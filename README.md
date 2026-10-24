@@ -562,11 +562,12 @@ belongs to the tooling that already built the collection, and is out of scope he
 >   database, detects black bars for every file, runs the CRF search for the whole
 >   backlog, encodes it, and watches for changes.
 >
-> **Fire-and-forget is implemented. The one-shot CLI is not, in three respects:** it
-> takes a folder plus a *required* output directory (no single file, no glob), it always
-> opens the database, and it writes to the output directory unless you pass `--replace`.
-> Everything else below describes what ships today. The gaps are listed in
-> [ISSUES.md](ISSUES.md).
+> **Both operating modes are implemented.** The one-shot CLI takes a file, a
+> folder, or a glob; it is stateless unless `--db` is passed; and it encodes
+> in place when no output directory is given (the original is renamed aside
+> and kept). Fire-and-forget is the container shape above. Follow the
+> [issue tracker](https://github.com/bennischober/ShrinkRay/issues) for what
+> is in flight.
 
 ## FAQ
 
@@ -594,6 +595,14 @@ on your `PATH` (the tool also checks the default install locations).
 ## Resources
 
 - [Changelog](CHANGELOG.md) — what shipped in each release
+- **Project docs**: [PRODUCT.md](PRODUCT.md) (the contract) ·
+  [DESIGN.md](DESIGN.md) (the dashboard's design system) ·
+  [docs/docker.md](docs/docker.md) (deployment) ·
+  [docs/encode-decision.md](docs/encode-decision.md) (every decision gate,
+  walked through) · [docs/plan-reuse.md](docs/plan-reuse.md) (the plan
+  cache) · [docs/black-bar-spike.md](docs/black-bar-spike.md) (the bar
+  detector's measured data) · [docs/tui.md](docs/tui.md) (the terminal
+  surface idea)
 - [FFmpeg documentation](https://ffmpeg.org/ffmpeg.html) ·
   [cropdetect filter](https://ffmpeg.org/ffmpeg-filters.html#cropdetect) ·
   [libvmaf](https://github.com/Netflix/vmaf)

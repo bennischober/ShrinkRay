@@ -145,10 +145,11 @@ anti-patterns are the sections further down — this block does not restate them
   `ui/src/lib/api.ts` is invisible to the dashboard; add both in one change.
 - **`ui/dist` is served by `app.py`** (`/` no-cache, `/assets/*` immutable, realpath
   containment) — it is build output, never edit it by hand.
-- **Two stale docs, one accurate.** `DESIGN.md` describes a grid/table toggle and a
-  poster card the app no longer has (`LibraryPage` is table-only, `PosterCard.svelte`
-  is orphaned); `ui/README.md` is unedited Vite template text. The root README's
-  "Web UI (ui/)" section is the accurate one.
+- **`DESIGN.md` is the design record; `ui/README.md` describes the toolchain.**
+  `PosterCard.svelte` is orphaned and its `poster-*` tokens are unused — the
+  cleanup is tracked in issue #180 (the DESIGN.md prose already says the
+  poster grid was demoted). The root README's "Web UI (ui/)" section and
+  `ui/README.md` (rewritten 2026-10-24) are accurate.
 - **`helpers.py` still exists** (190 L, dissolving). The "no helpers module" rule governs new
   code and the remaining moves; do not grow it.
 
