@@ -126,7 +126,7 @@ ignore = [
 # typer.Argument/typer.Option in defaults is the framework's intended usage
 "src/shrinkray/__main__.py" = ["B008"]
 # FastAPI Depends() in defaults is the framework's intended usage
-"src/shrinkray/app.py" = ["B008"]
+"src/shrinkray/server/app.py" = ["B008"]
 # KNOWN ISSUE, tracked as #43: the Jellyfin notifier calls urlopen on a
 # user-configured URL, and a config write can point token_env at any environment
 # variable. Remove this ignore together with the integration (issue #43); do not
