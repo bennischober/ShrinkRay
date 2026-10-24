@@ -1178,10 +1178,10 @@ class TestDb(unittest.TestCase):
             (out_dir / "movie.mkv").write_bytes(b"truncated debris")
             file_id = db.upsert_file(self.connection, self._record(str(movie)))
             db.add_encode(self.connection, file_id, "VMAF>95", "x265", 1000, 500, 50.0)
-            with mock.patch("shrinkray.encode.durations_match", return_value=False):
+            with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=False):
                 finished = service.finished_movies(self.connection, [movie], out_dir)
             self.assertEqual(finished, set())
-            with mock.patch("shrinkray.encode.durations_match", return_value=True):
+            with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True):
                 finished = service.finished_movies(self.connection, [movie], out_dir)
             self.assertEqual(finished, {str(movie)})
 

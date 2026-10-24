@@ -162,7 +162,7 @@ class TestProbeProgress(unittest.TestCase):
         own percent lines take over) — same shared pipeline as plan."""
         with (
             patch.object(quality, "probe_duration_seconds", return_value=600.0),
-            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(quality, "_source_snapshot", return_value=None),
             patch.object(quality, "_probe_movie", return_value=(20, 95.0, [], None)) as fake_probe,
             patch.object(quality, "find_handbrake", return_value="hb"),
@@ -183,7 +183,7 @@ class TestProbeProgress(unittest.TestCase):
         and probing runs for minutes before the final encode starts."""
         with (
             patch.object(quality, "probe_duration_seconds", return_value=600.0),
-            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(quality, "_source_snapshot", return_value=None),
             patch.object(quality, "_probe_movie", return_value=(20, 95.0, [], None)) as fake_probe,
             patch.object(quality, "find_handbrake", return_value="hb"),

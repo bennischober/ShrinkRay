@@ -112,9 +112,9 @@ class TestEncode(unittest.TestCase):
             source.write_bytes(b"x")
             with (
                 tempfile.TemporaryDirectory() as out,
-                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.encode._encode_with_command") as enc,
+                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
             ):
                 enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
                     encode.EncodeResult(input=i, output=o, success=True)
@@ -225,8 +225,8 @@ class TestEncode(unittest.TestCase):
                 stub.write_bytes(b'#!/bin/sh\necho "Encoding: task 1 of 1, 42.31 %"\nexit 0\n')
                 stub.chmod(0o755)
             with (
-                mock.patch("shrinkray.encode.find_handbrake", return_value=str(stub)),
-                mock.patch("shrinkray.encode.durations_match", return_value=True),
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
+                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
             ):
                 # must not raise TypeError; the encode result is failure
                 # (stub writes no output) but the crash is the regression
@@ -315,8 +315,8 @@ class TestEncode(unittest.TestCase):
             )
             percents: list[float] = []
             with (
-                mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=5.0),
-                mock.patch("shrinkray.encode.durations_match", return_value=True),
+                mock.patch("shrinkray.engine.pipeline.stall_timeout_seconds", return_value=5.0),
+                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
             ):
                 result = encode._encode_with_command(
                     src,
@@ -359,7 +359,7 @@ class TestEncode(unittest.TestCase):
                 encoding="utf-8",
             )
             percents: list[float] = []
-            with mock.patch("shrinkray.encode.durations_match", return_value=True):
+            with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True):
                 encode._encode_with_command(
                     src,
                     out,
@@ -391,7 +391,7 @@ class TestEncode(unittest.TestCase):
                 stub = Path(tmp) / "hb_stub.sh"
                 stub.write_bytes(b'#!/bin/sh\necho "Encoding: task 1 of 1, 42.31 %"\nsleep 60\n')
                 stub.chmod(0o755)
-            with mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=1.0):
+            with mock.patch("shrinkray.engine.pipeline.stall_timeout_seconds", return_value=1.0):
                 result = encode._encode_with_command(src, out, [str(stub)], progress=lambda p: None)
             self.assertFalse(result.success)
             self.assertFalse(result.cancelled, "a stall must be a failure, not a cancel")
@@ -410,7 +410,7 @@ class TestEncode(unittest.TestCase):
             out = Path(tmp) / "enc" / "out.mkv"
             (Path(tmp) / "enc").mkdir()
             src.write_bytes(b"x" * 8)
-            with mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=None):
+            with mock.patch("shrinkray.engine.pipeline.stall_timeout_seconds", return_value=None):
                 # a silent-but-finishing child: no percent lines at all
                 command = ["cmd", "/c", "exit 0"] if os.name == "nt" else ["true"]
                 result = encode._encode_with_command(src, out, command, progress=lambda p: None)
@@ -468,7 +468,7 @@ class TestEncode(unittest.TestCase):
                 stub = Path(tmp) / "hb_stub.sh"
                 stub.write_bytes(b'#!/bin/sh\nsh -c "sleep 60" & sleep 60\n')
                 stub.chmod(0o755)
-            with mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=1.0):
+            with mock.patch("shrinkray.engine.pipeline.stall_timeout_seconds", return_value=1.0):
                 started = time.monotonic()
                 result = encode._encode_with_command(src, out, [str(stub)], progress=lambda p: None)
                 elapsed = time.monotonic() - started
@@ -502,7 +502,7 @@ class TestEncode(unittest.TestCase):
             else:
                 stub.write_bytes(b"#!/bin/sh\nsleep 60\n")
                 stub.chmod(0o755)
-            with mock.patch("shrinkray.encode.stall_timeout_seconds", return_value=1.0):
+            with mock.patch("shrinkray.engine.pipeline.stall_timeout_seconds", return_value=1.0):
                 result = encode._encode_with_command(
                     src, out, [str(stub)], progress=lambda p: None, db_file=db_path
                 )
@@ -550,7 +550,7 @@ class TestEncode(unittest.TestCase):
                 script.chmod(0o755)
                 command = [str(script)]
             with mock.patch(
-                "shrinkray.encode.disk_free_bytes", return_value=1_000_000
+                "shrinkray.engine.pipeline.disk_free_bytes", return_value=1_000_000
             ):  # ~1 MB: below the 1 GiB floor
                 result = encode._encode_with_command(src, out, command, progress=lambda p: None)
             self.assertFalse(result.success)
@@ -571,7 +571,7 @@ class TestEncode(unittest.TestCase):
             out = Path(tmp) / "out.mkv"
             src.write_bytes(b"x" * 8)
             command = ["cmd", "/c", "exit 0"] if os.name == "nt" else ["true"]
-            with mock.patch("shrinkray.encode.disk_free_bytes", return_value=None):
+            with mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None):
                 result = encode._encode_with_command(src, out, command, progress=lambda p: None)
             # no cancellation: the watchdog stayed out of the way
             self.assertFalse(result.cancelled)
@@ -647,9 +647,11 @@ class TestEncodeLock(unittest.TestCase):
                 return encode.EncodeResult(input=i, output=o, success=True)
 
             with (
-                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.encode._encode_with_command", side_effect=fake_encode),
+                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+                mock.patch(
+                    "shrinkray.engine.pipeline._encode_with_command", side_effect=fake_encode
+                ),
             ):
                 encode.encode_movies([source], Path(tmp) / "enc", progress=events.append)
             self.assertEqual([e.get("percent") for e in events], [42.0])
@@ -665,8 +667,8 @@ class TestEncodeLock(unittest.TestCase):
             source.write_bytes(b"x")
             with (
                 guard_encodes(Path(tmp) / "enc"),
-                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
                 self.assertRaises(EncodeBusyError),
             ):
                 encode.encode_movies([source], Path(tmp) / "enc")
@@ -683,10 +685,10 @@ class TestEncodeLock(unittest.TestCase):
             debris = out_dir / "movie.mkv"
             debris.write_bytes(b"partial garbage")  # non-empty but truncated
             with (
-                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.encode.durations_match", return_value=False),
-                mock.patch("shrinkray.encode._encode_with_command") as enc,
+                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=False),
+                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
             ):
                 enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
                     encode.EncodeResult(input=i, output=o, success=True)
@@ -707,10 +709,10 @@ class TestEncodeLock(unittest.TestCase):
             out_dir.mkdir()
             (out_dir / "movie.mkv").write_bytes(b"real output")
             with (
-                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.encode.durations_match", return_value=True),
-                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.encode._encode_with_command") as enc,
+                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
             ):
                 results = encode.encode_movies([source], out_dir)
             self.assertEqual(results, [])
@@ -725,9 +727,9 @@ class TestEncodeLock(unittest.TestCase):
             out_dir.mkdir()
             (out_dir / "movie.mkv").write_bytes(b"")
             with (
-                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.encode._encode_with_command") as enc,
+                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
             ):
                 enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
                     encode.EncodeResult(input=i, output=o, success=True)
@@ -746,9 +748,9 @@ class TestEncodeLock(unittest.TestCase):
             out_dir.mkdir()
             db_path = Path(tmp) / "test.db"
             with (
-                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.encode.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.encode._encode_with_command") as enc,
+                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
             ):
                 enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
                     encode.EncodeResult(input=i, output=o, success=True)
@@ -879,9 +881,9 @@ class TestEncodeLock(unittest.TestCase):
             with (
                 mock.patch("shrinkray.quality._probe_movie", return_value=(20, 95.2, [], None)),
                 mock.patch("shrinkray.quality.find_handbrake", return_value=str(stub)),
-                mock.patch("shrinkray.encode.durations_match", return_value=True),
+                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
                 mock.patch("shrinkray.quality.measure_vmaf", side_effect=fake_measure),
-                mock.patch("shrinkray.encode.disk_free_bytes", return_value=None),
+                mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None),
             ):
                 result = encode_with_quality(src, out, progress=None, verify=True)
             self.assertTrue(result.success)
@@ -914,12 +916,12 @@ class TestEncodeLock(unittest.TestCase):
             with (
                 mock.patch("shrinkray.quality._probe_movie", return_value=(20, 95.2, [], None)),
                 mock.patch("shrinkray.quality.find_handbrake", return_value=str(stub)),
-                mock.patch("shrinkray.encode.durations_match", return_value=True),
+                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
                 mock.patch(
                     "shrinkray.quality.measure_vmaf",
                     side_effect=RuntimeError("ffmpeg exploded"),
                 ),
-                mock.patch("shrinkray.encode.disk_free_bytes", return_value=None),
+                mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None),
             ):
                 result = encode_with_quality(src, out, progress=None, verify=True)
             self.assertTrue(result.success)
@@ -950,9 +952,9 @@ class TestEncodeLock(unittest.TestCase):
             with (
                 mock.patch("shrinkray.quality._probe_movie", return_value=(20, 95.2, [], None)),
                 mock.patch("shrinkray.quality.find_handbrake", return_value=str(stub)),
-                mock.patch("shrinkray.encode.durations_match", return_value=True),
+                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
                 mock.patch("shrinkray.quality.measure_vmaf", side_effect=RuntimeError("no ffmpeg")),
-                mock.patch("shrinkray.encode.disk_free_bytes", return_value=None),
+                mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None),
                 mock.patch(
                     "shrinkray.tools.vmaf.detect_vmaf_style",
                     side_effect=RuntimeError("ffmpeg not found"),
@@ -1020,9 +1022,10 @@ class TestEncodeLock(unittest.TestCase):
             source = Path(tmp) / "movie.mkv"
             source.write_bytes(b"x" * 100)
             with (
-                mock.patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
                 mock.patch(
-                    "shrinkray.encode.check_disk_space", return_value=(False, "no space left")
+                    "shrinkray.engine.pipeline.check_disk_space",
+                    return_value=(False, "no space left"),
                 ),
                 self.assertRaises(RuntimeError) as ctx,
             ):
