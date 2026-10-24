@@ -702,7 +702,7 @@ def execute_plan(
         dict: The per-movie plan summary.
     """
     from shrinkray.config import load_config
-    from shrinkray.quality import plan_quality
+    from shrinkray.engine.plan import plan_quality
 
     payload = job.payload
     config = load_config()

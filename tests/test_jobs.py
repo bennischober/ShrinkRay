@@ -144,7 +144,7 @@ class TestJobs(unittest.TestCase):
             encoder="svt_av1",
         )
         with (
-            patch("shrinkray.quality.plan_quality", return_value=fake_result),
+            patch("shrinkray.engine.plan.plan_quality", return_value=fake_result),
             patch("shrinkray.jobs.cap_threads", return_value=1),
         ):
             result = jobs.execute_plan(job, self.connection, threading.Event())
@@ -209,7 +209,7 @@ class TestJobs(unittest.TestCase):
             )
         )
         with (
-            _patch("shrinkray.quality.plan_quality", return_value=fake_result) as fake_plan,
+            _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan,
             _patch("shrinkray.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job, self.connection, threading.Event())
@@ -217,7 +217,7 @@ class TestJobs(unittest.TestCase):
         # ...and without one, the config value does
         job2 = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
         with (
-            _patch("shrinkray.quality.plan_quality", return_value=fake_result) as fake_plan2,
+            _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan2,
             _patch("shrinkray.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job2, self.connection, threading.Event())
@@ -230,7 +230,7 @@ class TestJobs(unittest.TestCase):
             )
         )
         with (
-            _patch("shrinkray.quality.plan_quality", return_value=fake_result) as fake_plan3,
+            _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan3,
             _patch("shrinkray.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job3, self.connection, threading.Event())

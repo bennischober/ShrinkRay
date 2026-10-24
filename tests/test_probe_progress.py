@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from shrinkray import quality
+from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import search as engine_search
 
 
@@ -117,11 +118,11 @@ class TestProbeProgress(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(
-                    quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
+                    engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
                 ) as fake,
-                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=95.0),
                 patch.object(engine_search, "probe_crf", return_value=95.0),
@@ -139,12 +140,14 @@ class TestProbeProgress(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(
-                    quality, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
+                    engine_plan, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
                 ) as fake_search,
-                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_estimate,
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(
+                    engine_plan, "estimate_size_factor", return_value=0.5
+                ) as fake_estimate,
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
             ):
                 result = quality.plan_quality(src, progress=events.append)
@@ -200,13 +203,13 @@ class TestProbeProgress(unittest.TestCase):
         and the encode that follows, or the estimate comes from a different
         thread configuration than the real encode."""
         with (
-            patch.object(quality, "probe_duration_seconds", return_value=600.0),
-            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+            patch.object(engine_plan, "find_handbrake", return_value="hb"),
             patch.object(
-                quality, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
+                engine_plan, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
             ) as fake_search,
-            patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-            patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_estimate,
+            patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(engine_plan, "estimate_size_factor", return_value=0.5) as fake_estimate,
             patch.object(engine_search, "estimate_size_factor", return_value=0.5),
             tempfile.TemporaryDirectory() as tmp,
         ):
