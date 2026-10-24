@@ -205,6 +205,10 @@ def supports_svt_av1(binary: str) -> bool:
         return False
     if proc.returncode != 0:
         return False
-    presets = proc.stdout.decode(errors="replace").split()
+    # the preset list lands on stderr in real builds (libhb writes its banner
+    # and the list to stderr; stdout stays empty — found by the container
+    # smoke test, issue #165), so probe the MERGED output like the version
+    # probe does
+    presets = (proc.stdout + proc.stderr).decode(errors="replace").split()
     # an unknown encoder id answers with only the generic 'auto' preset
     return any(preset and preset != "auto" for preset in presets)

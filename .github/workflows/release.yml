@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -54,3 +55,71 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  container:
+    name: Build, smoke-test and publish the container image
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2fda9caf75a63 # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142395b465cb015aa039f45ba76d76ac97b # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # build first WITHOUT pushing: the image must boot and answer the
+      # healthcheck before anything reaches the registry (verify the artifact,
+      # same rule the encodes follow — a zero exit code is not success)
+      - name: Build the runtime image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+        with:
+          context: .
+          target: runtime
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Quality-measured video library compressor (ShrinkRay)
+          load: true
+
+      - name: Smoke-test the image (boot + healthcheck)
+        run: |
+          docker run -d --name smoke \
+            -e SHRINKRAY_TOKEN=smoke-test-token \
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          # the image's own HEALTHCHECK answers /api/status; wait for it
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' smoke 2>/dev/null || echo starting)
+            if [ "$status" = "healthy" ]; then
+              echo "image is healthy"
+              docker rm -f smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::smoke container never turned healthy (status: $status)"
+          docker logs smoke 2>&1 | tail -20 || true
+          exit 1
+
+      - name: Push the image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+        with:
+          context: .
+          target: runtime
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Quality-measured video library compressor (ShrinkRay)
+          push: true

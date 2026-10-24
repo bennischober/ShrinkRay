@@ -89,9 +89,9 @@ RUN ln -s /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg \
 # The toolchain links these; the runtime stage carries them, not the build deps.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      libass9 libbluray2 libdvdnav4 libdvdread8 libjansson4 libnuma1 \
+      libass9 libbluray2 libdvdnav4 libdvdread8 libjansson4 libmp3lame0 libnuma1 \
       libogg0 libopus0 libsamplerate0 libspeex1 libtheora0 libturbojpeg0 \
-      libvorbis0a libvpx7 libx264-164 libx265-199 zlib1g \
+      libvorbis0a libvorbisenc2 libvpx7 libx264-164 libx265-199 zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
 # non-root by default: everything the app writes on a bind mount must be
@@ -134,9 +134,13 @@ CMD []
 
 EXPOSE 8420
 
-# /api/status is the app's own summary; no new endpoint is needed.
+# /api/status is the app's own summary; no new endpoint is needed. The app
+# requires the token on every request of a non-loopback bind (issue #36), and
+# the container binds 0.0.0.0 — so the healthcheck sends it too (the compose
+# healthcheck already did; the image-level one used to 401, found by the #165
+# smoke test).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8420/api/status', timeout=3).status == 200 else 1)"]
+  CMD ["python", "-c", "import os,urllib.request,sys; req=urllib.request.Request('http://127.0.0.1:8420/api/status', headers={'Authorization': 'Bearer '+os.environ['SHRINKRAY_TOKEN']}); sys.exit(0 if urllib.request.urlopen(req, timeout=3).status == 200 else 1)"]
 
 # ── stage 4: the dev target (the gate runs inside it) ─────────────────────
 FROM runtime AS dev
