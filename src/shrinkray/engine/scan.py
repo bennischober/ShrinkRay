@@ -8,6 +8,7 @@ printing tables and writing output files belongs to the CLI layer.
 
 from __future__ import annotations
 
+import glob
 import os
 import sqlite3
 from collections.abc import Callable
@@ -110,6 +111,86 @@ def get_category(filename: Path, root: Path) -> str:
         # movie file in a folder directly under the root => use that folder
         return parts[0]
     return parts[0]
+
+
+def resolve_input_paths(
+    argument: str, extensions: list[str], exclude: Path | None = None
+) -> tuple[Path, list[Path]]:
+    """Resolves a CLI path argument to a category root and its movie files.
+
+    The Mode A contract is "a file, a folder, or a glob". All three shapes are
+    accepted here so no command has to care which one it was handed:
+
+    - a **file** is one movie, and its parent folder is the category root;
+    - a **directory** is walked recursively, and is its own category root;
+    - a **glob** (any of `*`, `?`, `[`) is expanded recursively, and its
+      category root is the pattern's leading literal directory.
+
+    The glob shape exists because the shell does not expand a quoted pattern: on
+    Windows a quoted `movies/*.mkv` reaches Python verbatim, so the CLI must do
+    the matching itself. A pattern that matches nothing is an error, not an empty
+    run - silently doing nothing is the failure mode this refuses.
+
+    Args:
+        argument (str): The path, directory or glob pattern from the CLI.
+        extensions (list[str]): Movie extensions, e.g. ['.mkv', '.mp4'].
+        exclude (Path | None): Directory to exclude (e.g. the output dir).
+
+    Returns:
+        tuple[Path, list[Path]]: The category root and the resolved movie
+            files, sorted and deduplicated.
+
+    Raises:
+        FileNotFoundError: If the path does not exist, or the glob matches
+            no movie file.
+    """
+    if not any(char in argument for char in "*?["):
+        path = Path(argument)
+        if path.is_file():
+            # a single movie is one item: no walk, and no extension check -
+            # the operator named the file explicitly
+            return path.parent.resolve(), [path.resolve()]
+        if not path.is_dir():
+            raise FileNotFoundError(f"'{argument}' does not exist")
+        return path.resolve(), find_movies(path, extensions, exclude=exclude)
+
+    # a glob: expand it here, because a quoted pattern arrives unexpanded
+    suffixes = {"." + extension.lower().lstrip(".") for extension in extensions}
+    matches = [
+        Path(match).resolve()
+        for match in glob.glob(argument, recursive=True)
+        if Path(match).is_file() and Path(match).suffix.lower() in suffixes
+    ]
+    if exclude is not None:
+        excluded = exclude.resolve()
+        matches = [match for match in matches if not _is_within(match, excluded)]
+    if not matches:
+        raise FileNotFoundError(
+            f"'{argument}' matched no movie file (extensions: {', '.join(sorted(suffixes))})"
+        )
+    # the category root is the pattern's leading literal directory, so a glob
+    # over one folder still groups its movies the way a directory scan would
+    root = Path(argument).parent
+    while any(char in str(root) for char in "*?["):
+        root = root.parent
+    return root.resolve(), sorted(dict.fromkeys(matches))
+
+
+def _is_within(path: Path, directory: Path) -> bool:
+    """Reports whether a path sits inside a directory.
+
+    Args:
+        path (Path): The path to test.
+        directory (Path): The directory to test against.
+
+    Returns:
+        bool: True when path is inside directory.
+    """
+    try:
+        path.relative_to(directory)
+    except ValueError:
+        return False
+    return True
 
 
 def find_movies(root: Path, extensions: list[str], exclude: Path | None = None) -> list[Path]:

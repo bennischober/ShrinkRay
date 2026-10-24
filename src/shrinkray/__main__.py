@@ -22,7 +22,13 @@ from shrinkray.config import (
     load_config,
 )
 from shrinkray.encode import cap_threads
-from shrinkray.engine.scan import find_movies, get_category, get_name, scan_movies
+from shrinkray.engine.scan import (
+    find_movies,
+    get_category,
+    get_name,
+    resolve_input_paths,
+    scan_movies,
+)
 from shrinkray.helpers import calc_time, generate_string, sanitize_number
 from shrinkray.logger import log, log_error
 from shrinkray.quality import (
@@ -278,12 +284,9 @@ def _totals(movies_by_category: dict) -> tuple:
 
 @app.command()
 def scan(
-    path: Path = typer.Argument(
+    path: str = typer.Argument(
         ...,
-        exists=True,
-        file_okay=False,
-        readable=True,
-        help="Root path of the movie folder, e.g. D:\\Movies",
+        help="A movie file, a folder, or a glob pattern (e.g. D:\\Movies).",
     ),
     csv_output: bool = typer.Option(
         False, "--csv", "-csv", help="Also write the data as csv file."
@@ -321,8 +324,13 @@ def scan(
     apply_config(config)
     connection = db.connect(db_file)
     try:
+        root, _ = resolve_input_paths(path, config.extensions)
+    except FileNotFoundError as e:
+        log_error(str(e))
+        raise typer.Exit(1) from e
+    try:
         movies_by_category, movies, error_messages = scan_movies(
-            path,
+            root,
             config,
             workers=workers if workers > 0 else None,
             connection=connection,
@@ -351,12 +359,9 @@ def scan(
 
 @app.command()
 def encode(
-    path: Path = typer.Argument(
+    path: str = typer.Argument(
         ...,
-        exists=True,
-        file_okay=False,
-        readable=True,
-        help="Root path of the movie folder, e.g. D:\\Movies",
+        help="A movie file, a folder, or a glob pattern (e.g. D:\\Movies).",
     ),
     output_dir: Path = typer.Argument(..., help="Directory for the encoded files."),
     dry_run: bool = typer.Option(
@@ -487,7 +492,12 @@ def encode(
     try:
         # the output directory must never be a scan target (previous outputs
         # would be re-encoded/re-probed)
-        _, movies, _ = scan_movies(path, config, connection=connection, exclude=output_dir)
+        try:
+            root, _ = resolve_input_paths(path, config.extensions, exclude=output_dir)
+        except FileNotFoundError as e:
+            log_error(str(e))
+            raise typer.Exit(1) from e
+        _, movies, _ = scan_movies(root, config, connection=connection, exclude=output_dir)
         _record_encodes(
             connection,
             movies,
@@ -782,12 +792,9 @@ def _record_encodes(
 
 @app.command()
 def plan(
-    path: Path = typer.Argument(
+    path: str = typer.Argument(
         ...,
-        exists=True,
-        file_okay=False,
-        readable=True,
-        help="Root path of the movie folder, e.g. D:\\Movies",
+        help="A movie file, a folder, or a glob pattern (e.g. D:\\Movies).",
     ),
     quality: bool = typer.Option(
         True,
@@ -866,7 +873,12 @@ def plan(
     apply_config(config)
     connection = db.connect(db_file)
     try:
-        _, movies, _ = scan_movies(path, config, connection=connection)
+        try:
+            root, _ = resolve_input_paths(path, config.extensions)
+        except FileNotFoundError as e:
+            log_error(str(e))
+            raise typer.Exit(1) from e
+        _, movies, _ = scan_movies(root, config, connection=connection)
 
         threads_cap = cap_threads(threads or config.handbrake_max_threads)
 
