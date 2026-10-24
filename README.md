@@ -481,11 +481,11 @@ The published image is on GHCR — a `v*` tag builds, smoke-tests and pushes it
 ```bash
 docker pull ghcr.io/bennischober/shrinkray:latest
 
-docker run -d --name shrinkray \
-  -p 8420:8420 \
-  -e SHRINKRAY_TOKEN='a-long-random-secret' \
-  -v /srv/media:/media:ro \
-  -v /srv/shrinkray-data:/data \
+docker run -d --name shrinkray-app \
+  --publish 8420:8420 \
+  --env SHRINKRAY_TOKEN='a-long-random-secret' \
+  --volume /srv/media:/media:ro \
+  --volume /srv/shrinkray-data:/data \
   ghcr.io/bennischober/shrinkray:latest
 ```
 
