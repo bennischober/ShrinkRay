@@ -32,6 +32,7 @@ from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
 from shrinkray.report import generate_report
 from shrinkray.server.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
+from shrinkray.server.metrics import CONTENT_TYPE, render_metrics
 from shrinkray.tools.process import apply_config
 
 app = FastAPI(title="ShrinkRay", version=__version__)
@@ -521,6 +522,26 @@ def _conf_to_dict(conf: Conf) -> dict:
         language=conf.language,
     )
     return model.model_dump()
+
+
+@app.get("/metrics")
+def metrics(conn: sqlite3.Connection = Depends(db_access)) -> Response:
+    """Serves the Prometheus text exposition format (issue #168).
+
+    Pull-based on purpose: the scraper connects to ShrinkRay, so the container
+    opens no outbound connection. Covered by the token middleware like every
+    other route - it is registered after `require_token`, not exempted from it.
+
+    Args:
+        conn: The database connection (db_access dependency).
+
+    Returns:
+        Response: The metrics in Prometheus text exposition format.
+    """
+    s = get_state()
+    root = _allowed_roots[0] if _allowed_roots else None
+    body = s.with_lock(lambda c: render_metrics(c, root))
+    return Response(content=body, media_type=CONTENT_TYPE)
 
 
 @app.get("/api/config")

@@ -169,6 +169,30 @@ The healthcheck calls `GET /api/status` with the token. `--root /media` is in th
 entrypoint because the default allowlist on Linux is the working directory, so
 without it every library path is a 403.
 
+## Observing it (issue #168)
+
+ShrinkRay is an observable source, not its own sink: it exposes the numbers, and
+you point your own stack at them. Nothing is pushed anywhere and the container
+opens no outbound connection.
+
+`GET /metrics` serves the Prometheus text exposition format. Point a scraper at it:
+
+```yaml
+scrape_configs:
+  - job_name: shrinkray
+    static_configs:
+      - targets: ['shrinkray:8420']
+    authorization:
+      credentials: 'a-long-random-secret'
+```
+
+The route sits behind the same `SHRINKRAY_TOKEN` gate as the rest of the API, so a
+scrape without the bearer token gets a 401. It exposes job counts by state and
+kind, queue depth, whether a job is running, encodes and bytes reclaimed, the
+stall-watchdog count, retained-original totals, the catalog size and the free
+space on the library filesystem. Every value is a query over state that already
+exists - the route measures nothing new.
+
 ## Not problems
 
 - Resource politeness: `nice` works in containers; thread caps are
