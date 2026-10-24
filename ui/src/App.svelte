@@ -526,6 +526,7 @@
           {failedJobs}
           {scanPaths}
           {outputDir}
+          {retainedFiles}
           sparkSamples={rssSamples}
           ondismiss={dismissFailed}
           ongoto={goto}
