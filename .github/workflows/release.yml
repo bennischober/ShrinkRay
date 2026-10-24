@@ -40,7 +40,9 @@ jobs:
           # changelog-discipline rule in AGENTS.md makes every PR write its
           # entry there). Extract the "## [<version>]" section; fall back to
           # generic text when the section is missing (mis-tagged release).
+          # tags are 'v0.4.0', changelog headings are '[0.4.0]' — strip the v
           version="${{ github.ref_name }}"
+          version="${version#v}"
           awk -v target="$version" '
             $0 ~ "^## [" target "]" { in_section = 1; next }
             in_section && /^## / { exit }
