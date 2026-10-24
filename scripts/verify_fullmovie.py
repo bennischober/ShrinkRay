@@ -6,17 +6,23 @@ COMPLETE encode against the COMPLETE source (not the 10s probes the CRF
 search used) and appends every result to test_media/scratch/verify_results.md
 so partial runs lose nothing.
 
-Usage (from the repo root):
-    uv run python scripts/verify_fullmovie.py            # all pairs
-    uv run python scripts/verify_fullmovie.py --only mandalorian
+Usage (from anywhere uv exists — PEP 723, issue #179):
+    uv run scripts/verify_fullmovie.py            # all pairs
+    uv run scripts/verify_fullmovie.py --only mandalorian
 
-Each pair measures 3-20 minutes (4K HDR: the Mandalorian took ~40 min to
-fail yesterday). Results append incrementally; a Ctrl+C keeps what finished.
+Run against an installed ShrinkRay (pipx/uv tool) or inside the checkout —
+the header's dependency list is empty because shrinkray itself provides
+measure_vmaf. Each pair measures 3-20 minutes (4K HDR: the Mandalorian took
+~40 min). Results append incrementally; a Ctrl+C keeps what finished.
 
-Failure evidence: measure_vmaf now writes stderr + command + a partial
+Failure evidence: measure_vmaf writes stderr + command + a partial
 vmaf.json into logs/ next to metadata.db (the 2026-10-21 failure produced
 an EMPTY error message — this is the fix for that blindness).
 """
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
 
 import argparse
 import sys
@@ -24,8 +30,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from shrinkray.quality import measure_vmaf
 from shrinkray.telemetry import logs_dir
+from shrinkray.tools.vmaf import measure_vmaf
 
 REPO = Path(__file__).resolve().parent.parent
 RESULT_FILE = REPO / "test_media" / "scratch" / "verify_results.md"
