@@ -107,9 +107,10 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
 uv run shrinkray app        # the dashboard on http://127.0.0.1:8420
 ```
 
-> The one-shot shape this is heading for — `encode` over a single file, a folder or a
-> glob, with no output directory and no database — is not wired yet. The commands above
-> are what runs today; see [ISSUES.md](ISSUES.md) for the gap.
+> A file, a folder or a glob all work as the input, and no database is created unless you
+> pass `--db`: a one-shot run is stateless. What is still missing is the encode landing in
+> the source's own path (it writes to the output directory you name); see
+> [ISSUES.md](ISSUES.md) for that gap.
 
 **Already have uv?** Run straight from GitHub without cloning:
 
@@ -231,8 +232,9 @@ uv run shrinkray scan 'D:\Movies' --csv
 | `--rescan` | force a full re-probe, ignoring the cache |
 | `--hash` | store a fast content hash (first/last MB) |
 
-Scans are cached in `metadata.db` (sqlite): unchanged files (same mtime and
-size) are not probed again — repeated scans are much faster.
+Scans are cached in `metadata.db` (sqlite) when you pass `--db`: unchanged files (same
+mtime and size) are not probed again, so repeated scans are much faster. Without `--db`
+no database is created or read — a one-shot run is stateless.
 
 ### `encode` — shrink your library
 
