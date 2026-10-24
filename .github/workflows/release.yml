@@ -34,14 +34,26 @@ jobs:
       - name: Build distributions
         run: uv build
 
-      - name: Extract release notes from README
+      - name: Extract release notes from CHANGELOG
         run: |
-          # use the git tag annotation as release notes, fallback to generic text
-          {
-            echo "## ShrinkRay ${{ github.ref_name }}"
-            echo ""
-            echo "See [README](https://github.com/${{ github.repository }}#readme) for install and usage instructions."
-          } > RELEASE_NOTES.md
+          # the matching section of CHANGELOG.md IS the release note (the
+          # changelog-discipline rule in AGENTS.md makes every PR write its
+          # entry there). Extract the "## [<version>]" section; fall back to
+          # generic text when the section is missing (mis-tagged release).
+          version="${{ github.ref_name }}"
+          awk -v target="$version" '
+            $0 ~ "^## [" target "]" { in_section = 1; next }
+            in_section && /^## / { exit }
+            in_section && /^\[.*\]: / { exit }
+            in_section { print }
+          ' CHANGELOG.md | sed -e :a -e "/^\n*$/{$d;N;ba" -e "}" > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            {
+              echo "## ShrinkRay ${{ github.ref_name }}"
+              echo ""
+              echo "See [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) and the [README](https://github.com/${{ github.repository }}#readme)."
+            } > RELEASE_NOTES.md
+          fi
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3

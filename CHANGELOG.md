@@ -56,6 +56,184 @@ tagged in git; the GitHub release for each tag carries the same notes.
   raises with the variable named in the message. The loopback development
   flow is unchanged: no token, no prompt.
 
+- **The container image is published to GHCR on release tags** (issue
+  #165): a `v*` tag runs the full gate, publishes the Python release, then
+  builds the runtime image, **smoke-tests it** (boot + token-authenticated
+  `/api/status` healthcheck) and only then pushes
+  `ghcr.io/bennischober/shrinkray:<tag>` and `:latest` with OCI labels.
+  The smoke test caught three real defects before anything shipped: two
+  missing shared libraries (`libmp3lame0`, `libvorbisenc2`) that made
+  HandBrakeCLI unloadable and the image refuse to boot; a healthcheck that
+  did not send the token (401 forever); and `supports_svt_av1()` reading
+  the encoder probe's preset list from stdout when HandBrakeCLI writes it
+  to stderr, which made a healthy toolchain report as unusable.
+
+- **Toolchain preflight** (issue #132): the resident app and `shrinkray
+  doctor` refuse to start on a toolchain that cannot do the product's one
+  job — HandBrakeCLI missing or without `svt_av1`, or VMAF unmeasurable —
+  naming the missing capability and the version that provides it, instead
+  of failing confusingly mid-run.
+
+- **A fresh container starts the backlog by itself** (issue #126):
+  `auto_backlog` runs scan → plan → encode over the mounted library on
+  boot, so the deployment shape is genuinely fire-and-forget. Off by
+  default outside the image.
+
+- **Watch mode is a real resident loop**: it walks the whole library tree
+  instead of one inbox folder (issue #133), encodes in place like the CLI
+  (issue #127), and every new or stable-changed file is re-scanned and
+  re-decided.
+
+- **The CLI accepts a file, a folder or a glob** (issue #123) and is
+  stateless unless `--db` is passed (issue #125): a one-shot run needs no
+  database, no config, no resident process. `encode` writes in place when
+  no output directory is given (issue #124), retaining the original per
+  the sacred-source rule.
+
+- **VMAF 96 is the default target, derived everywhere** (issue #103):
+  every CLI option, the API model and the job payload derive from
+  `DEFAULT_TARGET_VMAF` instead of repeating a literal; the HDR target is
+  expressed as a difference (`HDR_VMAF_OFFSET`) so the two cannot drift.
+
+- **The dashboard is a status view, not a control surface** (issue #134):
+  no route or button starts, cancels or reconfigures work.
+
+- **`shrinkray doctor`** — a library health check (db integrity, missing
+  toolchain, config validity, allowlisted roots) before work starts.
+
+- **Post-encode verification (`--verify`)**: a full-file VMAF measurement
+  of the output against the source as ground truth, recorded with the
+  encode; a failed verification is non-fatal and reported.
+
+- **Encode guards**: a disk-space preflight refuses what the drive cannot
+  finish (A2); a disk watchdog cancels rather than filling a shared drive;
+  a stall watchdog with silence-proof cancellation and tree-safe
+  termination; interrupted-encode debris is re-encoded, not skipped
+  forever (A1).
+
+- **Live progress everywhere**: SSE stream replaces DB-as-bus (progress is
+  flow, not state), the CLI renders a progress bar for quality-mode
+  encodes (A4), plan jobs stream their steps, and the jobs ETag covers
+  RUNNING progress so bars do not freeze mid-encode.
+
+- **Measured-data charts on the dashboard**: bitrate drift (a descending
+  staircase with real pixels and labeled VMAF lane), the reclaimable
+  figure, and a memory sparkline; the detail page shows the stored plan —
+  predictions where the decision lives.
+
+- **Config validated with a pydantic schema** (#61): a bad `config.json`
+  fails at load with the offending field named, and one config location is
+  shared by dashboard and engine (issue #58); writes are validated first
+  and atomic (issue #60).
+
+- **`config.json` written atomically** (issue #60): validate first, write
+  to a temp file, rename — a crash mid-write leaves the old config, never
+  a half-written one.
+
+- **Plan cache across runs** (schema v9-#14): a valid stored plan skips
+  probing entirely (`crf_source: plan`); the fingerprint keys on encoder,
+  presets, target, CRF range, sample count, crop-sample count and the
+  statistic, so any settings change re-probes. The detail page shows the
+  prediction where the decision lives.
+
+- **Bracketing interpolation in the CRF search** (issue #23): the binary
+  search narrows with interpolated midpoints between measured brackets,
+  fewer probe encodes for the same decision quality.
+
+- **Probe encodes honour the configured thread cap**, and the cap reaches
+  SVT-AV1 as `--encopts pin=N` (the x265-style `threads=N` is silently
+  ignored by SVT's parser).
+
+- **Crop detection samples ten windows** (issue #17, configurable via
+  `--crop-samples`) and crops only bars every sample agrees on — the safe
+  direction for an irreversible crop.
+
+- **The scanner gates on resolution, size and codec age** (issues #18,
+  #19, #20): below 1080p, below a size floor, or older than H.264 is
+  skipped with a reason before any probe cost; an unreadable value is
+  probed rather than silently dropped.
+
+### Changed
+
+- **The module layout is layered and machine-checked** (issue #97): the
+  flat package is now `tools/` → `engine/` → `server/` + CLI, enforced by
+  import-linter as the seventh gate command (`uv run lint-imports`) in the
+  local gate and CI; all transitional shim modules are deleted. The module
+  map lives in `src/shrinkray/AGENTS.md`.
+
+- **Probe every eligible codec; bar removal is part of every encode**
+  (issue #128): the codec gate no longer lets a modern codec skip the
+  search, the `--remove-bars` flag is gone from code, CLI, API and the
+  plan fingerprint, and the size check runs at the CRF the search chose
+  (issue #129) — an encode that would not shrink the file is refused
+  (issue #130).
+
+- **One config.json for dashboard and engine** (issue #58): both read the
+  same file (the dashboard wrote a second config the engine ignored).
+
+- **Config writes are validated and atomic** (issue #60): a bad value
+  fails at the API boundary with the field named, never half-written.
+
+- **Probe samples are stream-copied, not re-encoded** (issue #16): the
+  lossy x264 pass biased every VMAF measurement; the copy keeps bit depth,
+  colour tags and HDR side data, with a logged lossless ffv1 fallback for
+  containers that cannot hold the source codec.
+
+- **Every short-lived subprocess call has a timeout** (issue #62).
+
+- **The retry replays the stored payload** (issue #100): payload paths
+  union `path` and `paths`, so a retried job re-runs what the original ran.
+
+- **The HDR size estimate is labelled with its measured bias** (issue
+  #98), and the effective HDR target/encoder is recorded on the result and
+  the plan, not the caller's assumption.
+
+- **`record_plan` refuses a file changed between probing and recording**
+  (mtime/size check), so a plan cannot be stored under a fingerprint the
+  file no longer matches.
+
+- **Console timestamps carry the date and seconds** (issue #167):
+  `YYYY-MM-DD HH:MM:SS` local time in the console log (the resident mode
+  runs for days; a time-only stamp loses the day the moment the log leaves
+  the terminal); the report's generated line gains seconds (UTC).
+
+- **The strict typing bar is enforced on every module** (issue #40): mypy
+  runs `disallow_untyped_defs`, `warn_return_any`, `strict_equality` and
+  friends over the whole package; `py.typed` ships in the wheel.
+
+- **POSIX tree-kill via process groups** unblocks Linux CI; the tree-safe
+  termination applies to every encode path.
+
+- **The report creates its output directory and shows the verification
+  column.**
+
+### Fixed
+
+- **A stall watchdog that killed healthy encodes**: piped HandBrake never
+  sends newlines, so the newline-based liveness check starved and killed
+  running encodes; the watchdog now reads progress correctly and stall
+  telemetry reaches every encode path.
+
+- **The encode result survives an absent ffmpeg** (CI run 160): version
+  metadata probing is guarded, so verification metadata never fails an
+  encode.
+
+- **Watch mode's recursive/liveness traps** fixed, with prompt app
+  shutdown on stop.
+
+- **UI fixes**: readable primary hover; the two audit trails link to each
+  other; a job trail shows the movie's own outcome inside a batch job;
+  signed colored deltas, one unit spelling, one VMAF precision; drift
+  chart geometry was lying (real pixels, labeled lane, visible marks);
+  drift summary crashes; derived out-bars dressed as measured; `driftW`
+  declared before use.
+
+- **Test-suite fixes**: the test_db job import follows the server/ move;
+  the `logs/` telemetry-leak fix (a verify run without a db file no longer
+  writes failure bundles into the working directory,
+  `tests/test_telemetry_leak.py` pins it); the CodeQL sanitizer follows
+  the server/ move (issue #55).
+
 ### Changed
 
 - **AV1 is the only output codec**: SDR encodes with `svt_av1`, HDR with
