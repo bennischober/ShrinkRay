@@ -310,8 +310,13 @@ def scan(
     hash_files: bool = typer.Option(
         False, "--hash", help="Compute a fast content hash for new/changed files."
     ),
-    db_file: Path = typer.Option(
-        DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
+    db_file: Path | None = typer.Option(
+        None,
+        "--db",
+        help=(
+            "Path of the sqlite database file (scan cache/history). Omit it and "
+            "the run stays stateless: no database is created or read."
+        ),
     ),
     config_file: Path = typer.Option(
         None,
@@ -322,7 +327,7 @@ def scan(
     """Scans the movie folder and writes the metadata to a text file."""
     config = load_config(config_file=config_file)
     apply_config(config)
-    connection = db.connect(db_file)
+    connection = db.connect(db_file) if db_file is not None else None
     try:
         root, _ = resolve_input_paths(path, config.extensions)
     except FileNotFoundError as e:
@@ -338,7 +343,8 @@ def scan(
             compute_hash=hash_files,
         )
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
     if movies:
         total_time, total_size = _totals(movies_by_category)
@@ -475,8 +481,13 @@ def encode(
             "a media server or desktop work during long encodes."
         ),
     ),
-    db_file: Path = typer.Option(
-        DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
+    db_file: Path | None = typer.Option(
+        None,
+        "--db",
+        help=(
+            "Path of the sqlite database file (scan cache/history). Omit it and "
+            "the run stays stateless: no database is created or read."
+        ),
     ),
     config_file: Path = typer.Option(
         None,
@@ -488,7 +499,7 @@ def encode(
 
     config = load_config(config_file=config_file)
     apply_config(config)
-    connection = db.connect(db_file)
+    connection = db.connect(db_file) if db_file is not None else None
     try:
         # the output directory must never be a scan target (previous outputs
         # would be re-encoded/re-probed)
@@ -520,7 +531,8 @@ def encode(
             replace,
         )
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 def _latest_encode_id(connection: "sqlite3.Connection", source: Path) -> int | None:
@@ -530,7 +542,8 @@ def _latest_encode_id(connection: "sqlite3.Connection", source: Path) -> int | N
     a retained original back to the decision that produced its replacement.
 
     Args:
-        connection: The database connection.
+        connection: The database connection, or None for a stateless
+            run (nothing is persisted, no plan cache is consulted).
         source: The library file.
 
     Returns:
@@ -543,7 +556,7 @@ def _latest_encode_id(connection: "sqlite3.Connection", source: Path) -> int | N
     return int(latest["id"]) if latest is not None else None
 
 
-def _swap_into_place(connection: "sqlite3.Connection", source: Path, output: Path) -> None:
+def _swap_into_place(connection: "sqlite3.Connection | None", source: Path, output: Path) -> None:
     """Swaps a verified encode into the source's path, retaining the original.
 
     The swap gate is the check the encode already passed: the output exists,
@@ -560,7 +573,8 @@ def _swap_into_place(connection: "sqlite3.Connection", source: Path, output: Pat
     original back when the second rename fails, and recovery handles a crash.
 
     Args:
-        connection: The database connection.
+        connection: The database connection, or None for a stateless run (the
+            swap still happens, but no ledger row is written).
         source: The library file the output replaces.
         output: The verified encoded file.
     """
@@ -580,15 +594,29 @@ def _swap_into_place(connection: "sqlite3.Connection", source: Path, output: Pat
     except replace_module.SwapError as error:
         log_error(f"Not replacing '{source.name}': {error}")
         return
-    db.add_retained(
-        connection, source, retained, _latest_encode_id(connection, source), size_before, size_after
-    )
+    if connection is not None:
+        db.add_retained(
+            connection,
+            source,
+            retained,
+            _latest_encode_id(connection, source),
+            size_before,
+            size_after,
+        )
     output.unlink(missing_ok=True)
-    console.print(
-        f"[green]Replaced '{source.name}': the original is retained at "
-        f"'{retained.name}' ({size_before / (1024**3):.2f} GB); delete it "
-        f"when you are satisfied (see `shrinkray retained list`).[/green]"
-    )
+    if connection is not None:
+        console.print(
+            f"[green]Replaced '{source.name}': the original is retained at "
+            f"'{retained.name}' ({size_before / (1024**3):.2f} GB); delete it "
+            f"when you are satisfied (see `shrinkray retained list`).[/green]"
+        )
+    else:
+        console.print(
+            f"[green]Replaced '{source.name}': the original is retained at "
+            f"'{retained.name}' ({size_before / (1024**3):.2f} GB); delete it "
+            f"when you are satisfied. This run used no database, so the swap is "
+            f"not in `retained list`.[/green]"
+        )
 
 
 def _quality_progress_callback(progress: Progress, task: "TaskID") -> Callable[[dict], None]:
@@ -624,7 +652,7 @@ def _quality_progress_callback(progress: Progress, task: "TaskID") -> Callable[[
 
 
 def _record_encodes(
-    connection: "sqlite3.Connection",
+    connection: "sqlite3.Connection | None",
     movies: list[Path],
     output_dir: Path,
     config: "Conf",
@@ -668,7 +696,7 @@ def _record_encodes(
     # already encoded AND output still present? (unless --overwrite)
     # => batch resume: an interrupted run skips everything it finished before
     encoded_paths: set[str] = set()
-    if not overwrite and not dry_run:
+    if not overwrite and not dry_run and connection is not None:
         encoded_paths = finished_movies(connection, movies, output_dir)
 
     if not dry_run and quality:
@@ -743,7 +771,8 @@ def _record_encodes(
                                 f"{result.output_size / (1024**3):.2f} GB ({saved}% saved) "
                                 f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
                             )
-                            record_quality_results(connection, movie, result, config)
+                            if connection is not None:
+                                record_quality_results(connection, movie, result, config)
                             if replace:
                                 _swap_into_place(connection, movie, output_dir / movie.name)
                         elif result.skipped_reason is not None:
@@ -751,7 +780,8 @@ def _record_encodes(
                             console.print(
                                 f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]"
                             )
-                            record_quality_results(connection, movie, result, config)
+                            if connection is not None:
+                                record_quality_results(connection, movie, result, config)
                         else:
                             log_error(f"Encoding '{movie.name}' failed: {result.error}")
         except _EncodeCancelled as e:
@@ -783,7 +813,8 @@ def _record_encodes(
         raise typer.Exit(1) from e
 
     # record the encodes of this run in the database
-    record_fixed_results(connection, results, config)
+    if connection is not None:
+        record_fixed_results(connection, results, config)
     if replace:
         for fixed_result in results:
             if fixed_result.success:
@@ -851,8 +882,13 @@ def plan(
             "plan never encodes - recorded for provenance only)."
         ),
     ),
-    db_file: Path = typer.Option(
-        DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
+    db_file: Path | None = typer.Option(
+        None,
+        "--db",
+        help=(
+            "Path of the sqlite database file (scan cache/history). Omit it and "
+            "the run stays stateless: no database is created or read."
+        ),
     ),
     config_file: Path = typer.Option(
         None,
@@ -871,7 +907,7 @@ def plan(
 
     config = load_config(config_file=config_file)
     apply_config(config)
-    connection = db.connect(db_file)
+    connection = db.connect(db_file) if db_file is not None else None
     try:
         try:
             root, _ = resolve_input_paths(path, config.extensions)
@@ -912,7 +948,8 @@ def plan(
                 continue
             # quicksave: persist the decision (CRF or skip verdict) so a
             # later encode of this movie skips probing when unchanged
-            record_plan(connection, movie, result, config)
+            if connection is not None:
+                record_plan(connection, movie, result, config)
             plans.append(result)
 
             if result.skipped_reason is not None:
@@ -953,7 +990,8 @@ def plan(
             # the HDR estimate bias (issue #98): say so where the estimate is shown
             console.print(f"[yellow]{HDR_ESTIMATE_NOTE}[/yellow]")
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 @app.command("retained")

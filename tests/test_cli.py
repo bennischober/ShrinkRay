@@ -1,11 +1,14 @@
 """CLI command tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from shrinkray import config as config_helper
 from shrinkray import db
+from shrinkray.__main__ import app
 from shrinkray.engine import scan
 
 
@@ -381,3 +384,85 @@ class TestInputShapes(unittest.TestCase):
         pattern = str(self.nested / "*")
         _root, found = scan.resolve_input_paths(pattern, self.extensions)
         self.assertEqual(found, [self.one.resolve()])
+
+
+class TestStatelessModeA(unittest.TestCase):
+    """Issue #125: a one-shot run must not create a database it never asked for.
+
+    The CLI opened metadata.db unconditionally, so a stranger encoding one file got a
+    database as a side effect plus plan-cache behaviour that made the run depend on
+    prior state. The database is opt-in now: no --db, no database, and the scan is
+    given connection=None (which the engine already supports).
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.movie = self.root / "one.mkv"
+        self.movie.write_bytes(b"x" * 8)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _run(self, *argv: str) -> int:
+        """Runs the CLI in the temp dir and returns its exit code."""
+        from typer.testing import CliRunner
+
+        runner = CliRunner()
+        previous = os.getcwd()
+        os.chdir(self.root)
+        try:
+            return runner.invoke(app, list(argv)).exit_code
+        finally:
+            os.chdir(previous)
+
+    def test_a_stateless_scan_creates_no_database(self) -> None:
+        """The criterion: encoding one file leaves no metadata.db behind."""
+        with patch("shrinkray.__main__.scan_movies", return_value=({}, [], [])):
+            self._run("scan", str(self.movie), "--no-table")
+        self.assertFalse(
+            (self.root / "metadata.db").exists(),
+            "a stateless run created a database the operator never asked for",
+        )
+
+    def test_a_stateless_run_passes_no_connection_to_the_scan(self) -> None:
+        """The connection must be None, not a lazily created one."""
+        with patch("shrinkray.__main__.scan_movies", return_value=({}, [], [])) as fake_scan:
+            self._run("scan", str(self.movie), "--no-table")
+        self.assertIsNone(fake_scan.call_args.kwargs["connection"])
+
+    def test_an_explicit_db_is_opened_and_used(self) -> None:
+        """Passing --db restores today's caching behaviour."""
+        db_file = self.root / "explicit.db"
+        with patch("shrinkray.__main__.scan_movies", return_value=({}, [], [])) as fake_scan:
+            self._run("scan", str(self.movie), "--no-table", "--db", str(db_file))
+        self.assertIsNotNone(fake_scan.call_args.kwargs["connection"])
+        self.assertTrue(db_file.exists(), "an explicit --db was not created")
+
+    def test_a_stateless_plan_creates_no_database(self) -> None:
+        with patch("shrinkray.quality.plan_quality", return_value=_skipped_plan(self.movie)):
+            self._run("plan", str(self.movie))
+        self.assertFalse((self.root / "metadata.db").exists())
+
+    def test_a_stateless_plan_passes_no_db_file_to_the_engine(self) -> None:
+        """No database means no plan cache: the engine gets db_file=None."""
+        with patch(
+            "shrinkray.quality.plan_quality", return_value=_skipped_plan(self.movie)
+        ) as fake:
+            self._run("plan", str(self.movie))
+        self.assertIsNone(fake.call_args.kwargs["db_file"])
+
+
+def _skipped_plan(movie: Path) -> "object":
+    """Builds a skipped plan result for the mocked plan command."""
+    from shrinkray.quality import QualityResult
+
+    return QualityResult(
+        input=movie,
+        output=movie,
+        success=False,
+        skipped_reason="below min size",
+        error="skipped: below min size",
+        input_size=movie.stat().st_size,
+        output_size=movie.stat().st_size,
+    )
