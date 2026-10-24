@@ -28,6 +28,7 @@ from shrinkray.logger import log, log_error
 from shrinkray.quality import (
     DEFAULT_SAMPLE_COUNT,
     DEFAULT_SAMPLE_EVERY,
+    DEFAULT_TARGET_VMAF,
     HDR_ESTIMATE_NOTE,
 )
 from shrinkray.quality import (
@@ -373,7 +374,7 @@ def encode(
         ),
     ),
     target_vmaf: float = typer.Option(
-        95.0,
+        DEFAULT_TARGET_VMAF,
         "--target-vmaf",
         min=1.0,
         max=100.0,
@@ -794,7 +795,7 @@ def plan(
         help="Plan quality mode (VMAF-driven) or the fixed preset.",
     ),
     target_vmaf: float = typer.Option(
-        95.0,
+        DEFAULT_TARGET_VMAF,
         "--target-vmaf",
         min=1.0,
         max=100.0,
@@ -1144,7 +1145,7 @@ def watch_mode(
     ),
     output_dir: Path = typer.Argument(..., help="Directory for the encoded files."),
     target_vmaf: float = typer.Option(
-        95.0,
+        DEFAULT_TARGET_VMAF,
         "--target-vmaf",
         min=1.0,
         max=100.0,

@@ -62,6 +62,9 @@ from shrinkray.engine.encoders import (
     HDR_ESTIMATE_NOTE as HDR_ESTIMATE_NOTE,
 )
 from shrinkray.engine.encoders import (
+    HDR_VMAF_OFFSET as HDR_VMAF_OFFSET,
+)
+from shrinkray.engine.encoders import (
     encoder_for as encoder_for,
 )
 from shrinkray.engine.plan import (

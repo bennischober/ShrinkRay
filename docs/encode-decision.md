@@ -57,13 +57,13 @@ Every gate is a cheap question asked before the expensive next step.
 
 | # | Gate | Question | If it fails |
 |---|---|---|---|
-| 1 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS`, `encode.py:208`) | skip — not a movie |
-| 2 | Resolution | At least 1080p tall? (`min_source_height`, `quality.py:564`) | skip — too few pixels to save |
-| 3 | Size | At least the configured size floor? (`min_source_size_gb`, `quality.py:586`) | skip — payoff below the probe cost |
-| 4 | Codec age | H.264 or newer? (`MIN_SOURCE_CODEC`, `quality.py:174`, checked at `:611`) | skip — an older codec is not re-encoded |
-| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py:109`, called at `quality.py:642`) | no crop; the encode proceeds uncropped |
-| 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:591`) | skip — target unreachable |
-| 7 | **Size gate** | Would the result be smaller? (`engine/search.py:674`, and again at the chosen CRF `:720`) | skip — "would not shrink" |
+| 1 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS`, `encode.py:167`) | skip — not a movie |
+| 2 | Resolution | At least 1080p tall? (`min_source_height`, `quality.py:568`) | skip — too few pixels to save |
+| 3 | Size | At least the configured size floor? (`min_source_size_gb`, `quality.py:590`) | skip — payoff below the probe cost |
+| 4 | Codec age | H.264 or newer? (`MIN_SOURCE_CODEC`, `quality.py:176`, checked at `:615`) | skip — an older codec is not re-encoded |
+| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py:109`, called at `quality.py:646`) | no crop; the encode proceeds uncropped |
+| 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:592`) | skip — target unreachable |
+| 7 | **Size gate** | Would the result be smaller? (`engine/search.py:675`, and again at the chosen CRF `:721`) | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, **with the crop** | — |
 
 Note gate 5 cannot fail in the sense of aborting: "no bars found" is a normal outcome and the

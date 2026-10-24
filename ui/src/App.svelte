@@ -142,7 +142,7 @@
     JSON.parse(localStorage.getItem('ms.paths') ?? '["D:\\\\Movies"]')
   )
   let outputDir = $state(localStorage.getItem('ms.out') ?? 'D:\\Encoded')
-  let targetVmaf = $state(Number(localStorage.getItem('ms.vmaf') ?? 95))
+  let targetVmaf = $state(Number(localStorage.getItem('ms.vmaf') ?? 96))
   let workers = $state<number | null>(
     localStorage.getItem('ms.workers') ? Number(localStorage.getItem('ms.workers')) : null
   )
@@ -377,7 +377,7 @@
         paths: targets.slice(1),
         output_dir: kind === 'encode' ? outputDir || undefined : undefined,
         quality: kind !== 'scan',
-        target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 95)),
+        target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 96)),
         workers: kind === 'scan' ? workers : null,
       })
       await refresh()

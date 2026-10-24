@@ -59,6 +59,45 @@ class TestQuality(unittest.TestCase):
             )
             self.assertIsNone(bundle)
 
+    def test_the_decided_vmaf_default_is_96(self):
+        """Issue #103: VMAF 96 is the decided default, and nothing repeats it.
+
+        The defect was a literal 95.0 copied into every CLI option, the API model
+        and the job payload, so raising the constant left the surfaces behind. They
+        all derive from DEFAULT_TARGET_VMAF now; this pins the decision itself.
+        """
+        self.assertEqual(quality.DEFAULT_TARGET_VMAF, 96.0)
+
+    def test_the_hdr_default_is_the_sdr_default_minus_the_offset(self):
+        """The HDR target is calibrated DOWN from the SDR one by a fixed offset.
+
+        It used to be a second literal (94.5), which is how the two drifted apart
+        when only one was changed (issue #103). It is a difference now.
+        """
+        self.assertEqual(
+            quality.DEFAULT_HDR_TARGET_VMAF,
+            quality.DEFAULT_TARGET_VMAF - quality.HDR_VMAF_OFFSET,
+        )
+        self.assertLess(quality.DEFAULT_HDR_TARGET_VMAF, quality.DEFAULT_TARGET_VMAF)
+
+    def test_no_surface_repeats_the_default_literal(self):
+        """Every surface must DERIVE the default, not restate it as a literal.
+
+        A literal 95.0 in a CLI option or the API model is invisible to a change
+        of the constant - that is exactly how the docs said 96 while the code
+        shipped 95 (issue #103).
+        """
+        root = Path(__file__).resolve().parent.parent / "src" / "shrinkray"
+        offenders: list[str] = []
+        for name in ("__main__.py", "app.py", "jobs.py"):
+            for lineno, line in enumerate((root / name).read_text().splitlines(), 1):
+                if "95.0" not in line:
+                    continue
+                if line.lstrip().startswith("#"):
+                    continue
+                offenders.append(f"{name}:{lineno}: {line.strip()}")
+        self.assertEqual(offenders, [], "these repeat the VMAF default as a literal")
+
     def test_sample_offsets(self):
         # 3 samples spread over 10%-90% of a 100s movie
         offsets = quality.sample_offsets(100.0, 3)
@@ -283,7 +322,7 @@ class TestPlanReuse(unittest.TestCase):
             input=movie,
             output=movie,
             success=overrides.pop("success", True),
-            target_vmaf=overrides.pop("target_vmaf", 95.0),
+            target_vmaf=overrides.pop("target_vmaf", quality.DEFAULT_TARGET_VMAF),
             chosen_crf=overrides.pop("chosen_crf", 21),
             achieved_vmaf=overrides.pop("achieved_vmaf", 95.47),
             probes=overrides.pop("probes", [SampleProbe(crf=21, vmaf=95.47)]),
@@ -1153,8 +1192,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ) as fake_extract,
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=95.0),
-                patch.object(engine_search, "probe_crf", return_value=95.0),
+                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
             ):
                 result = quality.plan_quality(src, sample_every=600.0)
         self.assertTrue(result.success)
@@ -1323,8 +1362,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=95.0),
-                patch.object(engine_search, "probe_crf", return_value=95.0),
+                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
             ):
                 result = quality.plan_quality(src)
         self.assertTrue(result.success)
@@ -1350,8 +1389,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=95.0),
-                patch.object(engine_search, "probe_crf", return_value=95.0),
+                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
             ):
                 result = quality.plan_quality(src)
         self.assertTrue(result.success, result.error)
@@ -1378,8 +1417,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_size,
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=95.0),
-                patch.object(engine_search, "probe_crf", return_value=95.0),
+                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
             ):
                 result = quality.plan_quality(src)
         self.assertTrue(result.success, result.error)
@@ -1453,8 +1492,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=95.0),
-                patch.object(engine_search, "probe_crf", return_value=95.0),
+                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
             ):
                 result = quality.plan_quality(src)
         self.assertTrue(result.success)
@@ -1500,8 +1539,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=95.0),
-                patch.object(engine_search, "probe_crf", return_value=95.0),
+                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
             ):
                 result = quality.plan_quality(src)
         self.assertTrue(result.success)
@@ -1523,8 +1562,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(quality, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=95.0),
-                patch.object(engine_search, "probe_crf", return_value=95.0),
+                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
             ):
                 result = quality.plan_quality(src, min_source_height=1080)
         self.assertTrue(result.success)

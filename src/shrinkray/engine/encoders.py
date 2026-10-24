@@ -6,6 +6,8 @@ choice so no call site re-derives it (issue #21, #26).
 
 from __future__ import annotations
 
+from shrinkray.engine.search import DEFAULT_TARGET_VMAF
+
 # AV1 is the only output codec (issue #21): SVT-AV1 on the CPU, 10-bit for
 # HDR. x265 is gone from every path - not demoted to a fallback, not kept
 # as an option. encoder_for() is the single source of this choice.
@@ -25,8 +27,10 @@ HDR_ESTIMATE_NOTE = (
 )
 # HDR measurement runs on tone-mapped SDR twins, whose scale sits slightly
 # below the SDR-native one (a Mandalorian sample: CRF 14 = 94.78, CRF 10 =
-# 96.49); 94.5 is the calibrated equivalent of the 95 transparency floor
-DEFAULT_HDR_TARGET_VMAF = 94.5
+# 96.49). The calibrated offset is -0.5, expressed here as a difference so
+# the two defaults cannot drift apart again (issue #103).
+HDR_VMAF_OFFSET = 0.5
+DEFAULT_HDR_TARGET_VMAF = DEFAULT_TARGET_VMAF - HDR_VMAF_OFFSET
 
 
 def encoder_for(hdr: bool) -> str:

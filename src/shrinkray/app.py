@@ -32,7 +32,7 @@ from shrinkray.encode import cap_threads
 from shrinkray.engine.watch import watch
 from shrinkray.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.logger import log, log_error
-from shrinkray.quality import HDR_ESTIMATE_NOTE
+from shrinkray.quality import DEFAULT_TARGET_VMAF, HDR_ESTIMATE_NOTE
 from shrinkray.report import generate_report
 from shrinkray.tools.process import apply_config
 
@@ -237,7 +237,7 @@ class JobRequest(BaseModel):
     paths: list[str] | None = None
     output_dir: str | None = None
     quality: bool = False
-    target_vmaf: float = Field(95.0, ge=1.0, le=100.0)
+    target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
     overwrite: bool = False
     verify: bool = False
     workers: int | None = Field(None, ge=1, le=64)

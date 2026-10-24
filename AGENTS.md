@@ -111,7 +111,7 @@ anti-patterns are the sections further down — this block does not restate them
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `DEFAULT_TARGET_VMAF` | const 95.0 | `quality.py:120` | 8 | every CLI default derives from it |
+| `DEFAULT_TARGET_VMAF` | const 96.0 | `engine/search.py:48` | 8 | the decided default; every CLI option, the API model and the job payload derive from it |
 | `CANDIDATE_CODECS` | const | `quality.py:65` | 5 | `("h264",)` — the only size-alone candidates |
 | `MODERN_CODECS` | const | `quality.py:66` | 5 | `("hevc","av1")` — bars-only candidates |
 | `guard_encodes` | context mgr | `encode_lock.py:142` | 14 | per-output-dir lock, 6 h stale window |
@@ -121,12 +121,13 @@ anti-patterns are the sections further down — this block does not restate them
 
 ### NOTES (gotchas that cost a reader time)
 
-- **VMAF default: the decision is 96, the code ships 95.** `DEFAULT_TARGET_VMAF`
-  (`quality.py:120`) and every `--target-vmaf` default are 95.0. The product decision
-  is **96** (confirmed 2026-10-24), so the constant is the defect, not the prose. The
-  target participates in the stored plan fingerprint, so raising it deliberately
-  invalidates every cached plan — one change, one migration note, not a doc edit.
-  Tracked in [ISSUES.md](ISSUES.md); do not "fix" it by editing a doc.
+- **VMAF default: 96, and the code now ships 96.** `DEFAULT_TARGET_VMAF`
+  (`engine/search.py:48`) is `96.0`, and every `--target-vmaf` default, the API request
+  model and the job payload derive from it rather than repeating a literal — the literals
+  were the defect (issue #103). The target participates in the stored plan fingerprint, so
+  the 95.0 -> 96.0 change deliberately invalidated every cached plan: a library planned
+  under the old default re-probes once. The HDR default is `DEFAULT_TARGET_VMAF -
+  HDR_VMAF_OFFSET` (95.5), expressed as a difference so the two cannot drift apart.
 - **The package is flat today.** The `tools/`/`engine/`/`server/` tree in Project
   conventions is the #63 target, not the current layout. Do not describe it as
   current, and do not restructure as a drive-by on an unrelated issue.

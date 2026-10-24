@@ -71,7 +71,8 @@ interesting:
 > the *largest* CRF that stays visually transparent — then the movie is encoded
 > once with exactly that setting.
 
-Measured on real content (target VMAF 95, x265 — the AV1 default is 96):
+Measured on real content (target VMAF 95, x265 — those runs predate the AV1 output and the
+96 default, so the numbers below describe what they measured, not today's defaults):
 
 | Movie | Content | Result | Saved |
 |---|---|---|---|

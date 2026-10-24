@@ -9,7 +9,7 @@
   let {
     scanPaths,
     outputDir,
-    targetVmaf = 95,
+    targetVmaf = 96,
     workers = null,
     onpathsChange,
     onoutputChange,
@@ -29,7 +29,7 @@
   let newPath = $state('')
   // local editing copy of the VMAF target (committed on change); the
   // effect syncs it when the app-level value changes
-  let vmafDraft = $state(95)
+  let vmafDraft = $state(96)
   $effect(() => {
     vmafDraft = targetVmaf
   })
@@ -197,13 +197,13 @@
           step="0.5"
           bind:value={vmafDraft}
           onchange={() => {
-            onvmafChange?.(Math.min(100, Math.max(70, Number(vmafDraft) || 95)))
+            onvmafChange?.(Math.min(100, Math.max(70, Number(vmafDraft) || 96)))
             flash('vmaf')
           }}
           aria-label="VMAF quality target"
         />
       </label>
-      <HintMark text="VMAF is the measured visual similarity to the source (0-100). 95 is Netflix's 'visually transparent' floor: encodes below it are visibly worse. Higher target = larger files. The engine searches the largest CRF that still reaches this target on real samples." />
+      <HintMark text="VMAF is the measured visual similarity to the source (0-100). 96 is the project's decided 'visually transparent' floor: encodes below it are visibly worse. Higher target = larger files. The engine searches the largest CRF that still reaches this target on real samples." />
     </div>
   </section>
 

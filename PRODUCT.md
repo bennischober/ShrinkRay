@@ -154,12 +154,12 @@ untouched. A bar
 removal goes through the same search. There is no fixed-preset or "just crop it"
 encode — an encode whose quality is not measured would miss the point of the tool.
 
-> **VMAF 96 is the decided default; the code still ships 95.0.** This is a gap in the
-> implementation, not a doc error. `DEFAULT_TARGET_VMAF` in `quality.py` is `95.0`, and
-> every CLI option and the job payload inherit it. The product decision is 96, so the
-> constant must change — and because the target VMAF participates in the stored plan
-> fingerprint, that change deliberately invalidates every cached plan. Tracked in
-> [ISSUES.md](ISSUES.md).
+The CRF search always runs against the required quality floor — **VMAF 96**, which is
+`DEFAULT_TARGET_VMAF` in `engine/search.py`. Every `--target-vmaf` option, the API request
+model and the job payload derive from that one constant, so there is no second place to drift.
+The target participates in the stored plan fingerprint: raising it from the 95.0 the code shipped
+before deliberately invalidated every cached plan, so a library planned under the old default re-probes
+once.
 
 In practice it fuses two steps an operator would otherwise run by hand per file — an
 `ab-av1`-style CRF search, then the encode at the CRF it found — into one, and applies
