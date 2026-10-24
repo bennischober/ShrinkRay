@@ -91,14 +91,17 @@ jobs:
       # build first WITHOUT pushing: the image must boot and answer the
       # healthcheck before anything reaches the registry (verify the artifact,
       # same rule the encodes follow — a zero exit code is not success)
+      - name: Compute the image name (ghcr requires lowercase)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER}/$(echo ${GITHUB_REPOSITORY#*/} | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - name: Build the runtime image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           target: runtime
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ env.IMAGE }}:${{ github.ref_name }}
+            ghcr.io/${{ env.IMAGE }}:latest
           labels: |
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -109,7 +112,7 @@ jobs:
         run: |
           docker run -d --name smoke \
             -e SHRINKRAY_TOKEN=smoke-test-token \
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:${{ github.ref_name }}
           # the image's own HEALTHCHECK answers /api/status; wait for it
           for i in $(seq 1 30); do
             status=$(docker inspect --format '{{.State.Health.Status}}' smoke 2>/dev/null || echo starting)
@@ -130,8 +133,8 @@ jobs:
           context: .
           target: runtime
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:latest
           labels: |
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
