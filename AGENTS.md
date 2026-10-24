@@ -335,6 +335,13 @@ more specific.
   where it adds context, e.g. `fix(encode): ...`. Body explains the *why*
   when the *what* is not obvious. One logical change per commit — see the
   issue workflow above for how a change reaches `main`.
+- **Markdown prose is written as single long lines.** In issue bodies,
+  PR bodies, and `CHANGELOG.md`, paragraphs and list items are ONE line each
+  — no hand-wrapped 80-column breaks. Markdown reflows; hard breaks render
+  as chopped lines on the issue/release pages. Structure (headings, blank
+  lines, lists, tables, code fences, link-reference footers) stays as it
+  is. This applies to every text an agent writes for humans to render,
+  including PR/issue bodies created with `gh pr create`/`gh issue create`.
 - **Every PR that changes code or docs adds a `CHANGELOG.md` entry in the
   same PR.** One bullet under `## [Unreleased]` in the matching subsection
   (`Added` / `Changed` / `Fixed` / `Removed`), phrased as the user-visible
