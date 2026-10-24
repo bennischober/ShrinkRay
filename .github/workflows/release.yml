@@ -107,6 +107,7 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=Quality-measured video library compressor (ShrinkRay)
           load: true
+          provenance: false
           # the toolchain layers (the HandBrake compile, ~4 min) are
           # deterministic given the pinned sources — cache them across runs so
           # a release build is cache-restore + uv sync + copy, not a fresh
@@ -146,3 +147,4 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=Quality-measured video library compressor (ShrinkRay)
           push: true
+          provenance: false
