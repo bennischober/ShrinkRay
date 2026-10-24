@@ -100,8 +100,8 @@ jobs:
           context: .
           target: runtime
           tags: |
-            ghcr.io/${{ env.IMAGE }}:${{ github.ref_name }}
-            ghcr.io/${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:latest
           labels: |
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
