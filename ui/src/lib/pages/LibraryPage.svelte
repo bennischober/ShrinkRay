@@ -11,7 +11,6 @@
     runningMovie = null,
     runningPercent = null,
     plannedPaths = [],
-    onenqueue,
     onopenmovie,
     ontoggle,
     onselectall,
@@ -25,7 +24,6 @@
     runningMovie?: string | null
     runningPercent?: number | null
     plannedPaths?: string[]
-    onenqueue: (kind: 'scan' | 'plan' | 'encode', paths?: string[]) => void
     onopenmovie: (movie: Movie) => void
     ontoggle: (path: string, checked: boolean) => void
     onselectall: (checked: boolean, paths: string[]) => void
@@ -168,9 +166,6 @@
       <option value="missing">Missing</option>
     </select>
     <span class="spacer"></span>
-    <button class="act scan" onclick={() => onenqueue('scan')} disabled={scanning || pending} title="Re-read every source folder: new files are added, changed files re-read, missing files flagged after a grace period">
-      {scanning ? 'SCANNING…' : 'RESCAN ALL'}
-    </button>
   </div>
 
   <!-- ══ bulk bar (only when a selection exists) ══ -->
@@ -193,22 +188,13 @@
         {/if}
       </span>
       <span class="spacer"></span>
-      <button class="act" onclick={() => onenqueue('plan', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Dry measurement pass on the selected titles: predicts CRF, VMAF and savings without writing anything" aria-label="Plan the {selectedCount} selected titles">
-        PLAN SELECTED
-      </button>
-      <button class="act primary" onclick={() => onenqueue('encode', selectedMovies.map((m) => m.path))} disabled={selectedCount === 0 || pending} title="Re-encode the selected titles at their measured best CRF (sources untouched, output to the configured folder)" aria-label="Encode the {selectedCount} selected titles">
-        ENCODE SELECTED
-      </button>
       <button class="act quiet" onclick={onclear}>CLEAR</button>
     </div>
   {:else}
     <div class="bulk-bar idle">
       <span class="mono dim">{filtered.length} titles — tick checkboxes for bulk work</span>
       <span class="spacer"></span>
-      <!-- the hint rides inside PLAN ALL's title (round-6: the idle
-           toolbar carried 7 interactive elements — 6 now) -->
-      <HintButton label="PLAN ALL" hint="Probe every title and predict the outcome: which movies are worth encoding, at which CRF, saving how much. Nothing is written — a dry measurement pass. ENCODE (next to it) actually re-encodes: every movie is measured (VMAF) and written to the output folder." onclick={() => onenqueue('plan')} disabled={pending} />
-      <HintButton label="ENCODE ALL" hint="Re-encode every title with the largest CRF that still meets the VMAF target. Sources are never touched; results land in the output folder." variant="primary" onclick={() => onenqueue('encode')} disabled={pending} />
+      <span class="mono dim">the app works through the library on its own — this page only shows where it stands</span>
     </div>
   {/if}
 

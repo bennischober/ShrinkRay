@@ -12,6 +12,21 @@ from shrinkray import db
 
 
 class TestDb(unittest.TestCase):
+    def test_the_config_route_is_gone(self) -> None:
+        """Issue #134: the dashboard is a status view, not a control surface.
+
+        PUT /api/config let a browser rewrite config.json. The operator edits the
+        file on the mounted volume instead, so the route is removed - and a removed
+        route must answer 405, not silently accept the write.
+        """
+        from fastapi.testclient import TestClient
+
+        from shrinkray.server import app as app_module
+
+        client = TestClient(app_module.app)
+        response = client.put("/api/config", json={"language": "de"})
+        self.assertIn(response.status_code, (404, 405))
+
     def setUp(self):
 
         self.tmp = tempfile.TemporaryDirectory()
@@ -695,81 +710,6 @@ class TestDb(unittest.TestCase):
                 app_module.state = None
                 app_module._allowed_roots = []
 
-    def test_config_endpoint_roundtrip(self):
-        """GET /api/config returns the engine's full config shape (including
-        the resource-politeness and integration sections) so the UI can edit
-        them; POST persists what it is given."""
-        from fastapi.testclient import TestClient
-
-        import shrinkray.server.app as app_module
-        from shrinkray.server.app import AppState
-        from shrinkray.server.app import app as fast_app
-
-        app_module.state = AppState(Path(self.tmp.name) / "test.db")
-        try:
-            client = TestClient(fast_app)
-            body = client.get("/api/config").json()
-            # the sections the config page edits (defaults when no file exists)
-            self.assertIn("handbrake", body)
-            self.assertIn("max_threads", body["handbrake"])
-            self.assertIn("resources", body)
-            self.assertIn("idle_priority", body["resources"])
-            # EVERY model field is present - the hand-written dict had
-            # already drifted (stall_minutes was never shown, issue #61)
-            self.assertIn("stall_minutes", body["handbrake"])
-            self.assertIn("probe_encoder_preset", body["handbrake"])
-            self.assertIn("encoder_preset", body["handbrake"])
-            self.assertIn("crop_sample_count", body["ffmpeg"])
-            # the canonical key name (the deprecated 'seperator' is gone
-            # from the API's output)
-            self.assertIn("separator", body["file"]["output"])
-            # the removed integrations key (issue #43) is gone from the API
-            self.assertNotIn("integrations", body)
-            # PUT round-trips the new sections (the app's contract is PUT)
-            body["resources"]["idle_priority"] = False
-            body["handbrake"]["max_threads"] = 8
-            saved = client.put("/api/config", json=body)
-            self.assertEqual(saved.status_code, 200)
-            reread = client.get("/api/config").json()
-            self.assertFalse(reread["resources"]["idle_priority"])
-            self.assertEqual(reread["handbrake"]["max_threads"], 8)
-        finally:
-            app_module.state.shutdown()
-            app_module.state = None
-
-    def test_config_saved_via_api_is_the_engine_config(self):
-        """Issue #58: ONE location. A config saved with PUT /api/config is
-        what load_config() returns in a fresh process state for the same
-        --db (before the fix the dashboard wrote next to the db while the
-        engine read the package root - the setting silently stopped
-        applying after a restart)."""
-        from fastapi.testclient import TestClient
-
-        import shrinkray.config as config_module
-        import shrinkray.server.app as app_module
-        from shrinkray.server.app import AppState
-        from shrinkray.server.app import app as fast_app
-
-        app_module.state = AppState(Path(self.tmp.name) / "test.db")
-        try:
-            client = TestClient(fast_app)
-            body = client.get("/api/config").json()
-            body["handbrake"]["max_threads"] = 3
-            self.assertEqual(client.put("/api/config", json=body).status_code, 200)
-            # fresh process state: the engine's first load_config() call
-            config_module.reset_config()
-            conf = config_module.load_config(app_module.state.db_file.parent)
-            self.assertEqual(conf.handbrake_max_threads, 3)
-            # and the resolved path IS the dashboard's file (next to the db)
-            self.assertEqual(
-                config_module.config_file_used,
-                app_module.state.db_file.parent / "config.json",
-            )
-        finally:
-            app_module.state.shutdown()
-            app_module.state = None
-            config_module.reset_config()
-
     def test_explicit_config_wins_over_db_dir(self):
         """Issue #58's resolution order: an explicit --config file beats the
         db-directory default, and $SHRINKRAY_CONFIG beats the db dir too
@@ -878,7 +818,7 @@ class TestDb(unittest.TestCase):
             # row never mutates — (id, state) is the change signal).
             # Enqueue through the app's own queue object: direct SQL would
             # bypass its invariants.
-            from shrinkray.server.jobs import Job, JobKind
+            from shrinkray.jobs import Job, JobKind
 
             app_module.state.queue.enqueue(Job(kind=JobKind.SCAN, payload={"paths": ["D:/x"]}))
             fourth = client.get(
@@ -1430,90 +1370,6 @@ class TestDb(unittest.TestCase):
                 result = db.prune_missing(self.connection, existing, scope=str(root))
             self.assertEqual(result.pruned, 1)
             self.assertIsNone(db.get_file_by_path(self.connection, root / "gone.mkv"))
-
-    def test_invalid_put_leaves_no_file_behind(self):
-        """Issue #60: an invalid PUT against a directory with NO existing
-        config.json returns 400 and leaves no config.json behind (previously
-        the rejected content stayed on disk and broke every later
-        load_config())."""
-        from fastapi.testclient import TestClient
-
-        import shrinkray.config as config_module
-        import shrinkray.server.app as app_module
-        from shrinkray.server.app import AppState
-        from shrinkray.server.app import app as fast_app
-
-        app_module.state = AppState(Path(self.tmp.name) / "test.db")
-        try:
-            client = TestClient(fast_app)
-            bad = {"handbrake": {"max_threads": "abc"}}
-            response = client.put("/api/config", json=bad)
-            self.assertEqual(response.status_code, 400)
-            self.assertIn("invalid config", response.json()["detail"])
-            config_path = app_module.state.db_file.parent / "config.json"
-            self.assertFalse(config_path.exists())
-            # a later engine load is NOT poisoned (defaults, no error)
-            config_module.reset_config()
-            conf = config_module.load_config(app_module.state.db_file.parent)
-            self.assertEqual(conf.handbrake_max_threads, 0)
-        finally:
-            app_module.state.shutdown()
-            app_module.state = None
-            config_module.reset_config()
-
-    def test_invalid_put_leaves_existing_bytes_unchanged(self):
-        """Issue #60: an invalid PUT against an EXISTING config.json leaves
-        its bytes unchanged (validate first, write never happens)."""
-        from fastapi.testclient import TestClient
-
-        import shrinkray.server.app as app_module
-        from shrinkray.server.app import AppState
-        from shrinkray.server.app import app as fast_app
-
-        app_module.state = AppState(Path(self.tmp.name) / "test.db")
-        try:
-            client = TestClient(fast_app)
-            config_path = app_module.state.db_file.parent / "config.json"
-            original = '{"handbrake": {"max_threads": 4}}'
-            config_path.write_text(original, encoding="utf-8")
-            bad = {"handbrake": {"max_threads": "abc"}}
-            response = client.put("/api/config", json=bad)
-            self.assertEqual(response.status_code, 400)
-            self.assertEqual(config_path.read_text(encoding="utf-8"), original)
-        finally:
-            app_module.state.shutdown()
-            app_module.state = None
-
-    def test_failed_replace_leaves_original_intact(self):
-        """Issue #60: a failure between the temp write and the replace (the
-        acceptance criterion mocks os.replace to raise) leaves the original
-        file intact and no temp file behind."""
-        from unittest.mock import patch
-
-        from fastapi.testclient import TestClient
-
-        import shrinkray.server.app as app_module
-        from shrinkray.server.app import AppState
-        from shrinkray.server.app import app as fast_app
-
-        app_module.state = AppState(Path(self.tmp.name) / "test.db")
-        try:
-            client = TestClient(fast_app)
-            config_path = app_module.state.db_file.parent / "config.json"
-            original = '{"handbrake": {"max_threads": 4}}'
-            config_path.write_text(original, encoding="utf-8")
-            with patch("shrinkray.server.app.os.replace", side_effect=OSError("disk full")):
-                response = client.put("/api/config", json={"handbrake": {"max_threads": 2}})
-            self.assertEqual(response.status_code, 500)
-            self.assertEqual(config_path.read_text(encoding="utf-8"), original)
-            # no temp file left behind
-            leftovers = [
-                p.name for p in config_path.parent.iterdir() if p.name.startswith(".config-")
-            ]
-            self.assertEqual(leftovers, [])
-        finally:
-            app_module.state.shutdown()
-            app_module.state = None
 
 
 if __name__ == "__main__":

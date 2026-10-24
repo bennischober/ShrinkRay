@@ -7,7 +7,6 @@ to the local HTTP API — same engine, same database, same guardrails.
 Run with `shrinkray app`.
 """
 
-import contextlib
 import hmac
 import json
 import os
@@ -16,7 +15,6 @@ import queue
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import threading
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -27,9 +25,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
-from shrinkray.config import ENCODER_PRESETS, Conf, load_config
+from shrinkray.config import Conf, load_config
 from shrinkray.encode import cap_threads
-from shrinkray.engine.watch import watch
 from shrinkray.logger import log, log_error
 from shrinkray.quality import DEFAULT_TARGET_VMAF, HDR_ESTIMATE_NOTE
 from shrinkray.report import generate_report
@@ -535,59 +532,6 @@ def read_config() -> dict:
     return get_config()
 
 
-@app.put("/api/config")
-def update_config(data: dict) -> dict:
-    """Updates the configuration (writes config.json).
-
-    Validate first, write atomically (issue #60): the request body is
-    validated in memory (Conf) BEFORE any file is touched — a rejected
-    config never reaches the disk (previously a rejected write stayed on
-    disk and every later load_config() failed). The write itself is a
-    temp-file + os.replace pair: atomic on POSIX and Windows for a
-    same-volume rename, so a crash or a concurrent reader never sees a
-    half-written config.json.
-
-    Args:
-        data (dict): The configuration in config.json shape.
-
-    Returns:
-        dict: The saved configuration.
-    """
-    s = get_state()
-    config_path = _config_path(s)
-
-    # 1. validate in memory: no file is written until the config parses
-    import shrinkray.config as config_module
-
-    try:
-        config_module.Conf(data)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"invalid config: {e}") from e
-
-    # 2. write atomically: temp file in the same directory (same volume),
-    # fsync'd, then an atomic rename over the target; no backup/restore
-    # dance — a failure before the replace leaves the original untouched
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(prefix=".config-", suffix=".json", dir=config_path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as temp:
-            temp.write(json.dumps(data, indent=2))
-            temp.flush()
-            os.fsync(temp.fileno())
-        os.replace(temp_name, config_path)
-    except Exception as e:
-        # best effort cleanup of the temp file; the original config.json
-        # was never touched (the replace either happened or did not)
-        with contextlib.suppress(OSError):
-            os.unlink(temp_name)
-        raise HTTPException(status_code=500, detail=f"config write failed: {e}") from e
-
-    # 3. swap the in-memory singleton through the public reset (issue #58)
-    config_module.reset_config()
-    config_module.load_config(s.db_file.parent)
-    return data
-
-
 @app.get("/api/retained")
 def retained_list(conn: sqlite3.Connection = Depends(db_access)) -> list[dict]:
     """Lists the originals a swap retained (issue #35).
@@ -673,109 +617,6 @@ def get_job(job_id: int, conn: sqlite3.Connection = Depends(db_access)) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return job.to_dict()
-
-
-@app.post("/api/jobs")
-def create_job(request: JobRequest) -> dict:
-    """Enqueues a new job.
-
-    Args:
-        request (JobRequest): The job parameters.
-
-    Returns:
-        dict: The created job.
-    """
-    s = get_state()
-    if not request.path:
-        raise HTTPException(status_code=400, detail="path is required for this job kind")
-    path = validate_path(request.path, "path")
-    if not path.exists():
-        raise HTTPException(status_code=400, detail=f"path does not exist: {path}")
-
-    # multi-directory: merge the primary path with any additional paths
-    all_paths = [path]
-    for extra in request.paths or []:
-        extra_path = validate_path(extra, "paths")
-        if not extra_path.exists():
-            raise HTTPException(status_code=400, detail=f"path does not exist: {extra_path}")
-        all_paths.append(extra_path)
-    # deduplicate, keep order
-    seen: set[Path] = set()
-    unique_paths: list[Path] = []
-    for p in all_paths:
-        if p not in seen:
-            seen.add(p)
-            unique_paths.append(p)
-
-    payload: dict = {"paths": [str(p) for p in unique_paths]}
-    if request.kind == JobKind.ENCODE:
-        if not request.output_dir:
-            raise HTTPException(status_code=400, detail="encode requires output_dir")
-        payload["output_dir"] = str(validate_path(request.output_dir, "output_dir"))
-        payload["quality"] = request.quality
-        payload["target_vmaf"] = request.target_vmaf
-        payload["overwrite"] = request.overwrite
-        payload["workers"] = request.workers
-        payload["verify"] = request.verify
-        if request.encoder_preset is not None:
-            # reject before enqueueing: HandBrake must never see a value
-            # outside the encoder's speed-preset vocabulary (issue #31)
-            if request.encoder_preset not in ENCODER_PRESETS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"encoder_preset: '{request.encoder_preset}' is not a valid "
-                    f"speed preset (valid: {', '.join(ENCODER_PRESETS)})",
-                )
-            payload["encoder_preset"] = request.encoder_preset
-        if request.probe_encoder_preset is not None:
-            if request.probe_encoder_preset not in ENCODER_PRESETS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"probe_encoder_preset: '{request.probe_encoder_preset}' is not "
-                    f"a valid speed preset (valid: {', '.join(ENCODER_PRESETS)})",
-                )
-            payload["probe_encoder_preset"] = request.probe_encoder_preset
-    elif request.kind == JobKind.PLAN:
-        payload["target_vmaf"] = request.target_vmaf
-        if request.encoder_preset is not None:
-            if request.encoder_preset not in ENCODER_PRESETS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"encoder_preset: '{request.encoder_preset}' is not a valid "
-                    f"speed preset (valid: {', '.join(ENCODER_PRESETS)})",
-                )
-            payload["encoder_preset"] = request.encoder_preset
-        if request.probe_encoder_preset is not None:
-            if request.probe_encoder_preset not in ENCODER_PRESETS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"probe_encoder_preset: '{request.probe_encoder_preset}' is not "
-                    f"a valid speed preset (valid: {', '.join(ENCODER_PRESETS)})",
-                )
-            payload["probe_encoder_preset"] = request.probe_encoder_preset
-    else:  # scan
-        payload["rescan"] = request.rescan
-        payload["hash"] = request.hash
-        payload["workers"] = request.workers
-
-    job = s.queue.enqueue(Job(kind=request.kind, payload=payload))
-    return job.to_dict()
-
-
-@app.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: int) -> dict:
-    """Cancels a queued or running job.
-
-    Args:
-        job_id (int): The job id.
-
-    Returns:
-        dict: The acknowledgement.
-    """
-    s = get_state()
-    if not s.queue.cancel(job_id):
-        raise HTTPException(status_code=404, detail="job not found or already finished")
-    return {"cancelled": job_id}
 
 
 # response_model=None: the handler returns either a dict payload or a 304
@@ -1282,70 +1123,6 @@ def report_page() -> Response:
     return FileResponse(normalized, media_type="text/html")
 
 
-@app.post("/api/watch/{action}")
-def watch_control(
-    action: str,
-    inbox: str | None = None,
-    output_dir: str | None = None,
-    body: dict | None = None,
-) -> dict:
-    """Starts or stops the watch loop inside the app.
-
-    Accepts inbox/output_dir either as query parameters or as a JSON body
-    (the UI sends a body).
-
-    Args:
-        action (str): 'start' or 'stop'.
-        inbox (str | None): The inbox folder (start only).
-        output_dir (str | None): The output folder (start only).
-        body (dict | None): JSON body alternative to the query parameters.
-
-    Returns:
-        dict: The watcher state.
-    """
-    s = get_state()
-
-    if action == "stop":
-        s.watch_stop.set()
-        return {"watcher": "stopping"}
-
-    if action == "start":
-        body = body or {}
-        inbox = inbox or body.get("inbox")
-        output_dir = output_dir or body.get("output_dir")
-        if s.watch_thread and s.watch_thread.is_alive():
-            return {"watcher": "already running"}
-        if not inbox or not output_dir:
-            raise HTTPException(status_code=400, detail="start requires inbox and output_dir")
-        inbox_path = validate_path(inbox, "inbox")
-        output_path = validate_path(output_dir, "output_dir")
-
-        def run_watch() -> None:
-            try:
-                watch(
-                    [inbox_path],
-                    output_path,
-                    once=False,
-                    poll_interval=60.0,
-                    max_threads=cap_threads(load_config().handbrake_max_threads),
-                    stop_event=s.watch_stop,
-                    db_file=s.db_file,
-                    min_source_height=load_config().min_source_height,
-                    min_source_size_gb=load_config().min_source_size_gb,
-                    candidate_codecs=tuple(load_config().candidate_codecs),
-                    crop_sample_count=load_config().crop_sample_count,
-                )
-            except Exception as e:  # the thread must never die silently
-                log_error(f"watch loop crashed: {e}")
-
-        s.watch_stop.clear()
-        s.watch_thread = threading.Thread(target=run_watch, name="watcher", daemon=True)
-        s.watch_thread.start()
-        return {"watcher": "running"}
-
-    raise HTTPException(status_code=400, detail="action must be 'start' or 'stop'")
-
-
 def _default_roots() -> list[Path]:
     """Computes the default allowed roots: all available drive roots.
 
@@ -1441,6 +1218,7 @@ def run_app(
     _recover_interrupted_swaps()
     state.worker.start()
     auto_backlog(state, list(_allowed_roots), enabled=load_config().auto_backlog)
+    start_watch(state, list(_allowed_roots), None)
     log(f"ShrinkRay app listening on http://{host}:{port}")
 
     def monitor_memory() -> None:
@@ -1473,6 +1251,48 @@ def run_app(
 
         state.shutdown()
         log("app stopped")
+
+
+def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -> None:
+    """Starts the watch loop as a daemon thread (the resident app's own work).
+
+    The watcher is started by the APP on boot, not by a route: a status-only
+    dashboard must not be able to start work, and a container must watch without
+    a browser ever opening (issue #134).
+
+    Args:
+        state (AppState): The app state (the thread and stop event live there).
+        roots (list[Path]): The allowlisted folders to watch.
+        output_dir (Path | None): Where the encodes go, or None to encode in
+            place.
+    """
+    if state.watch_thread is not None and state.watch_thread.is_alive():
+        return
+    if not roots:
+        return
+    from shrinkray.engine.watch import watch
+
+    def run_watch() -> None:
+        try:
+            watch(
+                roots,
+                output_dir,
+                once=False,
+                poll_interval=60.0,
+                max_threads=cap_threads(load_config().handbrake_max_threads),
+                stop_event=state.watch_stop,
+                db_file=state.db_file,
+                min_source_height=load_config().min_source_height,
+                min_source_size_gb=load_config().min_source_size_gb,
+                candidate_codecs=tuple(load_config().candidate_codecs),
+                crop_sample_count=load_config().crop_sample_count,
+            )
+        except Exception as e:
+            log_error(f"watch loop crashed: {e}")
+
+    state.watch_stop.clear()
+    state.watch_thread = threading.Thread(target=run_watch, name="watcher", daemon=True)
+    state.watch_thread.start()
 
 
 def auto_backlog(state: "AppState", roots: list[Path], *, enabled: bool) -> list[str]:
