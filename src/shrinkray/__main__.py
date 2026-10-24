@@ -257,7 +257,7 @@ def app_command(
     The app owns long-running work; terminal and web UI are just consumers
     of the same engine and database. Stop with Ctrl+C.
     """
-    from shrinkray.app import run_app
+    from shrinkray.server.app import run_app
 
     # empty list = run_app computes its default (all drive roots); only an
     # explicit --root narrows the allowlist down

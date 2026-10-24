@@ -145,7 +145,7 @@ class TestJobs(unittest.TestCase):
         )
         with (
             patch("shrinkray.engine.plan.plan_quality", return_value=fake_result),
-            patch("shrinkray.jobs.cap_threads", return_value=1),
+            patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             result = jobs.execute_plan(job, self.connection, threading.Event())
         self.assertEqual(result["plans"][0]["state"], "encode")
@@ -210,7 +210,7 @@ class TestJobs(unittest.TestCase):
         )
         with (
             _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan,
-            _patch("shrinkray.jobs.cap_threads", return_value=1),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job, self.connection, threading.Event())
         self.assertEqual(fake_plan.call_args.kwargs.get("encoder_preset"), "8")
@@ -218,7 +218,7 @@ class TestJobs(unittest.TestCase):
         job2 = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
         with (
             _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan2,
-            _patch("shrinkray.jobs.cap_threads", return_value=1),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job2, self.connection, threading.Event())
         self.assertEqual(fake_plan2.call_args.kwargs.get("encoder_preset"), "3")
@@ -231,7 +231,7 @@ class TestJobs(unittest.TestCase):
         )
         with (
             _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan3,
-            _patch("shrinkray.jobs.cap_threads", return_value=1),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job3, self.connection, threading.Event())
         self.assertEqual(fake_plan3.call_args.kwargs.get("probe_encoder_preset"), "6")
@@ -408,7 +408,7 @@ class TestJobs(unittest.TestCase):
         hard-delete older ones (the jobs table never had any retention —
         the library side did via prune_missing, this side grew forever).
         Queued/running rows are never touched."""
-        from shrinkray.jobs import JOB_RETENTION
+        from shrinkray.server.jobs import JOB_RETENTION
 
         total = JOB_RETENTION + 10
         for i in range(total):
@@ -490,7 +490,7 @@ class TestJobs(unittest.TestCase):
         )
         worker = jobs.JobWorker(self.connection, self.queue)
         with mock.patch(
-            "shrinkray.jobs.resolve_movies", side_effect=RuntimeError("engine exploded")
+            "shrinkray.server.jobs.resolve_movies", side_effect=RuntimeError("engine exploded")
         ):
             worker._execute(job)  # must not raise
         reloaded = self.queue.get(job.id)
@@ -508,33 +508,33 @@ class TestApiPathValidation(unittest.TestCase):
     def setUp(self):
         import tempfile
 
-        from shrinkray import app as app_module
+        from shrinkray.server import app as app_module
 
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()
         app_module.allow_roots([self.root])
 
     def tearDown(self):
-        from shrinkray import app as app_module
+        from shrinkray.server import app as app_module
 
         app_module._allowed_roots = []
         self.tmp.cleanup()
 
     def test_validate_path_accepts_inside_root(self):
-        from shrinkray.app import validate_path
+        from shrinkray.server.app import validate_path
 
         path = validate_path(str(self.root / "movies"))
         self.assertEqual(path, self.root / "movies")
 
     def test_validate_path_accepts_root_itself(self):
-        from shrinkray.app import validate_path
+        from shrinkray.server.app import validate_path
 
         self.assertEqual(validate_path(str(self.root)), self.root)
 
     def test_validate_path_rejects_outside_root(self):
         from fastapi import HTTPException
 
-        from shrinkray.app import validate_path
+        from shrinkray.server.app import validate_path
 
         # a real directory outside the allowed root (the system temp dir that
         # holds it): a drive-letter literal is relative on posix and would
@@ -546,7 +546,7 @@ class TestApiPathValidation(unittest.TestCase):
     def test_validate_path_rejects_escape_via_dotdot(self):
         from fastapi import HTTPException
 
-        from shrinkray.app import validate_path
+        from shrinkray.server.app import validate_path
 
         # .. inside the root resolves outside => must be rejected
         with self.assertRaises(HTTPException) as ctx:
@@ -559,7 +559,7 @@ class TestApiPathValidation(unittest.TestCase):
         sees the real target (the case a real attacker would use)."""
         from fastapi import HTTPException
 
-        from shrinkray.app import validate_path
+        from shrinkray.server.app import validate_path
 
         if not hasattr(os, "symlink"):
             self.skipTest("symlinks unavailable on this platform")
@@ -579,7 +579,7 @@ class TestApiPathValidation(unittest.TestCase):
     def test_validate_path_rejects_empty(self):
         from fastapi import HTTPException
 
-        from shrinkray.app import validate_path
+        from shrinkray.server.app import validate_path
 
         with self.assertRaises(HTTPException) as ctx:
             validate_path("   ")
@@ -588,7 +588,7 @@ class TestApiPathValidation(unittest.TestCase):
     def test_validate_path_rejects_relative(self):
         from fastapi import HTTPException
 
-        from shrinkray.app import validate_path
+        from shrinkray.server.app import validate_path
 
         # relative paths resolve against the CWD, which is not an allowed root
         with self.assertRaises(HTTPException) as ctx:
@@ -598,7 +598,7 @@ class TestApiPathValidation(unittest.TestCase):
     def test_validate_path_accepts_root_itself_and_children(self):
         import tempfile
 
-        from shrinkray.app import allow_roots, validate_path
+        from shrinkray.server.app import allow_roots, validate_path
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -618,9 +618,9 @@ class TestApiPathValidation(unittest.TestCase):
 
         from fastapi.testclient import TestClient
 
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState
-        from shrinkray.app import app as fast_app
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
 
         with tempfile.TemporaryDirectory() as tmp:
             app_module.state = AppState(Path(tmp) / "test.db")
@@ -653,9 +653,9 @@ class TestApiPathValidation(unittest.TestCase):
         updates underneath the tab, and a hard-refresh ritual is a bug."""
         from fastapi.testclient import TestClient
 
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState
-        from shrinkray.app import app as fast_app
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
 
         dist = Path(__file__).parent.parent / "ui" / "dist"
         if not (dist / "index.html").is_file():
