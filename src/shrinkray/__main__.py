@@ -1219,15 +1219,20 @@ def doctor(
 
 @app.command()
 def watch_mode(
-    inbox: Path = typer.Argument(
+    root: list[Path] = typer.Option(
         ...,
+        "--root",
         exists=True,
         file_okay=False,
         readable=True,
-        help="Directory to watch for new movies.",
+        help=(
+            "Folder to watch (repeatable). The tree is walked recursively, so a "
+            "new or changed file anywhere under it is picked up."
+        ),
     ),
-    output_dir: Path | None = typer.Argument(
+    output_dir: Path | None = typer.Option(
         None,
+        "--output-dir",
         help=(
             "Directory for the encoded files. Omit it to encode IN PLACE: each "
             "verified output takes the source's own path and the original is "
@@ -1280,9 +1285,10 @@ def watch_mode(
 
     config = load_config(config_file=config_file)
     apply_config(config)
+    roots = [Path(r) for r in root]
     try:
         watch(
-            inbox,
+            roots,
             output_dir,
             target_vmaf=target_vmaf,
             encoder=config.handbrake_encoder,

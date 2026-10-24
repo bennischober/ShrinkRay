@@ -338,25 +338,28 @@ loopback development flow is unchanged — no token, no prompt. TLS is deliberat
 left to a reverse proxy. Stop with Ctrl+C; the running job's state is recovered on
 the next start.
 
-### `watch` — one-shot folder watcher
+### `watch-mode` - watch the library tree
 
 ```bash
 # in place: the verified output takes the source path, original renamed aside
-uv run shrinkray watch-mode 'D:\Downloads'
+uv run shrinkray watch-mode --root 'D:\Movies'
 
-# or write a second copy into an output directory
-uv run shrinkray watch-mode 'D:\Downloads' 'D:\Encoded'
+# several folders, written to an output directory instead
+uv run shrinkray watch-mode --root 'D:\Movies' --root 'E:\Archive' \
+    --output-dir 'D:\Encoded'
 ```
 
-The standalone variant of the app's watch loop: polls the inbox folder for
-new movie files, waits until they are stable (download/copy finished), applies
-the same skip logic and encodes them. With no output directory the encode lands
-**in place**, so the original is renamed aside and kept - and the retained
-originals are never picked up as new movies on a later pass. Naming an output
-directory keeps the older behaviour of writing a second copy there. Use the
-`app` command instead when you want this to run continuously alongside the
-dashboard.
+The standalone variant of the app's watch loop. It walks each `--root` folder
+**recursively**, so a new file anywhere in the tree is picked up without a
+restart - not only what someone drops into one inbox. A file that is still being
+written waits until it is stable; a **changed** file (same path, new mtime or size)
+is a new question and is re-decided.
 
+With no output directory the encode lands **in place**, so the original is
+renamed aside and kept - and the retained originals are never picked up as new
+movies on a later pass. Naming an output directory keeps the older behaviour of
+writing a second copy there. Use the `app` command instead when you want this to
+run continuously alongside the dashboard.
 > [!NOTE]
 > VMAF scores are only comparable within the same libvmaf version: the same
 > encode scored 95.76 on ffmpeg 5 (libvmaf v2) and 94.40 on ffmpeg 9 (libvmaf v3).

@@ -1322,7 +1322,7 @@ def watch_control(
         def run_watch() -> None:
             try:
                 watch(
-                    inbox_path,
+                    [inbox_path],
                     output_path,
                     once=False,
                     poll_interval=60.0,
