@@ -1439,6 +1439,7 @@ def run_app(
     apply_config(load_config(config_file=config_file))
     _recover_interrupted_swaps()
     state.worker.start()
+    auto_backlog(state, list(_allowed_roots), enabled=load_config().auto_backlog)
     log(f"ShrinkRay app listening on http://{host}:{port}")
 
     def monitor_memory() -> None:
@@ -1468,3 +1469,41 @@ def run_app(
     finally:
         state.shutdown()
         log("app stopped")
+
+
+def auto_backlog(state: "AppState", roots: list[Path], *, enabled: bool) -> list[str]:
+    """Enqueues the scan -> plan -> encode backlog on boot, in that order.
+
+    This is a SCHEDULER, not an engine: the job kinds and the worker's chaining
+    already exist, so this only decides that a fresh container should start working
+    without a client. It is off unless `app.auto_backlog` is set, because a
+    developer's dashboard must not start encoding their library.
+
+    The three jobs are enqueued together, not chained on completion: the queue is
+    FIFO and the worker is single-threaded, so they run in this order by
+    construction. A restart does not re-encode finished files, because the encode
+    job consults the database and skips what it already recorded.
+
+    Args:
+        state (AppState): The app state (queue and validated roots).
+        roots (list[Path]): The allowlisted folders to scan.
+        enabled (bool): False when `app.auto_backlog` is off (the default).
+
+    Returns:
+        list[str]: The enqueued job kinds, empty when disabled.
+    """
+    if not enabled or not roots:
+        return []
+    payload: dict = {"paths": [str(root) for root in roots]}
+    jobs = [
+        Job(kind=JobKind.SCAN, payload=payload),
+        Job(kind=JobKind.PLAN, payload={**payload, "quality": True}),
+        Job(kind=JobKind.ENCODE, payload={**payload, "quality": True}),
+    ]
+    for job in jobs:
+        state.queue.enqueue(job)
+    log(
+        "Startup backlog enqueued: scan -> plan -> encode over "
+        f"{len(roots)} root{'s' if len(roots) != 1 else ''}."
+    )
+    return [job.kind.value for job in jobs]

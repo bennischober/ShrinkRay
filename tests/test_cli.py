@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from unittest.mock import patch
 
 from shrinkray import config as config_helper
@@ -648,3 +649,81 @@ class TestToolchainPreflight(unittest.TestCase):
         ):
             problems = service.toolchain_problems()
         self.assertEqual(len(problems), 2, problems)
+
+
+class TestStartupBacklog(unittest.TestCase):
+    """Issue #126: a fresh container starts the backlog with no client.
+
+    The entrypoint started the resident app and nothing else, so a container pointed
+    at a library did nothing until someone opened the dashboard and clicked Scan,
+    Plan, Encode - which also makes the observe-only dashboard impossible.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "library"
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _state(self) -> "object":
+        from shrinkray import app as app_module
+
+        with (
+            mock.patch.object(app_module, "ProgressBus"),
+            mock.patch.object(app_module, "JobQueue"),
+            mock.patch.object(app_module, "JobWorker"),
+        ):
+            return app_module.AppState(Path(self.tmp.name) / "m.db")
+
+    def test_the_backlog_is_off_by_default(self) -> None:
+        """A developer's dashboard must not start encoding the library."""
+        from shrinkray import app as app_module
+
+        state = self._state()
+        self.assertEqual(app_module.auto_backlog(state, [self.root], enabled=False), [])
+        self.assertFalse(state.queue.enqueue.called)
+
+    def test_the_config_default_is_off(self) -> None:
+        """The non-container default is off, per the criterion."""
+        from shrinkray.config import Conf
+
+        self.assertFalse(Conf().auto_backlog)
+
+    def test_the_backlog_runs_scan_then_plan_then_encode(self) -> None:
+        """The criterion: the order is scan -> plan -> encode."""
+        from shrinkray import app as app_module
+
+        state = self._state()
+        kinds = app_module.auto_backlog(state, [self.root], enabled=True)
+        self.assertEqual(kinds, ["scan", "plan", "encode"])
+
+    def test_every_root_reaches_the_scan_payload(self) -> None:
+        """Every allowlisted root is scanned, not just the first."""
+        from shrinkray import app as app_module
+
+        second = Path(self.tmp.name) / "second"
+        second.mkdir()
+        state = self._state()
+        app_module.auto_backlog(state, [self.root, second], enabled=True)
+        scan = state.queue.enqueue.call_args_list[0].args[0]
+        self.assertEqual(scan.payload["paths"], [str(self.root), str(second)])
+
+    def test_the_plan_and_encode_are_quality_jobs(self) -> None:
+        """A fixed-preset encode would be a second, unmeasured path."""
+        from shrinkray import app as app_module
+
+        state = self._state()
+        app_module.auto_backlog(state, [self.root], enabled=True)
+        calls = state.queue.enqueue.call_args_list
+        self.assertTrue(calls[1].args[0].payload["quality"])
+        self.assertTrue(calls[2].args[0].payload["quality"])
+
+    def test_no_roots_enqueues_nothing(self) -> None:
+        """An empty allowlist must not enqueue a job that scans nothing."""
+        from shrinkray import app as app_module
+
+        state = self._state()
+        self.assertEqual(app_module.auto_backlog(state, [], enabled=True), [])
+        self.assertFalse(state.queue.enqueue.called)
