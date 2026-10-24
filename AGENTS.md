@@ -334,6 +334,16 @@ more specific.
   where it adds context, e.g. `fix(encode): ...`. Body explains the *why*
   when the *what* is not obvious. One logical change per commit — see the
   issue workflow above for how a change reaches `main`.
+- **Every PR that changes code or docs adds a `CHANGELOG.md` entry in the
+  same PR.** One bullet under `## [Unreleased]` in the matching subsection
+  (`Added` / `Changed` / `Fixed` / `Removed`), phrased as the user-visible
+  change (what a user of the release notices), referencing the issue:
+  `- **Short statement** (issue #N).` A PR without a changelog entry is
+  incomplete the same way a behavior change without a test is. Internal
+  refactors with no user-visible effect get an entry only when they change
+  something a reader of the release would care about (e.g. the module
+  layout). The release workflow turns the matching `[Unreleased]` section
+  into the GitHub release notes, so the entry IS the release note.
 - **The sqlite database (`metadata.db`) is user data, not source.** Schema
   changes go through a migration in `db.py` (bump `SCHEMA_VERSION`, see the
   v3 migration for the pattern). Never commit a `.db` file.
