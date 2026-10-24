@@ -10,6 +10,8 @@ Nothing yet.
 
 ### Added
 
+- **`shrinkray watch-mode` renders a live status panel** (issue #178): watched roots, output mode (in place vs output dir), disk free against the floor, and the current activity with a percent bar while encoding — fed by the engine's own progress events. `--no-live` restores the plain log stream, and a non-TTY session degrades automatically. No new dependency (rich was already core).
+
 - **The pull-first install path is documented** (issue #175): the README's Container section and docs/docker.md's Running-it section lead with `docker pull ghcr.io/bennischober/shrinkray:latest` + a single `docker run` (mounts + token), build-from-source is the development fallback, and the compose file's published-image line is ready to un-comment. docs/docker.md records the registry decision and the tag scheme.
 
 - **`scripts/verify_fullmovie.py` runs from anywhere uv exists** (issue #179): the script carries PEP 723 inline metadata, so the manual full-movie VMAF check works against an installed ShrinkRay without the dev checkout — which is where real-media verification actually happens. The pass also fixed a latent break: the script still imported `measure_vmaf` from `shrinkray.quality` (deleted in the #97 module move) and has been unrunnable since; it now imports from `shrinkray.tools.vmaf`.

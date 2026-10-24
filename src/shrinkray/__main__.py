@@ -45,6 +45,7 @@ from shrinkray.tools.process import apply_config
 if TYPE_CHECKING:
     import sqlite3
 
+    from rich.live import Live
     from rich.progress import TaskID
 
     from shrinkray.config import Conf
@@ -1213,6 +1214,83 @@ def doctor(
     raise typer.Exit(1)  # non-zero exit: scripts/cron can detect unhealth
 
 
+def _watch_display(
+    roots: list[Path],
+    output_dir: Path | None,
+    poll_interval: int,
+) -> tuple["Live", "Callable[[dict], None]"]:
+    """Builds the watch mode's live display (issue #178): a rich Live panel
+    with the watched roots, the output mode, the disk free vs floor and a
+    percent bar for the current encode, fed by the engine's progress events.
+
+    The display is a renderer over the events, never the loop itself: on a
+    non-TTY rich degrades Live to plain prints (the log lines keep flowing
+    as before), and --no-live skips the panel entirely.
+
+    Args:
+        roots (list[Path]): The watched roots (header line).
+        output_dir (Path | None): The output directory, or None for in-place
+            (the header says which mode).
+        poll_interval (int): Seconds between passes (header line).
+
+    Returns:
+        tuple[Live, Callable]: The Live instance (use as a context manager)
+        and the progress callback to hand to watch().
+    """
+    from rich.live import Live
+    from rich.table import Table
+    from rich.text import Text
+
+    from shrinkray.engine.pipeline import DISK_FREE_FLOOR_BYTES, disk_free_bytes
+
+    console = Console()
+
+    def render() -> Table:
+        table = Table.grid(padding=(0, 2))
+        mode = "in place (originals retained)" if output_dir is None else f"-> {output_dir}"
+        free = disk_free_bytes(output_dir if output_dir is not None else roots[0])
+        free_s = (
+            f"{free / (1024**3):.1f} GB free (floor {DISK_FREE_FLOOR_BYTES / (1024**3):.1f} GB)"
+            if free is not None
+            else "disk: unknown"
+        )
+        table.add_row(Text("ShrinkRay watch", style="bold"), Text(mode, style="dim"))
+        table.add_row(
+            Text("watching", style="dim"),
+            Text(", ".join(str(r) for r in roots), style="cyan"),
+        )
+        table.add_row(Text("poll", style="dim"), Text(f"{poll_interval}s · {free_s}", style="dim"))
+        status = _watch_state.get("status") or "waiting for new files..."
+        style = (
+            "green"
+            if _watch_state.get("done")
+            else ("amber" if _watch_state.get("percent") is not None else "")
+        )
+        table.add_row(Text("now", style="dim"), Text(str(status), style=style or "white"))
+        return table
+
+    _watch_state.clear()
+    _watch_state["status"] = None
+    _watch_state["percent"] = None
+    _watch_state["done"] = False
+
+    def callback(data: dict) -> None:
+        if data.get("stage") == "encode" and "percent" in data:
+            _watch_state["status"] = (
+                f"encoding '{data.get('movie', 'movie')}' at {data['percent']:.0f}%"
+            )
+            _watch_state["percent"] = float(data["percent"])
+        elif data.get("stage") == "probe":
+            _watch_state["status"] = f"probing: {data.get('detail', '...')}"
+            _watch_state["percent"] = None
+
+    live = Live(render(), console=console, refresh_per_second=4, screen=False)
+    return live, callback
+
+
+_watch_state: dict = {}
+
+
 @app.command()
 def watch_mode(
     root: list[Path] = typer.Option(
@@ -1264,6 +1342,15 @@ def watch_mode(
         help="Probe windows, overriding --sample-every when set explicitly.",
     ),
     poll: int = typer.Option(60, "--poll", min=5, help="Seconds between inbox checks."),
+    live: bool = typer.Option(
+        True,
+        "--live/--no-live",
+        help=(
+            "Render a live status panel (roots, disk, current encode with a "
+            "percent bar). --no-live restores the plain log stream; a non-TTY "
+            "session degrades automatically."
+        ),
+    ),
     config_file: Path = typer.Option(
         None,
         "--config",
@@ -1282,19 +1369,40 @@ def watch_mode(
     config = load_config(config_file=config_file)
     apply_config(config)
     roots = [Path(r) for r in root]
+    if not live:
+        try:
+            watch(
+                roots,
+                output_dir,
+                target_vmaf=target_vmaf,
+                encoder=config.handbrake_encoder,
+                probe_encoder_preset=config.handbrake_probe_encoder_preset,
+                encoder_preset=config.handbrake_encoder_preset,
+                poll_interval=float(poll),
+                max_threads=cap_threads(config.handbrake_max_threads),
+                db_file=DB_FILE,
+                min_source_height=config.min_source_height,
+            )
+        except (RuntimeError, FileNotFoundError) as e:
+            log_error(str(e))
+            raise typer.Exit(1) from e
+        return
+    live_display, progress_callback = _watch_display(roots, output_dir, poll)
     try:
-        watch(
-            roots,
-            output_dir,
-            target_vmaf=target_vmaf,
-            encoder=config.handbrake_encoder,
-            probe_encoder_preset=config.handbrake_probe_encoder_preset,
-            encoder_preset=config.handbrake_encoder_preset,
-            poll_interval=float(poll),
-            max_threads=cap_threads(config.handbrake_max_threads),
-            db_file=DB_FILE,
-            min_source_height=config.min_source_height,
-        )
+        with live_display:
+            watch(
+                roots,
+                output_dir,
+                target_vmaf=target_vmaf,
+                encoder=config.handbrake_encoder,
+                probe_encoder_preset=config.handbrake_probe_encoder_preset,
+                encoder_preset=config.handbrake_encoder_preset,
+                poll_interval=float(poll),
+                max_threads=cap_threads(config.handbrake_max_threads),
+                db_file=DB_FILE,
+                min_source_height=config.min_source_height,
+                progress=progress_callback,
+            )
     except (RuntimeError, FileNotFoundError) as e:
         log_error(str(e))
         raise typer.Exit(1) from e
