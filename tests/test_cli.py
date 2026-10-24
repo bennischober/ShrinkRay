@@ -6,6 +6,7 @@ from pathlib import Path
 
 from shrinkray import config as config_helper
 from shrinkray import db
+from shrinkray.engine import scan
 
 
 class TestMain(unittest.TestCase):
@@ -296,3 +297,87 @@ class TestReadmeInvocations(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInputShapes(unittest.TestCase):
+    """Issue #123: the Mode A contract is "a file, a folder, or a glob".
+
+    All three shapes must resolve to the same movie list, because the one-shot
+    mode exists for the single stubborn file and a quoted glob arrives
+    unexpanded on Windows. Real tempfile directories throughout: a fictional
+    path is absolute on Windows and relative on Linux, so resolve() differs.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.movies = self.root / "movies"
+        self.nested = self.movies / "Matrix"
+        self.nested.mkdir(parents=True)
+        self.one = self.nested / "one.mkv"
+        self.one.write_bytes(b"x")
+        self.two = self.movies / "two.mp4"
+        self.two.write_bytes(b"y")
+        (self.nested / "poster.jpg").write_bytes(b"z")
+        self.extensions = [".mkv", ".mp4"]
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_a_single_file_is_one_movie(self) -> None:
+        """The case the one-shot mode exists for: one stubborn file."""
+        _root, found = scan.resolve_input_paths(str(self.one), self.extensions)
+        self.assertEqual(found, [self.one.resolve()])
+
+    def test_a_folder_walks_recursively(self) -> None:
+        """A folder behaves as before: every movie under it."""
+        _root, found = scan.resolve_input_paths(str(self.movies), self.extensions)
+        self.assertEqual(found, sorted([self.one.resolve(), self.two.resolve()]))
+
+    def test_a_glob_matches_every_file_it_names(self) -> None:
+        """A quoted glob arrives unexpanded, so the CLI must expand it."""
+        pattern = str(self.movies / "*.mp4")
+        _root, found = scan.resolve_input_paths(pattern, self.extensions)
+        self.assertEqual(found, [self.two.resolve()])
+
+    def test_a_recursive_glob_reaches_nested_movies(self) -> None:
+        pattern = str(self.movies / "**" / "*.mkv")
+        _root, found = scan.resolve_input_paths(pattern, self.extensions)
+        self.assertEqual(found, [self.one.resolve()])
+
+    def test_a_glob_matching_nothing_is_an_error(self) -> None:
+        """Silently doing nothing is the failure mode this refuses."""
+        pattern = str(self.movies / "*.avi")
+        with self.assertRaises(FileNotFoundError) as raised:
+            scan.resolve_input_paths(pattern, self.extensions)
+        self.assertIn("matched no movie file", str(raised.exception))
+
+    def test_a_missing_path_is_an_error(self) -> None:
+        with self.assertRaises(FileNotFoundError):
+            scan.resolve_input_paths(str(self.root / "nope"), self.extensions)
+
+    def test_a_glob_keeps_the_pattern_directory_as_category_root(self) -> None:
+        """A glob over one folder groups like a directory scan would.
+
+        The category is derived from the root, so the root must be the pattern's
+        leading literal directory, not the filesystem root.
+        """
+        pattern = str(self.movies / "*.mp4")
+        root, _found = scan.resolve_input_paths(pattern, self.extensions)
+        self.assertEqual(root, self.movies.resolve())
+
+    def test_the_output_directory_is_excluded_from_a_glob(self) -> None:
+        """A glob must not re-encode the outputs a previous run produced."""
+        out = self.root / "encoded"
+        out.mkdir()
+        (out / "done.mkv").write_bytes(b"o")
+        pattern = str(self.root / "**" / "*.mkv")
+        _root, found = scan.resolve_input_paths(pattern, self.extensions, exclude=out)
+        self.assertIn(self.one.resolve(), found)
+        self.assertNotIn((out / "done.mkv").resolve(), found)
+
+    def test_a_non_movie_glob_match_is_ignored(self) -> None:
+        """The extension decides, so a glob naming a poster keeps only movies."""
+        pattern = str(self.nested / "*")
+        _root, found = scan.resolve_input_paths(pattern, self.extensions)
+        self.assertEqual(found, [self.one.resolve()])
