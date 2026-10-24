@@ -1,507 +1,189 @@
 # Changelog
 
-All notable changes to ShrinkRay are documented here. Releases are
-tagged in git; the GitHub release for each tag carries the same notes.
+All notable changes to ShrinkRay are documented here. Releases are tagged in git; the GitHub release for each tag carries the same notes.
 
 ## [Unreleased]
 
 Nothing yet.
 
 ## [0.4.0] - 2026-10-25
+
 ### Added
 
-- **The pull-first install path is documented** (issue #175): the README's
-  Container section and docs/docker.md's Running-it section lead with
-  `docker pull ghcr.io/bennischober/shrinkray:latest` + a single `docker run`
-  (mounts + token), build-from-source is the development fallback, and the
-  compose file's published-image line is ready to un-comment. docs/docker.md
-  records the registry decision and the tag scheme.
+- **The pull-first install path is documented** (issue #175): the README's Container section and docs/docker.md's Running-it section lead with `docker pull ghcr.io/bennischober/shrinkray:latest` + a single `docker run` (mounts + token), build-from-source is the development fallback, and the compose file's published-image line is ready to un-comment. docs/docker.md records the registry decision and the tag scheme.
 
-- **`scripts/verify_fullmovie.py` runs from anywhere uv exists** (issue
-  #179): the script carries PEP 723 inline metadata, so the manual
-  full-movie VMAF check works against an installed ShrinkRay without the
-  dev checkout — which is where real-media verification actually happens.
-  The pass also fixed a latent break: the script still imported
-  `measure_vmaf` from `shrinkray.quality` (deleted in the #97 module
-  move) and has been unrunnable since; it now imports from
-  `shrinkray.tools.vmaf`.
+- **`scripts/verify_fullmovie.py` runs from anywhere uv exists** (issue #179): the script carries PEP 723 inline metadata, so the manual full-movie VMAF check works against an installed ShrinkRay without the dev checkout — which is where real-media verification actually happens. The pass also fixed a latent break: the script still imported `measure_vmaf` from `shrinkray.quality` (deleted in the #97 module move) and has been unrunnable since; it now imports from `shrinkray.tools.vmaf`.
 
-- **A container image for development and headless runs** (issue #34): one
-  `Dockerfile` with a `runtime` target (the deployment shape) and a `dev`
-  target that runs the gate inside the image, plus a `docker-compose.yml`.
-  The toolchain is pinned by version **and** sha256 - stock Debian/Ubuntu
-  `ffmpeg` is built without libvmaf, so quality mode cannot run on it at all,
-  and an unpinned build makes stored VMAF scores incomparable across
-  machines. The build fails unless `ffmpeg -h filter=libvmaf` succeeds and both
-  version strings match the pins.
+- **A container image for development and headless runs** (issue #34): one `Dockerfile` with a `runtime` target (the deployment shape) and a `dev` target that runs the gate inside the image, plus a `docker-compose.yml`. The toolchain is pinned by version **and** sha256 - stock Debian/Ubuntu `ffmpeg` is built without libvmaf, so quality mode cannot run on it at all, and an unpinned build makes stored VMAF scores incomparable across machines. The build fails unless `ffmpeg -h filter=libvmaf` succeeds and both version strings match the pins.
 
-- **`resources.cpu_count()` respects a container's CPU quota.** `--cpus=2`
-  on a 24-core host must plan 2 workers, not 24. Measured: inside a 2-CPU
-  container `os.cpu_count()` *and* `os.process_cpu_count()` both still report
-  24, so the quota is read from the cgroup (`cpu.max` on v2,
-  `cpu.cfs_quota_us`/`cpu.cfs_period_us` on v1) with the machine count as
-  the fallback. Without it a quota-limited container plans a 24-way parallel
-  encode inside its quota and the encodes thrash.
+- **`resources.cpu_count()` respects a container's CPU quota.** `--cpus=2` on a 24-core host must plan 2 workers, not 24. Measured: inside a 2-CPU container `os.cpu_count()` *and* `os.process_cpu_count()` both still report 24, so the quota is read from the cgroup (`cpu.max` on v2, `cpu.cfs_quota_us`/`cpu.cfs_period_us` on v1) with the machine count as the fallback. Without it a quota-limited container plans a 24-way parallel encode inside its quota and the encodes thrash.
 
-- **Swap in place with a retained original** (issue #35): `encode --replace`
-  moves a verified output into its source's path and renames the original
-  aside as `<name>.shrinkray-original` - **kept, never deleted**. The
-  library is sacred: ShrinkRay has no code path that removes a source, and
-  the only `unlink` in `replace.py` removes a staging file it created
-  itself.
+- **Swap in place with a retained original** (issue #35): `encode --replace` moves a verified output into its source's path and renames the original aside as `<name>.shrinkray-original` - **kept, never deleted**. The library is sacred: ShrinkRay has no code path that removes a source, and the only `unlink` in `replace.py` removes a staging file it created itself.
 
-- **A retention ledger** (schema v14, `retained` table) records what each
-  swap replaced: source path, retained path, the encode that superseded it and
-  both sizes. `shrinkray retained list` and the dashboard's Retained page read
-  it, so the operator can reclaim that space manually, in their own file
-  manager. There is deliberately no delete button.
+- **A retention ledger** (schema v14, `retained` table) records what each swap replaced: source path, retained path, the encode that superseded it and both sizes. `shrinkray retained list` and the dashboard's Retained page read it, so the operator can reclaim that space manually, in their own file manager. There is deliberately no delete button.
 
-- **Crash recovery for an interrupted swap**: the swap is two
-  same-directory renames, so after a crash at any instant the source path
-  holds either the original or the new file, never neither. `shrinkray retained
-  recover --dir <folder>` resolves the leftovers, and the app does it for every
-  allowlisted root at startup.
+- **Crash recovery for an interrupted swap**: the swap is two same-directory renames, so after a crash at any instant the source path holds either the original or the new file, never neither. `shrinkray retained recover --dir <folder>` resolves the leftovers, and the app does it for every allowlisted root at startup.
 
-- **Optional bearer-token authentication for the dashboard** (issue #36).
-  `SHRINKRAY_TOKEN` turns auth on; every route then requires
-  `Authorization: Bearer <token>`, the SSE stream also accepts `?token=`
-  (an `EventSource` cannot send a header), and the UI asks for the token
-  once and keeps it in the browser. The guard is a middleware, not a
-  per-route dependency, so a route added later cannot be left
-  unauthenticated by forgetting a decorator.
+- **Optional bearer-token authentication for the dashboard** (issue #36). `SHRINKRAY_TOKEN` turns auth on; every route then requires `Authorization: Bearer <token>`, the SSE stream also accepts `?token=` (an `EventSource` cannot send a header), and the UI asks for the token once and keeps it in the browser. The guard is a middleware, not a per-route dependency, so a route added later cannot be left unauthenticated by forgetting a decorator.
 
-- **A non-loopback bind without a token is now a startup failure**, not a
-  silently open dashboard. Binding `0.0.0.0` with no `SHRINKRAY_TOKEN`
-  raises with the variable named in the message. The loopback development
-  flow is unchanged: no token, no prompt.
+- **A non-loopback bind without a token is now a startup failure**, not a silently open dashboard. Binding `0.0.0.0` with no `SHRINKRAY_TOKEN` raises with the variable named in the message. The loopback development flow is unchanged: no token, no prompt.
 
-- **The container image is published to GHCR on release tags** (issue
-  #165): a `v*` tag runs the full gate, publishes the Python release, then
-  builds the runtime image, **smoke-tests it** (boot + token-authenticated
-  `/api/status` healthcheck) and only then pushes
-  `ghcr.io/bennischober/shrinkray:<tag>` and `:latest` with OCI labels.
-  The smoke test caught three real defects before anything shipped: two
-  missing shared libraries (`libmp3lame0`, `libvorbisenc2`) that made
-  HandBrakeCLI unloadable and the image refuse to boot; a healthcheck that
-  did not send the token (401 forever); and `supports_svt_av1()` reading
-  the encoder probe's preset list from stdout when HandBrakeCLI writes it
-  to stderr, which made a healthy toolchain report as unusable.
+- **The container image is published to GHCR on release tags** (issue #165): a `v*` tag runs the full gate, publishes the Python release, then builds the runtime image, **smoke-tests it** (boot + token-authenticated `/api/status` healthcheck) and only then pushes `ghcr.io/bennischober/shrinkray:<tag>` and `:latest` with OCI labels. The smoke test caught three real defects before anything shipped: two missing shared libraries (`libmp3lame0`, `libvorbisenc2`) that made HandBrakeCLI unloadable and the image refuse to boot; a healthcheck that did not send the token (401 forever); and `supports_svt_av1()` reading the encoder probe's preset list from stdout when HandBrakeCLI writes it to stderr, which made a healthy toolchain report as unusable.
 
-- **Toolchain preflight** (issue #132): the resident app and `shrinkray
-  doctor` refuse to start on a toolchain that cannot do the product's one
-  job — HandBrakeCLI missing or without `svt_av1`, or VMAF unmeasurable —
-  naming the missing capability and the version that provides it, instead
-  of failing confusingly mid-run.
+- **Toolchain preflight** (issue #132): the resident app and `shrinkray doctor` refuse to start on a toolchain that cannot do the product's one job — HandBrakeCLI missing or without `svt_av1`, or VMAF unmeasurable — naming the missing capability and the version that provides it, instead of failing confusingly mid-run.
 
-- **A fresh container starts the backlog by itself** (issue #126):
-  `auto_backlog` runs scan → plan → encode over the mounted library on
-  boot, so the deployment shape is genuinely fire-and-forget. Off by
-  default outside the image.
+- **A fresh container starts the backlog by itself** (issue #126): `auto_backlog` runs scan → plan → encode over the mounted library on boot, so the deployment shape is genuinely fire-and-forget. Off by default outside the image.
 
-- **Watch mode is a real resident loop**: it walks the whole library tree
-  instead of one inbox folder (issue #133), encodes in place like the CLI
-  (issue #127), and every new or stable-changed file is re-scanned and
-  re-decided.
+- **Watch mode is a real resident loop**: it walks the whole library tree instead of one inbox folder (issue #133), encodes in place like the CLI (issue #127), and every new or stable-changed file is re-scanned and re-decided.
 
-- **The CLI accepts a file, a folder or a glob** (issue #123) and is
-  stateless unless `--db` is passed (issue #125): a one-shot run needs no
-  database, no config, no resident process. `encode` writes in place when
-  no output directory is given (issue #124), retaining the original per
-  the sacred-source rule.
+- **The CLI accepts a file, a folder or a glob** (issue #123) and is stateless unless `--db` is passed (issue #125): a one-shot run needs no database, no config, no resident process. `encode` writes in place when no output directory is given (issue #124), retaining the original per the sacred-source rule.
 
-- **VMAF 96 is the default target, derived everywhere** (issue #103):
-  every CLI option, the API model and the job payload derive from
-  `DEFAULT_TARGET_VMAF` instead of repeating a literal; the HDR target is
-  expressed as a difference (`HDR_VMAF_OFFSET`) so the two cannot drift.
+- **VMAF 96 is the default target, derived everywhere** (issue #103): every CLI option, the API model and the job payload derive from `DEFAULT_TARGET_VMAF` instead of repeating a literal; the HDR target is expressed as a difference (`HDR_VMAF_OFFSET`) so the two cannot drift.
 
-- **The dashboard is a status view, not a control surface** (issue #134):
-  no route or button starts, cancels or reconfigures work.
+- **The dashboard is a status view, not a control surface** (issue #134): no route or button starts, cancels or reconfigures work.
 
-- **`shrinkray doctor`** — a library health check (db integrity, missing
-  toolchain, config validity, allowlisted roots) before work starts.
+- **`shrinkray doctor`** — a library health check (db integrity, missing toolchain, config validity, allowlisted roots) before work starts.
 
-- **Post-encode verification (`--verify`)**: a full-file VMAF measurement
-  of the output against the source as ground truth, recorded with the
-  encode; a failed verification is non-fatal and reported.
+- **Post-encode verification (`--verify`)**: a full-file VMAF measurement of the output against the source as ground truth, recorded with the encode; a failed verification is non-fatal and reported.
 
-- **Encode guards**: a disk-space preflight refuses what the drive cannot
-  finish (A2); a disk watchdog cancels rather than filling a shared drive;
-  a stall watchdog with silence-proof cancellation and tree-safe
-  termination; interrupted-encode debris is re-encoded, not skipped
-  forever (A1).
+- **Encode guards**: a disk-space preflight refuses what the drive cannot finish (A2); a disk watchdog cancels rather than filling a shared drive; a stall watchdog with silence-proof cancellation and tree-safe termination; interrupted-encode debris is re-encoded, not skipped forever (A1).
 
-- **Live progress everywhere**: SSE stream replaces DB-as-bus (progress is
-  flow, not state), the CLI renders a progress bar for quality-mode
-  encodes (A4), plan jobs stream their steps, and the jobs ETag covers
-  RUNNING progress so bars do not freeze mid-encode.
+- **Live progress everywhere**: SSE stream replaces DB-as-bus (progress is flow, not state), the CLI renders a progress bar for quality-mode encodes (A4), plan jobs stream their steps, and the jobs ETag covers RUNNING progress so bars do not freeze mid-encode.
 
-- **Measured-data charts on the dashboard**: bitrate drift (a descending
-  staircase with real pixels and labeled VMAF lane), the reclaimable
-  figure, and a memory sparkline; the detail page shows the stored plan —
-  predictions where the decision lives.
+- **Measured-data charts on the dashboard**: bitrate drift (a descending staircase with real pixels and labeled VMAF lane), the reclaimable figure, and a memory sparkline; the detail page shows the stored plan — predictions where the decision lives.
 
-- **Config validated with a pydantic schema** (#61): a bad `config.json`
-  fails at load with the offending field named, and one config location is
-  shared by dashboard and engine (issue #58); writes are validated first
-  and atomic (issue #60).
+- **Config validated with a pydantic schema** (#61): a bad `config.json` fails at load with the offending field named, and one config location is shared by dashboard and engine (issue #58); writes are validated first and atomic (issue #60).
 
-- **`config.json` written atomically** (issue #60): validate first, write
-  to a temp file, rename — a crash mid-write leaves the old config, never
-  a half-written one.
+- **`config.json` written atomically** (issue #60): validate first, write to a temp file, rename — a crash mid-write leaves the old config, never a half-written one.
 
-- **Plan cache across runs** (schema v9-#14): a valid stored plan skips
-  probing entirely (`crf_source: plan`); the fingerprint keys on encoder,
-  presets, target, CRF range, sample count, crop-sample count and the
-  statistic, so any settings change re-probes. The detail page shows the
-  prediction where the decision lives.
+- **Plan cache across runs** (schema v9-#14): a valid stored plan skips probing entirely (`crf_source: plan`); the fingerprint keys on encoder, presets, target, CRF range, sample count, crop-sample count and the statistic, so any settings change re-probes. The detail page shows the prediction where the decision lives.
 
-- **Bracketing interpolation in the CRF search** (issue #23): the binary
-  search narrows with interpolated midpoints between measured brackets,
-  fewer probe encodes for the same decision quality.
+- **Bracketing interpolation in the CRF search** (issue #23): the binary search narrows with interpolated midpoints between measured brackets, fewer probe encodes for the same decision quality.
 
-- **Probe encodes honour the configured thread cap**, and the cap reaches
-  SVT-AV1 as `--encopts pin=N` (the x265-style `threads=N` is silently
-  ignored by SVT's parser).
+- **Probe encodes honour the configured thread cap**, and the cap reaches SVT-AV1 as `--encopts pin=N` (the x265-style `threads=N` is silently ignored by SVT's parser).
 
-- **Crop detection samples ten windows** (issue #17, configurable via
-  `--crop-samples`) and crops only bars every sample agrees on — the safe
-  direction for an irreversible crop.
+- **Crop detection samples ten windows** (issue #17, configurable via `--crop-samples`) and crops only bars every sample agrees on — the safe direction for an irreversible crop.
 
-- **The scanner gates on resolution, size and codec age** (issues #18,
-  #19, #20): below 1080p, below a size floor, or older than H.264 is
-  skipped with a reason before any probe cost; an unreadable value is
-  probed rather than silently dropped.
+- **The scanner gates on resolution, size and codec age** (issues #18, #19, #20): below 1080p, below a size floor, or older than H.264 is skipped with a reason before any probe cost; an unreadable value is probed rather than silently dropped.
 
 
-- **Probe density is duration-based (`sample_every`)**: `quality.sample_every`
-  (default 600s) and `--sample-every`/`--sample-count` derive the probe
-  window count from the runtime, so coverage is a fixed fraction of the file
-  (`sample_seconds / sample_every`) instead of shrinking as the movie gets
-  longer (issue #14). A count-based knob made coverage inverse to runtime:
-  the longer the movie, the more scenes it has and the less of it got probed.
-  `--sample-count` overrides the density when set explicitly, so a
-  latency-sensitive caller (watch mode) can still pin a fixed probe budget.
-  The derived count is resolved before the plan lookup, so it is recorded as
-  the plan's `sample_count` and a changed density misses the cache.
+- **Probe density is duration-based (`sample_every`)**: `quality.sample_every` (default 600s) and `--sample-every`/`--sample-count` derive the probe window count from the runtime, so coverage is a fixed fraction of the file (`sample_seconds / sample_every`) instead of shrinking as the movie gets longer (issue #14). A count-based knob made coverage inverse to runtime: the longer the movie, the more scenes it has and the less of it got probed. `--sample-count` overrides the density when set explicitly, so a latency-sensitive caller (watch mode) can still pin a fixed probe budget. The derived count is resolved before the plan lookup, so it is recorded as the plan's `sample_count` and a changed density misses the cache.
 
-- **Ten cropdetect windows per movie, configurable**: `ffmpeg.crop_sample_count`
-  (default 10) and `--crop-samples N` raise the crop detector's coverage
-  from three samples to ten (issue #17). With the bars common to every
-  sample, the crop is monotone non-increasing in the sample count, so more
-  samples only ever shrink it - the safe direction for an irreversible crop -
-  and an aspect-ratio switch is far less likely to be missed. The count is
-  part of the plan fingerprint (schema v11), so a plan made with three crop
-  samples is not reused by a run that samples ten. Cost is 10 x 2s of
-  cropdetect per movie when `--remove-bars` is set.
+- **Ten cropdetect windows per movie, configurable**: `ffmpeg.crop_sample_count` (default 10) and `--crop-samples N` raise the crop detector's coverage from three samples to ten (issue #17). With the bars common to every sample, the crop is monotone non-increasing in the sample count, so more samples only ever shrink it - the safe direction for an irreversible crop - and an aspect-ratio switch is far less likely to be missed. The count is part of the plan fingerprint (schema v11), so a plan made with three crop samples is not reused by a run that samples ten. Cost is 10 x 2s of cropdetect per movie when `--remove-bars` is set.
 
-- **The source-codec gate (PRODUCT.md's candidate rule)**: an H.264 source
-  is a candidate on size alone, while an HEVC or AV1 source is already
-  efficient and becomes a candidate only when it has black bars to remove
-  (issue #20). Anything older than H.264 is never re-encoded. An HEVC/AV1
-  source without `--remove-bars`, or with no bars actually detected, is
-  skipped as `already efficient`; the bars that justify its encode are
-  detected once by the gate and then applied, rather than sampled a second
-  time. `eligibility.candidate_codecs` (default `["h264"]`) names the
-  codecs that are candidates on size alone. An unreadable codec is probed
-  rather than excluded: an unknown value must never silently drop a file the
-  operator expected to be considered.
+- **The source-codec gate (PRODUCT.md's candidate rule)**: an H.264 source is a candidate on size alone, while an HEVC or AV1 source is already efficient and becomes a candidate only when it has black bars to remove (issue #20). Anything older than H.264 is never re-encoded. An HEVC/AV1 source without `--remove-bars`, or with no bars actually detected, is skipped as `already efficient`; the bars that justify its encode are detected once by the gate and then applied, rather than sampled a second time. `eligibility.candidate_codecs` (default `["h264"]`) names the codecs that are candidates on size alone. An unreadable codec is probed rather than excluded: an unknown value must never silently drop a file the operator expected to be considered.
 
-- **A minimum-size gate**: `eligibility.min_source_size_gb` (default 0, off)
-  skips a source below the configured size with the reason `below min size`,
-  before sample extraction or any probe encode (issue #19). Probe cost is
-  roughly constant per file while the payoff scales with the file's size, so
-  the smallest files have the worst cost/benefit ratio; the gate reads one
-  stat and decides from it. It is off by default because the right floor is a
-  property of the operator's library, not a universal truth: a 3 GB movie can
-  still save 1.5 GB, and a 20 GB movie that is already efficient saves
-  nothing.
+- **A minimum-size gate**: `eligibility.min_source_size_gb` (default 0, off) skips a source below the configured size with the reason `below min size`, before sample extraction or any probe encode (issue #19). Probe cost is roughly constant per file while the payoff scales with the file's size, so the smallest files have the worst cost/benefit ratio; the gate reads one stat and decides from it. It is off by default because the right floor is a property of the operator's library, not a universal truth: a 3 GB movie can still save 1.5 GB, and a 20 GB movie that is already efficient saves nothing.
 
-- **A minimum-resolution gate**: `eligibility.min_source_height` (default
-  1080, matching the floor PRODUCT.md states) skips a source whose height is
-  below it with the reason `resolution too low`, before any sample extraction
-  or probe encode (issue #18). A lower-resolution source has too few pixels
-  to save meaningfully, so the probe cost buys nothing, and the gate decides
-  from cached metadata instead of a new probe. The gate is off when set to 0,
-  and an unreadable height is probed rather than excluded: an unknown
-  resolution must never silently drop a file the operator expected to be
-  considered.
+- **A minimum-resolution gate**: `eligibility.min_source_height` (default 1080, matching the floor PRODUCT.md states) skips a source whose height is below it with the reason `resolution too low`, before any sample extraction or probe encode (issue #18). A lower-resolution source has too few pixels to save meaningfully, so the probe cost buys nothing, and the gate decides from cached metadata instead of a new probe. The gate is off when set to 0, and an unreadable height is probed rather than excluded: an unknown resolution must never silently drop a file the operator expected to be considered.
 
 ### Changed
 
-- **The module layout is layered and machine-checked** (issue #97): the
-  flat package is now `tools/` → `engine/` → `server/` + CLI, enforced by
-  import-linter as the seventh gate command (`uv run lint-imports`) in the
-  local gate and CI; all transitional shim modules are deleted. The module
-  map lives in `src/shrinkray/AGENTS.md`.
+- **The module layout is layered and machine-checked** (issue #97): the flat package is now `tools/` → `engine/` → `server/` + CLI, enforced by import-linter as the seventh gate command (`uv run lint-imports`) in the local gate and CI; all transitional shim modules are deleted. The module map lives in `src/shrinkray/AGENTS.md`.
 
-- **Probe every eligible codec; bar removal is part of every encode**
-  (issue #128): the codec gate no longer lets a modern codec skip the
-  search, the `--remove-bars` flag is gone from code, CLI, API and the
-  plan fingerprint, and the size check runs at the CRF the search chose
-  (issue #129) — an encode that would not shrink the file is refused
-  (issue #130).
+- **Probe every eligible codec; bar removal is part of every encode** (issue #128): the codec gate no longer lets a modern codec skip the search, the `--remove-bars` flag is gone from code, CLI, API and the plan fingerprint, and the size check runs at the CRF the search chose (issue #129) — an encode that would not shrink the file is refused (issue #130).
 
-- **One config.json for dashboard and engine** (issue #58): both read the
-  same file (the dashboard wrote a second config the engine ignored).
+- **One config.json for dashboard and engine** (issue #58): both read the same file (the dashboard wrote a second config the engine ignored).
 
-- **Config writes are validated and atomic** (issue #60): a bad value
-  fails at the API boundary with the field named, never half-written.
+- **Config writes are validated and atomic** (issue #60): a bad value fails at the API boundary with the field named, never half-written.
 
-- **Probe samples are stream-copied, not re-encoded** (issue #16): the
-  lossy x264 pass biased every VMAF measurement; the copy keeps bit depth,
-  colour tags and HDR side data, with a logged lossless ffv1 fallback for
-  containers that cannot hold the source codec.
+- **Probe samples are stream-copied, not re-encoded** (issue #16): the lossy x264 pass biased every VMAF measurement; the copy keeps bit depth, colour tags and HDR side data, with a logged lossless ffv1 fallback for containers that cannot hold the source codec.
 
 - **Every short-lived subprocess call has a timeout** (issue #62).
 
-- **The retry replays the stored payload** (issue #100): payload paths
-  union `path` and `paths`, so a retried job re-runs what the original ran.
+- **The retry replays the stored payload** (issue #100): payload paths union `path` and `paths`, so a retried job re-runs what the original ran.
 
-- **The HDR size estimate is labelled with its measured bias** (issue
-  #98), and the effective HDR target/encoder is recorded on the result and
-  the plan, not the caller's assumption.
+- **The HDR size estimate is labelled with its measured bias** (issue #98), and the effective HDR target/encoder is recorded on the result and the plan, not the caller's assumption.
 
-- **`record_plan` refuses a file changed between probing and recording**
-  (mtime/size check), so a plan cannot be stored under a fingerprint the
-  file no longer matches.
+- **`record_plan` refuses a file changed between probing and recording** (mtime/size check), so a plan cannot be stored under a fingerprint the file no longer matches.
 
-- **Console timestamps carry the date and seconds** (issue #167):
-  `YYYY-MM-DD HH:MM:SS` local time in the console log (the resident mode
-  runs for days; a time-only stamp loses the day the moment the log leaves
-  the terminal); the report's generated line gains seconds (UTC).
+- **Console timestamps carry the date and seconds** (issue #167): `YYYY-MM-DD HH:MM:SS` local time in the console log (the resident mode runs for days; a time-only stamp loses the day the moment the log leaves the terminal); the report's generated line gains seconds (UTC).
 
-- **The strict typing bar is enforced on every module** (issue #40): mypy
-  runs `disallow_untyped_defs`, `warn_return_any`, `strict_equality` and
-  friends over the whole package; `py.typed` ships in the wheel.
+- **The strict typing bar is enforced on every module** (issue #40): mypy runs `disallow_untyped_defs`, `warn_return_any`, `strict_equality` and friends over the whole package; `py.typed` ships in the wheel.
 
-- **POSIX tree-kill via process groups** unblocks Linux CI; the tree-safe
-  termination applies to every encode path.
+- **POSIX tree-kill via process groups** unblocks Linux CI; the tree-safe termination applies to every encode path.
 
-- **The report creates its output directory and shows the verification
-  column.**
+- **The report creates its output directory and shows the verification column.**
+
+- **AV1 is the only output codec**: SDR encodes with `svt_av1`, HDR with `svt_av1_10bit` (issue #21). x265 is gone from every path - not demoted to a fallback, not kept as an option. `encoder_for(hdr)` is the single source of the choice; the six HDR ternaries that used to be written per call site are replaced by it, and `handbrake.encoder` is a two-value assertion that rejects a config still naming x265 at load rather than silently producing H.265.
+
+- **The thread cap reaches SVT-AV1 as `--encopts pin=N`**: `threads=N` is an x264/x265 option, and SVT-AV1's parameter parser silently ignores an unknown key. `pin` restricts execution to the first N cores, which is what the cap means here.
+
+- **The decision statistic is the mean, not the minimum**: `probe_crf` aggregates the per-sample VMAF means with the mean instead of the minimum (issue #15). A minimum over samples is monotone non-increasing in the sample count: every window added can only lower it or leave it unchanged, which made it structurally hostile to the denser sampling #14 introduced - the better the coverage, the more likely one pathological window sank the whole score, pushed the search to the floor CRF and reported "target unreachable" for a film that was perfectly encodable. `achieved_vmaf` is now documented as the mean across probe windows, which is a better predictor of overall viewing quality; a user comparing runs across the change should know it is not the same statistic. What the mean gives up is stated plainly: "every probed window meets the target" is no longer literally true. Denser sampling makes a genuinely bad scene more likely to be observed and to move the average, but does not eliminate it.
+
+- **A skip now carries its evidence**: `SkipEncode` carries the best CRF, the VMAF measured there and the probe count, and `save_skip` stores them on the encode row. Previously an `encode` skip dropped that evidence, so the next run could not tell "already probed at the floor and failed" from "never probed" and re-probed the same window every time.
+
+- **A plan recorded under `min` is not reused as a `mean` one**: the aggregation is part of the plan fingerprint (schema v13), because a plan made under the minimum was a different decision. Existing rows default to `min`, which is what they actually measured.
 
 
-- **AV1 is the only output codec**: SDR encodes with `svt_av1`, HDR with
-  `svt_av1_10bit` (issue #21). x265 is gone from every path - not
-  demoted to a fallback, not kept as an option. `encoder_for(hdr)` is the
-  single source of the choice; the six HDR ternaries that used to be written
-  per call site are replaced by it, and `handbrake.encoder` is a two-value
-  assertion that rejects a config still naming x265 at load rather than
-  silently producing H.265.
+- **`plan` extracts each probe window once instead of three times**: the sample windows are extracted up front and the same list is handed to the CRF search and to the reported size factor (issue #30). `find_optimal_crf_and_skip` used to extract its own copy for the search while `plan_quality` extracted a second one for the size estimate, and the size estimate used only the first sample of that second list, so every window was decoded and written more than once per plan. With the duration-based sample counts that multiplier applies to a larger base cost. A fresh `encode` extracted twice for the same reason.
 
-- **The thread cap reaches SVT-AV1 as `--encopts pin=N`**: `threads=N` is
-  an x264/x265 option, and SVT-AV1's parameter parser silently ignores an
-  unknown key. `pin` restricts execution to the first N cores, which is what
-  the cap means here.
-
-- **The decision statistic is the mean, not the minimum**: `probe_crf`
-  aggregates the per-sample VMAF means with the mean instead of the
-  minimum (issue #15). A minimum over samples is monotone non-increasing
-  in the sample count: every window added can only lower it or leave it
-  unchanged, which made it structurally hostile to the denser sampling #14
-  introduced - the better the coverage, the more likely one pathological
-  window sank the whole score, pushed the search to the floor CRF and
-  reported "target unreachable" for a film that was perfectly encodable.
-  `achieved_vmaf` is now documented as the mean across probe windows,
-  which is a better predictor of overall viewing quality; a user comparing
-  runs across the change should know it is not the same statistic. What the
-  mean gives up is stated plainly: "every probed window meets the target" is
-  no longer literally true. Denser sampling makes a genuinely bad scene more
-  likely to be observed and to move the average, but does not eliminate it.
-
-- **A skip now carries its evidence**: `SkipEncode` carries the best CRF,
-  the VMAF measured there and the probe count, and `save_skip` stores them
-  on the encode row. Previously an `encode` skip dropped that evidence, so the
-  next run could not tell "already probed at the floor and failed" from
-  "never probed" and re-probed the same window every time.
-
-- **A plan recorded under `min` is not reused as a `mean` one**: the
-  aggregation is part of the plan fingerprint (schema v13), because a plan
-  made under the minimum was a different decision. Existing rows default to
-  `min`, which is what they actually measured.
-
-
-- **`plan` extracts each probe window once instead of three times**: the
-  sample windows are extracted up front and the same list is handed to the CRF
-  search and to the reported size factor (issue #30). `find_optimal_crf_and_skip`
-  used to extract its own copy for the search while `plan_quality` extracted a
-  second one for the size estimate, and the size estimate used only the first
-  sample of that second list, so every window was decoded and written more than
-  once per plan. With the duration-based sample counts that multiplier applies
-  to a larger base cost. A fresh `encode` extracted twice for the same reason.
-
-- **The typing, lint and coverage bar is enforced, not aspirational**: every
-  module under `src/shrinkray/` is now fully annotated and mypy runs with
-  `disallow_untyped_defs`, `disallow_incomplete_defs`, `warn_return_any`,
-  `no_implicit_reexport` and `strict_equality` (issue #40). `py.typed` ships
-  in the wheel, ruff runs the `S` (bandit) rules with each exception carrying
-  its reason, and coverage has a floor so a regression fails instead of sliding.
-  The per-module mypy rollout list is gone: one config applies to all of it.
+- **The typing, lint and coverage bar is enforced, not aspirational**: every module under `src/shrinkray/` is now fully annotated and mypy runs with `disallow_untyped_defs`, `disallow_incomplete_defs`, `warn_return_any`, `no_implicit_reexport` and `strict_equality` (issue #40). `py.typed` ships in the wheel, ruff runs the `S` (bandit) rules with each exception carrying its reason, and coverage has a floor so a regression fails instead of sliding. The per-module mypy rollout list is gone: one config applies to all of it.
 
 ### Fixed
 
-- **A stall watchdog that killed healthy encodes**: piped HandBrake never
-  sends newlines, so the newline-based liveness check starved and killed
-  running encodes; the watchdog now reads progress correctly and stall
-  telemetry reaches every encode path.
+- **A stall watchdog that killed healthy encodes**: piped HandBrake never sends newlines, so the newline-based liveness check starved and killed running encodes; the watchdog now reads progress correctly and stall telemetry reaches every encode path.
 
-- **The encode result survives an absent ffmpeg** (CI run 160): version
-  metadata probing is guarded, so verification metadata never fails an
-  encode.
+- **The encode result survives an absent ffmpeg** (CI run 160): version metadata probing is guarded, so verification metadata never fails an encode.
 
-- **Watch mode's recursive/liveness traps** fixed, with prompt app
-  shutdown on stop.
+- **Watch mode's recursive/liveness traps** fixed, with prompt app shutdown on stop.
 
-- **UI fixes**: readable primary hover; the two audit trails link to each
-  other; a job trail shows the movie's own outcome inside a batch job;
-  signed colored deltas, one unit spelling, one VMAF precision; drift
-  chart geometry was lying (real pixels, labeled lane, visible marks);
-  drift summary crashes; derived out-bars dressed as measured; `driftW`
-  declared before use.
+- **UI fixes**: readable primary hover; the two audit trails link to each other; a job trail shows the movie's own outcome inside a batch job; signed colored deltas, one unit spelling, one VMAF precision; drift chart geometry was lying (real pixels, labeled lane, visible marks); drift summary crashes; derived out-bars dressed as measured; `driftW` declared before use.
 
-- **Test-suite fixes**: the test_db job import follows the server/ move;
-  the `logs/` telemetry-leak fix (a verify run without a db file no longer
-  writes failure bundles into the working directory,
-  `tests/test_telemetry_leak.py` pins it); the CodeQL sanitizer follows
-  the server/ move (issue #55).
+- **Test-suite fixes**: the test_db job import follows the server/ move; the `logs/` telemetry-leak fix (a verify run without a db file no longer writes failure bundles into the working directory, `tests/test_telemetry_leak.py` pins it); the CodeQL sanitizer follows the server/ move (issue #55).
 
 
-- **Probe samples were re-encoded with lossy libx264**: sample extraction
-  now stream-copies the source (`-c:v copy`, keyframe-aligned, timestamps
-  normalised with `-avoid_negative_ts make_zero`) instead of running a CRF 12
-  x264 pass (issue #16). The samples are both the VMAF reference and the
-  probe encode's input, so the re-encode biased every measurement: it smoothed
-  grain and fine detail, which made the probe source easier than the real one
-  and pushed the chosen CRF too high. The copy also keeps the source's bit
-  depth, colour tags and HDR side data, which the x264 pass dropped. If a
-  container cannot hold the source codec the extraction falls back to a
-  lossless `ffv1` re-extract and logs that it did, rather than silently
-  encoding lossily.
+- **Probe samples were re-encoded with lossy libx264**: sample extraction now stream-copies the source (`-c:v copy`, keyframe-aligned, timestamps normalised with `-avoid_negative_ts make_zero`) instead of running a CRF 12 x264 pass (issue #16). The samples are both the VMAF reference and the probe encode's input, so the re-encode biased every measurement: it smoothed grain and fine detail, which made the probe source easier than the real one and pushed the chosen CRF too high. The copy also keeps the source's bit depth, colour tags and HDR side data, which the x264 pass dropped. If a container cannot hold the source codec the extraction falls back to a lossless `ffv1` re-extract and logs that it did, rather than silently encoding lossily.
 
-- **A batch encode's live progress was silently dropped**: `encode_movies`
-  rebound its `progress` parameter with its own rich progress bar, so a resident
-  app job never streamed a percent for a fixed-preset batch. The caller's
-  callback now receives every event alongside the bar.
+- **A batch encode's live progress was silently dropped**: `encode_movies` rebound its `progress` parameter with its own rich progress bar, so a resident app job never streamed a percent for a fixed-preset batch. The caller's callback now receives every event alongside the bar.
 
 ### Removed
 
-- **The orphaned PosterCard component and its design tokens** (issue
-  #180): `PosterCard.svelte` was created in the round-2 redesign, demoted
-  (DESIGN.md's own note: 354 near-identical typographic tiles
-  differentiated state but not identity), restored by accident, and never
-  wired into a page. Gone together with the unused `--poster-ground` /
-  `--poster-line` tokens; DESIGN.md's section is marked historical.
-  Recoverable from git history if the poster grid ever returns.
+- **The orphaned PosterCard component and its design tokens** (issue #180): `PosterCard.svelte` was created in the round-2 redesign, demoted (DESIGN.md's own note: 354 near-identical typographic tiles differentiated state but not identity), restored by accident, and never wired into a page. Gone together with the unused `--poster-ground` / `--poster-line` tokens; DESIGN.md's section is marked historical. Recoverable from git history if the poster grid ever returns.
 
-- **Duplicate detection and the only destructive route**: `dedupe.py`, the
-  `/api/duplicates` read route, `/api/duplicates/delete`, the Duplicates page,
-  the `dedupe` job kind, and the `send2trash`/`rapidfuzz` dependencies are
-  gone (issue #37). Deduplication is library management, which PRODUCT.md puts
-  outside this tool's scope, and the delete route was the one code path in
-  ShrinkRay that could remove a file from the library. A `metadata.db` that
-  still holds `dedupe` rows keeps them as history: they read back as a generic
-  `legacy` job, and a `queued` one is retired as failed at startup with the
-  reason recorded instead of being executed.
+- **Duplicate detection and the only destructive route**: `dedupe.py`, the `/api/duplicates` read route, `/api/duplicates/delete`, the Duplicates page, the `dedupe` job kind, and the `send2trash`/`rapidfuzz` dependencies are gone (issue #37). Deduplication is library management, which PRODUCT.md puts outside this tool's scope, and the delete route was the one code path in ShrinkRay that could remove a file from the library. A `metadata.db` that still holds `dedupe` rows keeps them as history: they read back as a generic `legacy` job, and a `queued` one is retired as failed at startup with the reason recorded instead of being executed.
 
-- **Jellyfin integration**: the opt-in library-refresh notification after
-  encode batches is gone (issue #43). ShrinkRay changes a file's bytes;
-  telling another application about it is that application's job — and the
-  integration was the only outbound network call in the codebase and an
-  unauthenticated path to the process environment (any dashboard visitor
-  could point `integrations.jellyfin.url` at their own host and exfiltrate
-  any environment variable's value as a request header). A `config.json`
-  that still carries the `integrations` key loads normally and logs one
-  warning naming the removed key.
+- **Jellyfin integration**: the opt-in library-refresh notification after encode batches is gone (issue #43). ShrinkRay changes a file's bytes; telling another application about it is that application's job — and the integration was the only outbound network call in the codebase and an unauthenticated path to the process environment (any dashboard visitor could point `integrations.jellyfin.url` at their own host and exfiltrate any environment variable's value as a request header). A `config.json` that still carries the `integrations` key loads normally and logs one warning naming the removed key.
 
 ## [0.3.0] - 2026-10-22
 
-The MetaDataScrapper era ends with this release: the tool is renamed to
-**ShrinkRay** and its purpose has grown from reading video metadata to a
-complete, quality-measured library shrinking pipeline.
+The MetaDataScrapper era ends with this release: the tool is renamed to **ShrinkRay** and its purpose has grown from reading video metadata to a complete, quality-measured library shrinking pipeline.
 
 ### Added
 
-- **Quality-measured re-encoding (the core feature)**: per-title
-  VMAF-driven CRF search — short samples are probed at different CRF
-  values, each scored with VMAF against its source, and a binary search
-  finds the largest CRF that still meets the quality floor (default 95,
-  roughly "transparent"); the movie is then encoded once with exactly
-  that setting. Fixed-preset mode remains available.
-- **HDR10 support**: tone-mapped (hable) VMAF measurement on both
-  inputs, automatic 10-bit encoder switch (`x265_10bit`), calibrated
-  HDR target and CRF range. Verified end-to-end on real content
-  (The Mandalorian S01E02: 4.26 GB → 3.45 GB at full-movie VMAF 95.72).
-- **Duplicate detection**: byte-identical (content hash), same-title
-  and fuzzy-title grouping with duration gating; group summaries with
-  wasted bytes; keep-rationale explains honestly why the best file is
-  kept (byte-identical / highest resolution / highest bitrate / "no
-  quality signal separates them"). DELETE moves files to the OS recycle
-  bin (recoverable) and retires the row immediately; restored files
-  recover on the next scan.
-- **Resident app + web dashboard**: job queue (scan, plan, encode,
-  dedupe) with live progress and per-movie fractions, adaptive polling
-  snapshot API (one round-trip, ETag-cached library), provenance chain
-  per title, config editing from the UI.
-- **Generation tracking (schema v7)**: every encode records input/output
-  bitrate, source/output paths and its generation number; re-encoding an
-  encode chains automatically. `shrinkray compare` renders a title's
-  provenance chain (the generation-drift ledger).
-- **Resource politeness**: encodes, probes and VMAF measurements run
-  below normal priority (config: `resources.idle_priority`); per-encode
-  thread cap (`handbrake.max_threads`, CLI `--threads`); the resident
-  app logs its own memory every 5 minutes and exposes `rss_mib` in the
-  status API (measured: ~16-64 MiB resident).
-- **Concurrent encode guard**: a pid-stamped lock file per output
-  directory makes encoder collisions (job worker vs watch loop vs CLI)
-  impossible instead of unlikely; stale locks of dead processes are
-  stolen.
-- **Opt-in Jellyfin integration**: one fire-and-forget
-  `POST /Library/Refresh` after encode batches (token via environment
-  variable, never in config.json).
-- **Soft-missing reconciliation (schema v6)**: deleted files are flagged
-  and hard-deleted only after 3 consecutive missing scans; reappearing
-  files recover automatically; mass-flagging emits an accident warning.
-- **Failure evidence bundles**: failed VMAF measurements and encodes
-  bundle command, stderr (empty recorded explicitly), traceback and
-  artifacts into `logs/` for diagnosis.
-- **Windows installer**: `install.ps1` one-liner (uv, GPL ffmpeg with
-  libvmaf, HandBrakeCLI, repo, dashboard build; idempotent).
-- **Linux/NAS deployment**: verified end-to-end on Ubuntu (WSL
-  rehearsal): full gate, VMAF measurement, headless recoverable trash,
-  graceful HandBrake absence, POSIX niceness and `/proc` RSS; systemd
-  unit in `deploy/`, README Linux/NAS section.
+- **Quality-measured re-encoding (the core feature)**: per-title VMAF-driven CRF search — short samples are probed at different CRF values, each scored with VMAF against its source, and a binary search finds the largest CRF that still meets the quality floor (default 95, roughly "transparent"); the movie is then encoded once with exactly that setting. Fixed-preset mode remains available.
+- **HDR10 support**: tone-mapped (hable) VMAF measurement on both inputs, automatic 10-bit encoder switch (`x265_10bit`), calibrated HDR target and CRF range. Verified end-to-end on real content (The Mandalorian S01E02: 4.26 GB → 3.45 GB at full-movie VMAF 95.72).
+- **Duplicate detection**: byte-identical (content hash), same-title and fuzzy-title grouping with duration gating; group summaries with wasted bytes; keep-rationale explains honestly why the best file is kept (byte-identical / highest resolution / highest bitrate / "no quality signal separates them"). DELETE moves files to the OS recycle bin (recoverable) and retires the row immediately; restored files recover on the next scan.
+- **Resident app + web dashboard**: job queue (scan, plan, encode, dedupe) with live progress and per-movie fractions, adaptive polling snapshot API (one round-trip, ETag-cached library), provenance chain per title, config editing from the UI.
+- **Generation tracking (schema v7)**: every encode records input/output bitrate, source/output paths and its generation number; re-encoding an encode chains automatically. `shrinkray compare` renders a title's provenance chain (the generation-drift ledger).
+- **Resource politeness**: encodes, probes and VMAF measurements run below normal priority (config: `resources.idle_priority`); per-encode thread cap (`handbrake.max_threads`, CLI `--threads`); the resident app logs its own memory every 5 minutes and exposes `rss_mib` in the status API (measured: ~16-64 MiB resident).
+- **Concurrent encode guard**: a pid-stamped lock file per output directory makes encoder collisions (job worker vs watch loop vs CLI) impossible instead of unlikely; stale locks of dead processes are stolen.
+- **Opt-in Jellyfin integration**: one fire-and-forget `POST /Library/Refresh` after encode batches (token via environment variable, never in config.json).
+- **Soft-missing reconciliation (schema v6)**: deleted files are flagged and hard-deleted only after 3 consecutive missing scans; reappearing files recover automatically; mass-flagging emits an accident warning.
+- **Failure evidence bundles**: failed VMAF measurements and encodes bundle command, stderr (empty recorded explicitly), traceback and artifacts into `logs/` for diagnosis.
+- **Windows installer**: `install.ps1` one-liner (uv, GPL ffmpeg with libvmaf, HandBrakeCLI, repo, dashboard build; idempotent).
+- **Linux/NAS deployment**: verified end-to-end on Ubuntu (WSL rehearsal): full gate, VMAF measurement, headless recoverable trash, graceful HandBrake absence, POSIX niceness and `/proc` RSS; systemd unit in `deploy/`, README Linux/NAS section.
 
 ### Changed
 
-- Rename MetaDataScrapper → ShrinkRay (package `src/shrinkray/`, CLI
-  `shrinkray`, GitHub repo). All tool configs, ignores and docs swept.
-- Scans are deterministic on every filesystem (sorted output; os.walk
-  order is hash-ordered on ext4).
-- Encode results are recorded benchmark-grade (schema v5): source
-  snapshot, CRF, VMAF, probe statistics, tool versions.
+- Rename MetaDataScrapper → ShrinkRay (package `src/shrinkray/`, CLI `shrinkray`, GitHub repo). All tool configs, ignores and docs swept.
+- Scans are deterministic on every filesystem (sorted output; os.walk order is hash-ordered on ext4).
+- Encode results are recorded benchmark-grade (schema v5): source snapshot, CRF, VMAF, probe statistics, tool versions.
 - Duplicates API and UI exclude retired/missing rows.
 
 ### Fixed
 
 - Same-thread db locking crash ("cannot release un-acquired lock").
-- Live progress deadlock: subprocess pipes are drained concurrently
-  while streaming stdout.
-- Encode truncation: outputs are duration-verified, not trusted by exit
-  code alone (HandBrake can exit 0 on failure).
+- Live progress deadlock: subprocess pipes are drained concurrently while streaming stdout.
+- Encode truncation: outputs are duration-verified, not trusted by exit code alone (HandBrake can exit 0 on failure).
 - Path allowlist hardened (realpath + containment; traversal rejected).
 - `os.startfile` guarded so mypy's linux view passes CI.
-- Test suite uses real temp directories (fictional `D:/...` paths broke
-  scope containment on Linux); scan order determinism; rename leftovers
-  in tool configs (coverage target, first-party lists, gitignore model
-  path).
+- Test suite uses real temp directories (fictional `D:/...` paths broke scope containment on Linux); scan order determinism; rename leftovers in tool configs (coverage target, first-party lists, gitignore model path).
 
 ### Security
 
-- Supply-chain hardening: uv malware-check gate, 7-day new-package
-  cooldown with security-fix exemption, CodeQL-recognized path
-  sanitization.
-- No secrets in tracked files: integration tokens live in environment
-  variables by construction.
+- Supply-chain hardening: uv malware-check gate, 7-day new-package cooldown with security-fix exemption, CodeQL-recognized path sanitization.
+- No secrets in tracked files: integration tokens live in environment variables by construction.
 
 [0.4.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.4.0
 [0.3.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.3.0
