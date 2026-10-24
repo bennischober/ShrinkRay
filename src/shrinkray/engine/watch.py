@@ -21,6 +21,7 @@ from shrinkray.engine.pipeline import (
     encode_with_quality,
 )
 from shrinkray.engine.plan import MIN_ENCODE_SECONDS
+from shrinkray.engine.samples import ProgressCallback
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
 from shrinkray.replace import RETAINED_SUFFIX, STAGING_SUFFIX
@@ -244,6 +245,7 @@ def watch(
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = ("h264",),
     crop_sample_count: int = 10,
+    progress: ProgressCallback | None = None,
 ) -> None:
     """Watches the inbox and encodes newly arrived movies.
 
@@ -272,6 +274,10 @@ def watch(
         db_file (Path | None): The sqlite database file - enables the stall
             watchdog's failure-bundle telemetry (None: no telemetry; the
             CLI one-shot watch prints the reason instead).
+        progress (ProgressCallback | None): Live-update callback receiving the
+            engine's event dicts ({'stage': 'encode', 'percent': ..., 'movie':
+            ...} and {'stage': 'probe', 'detail': ...}); the CLI's watch display
+            renders these. None (default): the events are dropped.
     """
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     known: set[str] = set()
@@ -388,6 +394,7 @@ def watch(
                                 min_source_size_gb=min_source_size_gb,
                                 candidate_codecs=candidate_codecs,
                                 crop_sample_count=crop_sample_count,
+                                progress=progress,
                             )
                     except EncodeBusyError as e:
                         log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
