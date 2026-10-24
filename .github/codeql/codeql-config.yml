@@ -1,7 +1,8 @@
 # CodeQL configuration for this repository (issue #55).
 #
 # The built-in py/path-injection query reports every use of a path that came
-# through the app's own validate_path (src/shrinkray/app.py), because the
+# through the app's own validate_path (src/shrinkray/server/app.py; the
+# function lived in src/shrinkray/app.py before issue #97 phase 4), because the
 # analyzer cannot see that the function normalises with os.path.realpath and
 # rejects anything outside the allowed roots. Ten such pre-existing alerts turn
 # every pull request that touches those lines red and bury real findings.
