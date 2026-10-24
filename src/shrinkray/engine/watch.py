@@ -59,22 +59,31 @@ def next_poll_interval(current: float, base: float, found_new: bool) -> float:
 
 
 def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list[Path]:
-    """Finds movie files in the inbox that are not in the known set.
+    """Finds movie files under the roots that are not in the known set.
+
+    The tree is walked RECURSIVELY, not one directory: Mode B's watchdog is
+    specified over the mounted library, where a new file can appear in any
+    subdirectory. An inbox only ever catches what someone drops in one folder.
+
+    A path is "known" when it is in `known` at the same mtime and size, so a
+    CHANGED file (same path, new content) is a new question and gets
+    re-decided. A file that is still being written is filtered by the caller's
+    stability check, not here.
 
     Args:
-        inbox (Path): The directory to watch.
+        inbox (Path): The root directory to watch (walked recursively).
         extensions (list[str]): The extensions to search for.
-        known (set[str]): Paths (as strings) that were already seen.
+        known (set[str]): "path:mtime:size" keys that were already decided.
 
     Returns:
-        list[Path]: The new movie files.
+        list[Path]: The new or changed movie files.
     """
     movies: list[Path] = []
     for extension in extensions:
         extension = extension.lower().lstrip(".")
-        candidates = list(inbox.glob(f"*.{extension}"))
-        candidates.extend(inbox.glob(f"*.{extension.upper()}"))
-        movies.extend(candidates)
+        # recursive: a new file anywhere in the tree must be picked up
+        movies.extend(inbox.rglob(f"*.{extension}"))
+        movies.extend(inbox.rglob(f"*.{extension.upper()}"))
     # windows glob is case-insensitive => deduplicate, then filter known.
     # the retained originals and staging copies are NEVER movies: in place the
     # library holds <name> and <name>.shrinkray-original side by side, and
@@ -83,10 +92,27 @@ def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list
     return [
         m
         for m in unique
-        if str(m.resolve()) not in known
+        if _identity(m) not in known
         and not m.name.endswith(RETAINED_SUFFIX)
         and not m.name.endswith(STAGING_SUFFIX)
     ]
+
+
+def _identity(path: Path) -> str:
+    """Returns the change-tracking key of one movie file.
+
+    mtime and size are part of the key so a CHANGED file at the same path is a
+    new question, not a file the watcher remembers deciding. Without them a
+    replaced file would never be re-scanned.
+
+    Args:
+        path (Path): The movie file.
+
+    Returns:
+        str: "absolute path:mtime:size".
+    """
+    stat = path.stat()
+    return f"{path.resolve()}:{stat.st_mtime}:{stat.st_size}"
 
 
 def is_stable(path: Path) -> bool:
@@ -202,7 +228,7 @@ def release_lock(lock_file: Path) -> None:
 
 
 def watch(
-    inbox: Path,
+    roots: list[Path],
     output_dir: Path | None = None,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     encoder: str = "svt_av1",
@@ -225,7 +251,8 @@ def watch(
     process exits cleanly.
 
     Args:
-        inbox (Path): The directory to watch for new movies.
+        roots (list[Path]): The folders to watch, each walked recursively
+            so a new or changed file anywhere under one is picked up.
         output_dir (Path | None): Directory for the encoded files, or None to
             encode IN PLACE: each verified output takes the source's own path
             and the original is renamed aside and kept.
@@ -259,7 +286,7 @@ def watch(
     # is no second tree, and the staging/retained names are excluded from the
     # candidate scan instead
     if output_dir is not None:
-        inbox_resolved = inbox.resolve()
+        inbox_resolved = roots[0].resolve()
         output_resolved = output_dir.resolve()
         if (
             inbox_resolved == output_resolved
@@ -268,14 +295,15 @@ def watch(
         ):
             raise ValueError(
                 "inbox and output_dir must be separate directories (the output "
-                f"must not live inside the inbox): inbox='{inbox}', output='{output_dir}'"
+                f"must not live inside the inbox): inbox='{roots[0]}', output='{output_dir}'"
             )
 
     if not acquire_lock(lock_file):
         log_error("Another watcher seems to be running (lock file exists).")
         return
 
-    inbox.mkdir(parents=True, exist_ok=True)
+    for root in roots:
+        root.mkdir(parents=True, exist_ok=True)
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -286,9 +314,9 @@ def watch(
     staging: contextlib.AbstractContextManager[str] = (
         contextlib.nullcontext(str(output_dir))
         if output_dir is not None
-        else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=inbox)
+        else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=roots[0])
     )
-    disk_target = output_dir if output_dir is not None else inbox
+    disk_target = output_dir if output_dir is not None else roots[0]
     in_place_mode = output_dir is None
 
     try:
@@ -314,7 +342,9 @@ def watch(
                         return
                     _sleep_or_stop(sleep_interval, stop_event)
                     continue
-                candidates = find_new_movies(inbox, extensions, known)
+                candidates = [
+                    movie for root in roots for movie in find_new_movies(root, extensions, known)
+                ]
                 for movie in candidates:
                     if stop_event is not None and stop_event.is_set():
                         log("Watch stopped (stop event set).")
@@ -326,7 +356,7 @@ def watch(
                         # at it again, starving every normal copy arrival)
                         log(f"'{movie.name}' is not stable yet (still copying?) => later.")
                         continue
-                    known.add(str(movie.resolve()))
+                    known.add(_identity(movie))
                     decision = decide(movie, target_vmaf, encoder)
                     if decision != "encode":
                         log(f"Skipping '{movie.name}': {decision}.")
@@ -360,14 +390,14 @@ def watch(
                             )
                     except EncodeBusyError as e:
                         log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
-                        known.discard(str(movie.resolve()))  # eligible again next pass
+                        known.discard(_identity(movie))  # eligible again next pass
                         continue
                     except Cancelled as e:
                         # disk watchdog (free space hit the floor) or user cancel:
                         # partial output already removed by the engine; retry
                         # when space freed up (or the user re-ran watch)
                         log_error(f"Encoding '{movie.name}' cancelled: {e} => retry next pass.")
-                        known.discard(str(movie.resolve()))
+                        known.discard(_identity(movie))
                         continue
                     if result.skipped_reason:
                         log(f"Skipping '{movie.name}': {result.skipped_reason}.")
