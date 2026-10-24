@@ -17,7 +17,6 @@ metadata.db*
 
 # media: the library is huge and is mounted, never baked in
 test_media/
-testdata/
 *.mkv
 *.mp4
 *.avi

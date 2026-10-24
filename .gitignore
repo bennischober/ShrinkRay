@@ -72,7 +72,7 @@ venv/
 .idea/
 
 # test media (copyright, too large for git)
-testdata/
+test_media/
 
 # generated reports
 report.html

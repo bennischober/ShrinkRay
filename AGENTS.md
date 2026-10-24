@@ -85,8 +85,7 @@ anti-patterns are the sections further down — this block does not restate them
 ├── src/shrinkray/    # layered package: tools/ engine/ server/ + CLI (~12.8k LOC)
 ├── ui/               # Svelte 5 dashboard, second toolchain with its own gate
 ├── tests/            # plain unittest per source area, run by pytest
-├── testdata/         # gitignored local fixtures (mkv clips, inbox/movies trees)
-├── test_media/       # gitignored real media, manual end-to-end runs only
+├── test_media/       # gitignored real media + local scratch (inbox/, movies/, out_*/)
 ├── docs/             # decisions/0001-module-layout.md, docker.md, tui.md, plan-reuse.md
 ├── deploy/           # shrinkray.service (systemd)
 ├── scripts/          # verify_fullmovie.py — manual full-movie check
