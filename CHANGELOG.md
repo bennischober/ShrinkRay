@@ -6,6 +6,15 @@ tagged in git; the GitHub release for each tag carries the same notes.
 ## [Unreleased]
 ### Added
 
+- **`scripts/verify_fullmovie.py` runs from anywhere uv exists** (issue
+  #179): the script carries PEP 723 inline metadata, so the manual
+  full-movie VMAF check works against an installed ShrinkRay without the
+  dev checkout — which is where real-media verification actually happens.
+  The pass also fixed a latent break: the script still imported
+  `measure_vmaf` from `shrinkray.quality` (deleted in the #97 module
+  move) and has been unrunnable since; it now imports from
+  `shrinkray.tools.vmaf`.
+
 - **A container image for development and headless runs** (issue #34): one
   `Dockerfile` with a `runtime` target (the deployment shape) and a `dev`
   target that runs the gate inside the image, plus a `docker-compose.yml`.
@@ -364,6 +373,14 @@ tagged in git; the GitHub release for each tag carries the same notes.
   callback now receives every event alongside the bar.
 
 ### Removed
+
+- **The orphaned PosterCard component and its design tokens** (issue
+  #180): `PosterCard.svelte` was created in the round-2 redesign, demoted
+  (DESIGN.md's own note: 354 near-identical typographic tiles
+  differentiated state but not identity), restored by accident, and never
+  wired into a page. Gone together with the unused `--poster-ground` /
+  `--poster-line` tokens; DESIGN.md's section is marked historical.
+  Recoverable from git history if the poster grid ever returns.
 
 - **Duplicate detection and the only destructive route**: `dedupe.py`, the
   `/api/duplicates` read route, `/api/duplicates/delete`, the Duplicates page,
