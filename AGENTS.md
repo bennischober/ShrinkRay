@@ -65,8 +65,10 @@ are target behaviour, not yet implemented — check the code before assuming one
   from the fresh scan.
 - **The collection is already organized.** The target library is a large set of
   already-named files with no duplicates. Never name, vendor, or assume any particular
-  acquisition, naming or media-server product in code, comments, docs or commit
-  messages — ShrinkRay is written for "a large existing video collection" and nothing
+  acquisition, naming or media-server product in code, comments or commit
+  messages (PRODUCT.md's "Ecosystem position" section is the single prose
+  exception, issue #166) — ShrinkRay is written for "a large existing video collection"
+  and nothing
   more specific. Never add a feature whose usefulness depends on knowing what a file is
   called or which file it is.
 
@@ -200,8 +202,12 @@ frame carry black bars its content does not need?" are the only questions this t
 answers.
 
 Never name, vendor, or assume any particular acquisition or naming automation in
-code, comments, docs or commit messages. ShrinkRay is written for "a large
-existing video collection" and nothing more specific.
+code, comments, or commit messages, and never couple any code path to one: no
+import, no path assumption, no filename parsing. The one exception is PRODUCT.md's
+"Ecosystem position" section (issue #166), which may name the companion ecosystem
+(Radarr, Sonarr, Plex, Jellyfin) in prose to describe the product's place among
+them. ShrinkRay is written for "a large existing video collection" and nothing
+more specific.
 
 ## Non-negotiable rules
 
