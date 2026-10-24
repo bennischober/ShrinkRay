@@ -157,7 +157,7 @@ def detect_crop_rect(
     except (StopIteration, KeyError, ValueError, json.JSONDecodeError):
         return None
 
-    from shrinkray.quality import sample_offsets  # transitional (phase 3)
+    from shrinkray.engine.samples import sample_offsets
 
     rects: list[tuple[int, int, int, int]] = []
     for offset in sample_offsets(duration, count):
