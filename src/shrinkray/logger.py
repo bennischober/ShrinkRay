@@ -6,9 +6,7 @@ from loguru import logger
 # resident mode runs for days, a time-only stamp loses the day the moment
 # the log leaves the terminal). The DB and the report stay UTC; this line
 # is the operator's wall clock.
-CONSOLE_FORMAT = (
-    "<green>{time:YYYY-MM-DD HH:MM:SS}</green> | <level>{level: <8}</level> | <level>{message}</level>"
-)
+CONSOLE_FORMAT = "<green>{time:YYYY-MM-DD HH:MM:SS}</green> | <level>{level: <8}</level> | <level>{message}</level>"
 
 # loguru default handler is already colorful => set our own format
 logger.remove()
