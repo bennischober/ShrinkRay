@@ -28,10 +28,11 @@ from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
 from shrinkray.config import ENCODER_PRESETS, Conf, load_config
-from shrinkray.encode import cap_threads
+from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
+from shrinkray.engine.pipeline import cap_threads
+from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.engine.watch import watch
 from shrinkray.logger import log, log_error
-from shrinkray.quality import DEFAULT_TARGET_VMAF, HDR_ESTIMATE_NOTE
 from shrinkray.report import generate_report
 from shrinkray.server.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.tools.process import apply_config
@@ -631,7 +632,7 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     running = s.with_lock(
         lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
     )
-    from shrinkray.resources import rss_mib
+    from shrinkray.tools.process import rss_mib
 
     rss = rss_mib()
     return {
@@ -809,7 +810,7 @@ def snapshot(
     """
     import hashlib
 
-    from shrinkray.resources import rss_mib
+    from shrinkray.tools.process import rss_mib
 
     s = get_state()
 
@@ -1450,7 +1451,7 @@ def run_app(
         reads the resident set size and logs it, so a slow leak becomes
         visible in the log instead of a user's dying NAS.
         """
-        from shrinkray.resources import rss_mib
+        from shrinkray.tools.process import rss_mib
 
         while True:
             rss = rss_mib()

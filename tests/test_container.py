@@ -65,7 +65,7 @@ class TestCpuCount(unittest.TestCase):
 
     def test_the_engine_uses_the_helper_not_os_cpu_count(self) -> None:
         """Every planner must ask the helper, or a quota is silently ignored."""
-        for name in ("encode.py", "scanner.py", "quality.py"):
+        for name in ("engine/pipeline.py", "engine/watch.py", "engine/plan.py", "engine/scan.py"):
             source = (REPO / "src" / "shrinkray" / name).read_text()
             self.assertNotIn("os.cpu_count()", source, f"{name} bypasses resources.cpu_count()")
 

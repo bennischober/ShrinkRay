@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from shrinkray import db, resources
+from shrinkray import db
 from shrinkray.db import MovieRecord
 from shrinkray.engine.crop import has_black_bars
 from shrinkray.helpers import (
@@ -27,6 +27,7 @@ from shrinkray.helpers import (
     timestr_to_int,
 )
 from shrinkray.logger import log, log_warning
+from shrinkray.tools import process as resources
 from shrinkray.tools.ffprobe import get_data
 
 if TYPE_CHECKING:

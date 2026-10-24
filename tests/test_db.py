@@ -638,7 +638,7 @@ class TestDb(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         import shrinkray.server.app as app_module
-        from shrinkray.quality import HDR_ESTIMATE_NOTE
+        from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
         from shrinkray.server.app import AppState
         from shrinkray.server.app import app as fast_app
 
@@ -944,8 +944,8 @@ class TestDb(unittest.TestCase):
         try:
             # seed: publish BEFORE any subscriber connects
             app_module.state.queue.enqueue(
-                __import__("shrinkray.jobs", fromlist=["Job"]).Job(
-                    kind=__import__("shrinkray.jobs", fromlist=["JobKind"]).JobKind.SCAN,
+                __import__("shrinkray.server.jobs", fromlist=["Job"]).Job(
+                    kind=__import__("shrinkray.server.jobs", fromlist=["JobKind"]).JobKind.SCAN,
                     payload={"paths": ["D:/x"]},
                 )
             )
@@ -1190,7 +1190,7 @@ class TestDb(unittest.TestCase):
         encode row (schema v8 columns)."""
 
         from shrinkray import service
-        from shrinkray.quality import QualityResult
+        from shrinkray.engine.plan import QualityResult
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1230,7 +1230,7 @@ class TestDb(unittest.TestCase):
         non-verify encode goes through the same record path)."""
 
         from shrinkray import service
-        from shrinkray.quality import QualityResult
+        from shrinkray.engine.plan import QualityResult
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1255,7 +1255,7 @@ class TestDb(unittest.TestCase):
         encode was recorded as VMAF>95.0 while decided against 94.5."""
 
         from shrinkray import service
-        from shrinkray.quality import QualityResult
+        from shrinkray.engine.plan import QualityResult
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1287,7 +1287,7 @@ class TestDb(unittest.TestCase):
         — the effective encoder field only overrides for HDR)."""
 
         from shrinkray import service
-        from shrinkray.quality import QualityResult
+        from shrinkray.engine.plan import QualityResult
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()

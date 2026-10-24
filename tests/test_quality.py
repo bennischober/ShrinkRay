@@ -7,9 +7,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from shrinkray import db, quality, service
+from shrinkray import db, service
+from shrinkray.engine import crop as engine_crop
+from shrinkray.engine import encoders as engine_encoders
+from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine import plan as engine_plan
+from shrinkray.engine import samples as engine_samples
 from shrinkray.engine import search as engine_search
+from shrinkray.tools import ffprobe as tools_ffprobe
+from shrinkray.tools import handbrake as tools_handbrake
+from shrinkray.tools import vmaf as tools_vmaf
 
 
 class TestQuality(unittest.TestCase):
@@ -67,7 +74,7 @@ class TestQuality(unittest.TestCase):
         and the job payload, so raising the constant left the surfaces behind. They
         all derive from DEFAULT_TARGET_VMAF now; this pins the decision itself.
         """
-        self.assertEqual(quality.DEFAULT_TARGET_VMAF, 96.0)
+        self.assertEqual(engine_search.DEFAULT_TARGET_VMAF, 96.0)
 
     def test_the_hdr_default_is_the_sdr_default_minus_the_offset(self):
         """The HDR target is calibrated DOWN from the SDR one by a fixed offset.
@@ -76,10 +83,10 @@ class TestQuality(unittest.TestCase):
         when only one was changed (issue #103). It is a difference now.
         """
         self.assertEqual(
-            quality.DEFAULT_HDR_TARGET_VMAF,
-            quality.DEFAULT_TARGET_VMAF - quality.HDR_VMAF_OFFSET,
+            engine_encoders.DEFAULT_HDR_TARGET_VMAF,
+            engine_search.DEFAULT_TARGET_VMAF - engine_encoders.HDR_VMAF_OFFSET,
         )
-        self.assertLess(quality.DEFAULT_HDR_TARGET_VMAF, quality.DEFAULT_TARGET_VMAF)
+        self.assertLess(engine_encoders.DEFAULT_HDR_TARGET_VMAF, engine_search.DEFAULT_TARGET_VMAF)
 
     def test_no_surface_repeats_the_default_literal(self):
         """Every surface must DERIVE the default, not restate it as a literal.
@@ -90,7 +97,7 @@ class TestQuality(unittest.TestCase):
         """
         root = Path(__file__).resolve().parent.parent / "src" / "shrinkray"
         offenders: list[str] = []
-        for name in ("__main__.py", "app.py", "jobs.py"):
+        for name in ("__main__.py", "server/app.py", "server/jobs.py"):
             for lineno, line in enumerate((root / name).read_text().splitlines(), 1):
                 if "95.0" not in line:
                     continue
@@ -101,13 +108,13 @@ class TestQuality(unittest.TestCase):
 
     def test_sample_offsets(self):
         # 3 samples spread over 10%-90% of a 100s movie
-        offsets = quality.sample_offsets(100.0, 3)
+        offsets = engine_samples.sample_offsets(100.0, 3)
         self.assertEqual(offsets, [10.0, 50.0, 90.0])
         # single sample => middle-ish position
-        self.assertEqual(quality.sample_offsets(100.0, 1), [10.0])
+        self.assertEqual(engine_samples.sample_offsets(100.0, 1), [10.0])
         # degenerate inputs
-        self.assertEqual(quality.sample_offsets(0.0, 3), [])
-        self.assertEqual(quality.sample_offsets(100.0, 0), [])
+        self.assertEqual(engine_samples.sample_offsets(0.0, 3), [])
+        self.assertEqual(engine_samples.sample_offsets(100.0, 0), [])
 
     def test_bisect_crf(self):
         # monotonic: low crf passes, high crf fails => largest passing crf wins
@@ -118,14 +125,14 @@ class TestQuality(unittest.TestCase):
             calls.append(c)
             return scores[c]
 
-        chosen = quality.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
         self.assertEqual(chosen, 22)  # 99 - (c-14)*0.5 >= 95 up to c=22
         # every CRF measured at most once
         self.assertEqual(len(calls), len(set(calls)))
         # even the lowest crf fails => fall back to the lowest
-        self.assertEqual(quality.bisect_crf(lambda c: 80.0, 14, 32, target_vmaf=95.0), 14)
+        self.assertEqual(engine_search.bisect_crf(lambda c: 80.0, 14, 32, target_vmaf=95.0), 14)
         # everything passes => the largest measured pass (hi is exclusive)
-        self.assertEqual(quality.bisect_crf(lambda c: 99.0, 14, 32, target_vmaf=95.0), 31)
+        self.assertEqual(engine_search.bisect_crf(lambda c: 99.0, 14, 32, target_vmaf=95.0), 31)
 
     def _interpolated_search(self, curve, lo: int, hi: int, target: float) -> tuple[int, int]:
         """Runs bisect_crf over a synthetic curve; returns (chosen, probes)."""
@@ -138,7 +145,7 @@ class TestQuality(unittest.TestCase):
                 cache[c] = curve(c)
             return cache[c]
 
-        chosen = quality.bisect_crf(score, lo, hi, target_vmaf=target)
+        chosen = engine_search.bisect_crf(score, lo, hi, target_vmaf=target)
         assert len(calls) == len(set(calls))  # each CRF measured once
         return chosen, len(calls)
 
@@ -187,15 +194,15 @@ class TestQuality(unittest.TestCase):
                 )
 
     def test_build_vmaf_command(self):
-        for style in (quality.VMAF_STYLE_LEGACY, quality.VMAF_STYLE_MODERN):
-            command = quality.build_vmaf_command(Path("enc.mkv"), Path("ref.mkv"), style=style)
+        for style in (tools_vmaf.VMAF_STYLE_LEGACY, tools_vmaf.VMAF_STYLE_MODERN):
+            command = tools_vmaf.build_vmaf_command(Path("enc.mkv"), Path("ref.mkv"), style=style)
             joined = " ".join(command)
             # distorted stream must be the first input (libvmaf main)
             self.assertEqual(command[command.index("-i") + 1], "enc.mkv")
             self.assertEqual(command[command.index("-i", command.index("-i") + 1) + 1], "ref.mkv")
             # model by bare filename => no windows drive colon in the filtergraph
             self.assertNotIn("\\", joined)
-            if style == quality.VMAF_STYLE_MODERN:
+            if style == tools_vmaf.VMAF_STYLE_MODERN:
                 self.assertIn("model=path=vmaf_v0.6.1.json", joined)
             else:
                 self.assertIn("model_path=vmaf_v0.6.1.json", joined)
@@ -203,18 +210,18 @@ class TestQuality(unittest.TestCase):
     def test_detect_vmaf_style_without_ffmpeg(self):
         # a missing ffmpeg must raise a clear error (CI has no ffmpeg)
         with self.assertRaises(RuntimeError):
-            quality.detect_vmaf_style(binary="definitely-not-installed-ffmpeg")
+            tools_vmaf.detect_vmaf_style(binary="definitely-not-installed-ffmpeg")
 
     def test_parse_vmaf_log(self):
         log_text = json.dumps({"pooled_metrics": {"vmaf": {"mean": 94.002412, "min": 46.9}}})
-        self.assertAlmostEqual(quality.parse_vmaf_log(log_text), 94.002412, places=5)
+        self.assertAlmostEqual(tools_vmaf.parse_vmaf_log(log_text), 94.002412, places=5)
         with self.assertRaises(ValueError):
-            quality.parse_vmaf_log(json.dumps({"pooled_metrics": {}}))
+            tools_vmaf.parse_vmaf_log(json.dumps({"pooled_metrics": {}}))
         with self.assertRaises(ValueError):
-            quality.parse_vmaf_log("{}")
+            tools_vmaf.parse_vmaf_log("{}")
 
     def test_build_encode_command(self):
-        command = quality.build_encode_command(
+        command = tools_handbrake.build_encode_command(
             "hb.exe", Path("in.mkv"), Path("out.mkv"), 23, "x265", "medium"
         )
         self.assertIn("--quality", command)
@@ -228,57 +235,57 @@ class TestQuality(unittest.TestCase):
 
     def test_parse_crop_line(self):
         text = "[Parsed_cropdetect] crop=1920:800:0:140\n[Parsed_cropdetect] crop=1920:796:0:142\n"
-        self.assertEqual(quality.parse_crop_line(text), (1920, 796, 0, 142))
-        self.assertIsNone(quality.parse_crop_line("nothing here"))
+        self.assertEqual(engine_crop.parse_crop_line(text), (1920, 796, 0, 142))
+        self.assertIsNone(engine_crop.parse_crop_line("nothing here"))
 
     def test_intersect_crop_rects(self):
         frame = (1920, 1080)
         # identical rects => those bars
         rects = [(1920, 800, 0, 140), (1920, 800, 0, 140)]
-        bars = quality.intersect_crop_rects(rects, frame)
+        bars = engine_crop.intersect_crop_rects(rects, frame)
         self.assertEqual(bars, (140, 140, 0, 0))
         # cropdetect reports the PICTURE rectangle, so the crop may only remove
         # bars present in ALL samples => keep the union of the picture areas
         # (here y in [90, 990): only the 90 px bar common to both is removed)
         smaller = [(1920, 800, 0, 140), (1920, 900, 0, 90)]
-        self.assertEqual(quality.intersect_crop_rects(smaller, frame), (90, 90, 0, 0))
+        self.assertEqual(engine_crop.intersect_crop_rects(smaller, frame), (90, 90, 0, 0))
         # a sample with no bars at all vetoes the crop entirely
         sides = [(1920, 1080, 0, 0), (1800, 1080, 60, 0)]
-        self.assertIsNone(quality.intersect_crop_rects(sides, frame))
+        self.assertIsNone(engine_crop.intersect_crop_rects(sides, frame))
         # noise-sized bars (below 2% of the dimension) => None
         tiny = [(1920, 1060, 0, 10), (1920, 1060, 0, 10)]
-        self.assertIsNone(quality.intersect_crop_rects(tiny, frame))
+        self.assertIsNone(engine_crop.intersect_crop_rects(tiny, frame))
         # empty input
-        self.assertIsNone(quality.intersect_crop_rects([], frame))
+        self.assertIsNone(engine_crop.intersect_crop_rects([], frame))
 
     def test_intersect_crop_rects_bar_free_sample_vetoes(self):
         """A sample with no bars must prevent cropping, not be overruled."""
         frame = (1920, 1080)
         # one sample is the full frame => no bar is present in every sample
         self.assertIsNone(
-            quality.intersect_crop_rects([(1920, 800, 0, 140), (1920, 1080, 0, 0)], frame)
+            engine_crop.intersect_crop_rects([(1920, 800, 0, 140), (1920, 1080, 0, 0)], frame)
         )
         # a sample with smaller bars still restricts the crop: the 140 px bar is
         # only a bar in one sample, so only the common 90 px may be removed
         self.assertEqual(
-            quality.intersect_crop_rects([(1920, 800, 0, 140), (1920, 900, 0, 90)], frame),
+            engine_crop.intersect_crop_rects([(1920, 800, 0, 140), (1920, 900, 0, 90)], frame),
             (90, 90, 0, 0),
         )
 
     def test_build_encode_command_crop(self):
-        command = quality.build_encode_command(
+        command = tools_handbrake.build_encode_command(
             "hb.exe", Path("in.mkv"), Path("out.mkv"), 20, "x265", "medium", crop=(140, 140, 0, 0)
         )
         self.assertEqual(command[command.index("--crop") + 1], "140:140:0:0")
         # no crop => explicit 0:0:0:0 (auto-crop would break VMAF geometry)
-        plain = quality.build_encode_command(
+        plain = tools_handbrake.build_encode_command(
             "hb.exe", Path("in.mkv"), Path("out.mkv"), 20, "x265", "medium"
         )
         self.assertEqual(plain[plain.index("--crop") + 1], "0:0:0:0")
 
     def test_build_encode_command_threads(self):
         """The quality pipeline passes the cap via --encopts pin=N."""
-        command = quality.build_encode_command(
+        command = tools_handbrake.build_encode_command(
             "hb",
             Path("in.mkv"),
             Path("out.mkv"),
@@ -289,7 +296,7 @@ class TestQuality(unittest.TestCase):
         )
         self.assertIn("--encopts", command)
         self.assertIn("pin=6", command)
-        plain = quality.build_encode_command(
+        plain = tools_handbrake.build_encode_command(
             "hb", Path("in.mkv"), Path("out.mkv"), 20, "svt_av1", "medium"
         )
         self.assertNotIn("--encopts", plain)
@@ -317,13 +324,13 @@ class TestPlanReuse(unittest.TestCase):
 
     def _store_plan(self, movie: Path, **overrides) -> None:
         """Stores a plan for the movie via the service write path."""
-        from shrinkray.quality import SampleProbe
+        from shrinkray.engine.search import SampleProbe
 
-        result = quality.QualityResult(
+        result = engine_plan.QualityResult(
             input=movie,
             output=movie,
             success=overrides.pop("success", True),
-            target_vmaf=overrides.pop("target_vmaf", quality.DEFAULT_TARGET_VMAF),
+            target_vmaf=overrides.pop("target_vmaf", engine_search.DEFAULT_TARGET_VMAF),
             chosen_crf=overrides.pop("chosen_crf", 21),
             achieved_vmaf=overrides.pop("achieved_vmaf", 95.47),
             probes=overrides.pop("probes", [SampleProbe(crf=21, vmaf=95.47)]),
@@ -333,8 +340,8 @@ class TestPlanReuse(unittest.TestCase):
             encoder_preset="3",
             probe_encoder_preset="5",
             crop=None,
-            crf_range=overrides.pop("crf_range", quality.DEFAULT_CRF_RANGE),
-            sample_count=quality.sample_count_for(600.0, quality.DEFAULT_SAMPLE_EVERY),
+            crf_range=overrides.pop("crf_range", engine_search.DEFAULT_CRF_RANGE),
+            sample_count=engine_search.sample_count_for(600.0, engine_plan.DEFAULT_SAMPLE_EVERY),
             sample_seconds=10.0,
             hdr=overrides.pop("hdr", False),
             encoder=overrides.pop("encoder", "svt_av1"),
@@ -345,7 +352,7 @@ class TestPlanReuse(unittest.TestCase):
 
     def _encode(self, movie: Path, **kwargs):
         """Runs encode_with_quality with every external seam mocked."""
-        from shrinkray.encode import EncodeResult
+        from shrinkray.engine.pipeline import EncodeResult
 
         output = Path(self.tmp.name) / "out.mkv"
 
@@ -360,10 +367,10 @@ class TestPlanReuse(unittest.TestCase):
             )
 
         with (
-            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
-                quality,
+                engine_pipeline,
                 "_source_snapshot",
                 return_value={
                     "width": None,
@@ -373,19 +380,21 @@ class TestPlanReuse(unittest.TestCase):
                     "bitrate": None,
                 },
             ),
-            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
             patch.object(
-                quality, "_encode_with_command", side_effect=fake_encode_command
+                engine_pipeline, "_encode_with_command", side_effect=fake_encode_command
             ) as fake_encode,
         ):
-            result = quality.encode_with_quality(movie, output, db_file=self.db_file, **kwargs)
+            result = engine_pipeline.encode_with_quality(
+                movie, output, db_file=self.db_file, **kwargs
+            )
         return result, fake_encode
 
     def test_valid_plan_skips_probing_and_encodes_planned_crf(self):
         movie = self._movie()
         self._store_plan(movie)
         with (
-            patch.object(quality, "_probe_movie") as fake_probe,
+            patch.object(engine_pipeline, "_probe_movie") as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, fake_encode = self._encode(movie)
@@ -413,7 +422,7 @@ class TestPlanReuse(unittest.TestCase):
         """Issue #22's core acceptance: in ONE run the probe encodes receive
         the probe preset and the final encode receives the final preset —
         measurement and output are two separate settings."""
-        from shrinkray.encode import EncodeResult
+        from shrinkray.engine.pipeline import EncodeResult
 
         movie = self._movie()
         built: list[tuple[str, str]] = []  # (preset, phase)
@@ -423,10 +432,10 @@ class TestPlanReuse(unittest.TestCase):
             return ["hb", "--quality", str(crf), "--encoder-preset", preset]
 
         with (
-            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
-                quality,
+                engine_pipeline,
                 "_source_snapshot",
                 return_value={
                     "width": None,
@@ -436,12 +445,12 @@ class TestPlanReuse(unittest.TestCase):
                     "bitrate": None,
                 },
             ),
-            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
-            patch.object(quality, "_probe_movie", return_value=(21, 95.5, [], None)),
-            patch.object(quality, "build_encode_command", side_effect=fake_build),
+            patch.object(engine_pipeline, "_probe_movie", return_value=(21, 95.5, [], None)),
+            patch.object(engine_pipeline, "build_encode_command", side_effect=fake_build),
             patch.object(
-                quality,
+                engine_pipeline,
                 "_encode_with_command",
                 side_effect=lambda i, o, c, **kw: (
                     o.write_bytes(b"y" * (i.stat().st_size // 2)),
@@ -455,7 +464,7 @@ class TestPlanReuse(unittest.TestCase):
                 )[1],
             ),
         ):
-            result = quality.encode_with_quality(
+            result = engine_pipeline.encode_with_quality(
                 movie,
                 Path(self.tmp.name) / "out.mkv",
                 db_file=self.db_file,
@@ -472,7 +481,9 @@ class TestPlanReuse(unittest.TestCase):
         movie = self._movie()
         self._store_plan(movie, chosen_crf=21)
         with (
-            patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None)
+            ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             # the plan fingerprint keys on the PROBE preset (issue #22): the
@@ -490,7 +501,7 @@ class TestPlanReuse(unittest.TestCase):
         movie = self._movie()
         self._store_plan(movie, chosen_crf=21)
         with (
-            patch.object(quality, "_probe_movie") as fake_probe,
+            patch.object(engine_pipeline, "_probe_movie") as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie, encoder_preset="9")
@@ -502,7 +513,9 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie)
         movie.write_bytes(b"x" * 64)  # size change => fingerprint mismatch
         with (
-            patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None)
+            ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie)
@@ -513,8 +526,8 @@ class TestPlanReuse(unittest.TestCase):
         movie = self._movie()
         self._store_plan(movie, success=False, skipped_reason="no size gain")
         with (
-            patch.object(quality, "_probe_movie") as fake_probe,
-            patch.object(quality, "_encode_with_command") as fake_encode,
+            patch.object(engine_pipeline, "_probe_movie") as fake_probe,
+            patch.object(engine_pipeline, "_encode_with_command") as fake_encode,
         ):
             result, _ = self._encode(movie)
         fake_probe.assert_not_called()
@@ -527,7 +540,9 @@ class TestPlanReuse(unittest.TestCase):
         movie = self._movie()
         self._store_plan(movie)
         with (
-            patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None)
+            ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie, force_reprobe=True)
@@ -538,7 +553,9 @@ class TestPlanReuse(unittest.TestCase):
     def test_no_plan_row_runs_probe_path(self):
         movie = self._movie()
         with (
-            patch.object(quality, "_probe_movie", return_value=(20, 95.1, [], None)) as fake_probe,
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None)
+            ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie)
@@ -559,10 +576,10 @@ class TestPlanReuse(unittest.TestCase):
         # record_plan
         self._store_plan(
             movie,
-            target_vmaf=quality.DEFAULT_HDR_TARGET_VMAF,
+            target_vmaf=engine_encoders.DEFAULT_HDR_TARGET_VMAF,
             chosen_crf=18,
             achieved_vmaf=94.8,
-            crf_range=quality.DEFAULT_HDR_CRF_RANGE,
+            crf_range=engine_search.DEFAULT_HDR_CRF_RANGE,
             encoder="svt_av1_10bit",
             hdr=True,
         )
@@ -571,8 +588,8 @@ class TestPlanReuse(unittest.TestCase):
         # the encode side: same HDR file => the engine switches to 10-bit
         # and MUST find the plan under it
         with (
-            patch.object(quality, "is_hdr_file", return_value=True),
-            patch.object(quality, "_probe_movie") as fake_probe,
+            patch.object(engine_plan, "is_hdr_file", return_value=True),
+            patch.object(engine_pipeline, "_probe_movie") as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie)
@@ -588,7 +605,7 @@ class TestPlanReuse(unittest.TestCase):
         produce a grown artifact exactly as a real encode can (the probe
         estimate is a prediction; the full encode is the ground truth).
         """
-        from shrinkray.encode import EncodeResult
+        from shrinkray.engine.pipeline import EncodeResult
 
         output = Path(self.tmp.name) / "out.mkv"
 
@@ -603,10 +620,10 @@ class TestPlanReuse(unittest.TestCase):
             )
 
         with (
-            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
-                quality,
+                engine_pipeline,
                 "_source_snapshot",
                 return_value={
                     "width": None,
@@ -616,10 +633,10 @@ class TestPlanReuse(unittest.TestCase):
                     "bitrate": None,
                 },
             ),
-            patch.object(quality, "find_handbrake", return_value="hb"),
-            patch.object(quality, "_encode_with_command", side_effect=fake_encode_command),
+            patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+            patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode_command),
         ):
-            result = quality.encode_with_quality(movie, output, db_file=self.db_file)
+            result = engine_pipeline.encode_with_quality(movie, output, db_file=self.db_file)
         return result, output
 
     def test_a_grown_encode_is_a_failure_not_a_success(self):
@@ -726,7 +743,7 @@ class TestProbeCache(unittest.TestCase):
             patch.object(engine_search, "_run", side_effect=fake_run),
             patch.object(engine_search, "measure_vmaf", return_value=95.5),
         ):
-            score = quality.probe_crf(**{**defaults, **kwargs})
+            score = engine_search.probe_crf(**{**defaults, **kwargs})
         return score, encodes
 
     def test_probe_crf_returns_the_mean_of_samples(self):
@@ -749,7 +766,7 @@ class TestProbeCache(unittest.TestCase):
             patch.object(engine_search, "_run", side_effect=fake_run),
             patch.object(engine_search, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
         ):
-            score = quality.probe_crf(
+            score = engine_search.probe_crf(
                 samples,
                 20,
                 self.workdir,
@@ -783,7 +800,7 @@ class TestProbeCache(unittest.TestCase):
             patch.object(engine_search, "_run", side_effect=fake_run),
             patch.object(engine_search, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
         ):
-            score = quality.probe_crf(
+            score = engine_search.probe_crf(
                 samples,
                 20,
                 self.workdir,
@@ -814,7 +831,7 @@ class TestProbeCache(unittest.TestCase):
             patch.object(engine_search, "_run", side_effect=fake_run),
             patch.object(engine_search, "measure_vmaf", side_effect=lambda *a, **k: next(scores)),
         ):
-            score = quality.probe_crf(
+            score = engine_search.probe_crf(
                 samples,
                 20,
                 self.workdir,
@@ -981,7 +998,7 @@ class TestProbeCache(unittest.TestCase):
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
             patch.object(engine_search, "_run", side_effect=fake_run),
         ):
-            factor = quality.estimate_size_factor(**{**defaults, **kwargs})
+            factor = engine_search.estimate_size_factor(**{**defaults, **kwargs})
         return factor, encodes
 
     def test_size_and_vmaf_caches_do_not_collide(self):
@@ -1032,7 +1049,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
             patch.object(engine_search, "estimate_size_factor", side_effect=fake_estimate),
             patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
         ):
-            result = quality.find_optimal_crf_and_skip(
+            result = engine_search.find_optimal_crf_and_skip(
                 self.movie,
                 self.workdir,
                 "hb",
@@ -1069,7 +1086,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
             patch.object(engine_search, "estimate_size_factor", return_value=1.3),
             patch.object(engine_search, "find_optimal_crf") as fake_search,
         ):
-            result = quality.find_optimal_crf_and_skip(
+            result = engine_search.find_optimal_crf_and_skip(
                 self.movie,
                 self.workdir,
                 "hb",
@@ -1117,7 +1134,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 self.assertRaises(RuntimeError) as ctx,
             ):
-                quality.detect_vmaf_style()
+                tools_vmaf.detect_vmaf_style()
             self.assertIn("60s", str(ctx.exception))
             # a failed detection must not be cached: the next call probes again
             self.assertIsNone(vmaf_tools._vmaf_style)
@@ -1133,7 +1150,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 "shrinkray.engine.crop.subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
             ) as mocked:
-                self.assertIsNone(quality.detect_crop_rect(movie, None, count=3))
+                self.assertIsNone(engine_crop.detect_crop_rect(movie, None, count=3))
             # exactly the ffprobe frame-size call was made (not the
             # cropdetect _run); the duration probe inside uses -show_format
             self.assertIn("-show_format", mocked.call_args.args[0])
@@ -1149,16 +1166,16 @@ class TestSubprocessTimeouts(unittest.TestCase):
         sample_every regardless of length (issue #14).
         """
         # a 20-minute short: one window per 10 minutes => 2
-        self.assertEqual(quality.sample_count_for(1200.0, 600.0), 2)
+        self.assertEqual(engine_search.sample_count_for(1200.0, 600.0), 2)
         # a 2-hour film => 12
-        self.assertEqual(quality.sample_count_for(7200.0, 600.0), 12)
+        self.assertEqual(engine_search.sample_count_for(7200.0, 600.0), 12)
         # a 4-hour film => 24 (coverage stays the same fraction)
-        self.assertEqual(quality.sample_count_for(14400.0, 600.0), 24)
+        self.assertEqual(engine_search.sample_count_for(14400.0, 600.0), 24)
 
     def test_sample_count_for_short_input_yields_one(self):
         """An input shorter than the density still yields one window."""
-        self.assertEqual(quality.sample_count_for(300.0, 600.0), 1)
-        self.assertEqual(quality.sample_count_for(1.0, 600.0), 1)
+        self.assertEqual(engine_search.sample_count_for(300.0, 600.0), 1)
+        self.assertEqual(engine_search.sample_count_for(1.0, 600.0), 1)
 
     def test_sample_count_for_explicit_count_overrides(self):
         """An explicit sample_count wins over the density knob.
@@ -1166,12 +1183,16 @@ class TestSubprocessTimeouts(unittest.TestCase):
         A latency-sensitive caller (watch mode) must still be able to pin a
         fixed probe budget.
         """
-        self.assertEqual(quality.sample_count_for(7200.0, 600.0, sample_count=3), 3)
+        self.assertEqual(engine_search.sample_count_for(7200.0, 600.0, sample_count=3), 3)
 
     def test_sample_count_for_disabled_density_uses_default(self):
         """A disabled density falls back to the count-based default."""
-        self.assertEqual(quality.sample_count_for(7200.0, 0.0), quality.DEFAULT_SAMPLE_COUNT)
-        self.assertEqual(quality.sample_count_for(None, 600.0), quality.DEFAULT_SAMPLE_COUNT)
+        self.assertEqual(
+            engine_search.sample_count_for(7200.0, 0.0), engine_plan.DEFAULT_SAMPLE_COUNT
+        )
+        self.assertEqual(
+            engine_search.sample_count_for(None, 600.0), engine_plan.DEFAULT_SAMPLE_COUNT
+        )
 
     def test_plan_records_derived_sample_count(self):
         """The plan records the DERIVED count, not the raw default.
@@ -1193,10 +1214,14 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ) as fake_extract,
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
-                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
             ):
-                result = quality.plan_quality(src, sample_every=600.0)
+                result = engine_plan.plan_quality(src, sample_every=600.0)
         self.assertTrue(result.success)
         self.assertEqual(result.sample_count, 12)
         # the extraction was asked for the derived count
@@ -1234,7 +1259,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch("shrinkray.engine.crop._run", side_effect=fake_run),
             ):
-                quality.detect_crop_rect(movie, Path(tmp))
+                engine_crop.detect_crop_rect(movie, Path(tmp))
         self.assertEqual(len(commands), 10)
 
     def test_crop_samples_are_configurable(self):
@@ -1267,7 +1292,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch("shrinkray.engine.crop._run", side_effect=fake_run),
             ):
-                quality.detect_crop_rect(movie, Path(tmp), count=4)
+                engine_crop.detect_crop_rect(movie, Path(tmp), count=4)
         self.assertEqual(len(commands), 4)
 
     def test_plan_fingerprint_records_crop_sample_count(self):
@@ -1343,7 +1368,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "extract_samples") as fake_extract,
                 patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
-                result = quality.plan_quality(src)
+                result = engine_plan.plan_quality(src)
         self.assertFalse(result.success)
         self.assertEqual(result.skipped_reason, "source codec not a candidate")
         self.assertIn("mpeg2video", result.error or "")
@@ -1363,10 +1388,14 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
-                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
             ):
-                result = quality.plan_quality(src)
+                result = engine_plan.plan_quality(src)
         self.assertTrue(result.success)
         self.assertIsNone(result.skipped_reason)
 
@@ -1386,14 +1415,18 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "source_height", return_value=2160),
                 patch.object(engine_plan, "source_codec", return_value="hevc"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
-                patch.object(quality, "detect_crop_rect", return_value=None),
+                patch.object(engine_crop, "detect_crop_rect", return_value=None),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
-                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
             ):
-                result = quality.plan_quality(src)
+                result = engine_plan.plan_quality(src)
         self.assertTrue(result.success, result.error)
         self.assertIsNone(result.skipped_reason)
         # no bars is a normal outcome, not a skip: the encode proceeds uncropped
@@ -1418,10 +1451,14 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5) as fake_size,
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
-                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
             ):
-                result = quality.plan_quality(src)
+                result = engine_plan.plan_quality(src)
         self.assertTrue(result.success, result.error)
         self.assertEqual(result.crop, bars)
         # the size estimate was made against the CROPPED output
@@ -1443,12 +1480,12 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "source_height", return_value=2160),
                 patch.object(engine_plan, "source_codec", return_value="hevc"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
-                patch.object(quality, "detect_crop_rect", return_value=None),
+                patch.object(engine_crop, "detect_crop_rect", return_value=None),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_plan, "estimate_size_factor", return_value=1.3),
                 patch.object(engine_search, "estimate_size_factor", return_value=1.3),
             ):
-                result = quality.plan_quality(src)
+                result = engine_plan.plan_quality(src)
         self.assertFalse(result.success)
         self.assertNotEqual(result.skipped_reason, "already efficient")
         self.assertEqual(result.skipped_reason, "no size gain")
@@ -1470,7 +1507,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "extract_samples") as fake_extract,
                 patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
-                result = quality.plan_quality(src, min_source_size_gb=5.0)
+                result = engine_plan.plan_quality(src, min_source_size_gb=5.0)
         self.assertFalse(result.success)
         self.assertEqual(result.skipped_reason, "below min size")
         self.assertIn("5.00 GB", result.error or "")
@@ -1493,10 +1530,14 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
-                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
             ):
-                result = quality.plan_quality(src)
+                result = engine_plan.plan_quality(src)
         self.assertTrue(result.success)
         self.assertIsNone(result.skipped_reason)
 
@@ -1516,7 +1557,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "extract_samples") as fake_extract,
                 patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
-                result = quality.plan_quality(src, min_source_height=1080)
+                result = engine_plan.plan_quality(src, min_source_height=1080)
         self.assertFalse(result.success)
         self.assertEqual(result.skipped_reason, "resolution too low")
         self.assertIn("720p", result.error or "")
@@ -1540,10 +1581,14 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
-                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
             ):
-                result = quality.plan_quality(src)
+                result = engine_plan.plan_quality(src)
         self.assertTrue(result.success)
         self.assertIsNone(result.skipped_reason)
 
@@ -1563,10 +1608,14 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
-                patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
             ):
-                result = quality.plan_quality(src, min_source_height=1080)
+                result = engine_plan.plan_quality(src, min_source_height=1080)
         self.assertTrue(result.success)
         self.assertIsNone(result.skipped_reason)
 
@@ -1595,7 +1644,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             patch("shrinkray.engine.samples._run", side_effect=fake_run),
             tempfile.TemporaryDirectory() as tmp,
         ):
-            quality.extract_samples(Path("movie.mkv"), Path(tmp), 2, 10.0)
+            engine_samples.extract_samples(Path("movie.mkv"), Path(tmp), 2, 10.0)
         self.assertEqual(len(commands), 2)
         for command in commands:
             self.assertIn("-c:v", command)
@@ -1629,7 +1678,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             patch("shrinkray.engine.samples.log_warning") as warned,
             tempfile.TemporaryDirectory() as tmp,
         ):
-            samples = quality.extract_samples(Path("movie.mkv"), Path(tmp), 1, 10.0)
+            samples = engine_samples.extract_samples(Path("movie.mkv"), Path(tmp), 1, 10.0)
         self.assertEqual(len(samples), 1)
         self.assertEqual(commands[1][commands[1].index("-c:v") + 1], "ffv1")
         self.assertTrue(warned.called)
@@ -1648,7 +1697,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 self.assertRaises(RuntimeError) as ctx,
             ):
-                quality.extract_samples(movie, Path(tmp) / "work", count=3, seconds=10.0)
+                engine_samples.extract_samples(movie, Path(tmp) / "work", count=3, seconds=10.0)
         self.assertIn("timed out after 60s", str(ctx.exception))
         self.assertIn("movie.mkv", str(ctx.exception))
 

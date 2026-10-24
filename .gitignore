@@ -89,3 +89,4 @@ ISSUES.md
 # could not apply; `/*` ignores everything inside, subfolders included)
 /test_media/*
 !/test_media/README.md
+.import_linter_cache/
