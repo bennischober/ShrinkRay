@@ -6,7 +6,10 @@ private class ValidatePathCallSanitizer extends PathInjection::Sanitizer {
   ValidatePathCallSanitizer() {
     exists(DataFlow::CallCfgNode call |
       call.getFunction().asExpr().(Name).getId() = "validate_path" and
-      call.getLocation().getFile().getRelativePath() = "src/shrinkray/app.py"
+      // the function's home moved in issue #97 phase 4 (PR #156):
+      // shrinkray/app.py -> shrinkray/server/app.py
+      call.getLocation().getFile().getRelativePath() =
+        "src/shrinkray/server/app.py"
     )
   }
 }

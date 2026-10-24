@@ -1,6 +1,6 @@
 /**
  * @name Uncontrolled data used in path expression (boundary-aware)
- * @description Accessing paths influenced by users can allow an attacker to access unexpected resources. This variant teaches the analyzer this repository's own path-containment boundary (shrinkray.app.validate_path), so validated paths are not reported while unvalidated flows still are.
+ * @description Accessing paths influenced by users can allow an attacker to access unexpected resources. This variant teaches the analyzer this repository's own path-containment boundary (shrinkray.server.app.validate_path), so validated paths are not reported while unvalidated flows still are.
  * @kind path-problem
  * @problem.severity error
  * @security-severity 7.5
