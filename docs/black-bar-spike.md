@@ -136,6 +136,44 @@ measurement, and is labelled as such.
 whose aspect ratio differs from the body. The tail-exclusion question needs a film where
 it does.
 
+## Decision: the scan flag and the encode rectangle (issue #131)
+
+There are two bar measurements today, and they disagree:
+
+| | Where | What it produces | Sampling |
+|---|---|---|---|
+| scan flag | `engine/crop.py:193` (`has_black_bars`), stored in `files.crop` | 1/0 | one `cropdetect` run over the file |
+| encode rectangle | `engine/crop.py:110` (`detect_crop_rect`) | a `(top, bottom, left, right)` rect | `crop_sample_count` windows, intersected |
+
+**Decision: they stay two measurements, and the flag is a cheap pre-filter — not a second
+opinion.** The reason is the cost measurement above: a keyframe-only pass costs ~3 min/hour of
+runtime, which is affordable per film at plan/encode time but *not* across a whole library
+during `scan`. The scan exists to answer "what is in this collection" cheaply; making it run the
+full timeline pass for every file would turn a scan of a few thousand titles into hours of
+`cropdetect` work before anything is planned.
+
+So the two are not redundant measurements of the same thing, and they are not supposed to agree:
+
+- The **flag** answers "is this file worth looking at?" It is allowed to be coarse, and a false
+  positive costs nothing: the encode measures the rectangle anyway.
+- The **rectangle** answers "what do I crop?" It is the only value that ever reaches an encode,
+  and it is always measured fresh from sampled windows under the safe union rule.
+
+A file flagged "has bars" that then produces no crop is therefore **not a contradiction** — it is
+the flag doing its cheap job and the rectangle doing its careful one. What was missing was not
+agreement, it was that the operator could not see this; that is the report work below.
+
+**What this decision rejects, and why.** The alternative — one detector for both, cached per file
+version — is the follow-up issue the spike proposes above, and it is the right end state. It is not
+this change because it needs a `crops` table, a migration, and a keyframe-timeline pass in `scan`;
+that is a feature, and #131 asked for a decision first. Unifying later does not invalidate this
+decision: when the one detector lands, the flag becomes its cached summary rather than a separate
+run.
+
+**Report requirement (the second acceptance criterion).** Until the unification lands, the report
+must show both values and explain a disagreement, so "flagged but no crop" is visible rather than
+mysterious. That is tracked as the reconcile-the-report work in the follow-up issue.
+
 ## What this spike establishes, and what it does not
 
 **Established by measurement:**

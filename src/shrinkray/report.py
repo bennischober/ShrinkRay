@@ -73,6 +73,30 @@ footer { margin-top: 1.5rem; color: var(--dim); font-size: .8rem; }
 """
 
 
+def _bars_note(scan_bars: int | None, plan_crop: str | None) -> str:
+    """Explains the two bar measurements when they disagree (issue #131).
+
+    The scan stores a 1/0 flag and the encode stores a crop rectangle, and they are
+    deliberately separate measurements: the flag is a cheap pre-filter, the rectangle is the
+    only value that reaches an encode. A file flagged "has bars" that then yields no crop is
+    therefore not a contradiction - but it is invisible without this line, which is the whole
+    reason the issue exists.
+
+    Args:
+        scan_bars (int | None): The scan's 1/0 flag from files.crop.
+        plan_crop (str | None): The plan's crop rectangle, 'top,bottom,left,right'.
+
+    Returns:
+        str: A short explanation, or '' when there is nothing to reconcile.
+    """
+    if not scan_bars or plan_crop:
+        return ""
+    return (
+        "bars flagged by scan, no crop in the plan "
+        "(the flag is a cheap pre-filter; the encode measures its own rectangle)"
+    )
+
+
 def _summary_cards(rows: list[dict]) -> str:
     """Renders the summary cards from all latest-encode rows."""
     total = len(rows)
@@ -208,11 +232,13 @@ def generate_report(db_path: Path, output: Path) -> None:
     rows = connection.execute(
         """
         SELECT f.path, f.name, f.category, f.duration, f.codec,
-               f.width, f.height, f.missing_scans,
+               f.width, f.height, f.missing_scans, f.crop AS scan_bars,
+               p.crop AS plan_crop,
                e.input_size, e.output_size, e.saved_percent,
                e.chosen_crf, e.achieved_vmaf, e.preset, e.encoded_at,
                e.verified_vmaf, e.verified_subsample
         FROM files f
+        LEFT JOIN plans p ON p.file_id = f.id
         LEFT JOIN encodes e ON e.id = (
             SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
         )
@@ -234,6 +260,10 @@ def generate_report(db_path: Path, output: Path) -> None:
             decision, note = "encode", f"fixed preset ({preset})"
         else:
             decision, note = "none", ""
+
+        bars_note = _bars_note(r["scan_bars"], r["plan_crop"])
+        if bars_note:
+            note = f"{note}; {bars_note}" if note else bars_note
 
         # for fixed-mode rows the saved_percent column already holds the value
         row_dict = dict(r)

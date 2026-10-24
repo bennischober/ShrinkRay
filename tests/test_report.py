@@ -235,3 +235,35 @@ class TestReportCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBarMeasurementReconciliation(unittest.TestCase):
+    """Issue #131: the scan's flag and the encode's crop are two measurements.
+
+    The decision (docs/black-bar-spike.md) keeps them separate: the flag is a cheap
+    pre-filter, the rectangle is the only value that reaches an encode. They are not
+    supposed to agree, so a file flagged "has bars" that yields no crop must be
+    EXPLAINED in the report rather than look like a bug.
+    """
+
+    def test_a_flagged_file_with_no_crop_is_explained(self) -> None:
+        from shrinkray.report import _bars_note
+
+        note = _bars_note(1, None)
+        self.assertIn("bars flagged by scan", note)
+        self.assertIn("pre-filter", note)
+
+    def test_a_flagged_file_with_a_crop_needs_no_note(self) -> None:
+        from shrinkray.report import _bars_note
+
+        self.assertEqual(_bars_note(1, "20,20,0,0"), "")
+
+    def test_an_unflagged_file_needs_no_note(self) -> None:
+        from shrinkray.report import _bars_note
+
+        self.assertEqual(_bars_note(0, None), "")
+
+    def test_a_file_with_no_scan_data_needs_no_note(self) -> None:
+        from shrinkray.report import _bars_note
+
+        self.assertEqual(_bars_note(None, None), "")

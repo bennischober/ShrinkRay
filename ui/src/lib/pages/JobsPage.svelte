@@ -7,13 +7,9 @@
 
   let {
     history,
-    oncancel,
-    onretry,
     onopenMovie,
   }: {
     history: Job[]
-    oncancel: (id: number | null) => void
-    onretry: (job: Job) => void
     /** Open a movie's detail page (single-movie jobs link to their title). */
     onopenMovie: (path: string) => void
   } = $props()
@@ -176,11 +172,6 @@
             <span class="when" title={job.started_at ?? ''}>{fmtWhen(job.started_at ?? job.created_at)}</span>
             <span class="dur">{job.state === 'done' ? fmtSpan(job.started_at, job.finished_at) ?? '—' : job.state === 'running' ? '…' : '—'}</span>
             <span class="ops">
-              {#if job.state === 'running' || job.state === 'queued'}
-                <button class="mini" onclick={() => oncancel(job.id)}>CANCEL</button>
-              {:else if job.state === 'failed'}
-                <button class="mini" onclick={() => onretry(job)}>RETRY</button>
-              {/if}
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}
               </button>
@@ -201,7 +192,6 @@
             {@const note = failedOutcomeNote(job)}
             <div class="mono error">
               {note.replace('__FAILED_OUTCOMES__', '')}
-              <button class="mini" onclick={() => onretry(job)}>RETRY</button>
             </div>
           {:else if job.error}
             <!-- translated for the row (the operator's language); the raw

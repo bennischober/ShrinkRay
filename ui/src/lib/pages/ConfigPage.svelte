@@ -88,20 +88,6 @@
     flash('paths')
   }
 
-  async function save() {
-    if (!config) return
-    busy = true
-    saveError = null
-    try {
-      config = await api.saveConfig(config)
-      saved = true
-      setTimeout(() => (saved = false), 2000)
-    } catch (e) {
-      saveError = e instanceof Error ? e.message : String(e)
-    } finally {
-      busy = false
-    }
-  }
 
   function addExtension(event: Event) {
     if (!config) return
@@ -342,10 +328,7 @@
         </div>
       </div>
       <div class="foot">
-        <span class="mono dim">changes apply to the next job</span>
-        <button class="act primary" onclick={save} disabled={busy}>
-          {busy ? 'SAVING…' : 'SAVE CONFIG'}
-        </button>
+        <span class="mono dim">config.json is a file on disk — edit it there and restart</span>
       </div>
     {/if}
   </section>
@@ -493,17 +476,4 @@
     word-break: break-word;
   }
 
-  .act {
-    background: var(--panel-raised);
-    border: 1px solid var(--ink);
-    border-radius: var(--radius);
-    color: var(--ink);
-    padding: 6px 16px;
-    cursor: pointer;
-    font-size: var(--fs-legend);
-    letter-spacing: var(--track-legend);
-    text-transform: uppercase;
-  }
-  .act.primary { background: var(--teal); border-color: var(--teal); color: var(--ground); }
-  .act:disabled { opacity: 0.5; cursor: default; }
 </style>
