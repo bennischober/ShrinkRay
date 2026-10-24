@@ -412,9 +412,18 @@ Example [config.json](config.json):
         "idle_priority": true       // encodes run below normal priority
     },
     "codec": { "hdr": { "color_space": [], "color_transfer": [] } },
+    "app": {
+        "auto_backlog": false      // start scan -> plan -> encode on boot
+    },
     "language": "en"
 }
 ```
+
+> **`app.auto_backlog` is off by default.** Set it to `true` (the container sets it) and a
+> started app enqueues the backlog for every allowlisted root with no client: a scan, then a
+> plan, then an encode of everything the plan marked worth encoding. The queue is FIFO and the
+> worker single-threaded, so the order holds by construction; a restart does not re-encode
+> finished files, because the database already records them as done.
 
 Three keys named "preset" with different meanings — the distinction:
 `handbrake.preset` is the **fixed-mode** HandBrake preset *name* (a full

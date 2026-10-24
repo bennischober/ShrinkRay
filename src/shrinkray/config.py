@@ -217,6 +217,14 @@ class EligibilitySection(BaseModel):
         return value
 
 
+class AppSection(BaseModel):
+    """app: how the resident app behaves on boot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    auto_backlog: bool = False
+
+
 class HdrSection(BaseModel):
     """codec.hdr: the markers that flag a source as HDR."""
 
@@ -253,6 +261,7 @@ class ConfigModel(BaseModel):
     quality: QualitySection = Field(default_factory=QualitySection)
     resources: ResourcesSection = Field(default_factory=ResourcesSection)
     codec: CodecSection = Field(default_factory=CodecSection)
+    app: AppSection = Field(default_factory=AppSection)
     eligibility: EligibilitySection = Field(default_factory=EligibilitySection)
     language: str = DEFAULT_LANGUAGE
 
@@ -325,6 +334,9 @@ class Conf:
         self.min_source_height: int = model.eligibility.min_source_height
         self.min_source_size_gb: float = model.eligibility.min_source_size_gb
         self.candidate_codecs: list[str] = model.eligibility.candidate_codecs
+
+        # app => whether the resident app starts the backlog on boot
+        self.auto_backlog: bool = model.app.auto_backlog
 
 
 _config: Conf | None = None
