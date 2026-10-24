@@ -10,4 +10,4 @@ from importlib import metadata
 try:
     __version__ = metadata.version("shrinkray")
 except metadata.PackageNotFoundError:  # direct src-tree run without install
-    __version__ = "0.3.0"
+    __version__ = "0.4.0"
