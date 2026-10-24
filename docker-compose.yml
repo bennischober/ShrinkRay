@@ -11,6 +11,9 @@
 
 services:
   shrinkray:
+    # the published image (built, smoke-tested and pushed by a v* tag, issue
+    # #165). To use it, comment out the build block below and un-comment this:
+    # image: ghcr.io/bennischober/shrinkray:latest
     build:
       context: .
       target: runtime

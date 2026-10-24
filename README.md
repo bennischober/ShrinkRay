@@ -475,7 +475,27 @@ libvmaf**, so quality mode cannot run there; use the `dev` target of the
 
 ### Container
 
-Two targets, one file:
+The published image is on GHCR — a `v*` tag builds, smoke-tests and pushes it
+(issue #165), so most deployments never build anything:
+
+```bash
+docker pull ghcr.io/bennischober/shrinkray:latest
+
+docker run -d --name shrinkray-app \
+  --publish 8420:8420 \
+  --env SHRINKRAY_TOKEN='a-long-random-secret' \
+  --volume /srv/media:/media:ro \
+  --volume /srv/shrinkray-data:/data \
+  ghcr.io/bennischober/shrinkray:latest
+```
+
+Pin a release with the version tag (`ghcr.io/bennischober/shrinkray:v0.4.0`);
+`docker inspect` on the image shows the version label without starting it.
+The image runs as a non-root user (override with `--build-arg UID/GID` on a
+source build) and expects the volume layout below.
+
+Build from source instead (for development or an untagged checkout): two
+targets, one file:
 
 ```bash
 docker build --target runtime -t shrinkray:local .

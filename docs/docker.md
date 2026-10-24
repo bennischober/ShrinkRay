@@ -1,12 +1,25 @@
 # Docker deployment
 
-Status: **built** (issue #34). `Dockerfile` defines two targets - `runtime`
-for deployment and `dev` for the gate - and `docker-compose.yml` is the deployment
-shape. The trade-offs recorded below are the ones the build actually had to
-respect; where a decision was made, it is stated with the reason.
+Status: **built** (issue #34) **and published** (issue #165). `Dockerfile`
+defines two targets - `runtime` for deployment and `dev` for the gate - and
+`docker-compose.yml` is the deployment shape. Every `v*` tag builds the
+runtime image, smoke-tests it (boot + token-authenticated healthcheck) and
+pushes it to `ghcr.io/bennischober/shrinkray:<tag>` and `:latest` with OCI
+labels carrying the version - so the common install is `docker pull`, and the
+source build is the development path. The trade-offs recorded below are the
+ones the build actually had to respect; where a decision was made, it is
+stated with the reason.
 
 ## What shipped
 
+- **Published to GHCR on release tags** (issue #165): a `v*` tag runs the
+  release job, then builds the runtime image, smoke-tests it (boot +
+  token-authenticated `/api/status` healthcheck — the image must turn
+  healthy before anything reaches the registry) and pushes
+  `ghcr.io/bennischober/shrinkray:<tag>` + `:latest` with OCI labels
+  (`org.opencontainers.image.version` carries the tag, so `docker inspect`
+  answers "what am I running"). No new secret: the workflow's built-in
+  `GITHUB_TOKEN` with `packages: write`.
 - **`Dockerfile`, two targets.** `runtime` is the deployment image; `dev` is the
   same base plus the dev group and Node, so the seven gate commands run in the
   environment they ship in.
@@ -126,12 +139,27 @@ fresh" cost. Details below.
    of a runtime step that can fail in ways a stranger has to debug.
 3. **Docker is an official deployment channel alongside systemd + uv.** Yes -
    `deploy/shrinkray.service` stays for bare metal; the image is the NAS path.
-4. **Registry.** Neither yet: `docker build` is the documented path, and the
-   image is built and exercised by hand. Publishing to ghcr.io on tags, and a CI
-   job that builds the image, are follow-ups that need a workflow and secrets;
-   neither is claimed here.
+4. **Registry.** ghcr.io (issue #165): the release workflow builds, smoke-tests
+   and pushes on `v*` tags; no extra secret is needed (`GITHUB_TOKEN` +
+   `packages: write`). Docker Hub can be added as a second push target later
+   without rework if discovery ever matters.
 
 ## Running it
+
+Pull the published image (no build, no clone):
+
+```bash
+docker pull ghcr.io/bennischober/shrinkray:latest
+
+docker run -d --name shrinkray \
+  -p 8420:8420 \
+  -e SHRINKRAY_TOKEN='a-long-random-secret' \
+  -v /srv/media:/media:ro \
+  -v /srv/shrinkray-data:/data \
+  ghcr.io/bennischober/shrinkray:latest
+```
+
+Or via compose (un-comment the `image:` line, comment the `build:` block):
 
 ```bash
 SHRINKRAY_TOKEN=... MEDIA_DIR=/path/to/library docker compose up -d
