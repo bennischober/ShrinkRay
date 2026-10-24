@@ -3,7 +3,7 @@
 This is the evidence script for the question the 2026-10-21 plan could not
 answer: does a full encode actually sit at the target VMAF? It measures the
 COMPLETE encode against the COMPLETE source (not the 10s probes the CRF
-search used) and appends every result to testdata/scratch/verify_results.md
+search used) and appends every result to test_media/scratch/verify_results.md
 so partial runs lose nothing.
 
 Usage (from the repo root):
@@ -28,28 +28,28 @@ from shrinkray.quality import measure_vmaf
 from shrinkray.telemetry import logs_dir
 
 REPO = Path(__file__).resolve().parent.parent
-RESULT_FILE = REPO / "testdata" / "scratch" / "verify_results.md"
+RESULT_FILE = REPO / "test_media" / "scratch" / "verify_results.md"
 
 # (label, encoded file, reference file) — encoded first, source second
 PAIRS = [
     (
         "rick_morty_s01e01 (CRF 24)",
-        "testdata/out_quality/rick_morty_s01e01.mkv",
-        "testdata/movies/rick_morty_s01e01.mkv",
+        "test_media/out_quality/rick_morty_s01e01.mkv",
+        "test_media/movies/rick_morty_s01e01.mkv",
     ),
     (
         "bloodshot_alt_ending (CRF 20)",
-        "testdata/out_quality/bloodshot_alt_ending.mkv",
-        "testdata/movies/bloodshot_alt_ending.mkv",
+        "test_media/out_quality/bloodshot_alt_ending.mkv",
+        "test_media/movies/bloodshot_alt_ending.mkv",
     ),
     (
         "django_unchained (CRF 20)",
-        "testdata/out_quality/django_unchained.mkv",
-        "testdata/movies/django_unchained.mkv",
+        "test_media/out_quality/django_unchained.mkv",
+        "test_media/movies/django_unchained.mkv",
     ),
     (
         "the_mandalorian_s01e02 (CRF 14, HDR)",
-        "testdata/out_hdr/the_mandalorian_s01e02.mkv",
+        "test_media/out_hdr/the_mandalorian_s01e02.mkv",
         r"G:\Serien\The Mandalorian\Season 1\The Mandalorian - S01E02 - Chapter 2- The Child.mkv",
     ),
 ]
@@ -87,7 +87,7 @@ def main() -> int:
             score = measure_vmaf(
                 encoded,
                 Path(reference),
-                workdir=REPO / "testdata" / "scratch",
+                workdir=REPO / "test_media" / "scratch",
                 hdr="HDR" in label,
                 db_file=REPO / "metadata.db",
             )

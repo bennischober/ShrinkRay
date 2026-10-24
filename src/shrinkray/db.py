@@ -1137,8 +1137,8 @@ def prune_missing(
 
     Without a scope, only rows inside the given scope directory are
     considered: a scan of one folder must never touch the history of files
-    stored elsewhere (e.g. a scan of testdata/movies_two must leave the
-    records of testdata/movies alone).
+    stored elsewhere (e.g. a scan of test_media/movies_two must leave the
+    records of test_media/movies alone).
 
     Args:
         connection (sqlite3.Connection): The database connection.
