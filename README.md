@@ -341,12 +341,19 @@ the next start.
 ### `watch` — one-shot folder watcher
 
 ```bash
+# in place: the verified output takes the source path, original renamed aside
+uv run shrinkray watch-mode 'D:\Downloads'
+
+# or write a second copy into an output directory
 uv run shrinkray watch-mode 'D:\Downloads' 'D:\Encoded'
 ```
 
 The standalone variant of the app's watch loop: polls the inbox folder for
 new movie files, waits until they are stable (download/copy finished), applies
-the same skip logic and encodes them — **sources stay untouched**. Use the
+the same skip logic and encodes them. With no output directory the encode lands
+**in place**, so the original is renamed aside and kept - and the retained
+originals are never picked up as new movies on a later pass. Naming an output
+directory keeps the older behaviour of writing a second copy there. Use the
 `app` command instead when you want this to run continuously alongside the
 dashboard.
 
