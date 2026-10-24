@@ -205,7 +205,8 @@ def measure_vmaf(
         hdr (bool): Tone-map both sides for the measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file, used to locate the logs
-            directory for failure evidence (None => cwd metadata.db).
+            directory for failure evidence (None => no failure bundle; the
+            caller decides where telemetry lands).
         subsample (int | None): libvmaf n_subsample divisor (None = every
             frame). Used by the post-encode verification for large files.
 
@@ -241,7 +242,7 @@ def measure_vmaf(
         # worst case: the bundle keeps stderr, command and any partial
         # vmaf.json alive for diagnosis)
         save_failure(
-            db_file=db_file or Path("metadata.db"),
+            db_file=db_file,
             kind="vmaf-measure",
             command=command,
             stderr=err,

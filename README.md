@@ -482,7 +482,7 @@ docker build --target runtime -t shrinkray:local .
 docker build --target dev     -t shrinkray:dev   .
 ```
 
-`dev` runs the five gate commands inside the image. `runtime` is the deployment
+`dev` runs the seven gate commands inside the image. `runtime` is the deployment
 shape; see [docs/docker.md](docs/docker.md) for the volumes, the `--root`
 requirement on Linux, and the fact that publishing a port **requires**
 `SHRINKRAY_TOKEN` (the app refuses to bind `0.0.0.0` without one, and there is

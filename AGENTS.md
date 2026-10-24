@@ -82,42 +82,42 @@ anti-patterns are the sections further down — this block does not restate them
 
 ```
 ./
-├── src/shrinkray/    # 18 flat modules, ~11.4k LOC — the whole Python product
+├── src/shrinkray/    # layered package: tools/ engine/ server/ + CLI (~12.8k LOC)
 ├── ui/               # Svelte 5 dashboard, second toolchain with its own gate
-├── tests/            # one file per source module, plain unittest, run by pytest
+├── tests/            # plain unittest per source area, run by pytest
 ├── testdata/         # gitignored local fixtures (mkv clips, inbox/movies trees)
 ├── test_media/       # gitignored real media, manual end-to-end runs only
 ├── docs/             # decisions/0001-module-layout.md, docker.md, tui.md, plan-reuse.md
 ├── deploy/           # shrinkray.service (systemd)
 ├── scripts/          # verify_fullmovie.py — manual full-movie check
-└── .github/workflows/ci.yml   # job `test` (the six commands) + job `ui`
+└── .github/workflows/ci.yml   # job `test` (the seven commands) + job `ui`
 ```
 
 ### WHERE TO LOOK
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Change a CLI command or flag | `src/shrinkray/__main__.py` (1067 L) | typer app; no business logic |
-| Change the VMAF/CRF decision | `src/shrinkray/quality.py` (2821 L) | measure, crop detect, sampling, search, plan cache |
-| Change an HTTP route or SSE | `src/shrinkray/app.py` (1311 L) | FastAPI, 16 routes incl. SSE `/api/events` |
-| Change the schema | `src/shrinkray/db.py` (1082 L) | migration + `SCHEMA_VERSION` bump |
-| Change what gets encoded | `src/shrinkray/encode.py` (1029 L) | HandBrake invocation, artifact verification |
-| Change candidate selection | `src/shrinkray/quality.py` | `CANDIDATE_CODECS` / `MODERN_CODECS` gate |
-| Change the watchdog | `src/shrinkray/watch.py` | poll interval, stability, `decide()` |
+| Change a CLI command or flag | `src/shrinkray/__main__.py` (1304 L) | typer app; no business logic |
+| Change the VMAF/CRF decision | `src/shrinkray/engine/search.py` (820 L) | bisect_crf, sample_count_for, DEFAULT_TARGET_VMAF |
+| Change encode/verify machinery | `src/shrinkray/engine/pipeline.py` (1647 L) | encode_with_quality, encode_movies, check_disk_space |
+| Change an HTTP route or SSE | `src/shrinkray/server/app.py` (1334 L) | FastAPI routes incl. SSE `/api/events` |
+| Change the schema | `src/shrinkray/db.py` (1193 L) | migration + `SCHEMA_VERSION` bump |
+| Change candidate selection | `src/shrinkray/engine/plan.py` | `CANDIDATE_CODECS` / `MODERN_CODECS` gate |
+| Change the watchdog | `src/shrinkray/engine/watch.py` (474 L) | poll interval, stability, `decide()` |
 | Change the dashboard | `ui/src/lib/pages/` | contract also in `ui/src/lib/api.ts` |
-| Understand a past decision | `docs/decisions/`, issue #63 | layout target, not current state |
+| Understand a past decision | `docs/decisions/`, issue #63 | landed 2026-10-24 (#97) |
 
 ### CODE MAP
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
 | `DEFAULT_TARGET_VMAF` | const 96.0 | `engine/search.py:48` | 8 | the decided default; every CLI option, the API model and the job payload derive from it |
-| `CANDIDATE_CODECS` | const | `quality.py:65` | 5 | `("h264",)` — the only size-alone candidates |
-| `MODERN_CODECS` | const | `quality.py:66` | 5 | `("hevc","av1")` — bars-only candidates |
-| `guard_encodes` | context mgr | `encode_lock.py:142` | 14 | per-output-dir lock, 6 h stale window |
-| `SCHEMA_VERSION` | const 14 | `db.py:8` | 9 | bump with every migration |
-| `find_handbrake` | function | `encode.py:175` | 40 | binary discovery, degrades to `None` |
-| `encode_file` | function | `encode.py:742` | — | the one full encode |
+| `CANDIDATE_CODECS` | const | `engine/plan.py` | 5 | `("h264",)` — the only size-alone candidates |
+| `MODERN_CODECS` | const | `engine/plan.py` | 5 | `("hevc","av1")` — bars-only candidates |
+| `guard_encodes` | context mgr | `engine/lock.py` | 14 | per-output-dir lock, 6 h stale window |
+| `SCHEMA_VERSION` | const 15 | `db.py:8` | 9 | bump with every migration |
+| `find_handbrake` | function | `tools/handbrake.py` | 40 | binary discovery, degrades to `None` |
+| `encode_with_quality` | function | `engine/pipeline.py` | — | the one full encode |
 
 ### NOTES (gotchas that cost a reader time)
 
@@ -128,15 +128,15 @@ anti-patterns are the sections further down — this block does not restate them
   the 95.0 -> 96.0 change deliberately invalidated every cached plan: a library planned
   under the old default re-probes once. The HDR default is `DEFAULT_TARGET_VMAF -
   HDR_VMAF_OFFSET` (95.5), expressed as a difference so the two cannot drift apart.
-- **The package is flat today.** The `tools/`/`engine/`/`server/` tree in Project
-  conventions is the #63 target, not the current layout. Do not describe it as
-  current, and do not restructure as a drive-by on an unrelated issue.
-- **One writer per output directory.** `encode_lock.guard_encodes` is the only guard;
+- **The layers are real and enforced.** The `tools/`/`engine/`/`server/` tree is
+  the current layout (landed via #97, 2026-10-24); `uv run lint-imports` fails
+  on any upward edge. Do not add a layer-crossing import to dodge it.
+- **One writer per output directory.** `engine/lock.guard_encodes` is the only guard;
   any new code path that writes into an output dir must take it.
-- **Tests patch module-qualified names** (`shrinkray.encode.find_handbrake`), so moving
-  a function between modules silently breaks patch targets — a #63 move must update
-  the patch strings in the same commit.
-- **The gate is not the whole gate.** The six commands cover Python only; CI also runs
+- **Tests patch the LOOKUP home** (`shrinkray.engine.pipeline.find_handbrake`),
+  not the definition home (`tools.handbrake`) — moving a function between modules
+  changes the patch target, not the logic.
+- **The gate is not the whole gate.** The seven commands cover Python only; CI also runs
   a separate `ui` job (`npm ci`, `npm run check`, `npm run test`, `npm run build` in
   `ui/` — vitest covers the api contract helpers, the SSE progress store and the jobs
   page render). A change under `ui/` is unverified until those four pass too.
@@ -148,8 +148,8 @@ anti-patterns are the sections further down — this block does not restate them
   poster card the app no longer has (`LibraryPage` is table-only, `PosterCard.svelte`
   is orphaned); `ui/README.md` is unedited Vite template text. The root README's
   "Web UI (ui/)" section is the accurate one.
-- **`helpers.py` still exists** (257 L). The "no helpers module" rule governs new code
-  and the #63 moves; do not grow it.
+- **`helpers.py` still exists** (190 L, dissolving). The "no helpers module" rule governs new
+  code and the remaining moves; do not grow it.
 
 ## Engineering standard (non-negotiable)
 
@@ -219,7 +219,7 @@ existing video collection" and nothing more specific.
 2. **Never commit secrets.** The litellm API key lives in
    `.opencode/orthos-key` (gitignored). Do not copy keys into code, tests,
    logs or commit messages. Do not use PII in commit messages.
-3. **Run the full gate before every commit.** All six must pass:
+3. **Run the full gate before every commit.** All seven must pass:
 
    ```sh
    uv run ruff check src tests
@@ -227,6 +227,7 @@ existing video collection" and nothing more specific.
    uv run mypy --platform linux
    uv run mypy --platform win32
    uv run pytest -q
+   uv run lint-imports
    ```
 
    Both mypy runs are explicit so the gate is identical on every host. Running
@@ -237,8 +238,12 @@ existing video collection" and nothing more specific.
    Linux runner and breaks a Windows contributor. Checking both directions catches
    both, whichever machine you are on.
 
-   CI runs exactly these six. If you cannot make the gate pass, do not commit;
-   report the blocker instead.
+   `lint-imports` enforces the layered layout (tools -> engine -> server -> cli)
+   from the #63 decision record; a module in the wrong layer is a red gate, not a
+   review comment.
+
+   CI runs exactly these seven (plus the `ui` job). If you cannot make the gate
+   pass, do not commit; report the blocker instead.
 
 ## Project conventions
 
@@ -259,10 +264,11 @@ existing video collection" and nothing more specific.
   type hints and a docstring in Google style (see existing modules for the
   pattern).
 - **Tests live in `tests/` as plain `unittest`** classes run by pytest,
-  one file per source module (`test_encode.py`, `test_quality.py`,
+  one file per source area (`test_encode.py`, `test_quality.py`,
   `test_watch.py`, `test_db.py`, `test_report.py`, `test_cli.py`,
-  `test_jobs.py`, `test_resources.py`,
-  `test_media.py`, `test_misc.py`). Opt-in smoke tests against the real
+  `test_jobs.py`, `test_probe_progress.py`, `test_container.py`,
+  `test_resources.py`, `test_media.py`, `test_misc.py`, `test_plans.py`,
+  `test_telemetry_leak.py`). Opt-in smoke tests against the real
   binaries live in `tests/test_smoke.py` — skipped unless
   `SHRINKRAY_SMOKE=1` is set AND ffmpeg/HandBrakeCLI are on PATH (they
   never run in CI or the default gate; run them explicitly after changes
@@ -290,38 +296,34 @@ existing video collection" and nothing more specific.
   letterboxing, HDR, an aspect-ratio change) — a stub-based test cannot.
   Never commit the media itself, and never reference these filenames in code,
   tests or docs: the set of files in the folder is the operator's business.
-- **Module layout (decision record, issue #63).** Three shallow subpackages
-  will hold the product, split by reason-to-change — this is the agreed target
-  every refactor PR moves toward, not a daily obligation:
+- **Module layout (decision record, issue #63; landed 2026-10-24 via #97).**
+  Three shallow subpackages hold the product, split by reason-to-change — this
+  is the CURRENT layout, enforced by the `lint-imports` gate command:
 
     ```
     src/shrinkray/
       __main__.py      CLI: parse arguments, call service/engine, render. No business logic.
       config.py        pure data; loading it has no side effects
-      logger.py  db.py  telemetry.py  report.py  service.py
+      logger.py  db.py  telemetry.py  report.py  service.py  helpers.py (dissolving)
       tools/           the subprocess boundary: the only code that runs an external binary
         process.py       one runner: argument lists, timeout, stall watchdog, priority, termination
         ffprobe.py  vmaf.py  handbrake.py
       engine/          the product: "is this file bigger than its quality requires?"
         scan.py  crop.py  samples.py  search.py  encoders.py  plan.py  pipeline.py  lock.py  watch.py
       server/          the network surface: nothing else listens on a socket
-        app.py  routes_*.py  security.py  jobs.py
+        app.py  jobs.py
     ```
 
   **Imports only go downward** (entry points → service → engine → tools →
-  foundation), to be enforced by an `import-linter` layers contract as a
-  seventh gate command (`uv run lint-imports`) once the tree satisfies it.
-  Until then the rule is discipline: no new code may add an upward import
-  (`tools` importing `engine`, `engine` importing `server`, foundation
-  importing anything above itself) or a function-level `shrinkray` import
-  to dodge a cycle. Other standing rules from the record: **no
-  `helpers`/`utils`/`common` module** (a function lives with its concern
-  or its only caller — `helpers.py` dissolves into its callers);
-  **one implementation per external fact** (only `tools/ffprobe.py` runs and
-  parses ffprobe, only `engine/encoders.py` decides the encoder for HDR/SDR,
-  only `engine/crop.py` detects bars); **tests mirror the layout**
-  (`tests/engine/test_search.py`, ...). Full record with the phase order and
-  the move table: issue #63.
+  foundation), enforced by the import-linter layers contract — `uv run
+  lint-imports` is the seventh gate command and red in CI on any upward edge.
+  Standing rules from the record: **no new `helpers`/`utils`/`common` module**
+  (a function lives with its concern or its only caller — `helpers.py` dissolves
+  into its callers); **one implementation per external fact** (only
+  `tools/ffprobe.py` runs and parses ffprobe, only `engine/encoders.py` decides
+  the encoder for HDR/SDR, only `engine/crop.py` detects bars); **tests mirror
+  the layout** (`tests/engine/test_search.py`, ...) as they are touched. Full
+  record with the phase order and the move table: issue #63.
 - **Commit messages follow Conventional Commits** (`feat`, `fix`, `docs`,
   `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `style`) with a scope
   where it adds context, e.g. `fix(encode): ...`. Body explains the *why*
@@ -360,7 +362,7 @@ around it is a deliberate direct push, which has its own rules below.
 
    The issue number belongs in the branch name, so `git branch --list` answers "what
    is in flight" without consulting GitHub.
-3. **Do the work, then pass the gate.** The five commands in Non-negotiable rule 3
+3. **Do the work, then pass the gate.** The commands in Non-negotiable rule 3
    must pass locally before anything is pushed. Commit in reviewable units, not one
    dump — see the commit rules below.
 4. **Push the branch and open a pull request.** Reference the issue so it links and
@@ -390,7 +392,7 @@ gh pr view <N> --json mergeable,mergeStateStatus
 
 git switch <branch>
 git fetch origin && git merge origin/main       # resolve conflicts HERE, in your branch
-# fix the failure, run the five gate commands, commit
+# fix the failure, run the gate commands, commit
 git push                                      # the same PR updates in place
 ```
 
@@ -410,17 +412,11 @@ branch under a reviewer is not.
 
 ### Pushing directly to `main`
 
-Direct pushes are technically possible — branch protection is not enabled (verified
-2026-10-23: the protection API returns 404) and the `push` permission is held — and
-they are permitted when you have a concrete reason: an urgent fix, unblocking a broken
-`main`, or a change that cannot be reviewed meaningfully as a diff. The default is still
-branch → PR → merge, for one reason: a direct push runs the gate *after* `main` is
-already red, while a PR runs CI before anything lands. `main` is what a stranger
-clones; it must be green at every commit.
-
-When you do push directly, **Multi-agent etiquette still applies in full**: claim the
-issue, keep one issue in flight, check `git status` before staging, and pull before you
-push. A direct push is a shortcut around the review step, never around the coordination.
+Direct pushes are blocked by branch protection (GitHub returns 403 for a direct
+push to `main`), and that is by design: a PR runs CI before anything lands,
+while a direct push would make `main` red first and debug later. `main` is what
+a stranger clones; it must be green at every commit, and the only way to
+guarantee that is to make every change arrive through a checked PR.
 
 GitHub does not let an author approve their own pull request, and every PR here is opened
 by the same account that would merge it — so "approved" in practice means "green checks and
