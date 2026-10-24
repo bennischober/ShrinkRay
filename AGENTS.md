@@ -474,9 +474,11 @@ Multiple agents (and humans) work in this repository concurrently.
 
 ## Autonomy
 
-- Work through the task list without stopping to ask what comes next;
-  `TODO.md` records agreed next steps and known limitations. Work that is
-  already filed as a GitHub issue lives there, not in `TODO.md`.
+- Work through the issue tracker without stopping to ask what comes next:
+  open issues are the task list, and needs-decision issues stay open until
+  the maintainer decides. Quick doc/format fixes may land directly on
+  `main` when the maintainer says so; everything else goes through the
+  issue workflow above.
 - Prefer sensible defaults over questions; document the choice you made.
   Ask only for: irreversible or destructive actions, missing credentials,
   or genuinely ambiguous product direction.

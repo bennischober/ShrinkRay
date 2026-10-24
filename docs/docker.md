@@ -160,8 +160,8 @@ risk. Still: one watcher per library.
 ## Related
 
 - deploy/shrinkray.service - the existing systemd path (works today)
-- TODO.md - pointer kept under Linux/NAS deployment
-- TODO.md Decisions - the no-PyInstaller decision this extends
+- The changelog's decisions (CHANGELOG.md) - the no-PyInstaller decision
+  this extends
 - GitHub issue #35 (swap-in-place with a retained original) - decides where
   retained originals live, which sets whether the volume story needs a separate
   mount. Decide the two together.

@@ -86,8 +86,8 @@ wasted.
 
 > [!NOTE]
 > **HDR10 content is supported** by quality mode (10-bit encoder + tone-mapped
-> VMAF measurement). Dolby Vision dual-layer files are not yet (see
-> [TODO.md](TODO.md)).
+> VMAF measurement). Dolby Vision dual-layer files are not yet (tracked in
+> [issue #104](https://github.com/bennischober/ShrinkRay/issues/104)).
 
 ## Quickstart
 

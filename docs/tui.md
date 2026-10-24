@@ -68,6 +68,6 @@ run_test - is a good recipe and reusable for the Live layout too).
 
 - docs/docker.md - the "second artifact" cost pattern this decision
   reuses; container entrypoint modes are the same deployment question
-- TODO.md Ideas - PEP 723 for scripts/ and this page's scope decision
+- Issue #179 - the PEP 723 idea for scripts/, filed from this page
 - src/shrinkray/engine/watch.py - the watch loop that would get the Live layout
 - src/shrinkray/__main__.py - A4 progress callback (percent events)
