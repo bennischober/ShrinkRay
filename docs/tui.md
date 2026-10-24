@@ -56,8 +56,9 @@ run_test - is a good recipe and reusable for the Live layout too).
 
 - **PEP 723 inline script deps**: their `tui.py` is `uv run tui.py` with
   `# /// script` dependencies - self-contained, no project venv needed.
-  Our helper scripts (scripts/verify_fullmovie.py) could adopt this so
-  they run on any machine with uv alone. Small, real win.
+  ADOPTED: `scripts/verify_fullmovie.py` carries the header now (issue
+  #179) — `uv run scripts/verify_fullmovie.py` works from anywhere uv
+  exists, against an installed ShrinkRay or the checkout.
 - **Maintenance-rules + verify-recipe docs discipline**: constants that
   encode measured external behavior are documented as such ("don't
   change without a live test"), and each component carries its own
@@ -68,6 +69,7 @@ run_test - is a good recipe and reusable for the Live layout too).
 
 - docs/docker.md - the "second artifact" cost pattern this decision
   reuses; container entrypoint modes are the same deployment question
-- Issue #179 - the PEP 723 idea for scripts/, filed from this page
+- Issue #179 - the PEP 723 idea for scripts/, ADOPTED in
+  scripts/verify_fullmovie.py
 - src/shrinkray/engine/watch.py - the watch loop that would get the Live layout
 - src/shrinkray/__main__.py - A4 progress callback (percent events)
