@@ -49,11 +49,11 @@ seconds. The dashboard is its status window — what is running, what is planned
 left, what was reclaimed — not a control panel.
 
 > [!IMPORTANT]
-> **The one-shot shape is the target, not the current behaviour.** Today `encode` takes a
-> folder plus a *required* output directory, always opens the database, and writes to the
-> output directory unless you pass `--replace`. Single files, globs, the database-free
-> default and the in-place default are tracked in [ISSUES.md](ISSUES.md). The commands in
-> the reference below are what actually runs.
+> **The one-shot shape is what runs today.** `encode` takes a file, a folder or a glob, and
+> omitting the output directory re-encodes **in place**: the verified output takes the source's
+> own path and the original is renamed aside and kept. No database is created unless you pass
+> `--db`. Naming an output directory instead keeps the older behaviour of writing a second copy
+> there.
 
 ## What does it do?
 
@@ -108,9 +108,8 @@ uv run shrinkray app        # the dashboard on http://127.0.0.1:8420
 ```
 
 > A file, a folder or a glob all work as the input, and no database is created unless you
-> pass `--db`: a one-shot run is stateless. What is still missing is the encode landing in
-> the source's own path (it writes to the output directory you name); see
-> [ISSUES.md](ISSUES.md) for that gap.
+> pass `--db`: a one-shot run is stateless. Omit the output directory and the encode lands in
+> the source's own path, with the original renamed aside and kept — nothing is deleted.
 
 **Already have uv?** Run straight from GitHub without cloning:
 
@@ -239,14 +238,17 @@ no database is created or read — a one-shot run is stateless.
 ### `encode` — shrink your library
 
 ```bash
-# fixed preset (fast, predictable)
-uv run shrinkray encode 'D:\Movies' 'D:\Encoded'
+# quality-measured, in place (the default: original renamed aside, kept)
+uv run shrinkray encode 'D:\Movies' --quality
 
-# quality-measured (smaller, transparent, slower)
+# fixed preset, in place (fast, predictable)
+uv run shrinkray encode 'D:\Movies'
+
+# write a second copy into an output directory instead
 uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
 
 # with options
-uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
+uv run shrinkray encode 'D:\Movies' \
     --quality --target-vmaf 96
 ```
 
@@ -256,7 +258,7 @@ uv run shrinkray encode 'D:\Movies' 'D:\Encoded' \
 | `--target-vmaf N` | quality floor for quality mode (default: `96`) |
 | `--probe-encoder-preset N` | the PROBES' encoder speed preset (`5` default; SVT-AV1 speed 0-10, higher = slower; a measurement setting — changing it invalidates stored plans) |
 | `--encoder-preset N` | the FINAL encode's speed preset (`3` default; an output setting — the probes run `--probe-encoder-preset`) |
-| `--replace` | swap the verified output into the source's path, renaming the original aside (never deleted) instead of writing to the output directory |
+| `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows per movie (more samples can only shrink the crop) |
 | `--dry-run` | show what would be encoded, without encoding |
 | `--overwrite` | re-encode even if the output already exists |

@@ -466,3 +466,91 @@ def _skipped_plan(movie: Path) -> "object":
         input_size=movie.stat().st_size,
         output_size=movie.stat().st_size,
     )
+
+
+class TestEncodeInPlace(unittest.TestCase):
+    """Issue #124: the one-shot encode lands in the source's own path.
+
+    The output directory used to be a required positional, so a one-shot run always
+    produced a second copy in a second directory - the duplication the product
+    excludes, and an output directory the operator never wanted to name. Omitting it
+    now encodes in place: the verified output takes the source's path and the
+    original is renamed aside and kept. Naming one keeps today's behaviour.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.library = self.root / "movies"
+        self.library.mkdir()
+        self.movie = self.library / "one.mkv"
+        self.movie.write_bytes(b"x" * 100)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _encode(self, *argv: str) -> "object":
+        """Runs encode with the engine faked to write a smaller output."""
+        from shrinkray.quality import QualityResult
+
+        def fake_encode(movie, output, **kwargs):
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+            Path(output).write_bytes(b"y" * 50)
+            return QualityResult(
+                input=Path(movie),
+                output=Path(output),
+                success=True,
+                chosen_crf=20,
+                achieved_vmaf=96.0,
+                input_size=100,
+                output_size=50,
+            )
+
+        from typer.testing import CliRunner
+
+        runner = CliRunner()
+        previous = os.getcwd()
+        os.chdir(self.root)
+        try:
+            with patch("shrinkray.quality.encode_with_quality", side_effect=fake_encode):
+                return runner.invoke(app, list(argv))
+        finally:
+            os.chdir(previous)
+
+    def test_an_omitted_output_dir_encodes_in_place(self) -> None:
+        """The criterion: no second argument, the source's path holds the encode."""
+        result = self._encode("encode", str(self.library), "--quality")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(self.movie.read_bytes(), b"y" * 50)
+
+    def test_the_original_is_retained_beside_the_source(self) -> None:
+        """The source is never deleted: it is renamed aside and kept."""
+        from shrinkray.replace import retained_path_for
+
+        result = self._encode("encode", str(self.library), "--quality")
+        self.assertEqual(result.exit_code, 0, result.output)
+        retained = retained_path_for(self.movie)
+        self.assertTrue(retained.exists(), "the original was not retained")
+        self.assertEqual(retained.read_bytes(), b"x" * 100)
+
+    def test_no_second_copy_is_left_behind(self) -> None:
+        """In place means one file, not a source plus an output elsewhere."""
+        result = self._encode("encode", str(self.library), "--quality")
+        self.assertEqual(result.exit_code, 0, result.output)
+        left = sorted(p.name for p in self.library.iterdir() if p.is_file())
+        self.assertEqual(len(left), 2, f"expected source+original only, got {left}")
+
+    def test_the_working_directory_is_removed(self) -> None:
+        """The in-place staging directory must not litter the library."""
+        result = self._encode("encode", str(self.library), "--quality")
+        self.assertEqual(result.exit_code, 0, result.output)
+        leftovers = [p.name for p in self.library.iterdir() if p.name.startswith(".shrinkray-")]
+        self.assertEqual(leftovers, [], "the staging directory was left behind")
+
+    def test_an_explicit_output_dir_still_writes_there(self) -> None:
+        """The regression guard: naming an output directory keeps today's behaviour."""
+        out = self.root / "encoded"
+        result = self._encode("encode", str(self.library), str(out), "--quality")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertTrue((out / "one.mkv").exists(), "the output was not written")
+        self.assertEqual(self.movie.read_bytes(), b"x" * 100, "the source was touched")
