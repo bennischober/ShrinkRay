@@ -27,6 +27,37 @@ acquiring, playing, serving — has already been done by the time ShrinkRay sees
 and ShrinkRay never does any of it. The operator is comfortable with terminals and
 containers, wants unattended operation, and will not accept a tool that can lose a file.
 
+## Ecosystem position (issue #166)
+
+ShrinkRay has one specific thing to do: **make movies smaller at measured quality.**
+It is a companion to the media-stack tools, not a competitor to any of them:
+
+- **Radarr / Sonarr** decide *what* the library contains and keep it organized —
+  naming, matching, deduplication, acquisition. ShrinkRay never does any of that.
+- **Plex / Jellyfin** *play* the library. ShrinkRay never serves media.
+- ShrinkRay sits beside them on the **same mounted library**: the *arrs write into
+  it, the player reads it, ShrinkRay rewrites files in place at measured quality and
+  retains every original (`<name>.shrinkray-original`) so coexisting with other
+  automation on the tree stays safe.
+- The **web dashboard is reachable from any browser** on the network — no desktop
+  app, no SSH tunnel. It is an observability surface (see *Operating modes*), not a
+  control panel.
+
+This section names the ecosystem in prose only: no code path may import, probe,
+parse for, or depend on any of these tools (see the scope boundary in AGENTS.md).
+
+## Auth roadmap (issue #166)
+
+- **Now:** a shared-secret token (`SHRINKRAY_TOKEN`, issue #36) gates any
+  non-loopback bind; on a trusted LAN the practical deployment is token-or-nothing
+  at the operator's discretion. Reverse-proxy termination is documented
+  (docs/docker.md); there is no TLS in the app.
+- **Later:** proper per-user authentication — the shape (session login,
+  proxy-forwarded identity, OIDC) is a future decision, deliberately not made here.
+  The deferral is safe because the dashboard is **read-only in intent** (issue
+  #134): nothing in the UI can start, cancel or reconfigure work, so an open
+  dashboard leaks information, never control.
+
 ## Operating modes
 
 There are exactly **two ways to run ShrinkRay**, and they share one engine. They differ
