@@ -4,7 +4,6 @@ All notable changes to ShrinkRay are documented here. Releases are
 tagged in git; the GitHub release for each tag carries the same notes.
 
 ## [Unreleased]
-
 ### Added
 
 - **A container image for development and headless runs** (issue #34): one
@@ -153,129 +152,6 @@ tagged in git; the GitHub release for each tag carries the same notes.
   skipped with a reason before any probe cost; an unreadable value is
   probed rather than silently dropped.
 
-### Changed
-
-- **The module layout is layered and machine-checked** (issue #97): the
-  flat package is now `tools/` → `engine/` → `server/` + CLI, enforced by
-  import-linter as the seventh gate command (`uv run lint-imports`) in the
-  local gate and CI; all transitional shim modules are deleted. The module
-  map lives in `src/shrinkray/AGENTS.md`.
-
-- **Probe every eligible codec; bar removal is part of every encode**
-  (issue #128): the codec gate no longer lets a modern codec skip the
-  search, the `--remove-bars` flag is gone from code, CLI, API and the
-  plan fingerprint, and the size check runs at the CRF the search chose
-  (issue #129) — an encode that would not shrink the file is refused
-  (issue #130).
-
-- **One config.json for dashboard and engine** (issue #58): both read the
-  same file (the dashboard wrote a second config the engine ignored).
-
-- **Config writes are validated and atomic** (issue #60): a bad value
-  fails at the API boundary with the field named, never half-written.
-
-- **Probe samples are stream-copied, not re-encoded** (issue #16): the
-  lossy x264 pass biased every VMAF measurement; the copy keeps bit depth,
-  colour tags and HDR side data, with a logged lossless ffv1 fallback for
-  containers that cannot hold the source codec.
-
-- **Every short-lived subprocess call has a timeout** (issue #62).
-
-- **The retry replays the stored payload** (issue #100): payload paths
-  union `path` and `paths`, so a retried job re-runs what the original ran.
-
-- **The HDR size estimate is labelled with its measured bias** (issue
-  #98), and the effective HDR target/encoder is recorded on the result and
-  the plan, not the caller's assumption.
-
-- **`record_plan` refuses a file changed between probing and recording**
-  (mtime/size check), so a plan cannot be stored under a fingerprint the
-  file no longer matches.
-
-- **Console timestamps carry the date and seconds** (issue #167):
-  `YYYY-MM-DD HH:MM:SS` local time in the console log (the resident mode
-  runs for days; a time-only stamp loses the day the moment the log leaves
-  the terminal); the report's generated line gains seconds (UTC).
-
-- **The strict typing bar is enforced on every module** (issue #40): mypy
-  runs `disallow_untyped_defs`, `warn_return_any`, `strict_equality` and
-  friends over the whole package; `py.typed` ships in the wheel.
-
-- **POSIX tree-kill via process groups** unblocks Linux CI; the tree-safe
-  termination applies to every encode path.
-
-- **The report creates its output directory and shows the verification
-  column.**
-
-### Fixed
-
-- **A stall watchdog that killed healthy encodes**: piped HandBrake never
-  sends newlines, so the newline-based liveness check starved and killed
-  running encodes; the watchdog now reads progress correctly and stall
-  telemetry reaches every encode path.
-
-- **The encode result survives an absent ffmpeg** (CI run 160): version
-  metadata probing is guarded, so verification metadata never fails an
-  encode.
-
-- **Watch mode's recursive/liveness traps** fixed, with prompt app
-  shutdown on stop.
-
-- **UI fixes**: readable primary hover; the two audit trails link to each
-  other; a job trail shows the movie's own outcome inside a batch job;
-  signed colored deltas, one unit spelling, one VMAF precision; drift
-  chart geometry was lying (real pixels, labeled lane, visible marks);
-  drift summary crashes; derived out-bars dressed as measured; `driftW`
-  declared before use.
-
-- **Test-suite fixes**: the test_db job import follows the server/ move;
-  the `logs/` telemetry-leak fix (a verify run without a db file no longer
-  writes failure bundles into the working directory,
-  `tests/test_telemetry_leak.py` pins it); the CodeQL sanitizer follows
-  the server/ move (issue #55).
-
-### Changed
-
-- **AV1 is the only output codec**: SDR encodes with `svt_av1`, HDR with
-  `svt_av1_10bit` (issue #21). x265 is gone from every path - not
-  demoted to a fallback, not kept as an option. `encoder_for(hdr)` is the
-  single source of the choice; the six HDR ternaries that used to be written
-  per call site are replaced by it, and `handbrake.encoder` is a two-value
-  assertion that rejects a config still naming x265 at load rather than
-  silently producing H.265.
-
-- **The thread cap reaches SVT-AV1 as `--encopts pin=N`**: `threads=N` is
-  an x264/x265 option, and SVT-AV1's parameter parser silently ignores an
-  unknown key. `pin` restricts execution to the first N cores, which is what
-  the cap means here.
-
-- **The decision statistic is the mean, not the minimum**: `probe_crf`
-  aggregates the per-sample VMAF means with the mean instead of the
-  minimum (issue #15). A minimum over samples is monotone non-increasing
-  in the sample count: every window added can only lower it or leave it
-  unchanged, which made it structurally hostile to the denser sampling #14
-  introduced - the better the coverage, the more likely one pathological
-  window sank the whole score, pushed the search to the floor CRF and
-  reported "target unreachable" for a film that was perfectly encodable.
-  `achieved_vmaf` is now documented as the mean across probe windows,
-  which is a better predictor of overall viewing quality; a user comparing
-  runs across the change should know it is not the same statistic. What the
-  mean gives up is stated plainly: "every probed window meets the target" is
-  no longer literally true. Denser sampling makes a genuinely bad scene more
-  likely to be observed and to move the average, but does not eliminate it.
-
-- **A skip now carries its evidence**: `SkipEncode` carries the best CRF,
-  the VMAF measured there and the probe count, and `save_skip` stores them
-  on the encode row. Previously an `encode` skip dropped that evidence, so the
-  next run could not tell "already probed at the floor and failed" from
-  "never probed" and re-probed the same window every time.
-
-- **A plan recorded under `min` is not reused as a `mean` one**: the
-  aggregation is part of the plan fingerprint (schema v13), because a plan
-  made under the minimum was a different decision. Existing rows default to
-  `min`, which is what they actually measured.
-
-### Added
 
 - **Probe density is duration-based (`sample_every`)**: `quality.sample_every`
   (default 600s) and `--sample-every`/`--sample-count` derive the probe
@@ -332,6 +208,99 @@ tagged in git; the GitHub release for each tag carries the same notes.
 
 ### Changed
 
+- **The module layout is layered and machine-checked** (issue #97): the
+  flat package is now `tools/` → `engine/` → `server/` + CLI, enforced by
+  import-linter as the seventh gate command (`uv run lint-imports`) in the
+  local gate and CI; all transitional shim modules are deleted. The module
+  map lives in `src/shrinkray/AGENTS.md`.
+
+- **Probe every eligible codec; bar removal is part of every encode**
+  (issue #128): the codec gate no longer lets a modern codec skip the
+  search, the `--remove-bars` flag is gone from code, CLI, API and the
+  plan fingerprint, and the size check runs at the CRF the search chose
+  (issue #129) — an encode that would not shrink the file is refused
+  (issue #130).
+
+- **One config.json for dashboard and engine** (issue #58): both read the
+  same file (the dashboard wrote a second config the engine ignored).
+
+- **Config writes are validated and atomic** (issue #60): a bad value
+  fails at the API boundary with the field named, never half-written.
+
+- **Probe samples are stream-copied, not re-encoded** (issue #16): the
+  lossy x264 pass biased every VMAF measurement; the copy keeps bit depth,
+  colour tags and HDR side data, with a logged lossless ffv1 fallback for
+  containers that cannot hold the source codec.
+
+- **Every short-lived subprocess call has a timeout** (issue #62).
+
+- **The retry replays the stored payload** (issue #100): payload paths
+  union `path` and `paths`, so a retried job re-runs what the original ran.
+
+- **The HDR size estimate is labelled with its measured bias** (issue
+  #98), and the effective HDR target/encoder is recorded on the result and
+  the plan, not the caller's assumption.
+
+- **`record_plan` refuses a file changed between probing and recording**
+  (mtime/size check), so a plan cannot be stored under a fingerprint the
+  file no longer matches.
+
+- **Console timestamps carry the date and seconds** (issue #167):
+  `YYYY-MM-DD HH:MM:SS` local time in the console log (the resident mode
+  runs for days; a time-only stamp loses the day the moment the log leaves
+  the terminal); the report's generated line gains seconds (UTC).
+
+- **The strict typing bar is enforced on every module** (issue #40): mypy
+  runs `disallow_untyped_defs`, `warn_return_any`, `strict_equality` and
+  friends over the whole package; `py.typed` ships in the wheel.
+
+- **POSIX tree-kill via process groups** unblocks Linux CI; the tree-safe
+  termination applies to every encode path.
+
+- **The report creates its output directory and shows the verification
+  column.**
+
+
+- **AV1 is the only output codec**: SDR encodes with `svt_av1`, HDR with
+  `svt_av1_10bit` (issue #21). x265 is gone from every path - not
+  demoted to a fallback, not kept as an option. `encoder_for(hdr)` is the
+  single source of the choice; the six HDR ternaries that used to be written
+  per call site are replaced by it, and `handbrake.encoder` is a two-value
+  assertion that rejects a config still naming x265 at load rather than
+  silently producing H.265.
+
+- **The thread cap reaches SVT-AV1 as `--encopts pin=N`**: `threads=N` is
+  an x264/x265 option, and SVT-AV1's parameter parser silently ignores an
+  unknown key. `pin` restricts execution to the first N cores, which is what
+  the cap means here.
+
+- **The decision statistic is the mean, not the minimum**: `probe_crf`
+  aggregates the per-sample VMAF means with the mean instead of the
+  minimum (issue #15). A minimum over samples is monotone non-increasing
+  in the sample count: every window added can only lower it or leave it
+  unchanged, which made it structurally hostile to the denser sampling #14
+  introduced - the better the coverage, the more likely one pathological
+  window sank the whole score, pushed the search to the floor CRF and
+  reported "target unreachable" for a film that was perfectly encodable.
+  `achieved_vmaf` is now documented as the mean across probe windows,
+  which is a better predictor of overall viewing quality; a user comparing
+  runs across the change should know it is not the same statistic. What the
+  mean gives up is stated plainly: "every probed window meets the target" is
+  no longer literally true. Denser sampling makes a genuinely bad scene more
+  likely to be observed and to move the average, but does not eliminate it.
+
+- **A skip now carries its evidence**: `SkipEncode` carries the best CRF,
+  the VMAF measured there and the probe count, and `save_skip` stores them
+  on the encode row. Previously an `encode` skip dropped that evidence, so the
+  next run could not tell "already probed at the floor and failed" from
+  "never probed" and re-probed the same window every time.
+
+- **A plan recorded under `min` is not reused as a `mean` one**: the
+  aggregation is part of the plan fingerprint (schema v13), because a plan
+  made under the minimum was a different decision. Existing rows default to
+  `min`, which is what they actually measured.
+
+
 - **`plan` extracts each probe window once instead of three times**: the
   sample windows are extracted up front and the same list is handed to the CRF
   search and to the reported size factor (issue #30). `find_optimal_crf_and_skip`
@@ -350,6 +319,32 @@ tagged in git; the GitHub release for each tag carries the same notes.
   The per-module mypy rollout list is gone: one config applies to all of it.
 
 ### Fixed
+
+- **A stall watchdog that killed healthy encodes**: piped HandBrake never
+  sends newlines, so the newline-based liveness check starved and killed
+  running encodes; the watchdog now reads progress correctly and stall
+  telemetry reaches every encode path.
+
+- **The encode result survives an absent ffmpeg** (CI run 160): version
+  metadata probing is guarded, so verification metadata never fails an
+  encode.
+
+- **Watch mode's recursive/liveness traps** fixed, with prompt app
+  shutdown on stop.
+
+- **UI fixes**: readable primary hover; the two audit trails link to each
+  other; a job trail shows the movie's own outcome inside a batch job;
+  signed colored deltas, one unit spelling, one VMAF precision; drift
+  chart geometry was lying (real pixels, labeled lane, visible marks);
+  drift summary crashes; derived out-bars dressed as measured; `driftW`
+  declared before use.
+
+- **Test-suite fixes**: the test_db job import follows the server/ move;
+  the `logs/` telemetry-leak fix (a verify run without a db file no longer
+  writes failure bundles into the working directory,
+  `tests/test_telemetry_leak.py` pins it); the CodeQL sanitizer follows
+  the server/ move (issue #55).
+
 
 - **Probe samples were re-encoded with lossy libx264**: sample extraction
   now stream-copies the source (`-c:v copy`, keyframe-aligned, timestamps
