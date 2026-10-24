@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from shrinkray import db, encode, quality, service
+from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import search as engine_search
 
 
@@ -1183,14 +1184,14 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=7200.0),
-                patch.object(quality, "source_height", return_value=2160),
-                patch.object(quality, "source_codec", return_value="h264"),
-                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=7200.0),
+                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(engine_plan, "source_codec", return_value="h264"),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(
-                    quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
+                    engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
                 ) as fake_extract,
-                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
                 patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
@@ -1336,11 +1337,11 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=1080),
-                patch.object(quality, "source_codec", return_value="mpeg2video"),
-                patch.object(quality, "extract_samples") as fake_extract,
-                patch.object(quality, "find_handbrake") as fake_hb,
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=1080),
+                patch.object(engine_plan, "source_codec", return_value="mpeg2video"),
+                patch.object(engine_plan, "extract_samples") as fake_extract,
+                patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
                 result = quality.plan_quality(src)
         self.assertFalse(result.success)
@@ -1355,12 +1356,12 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=1080),
-                patch.object(quality, "source_codec", return_value="h264"),
-                patch.object(quality, "find_handbrake", return_value="hb"),
-                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=1080),
+                patch.object(engine_plan, "source_codec", return_value="h264"),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
                 patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
@@ -1381,13 +1382,13 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=2160),
-                patch.object(quality, "source_codec", return_value="hevc"),
-                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(engine_plan, "source_codec", return_value="hevc"),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(quality, "detect_crop_rect", return_value=None),
-                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
                 patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
@@ -1409,13 +1410,13 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=2160),
-                patch.object(quality, "source_codec", return_value="hevc"),
-                patch.object(quality, "find_handbrake", return_value="hb"),
-                patch.object(quality, "detect_crop_rect", return_value=bars) as fake_crop,
-                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(quality, "estimate_size_factor", return_value=0.5) as fake_size,
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(engine_plan, "source_codec", return_value="hevc"),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "detect_crop_rect", return_value=bars) as fake_crop,
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5) as fake_size,
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
                 patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
@@ -1438,13 +1439,13 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=2160),
-                patch.object(quality, "source_codec", return_value="hevc"),
-                patch.object(quality, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(engine_plan, "source_codec", return_value="hevc"),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(quality, "detect_crop_rect", return_value=None),
-                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(quality, "estimate_size_factor", return_value=1.3),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=1.3),
                 patch.object(engine_search, "estimate_size_factor", return_value=1.3),
             ):
                 result = quality.plan_quality(src)
@@ -1464,10 +1465,10 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)  # a few bytes: far below 5 GB
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=2160),
-                patch.object(quality, "extract_samples") as fake_extract,
-                patch.object(quality, "find_handbrake") as fake_hb,
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(engine_plan, "extract_samples") as fake_extract,
+                patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
                 result = quality.plan_quality(src, min_source_size_gb=5.0)
         self.assertFalse(result.success)
@@ -1486,11 +1487,11 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=2160),
-                patch.object(quality, "find_handbrake", return_value="hb"),
-                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
                 patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
@@ -1510,10 +1511,10 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=720),
-                patch.object(quality, "extract_samples") as fake_extract,
-                patch.object(quality, "find_handbrake") as fake_hb,
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=720),
+                patch.object(engine_plan, "extract_samples") as fake_extract,
+                patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
                 result = quality.plan_quality(src, min_source_height=1080)
         self.assertFalse(result.success)
@@ -1533,11 +1534,11 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=720),
-                patch.object(quality, "find_handbrake", return_value="hb"),
-                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=720),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
                 patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
@@ -1556,11 +1557,11 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
-                patch.object(quality, "source_height", return_value=None),
-                patch.object(quality, "find_handbrake", return_value="hb"),
-                patch.object(quality, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(quality, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=None),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(quality, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
                 patch.object(engine_search, "probe_crf", return_value=quality.DEFAULT_TARGET_VMAF),
