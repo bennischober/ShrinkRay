@@ -10,9 +10,11 @@ it is pipeline logic that USES these commands.
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 HANDBRAKE_BINARY = "HandBrakeCLI"
+PROBE_TIMEOUT = 60  # seconds
 
 
 def find_handbrake() -> str | None:
@@ -152,3 +154,57 @@ def build_encode_command(
         "--optimize",  # web optimized => mp4/mkv file can start streaming
     ]
     return command
+
+
+# HandBrake 1.6 is the first release whose SVT-AV1 encoder id is 'svt_av1';
+# older builds only know 'svt_av1_10bit' / 'x265', so asking for svt_av1
+# fails as an argument error mid-run instead of at preflight.
+MIN_HANDBRAKE_VERSION = "1.6"
+
+
+def handbrake_version(binary: str) -> str | None:
+    """Returns the HandBrakeCLI version string, or None when unreadable.
+
+    Args:
+        binary (str): Path to the HandBrakeCLI binary.
+
+    Returns:
+        str | None: The version line, or None when the probe failed.
+    """
+    try:
+        proc = subprocess.run(
+            [binary, "--version"],
+            capture_output=True,
+            timeout=PROBE_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (proc.stdout + proc.stderr).decode(errors="replace").strip()
+    return text.splitlines()[0] if text else None
+
+
+def supports_svt_av1(binary: str) -> bool:
+    """Reports whether this HandBrakeCLI knows the svt_av1 encoder id.
+
+    The encoder list is the only honest test: a version string can be
+    backported, while the list is what HandBrake will actually accept.
+
+    Args:
+        binary (str): Path to the HandBrakeCLI binary.
+
+    Returns:
+        bool: True when 'svt_av1' is among the available encoders.
+    """
+    try:
+        proc = subprocess.run(
+            [binary, "--encoder-preset-list", "svt_av1"],
+            capture_output=True,
+            timeout=PROBE_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if proc.returncode != 0:
+        return False
+    presets = proc.stdout.decode(errors="replace").split()
+    # an unknown encoder id answers with only the generic 'auto' preset
+    return any(preset and preset != "auto" for preset in presets)

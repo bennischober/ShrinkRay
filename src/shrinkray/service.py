@@ -520,3 +520,39 @@ def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[Doct
                 )
             )
     return findings
+
+
+def toolchain_problems() -> list[str]:
+    """Returns the missing toolchain capabilities, empty when all are present.
+
+    The quality mode is the whole product, so a host that cannot measure VMAF or
+    cannot encode AV1 cannot do the one thing this tool does. Checking here turns a
+    confusing mid-run failure into a clear refusal before any work starts.
+
+    Returns:
+        list[str]: One message per missing capability, each naming the version
+            that provides it.
+    """
+    from shrinkray.tools import handbrake as handbrake_module
+    from shrinkray.tools.vmaf import detect_vmaf_style
+
+    problems: list[str] = []
+    binary = handbrake_module.find_handbrake()
+    minimum = handbrake_module.MIN_HANDBRAKE_VERSION
+    if binary is None:
+        problems.append(
+            f"'{handbrake_module.HANDBRAKE_BINARY}' not found: install HandBrake "
+            f">= {minimum} (AV1 output needs svt_av1)"
+        )
+    elif not handbrake_module.supports_svt_av1(binary):
+        version = handbrake_module.handbrake_version(binary) or "unknown version"
+        problems.append(
+            f"HandBrakeCLI ({version}) does not know the 'svt_av1' encoder: "
+            f"install >= {minimum} (AV1 output needs svt_av1)"
+        )
+
+    try:
+        detect_vmaf_style()
+    except RuntimeError as e:
+        problems.append(f"VMAF cannot be measured: {e}")
+    return problems
