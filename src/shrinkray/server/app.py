@@ -25,11 +25,10 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
-from shrinkray.config import ENCODER_PRESETS, Conf, load_config
+from shrinkray.config import Conf, load_config
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
-from shrinkray.engine.watch import watch
 from shrinkray.logger import log, log_error
 from shrinkray.report import generate_report
 from shrinkray.server.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus

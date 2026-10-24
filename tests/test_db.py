@@ -818,7 +818,7 @@ class TestDb(unittest.TestCase):
             # row never mutates — (id, state) is the change signal).
             # Enqueue through the app's own queue object: direct SQL would
             # bypass its invariants.
-            from shrinkray.jobs import Job, JobKind
+            from shrinkray.server.jobs import Job, JobKind
 
             app_module.state.queue.enqueue(Job(kind=JobKind.SCAN, payload={"paths": ["D:/x"]}))
             fourth = client.get(
