@@ -4,6 +4,10 @@ All notable changes to ShrinkRay are documented here. Releases are
 tagged in git; the GitHub release for each tag carries the same notes.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [0.4.0] - 2026-10-25
 ### Added
 
 - **The pull-first install path is documented** (issue #175): the README's
@@ -499,4 +503,5 @@ complete, quality-measured library shrinking pipeline.
 - No secrets in tracked files: integration tokens live in environment
   variables by construction.
 
+[0.4.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.4.0
 [0.3.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.3.0
