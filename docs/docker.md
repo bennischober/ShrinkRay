@@ -8,7 +8,7 @@ respect; where a decision was made, it is stated with the reason.
 ## What shipped
 
 - **`Dockerfile`, two targets.** `runtime` is the deployment image; `dev` is the
-  same base plus the dev group and Node, so the five gate commands run in the
+  same base plus the dev group and Node, so the seven gate commands run in the
   environment they ship in.
 - **`.dockerignore`** excludes credentials (`.opencode/`, `*.key`, `.env`), user data
   (`*.db`), media (`test_media/`), and build state (`.venv/`, `node_modules/`).

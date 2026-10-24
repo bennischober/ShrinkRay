@@ -6,7 +6,7 @@ CRF).
 
 ## Why this is sound
 
-`plan_quality()` and `encode_with_quality()` (src/shrinkray/quality.py)
+`plan_quality()` and `encode_with_quality()` (src/shrinkray/engine/plan.py and src/shrinkray/engine/pipeline.py)
 run the EXACT same probing pipeline: `_probe_movie()` ->
 `find_optimal_crf_and_skip()` — same samples, same bisect, same VMAF
 measurement. The plan's `chosen_crf` is precisely what the encode would

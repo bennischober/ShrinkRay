@@ -160,4 +160,4 @@ ENV RUFF_CACHE_DIR=/tmp/ruff-cache \
     PYTEST_ADDOPTS="-p no:cacheprovider"
 
 ENTRYPOINT []
-CMD ["sh", "-c", "/app/.venv/bin/ruff check src tests && /app/.venv/bin/ruff format --check src tests && /app/.venv/bin/mypy --platform linux && /app/.venv/bin/pytest -q"]
+CMD ["sh", "-c", "/app/.venv/bin/ruff check src tests && /app/.venv/bin/ruff format --check src tests && /app/.venv/bin/mypy --platform linux && /app/.venv/bin/pytest -q && /app/.venv/bin/lint-imports"]

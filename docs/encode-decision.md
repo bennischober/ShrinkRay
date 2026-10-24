@@ -58,10 +58,10 @@ Every gate is a cheap question asked before the expensive next step.
 | # | Gate | Question | If it fails |
 |---|---|---|---|
 | 1 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS`, `engine/plan.py:50`) | skip — not a movie |
-| 2 | Resolution | At least 1080p tall? (`min_source_height`, `quality.py:457`) | skip — too few pixels to save |
-| 3 | Size | At least the configured size floor? (`min_source_size_gb`, `quality.py:473`) | skip — payoff below the probe cost |
-| 4 | Codec age | H.264 or newer? (`MIN_SOURCE_CODEC`, `engine/plan.py:47`, checked at `quality.py:492`) | skip — an older codec is not re-encoded |
-| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py:110`, called at `quality.py:291`) | no crop; the encode proceeds uncropped |
+| 2 | Resolution | At least 1080p tall? (`min_source_height`, `engine/plan.py:308`) | skip — too few pixels to save |
+| 3 | Size | At least the configured size floor? (`min_source_size_gb`, `engine/plan.py:309`) | skip — payoff below the probe cost |
+| 4 | Codec age | H.264 or newer? (`MIN_SOURCE_CODEC`, `engine/plan.py:47`) | skip — an older codec is not re-encoded |
+| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py`, called at `engine/plan.py:478`) | no crop; the encode proceeds uncropped |
 | 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:592`) | skip — target unreachable |
 | 7 | **Size gate** | Would the result be smaller? (`engine/search.py:675`, and again at the chosen CRF `:721`) | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, **with the crop** | — |

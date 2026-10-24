@@ -54,6 +54,12 @@ jobs:
       - name: Run tests with coverage
         run: uv run pytest -q
 
+      # the layers contract (tools -> engine -> server -> cli) is machine-checked,
+      # not aspirational: a module in the wrong layer breaks this step, not a
+      # review comment
+      - name: Run import-linter
+        run: uv run lint-imports
+
       - name: Audit dependencies
         run: uv audit --locked
 

@@ -36,7 +36,7 @@ def logs_dir(db_file: Path) -> Path:
 
 
 def save_failure(
-    db_file: Path,
+    db_file: Path | None,
     kind: str,
     command: list[str] | None = None,
     stderr: str = "",
@@ -50,8 +50,9 @@ def save_failure(
     is reporting on, so any exception here is swallowed after a log line.
 
     Args:
-        db_file (Path): The database file (the bundle lands in logs/ next
-            to it).
+        db_file (Path | None): The database file (the bundle lands in logs/
+            next to it); None disables the bundle — telemetry needs a home
+            the caller owns, never the process's working directory.
         kind (str): A short failure tag, e.g. 'vmaf-measure' or 'encode'.
         command (list[str] | None): The failing subprocess command.
         stderr (str): The captured stderr of that subprocess.
@@ -65,6 +66,8 @@ def save_failure(
         Path | None: The bundle directory, or None when writing failed.
     """
     try:
+        if db_file is None:
+            return None
         stamp = time.strftime("%Y%m%d-%H%M%S")
         bundle = logs_dir(db_file) / f"{stamp}-{kind}"
         attempts = 0
