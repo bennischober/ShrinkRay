@@ -9,6 +9,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from unittest.mock import patch
 
 from shrinkray import quality
 
@@ -438,3 +439,112 @@ class TestAdaptivePoll(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWatchInPlace(unittest.TestCase):
+    """Issue #127: the watcher can encode in place.
+
+    Mode B's watchdog is supposed to encode the library in place, but it required
+    two directories and refused to run when they overlapped - the in-place case was
+    the one it rejected. The overlap guard is right for what it protects, so the fix
+    adds an in-place form instead of removing it.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.inbox = Path(self.tmp.name) / "inbox"
+        self.inbox.mkdir()
+        self.movie = self.inbox / "one.mkv"
+        self.movie.write_bytes(b"x" * 100)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _run(self, *argv: str) -> "object":
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        runner = CliRunner()
+        previous = os.getcwd()
+        os.chdir(self.tmp.name)
+        try:
+            return runner.invoke(app, list(argv))
+        finally:
+            os.chdir(previous)
+
+    def test_the_in_place_form_does_not_need_an_output_directory(self) -> None:
+        """The criterion: watch-mode with no output dir is accepted."""
+        with patch("shrinkray.engine.watch.watch") as fake_watch:
+            result = self._run("watch-mode", str(self.inbox), "--poll", "5")
+        self.assertEqual(result.exit_code, 0, result.output)
+        fake_watch.assert_called_once()
+        self.assertIsNone(fake_watch.call_args.args[1])
+
+    def test_the_two_directory_form_still_passes_both(self) -> None:
+        """The regression guard: naming an output dir keeps today's behaviour."""
+        out = Path(self.tmp.name) / "encoded"
+        with patch("shrinkray.engine.watch.watch") as fake_watch:
+            result = self._run("watch-mode", str(self.inbox), str(out), "--poll", "5")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(fake_watch.call_args.args[1], out)
+
+    def test_the_overlap_guard_still_refuses_two_overlapping_dirs(self) -> None:
+        """The guard is right for what it protects: keep it for that form."""
+        from shrinkray.engine.watch import watch
+
+        with self.assertRaises(ValueError) as raised:
+            watch(self.inbox, self.inbox, once=True)
+        self.assertIn("separate directories", str(raised.exception))
+
+    def test_the_in_place_form_does_not_trip_the_overlap_guard(self) -> None:
+        """In place there is no second tree, so the guard must not fire."""
+        from shrinkray.engine.watch import watch
+
+        with patch("shrinkray.engine.watch.encode_with_quality") as fake_encode:
+            fake_encode.return_value = type(
+                "R",
+                (),
+                {
+                    "success": False,
+                    "skipped_reason": "below min size",
+                    "error": "skipped",
+                    "chosen_crf": None,
+                    "achieved_vmaf": None,
+                    "saved_percent": 0.0,
+                    "output": self.movie,
+                },
+            )()
+            watch(self.inbox, None, once=True, poll_interval=0.01)
+
+    def test_a_retained_original_is_never_a_candidate(self) -> None:
+        """The retained original must not be re-encoded as a new movie.
+
+        The extension filter is what protects this: the retained name carries the
+        suffix, so it never matches a movie extension. The explicit suffix check
+        in find_new_movies is belt-and-braces for a misconfigured extension list,
+        which is why the second half asserts it against a pattern that WOULD match.
+        """
+        from shrinkray.engine.watch import find_new_movies
+        from shrinkray.replace import RETAINED_SUFFIX, retained_path_for
+
+        retained = retained_path_for(self.movie)
+        retained.write_bytes(b"o" * 100)
+        found = find_new_movies(self.inbox, [".mkv"], set())
+        self.assertIn(self.movie, found)
+        self.assertNotIn(retained, found, "the retained original was picked up")
+        # a misconfigured extension list must still not pick it up
+        loose = find_new_movies(self.inbox, [".mkv", RETAINED_SUFFIX], set())
+        self.assertNotIn(retained, loose, "a loose extension list picked it up")
+
+    def test_a_staging_copy_is_never_a_candidate(self) -> None:
+        """A staging copy must not be encoded while the swap is in flight."""
+        from shrinkray.engine.watch import find_new_movies
+        from shrinkray.replace import STAGING_SUFFIX, staging_path_for
+
+        staged = staging_path_for(self.movie)
+        staged.write_bytes(b"s" * 100)
+        found = find_new_movies(self.inbox, [".mkv"], set())
+        self.assertNotIn(staged, found, "the staging copy was picked up")
+        loose = find_new_movies(self.inbox, [".mkv", STAGING_SUFFIX], set())
+        self.assertNotIn(staged, loose, "a loose extension list picked it up")

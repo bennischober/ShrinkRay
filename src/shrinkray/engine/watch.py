@@ -6,6 +6,7 @@ logic as the encode/plan commands and encodes them (source stays untouched
 => the human stays in the loop for replacing library files).
 """
 
+import contextlib
 import os
 import tempfile
 import threading
@@ -24,6 +25,7 @@ from shrinkray.encode import (
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.logger import log, log_error
 from shrinkray.quality import DEFAULT_TARGET_VMAF, Cancelled, encode_with_quality
+from shrinkray.replace import RETAINED_SUFFIX, STAGING_SUFFIX
 
 # a file is stable when its size is unchanged between two checks ...
 STABLE_CHECK_INTERVAL = 30.0
@@ -73,9 +75,18 @@ def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list
         candidates = list(inbox.glob(f"*.{extension}"))
         candidates.extend(inbox.glob(f"*.{extension.upper()}"))
         movies.extend(candidates)
-    # windows glob is case-insensitive => deduplicate, then filter known
+    # windows glob is case-insensitive => deduplicate, then filter known.
+    # the retained originals and staging copies are NEVER movies: in place the
+    # library holds <name> and <name>.shrinkray-original side by side, and
+    # re-encoding a retained original would double the library on every pass
     unique = list(dict.fromkeys(movies))
-    return [m for m in unique if str(m.resolve()) not in known]
+    return [
+        m
+        for m in unique
+        if str(m.resolve()) not in known
+        and not m.name.endswith(RETAINED_SUFFIX)
+        and not m.name.endswith(STAGING_SUFFIX)
+    ]
 
 
 def is_stable(path: Path) -> bool:
@@ -192,7 +203,7 @@ def release_lock(lock_file: Path) -> None:
 
 def watch(
     inbox: Path,
-    output_dir: Path,
+    output_dir: Path | None = None,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     encoder: str = "svt_av1",
     probe_encoder_preset: str = "5",
@@ -215,7 +226,9 @@ def watch(
 
     Args:
         inbox (Path): The directory to watch for new movies.
-        output_dir (Path): Directory for the encoded files.
+        output_dir (Path | None): Directory for the encoded files, or None to
+            encode IN PLACE: each verified output takes the source's own path
+            and the original is renamed aside and kept.
         target_vmaf (float): The VMAF quality floor.
         encoder (str): The video encoder.
         probe_encoder_preset (str): The PROBE's speed preset (a measurement
@@ -242,117 +255,189 @@ def watch(
     # inbox == output_dir that means HandBrake writes its own INPUT's path
     # (truncating the source mid-read, then A1 debris-removal on it).
     # Overlap in either direction poisons the candidate set => refuse.
-    inbox_resolved = inbox.resolve()
-    output_resolved = output_dir.resolve()
-    if (
-        inbox_resolved == output_resolved
-        or inbox_resolved in output_resolved.parents
-        or (output_resolved in inbox_resolved.parents)
-    ):
-        raise ValueError(
-            "inbox and output_dir must be separate directories (the output "
-            f"must not live inside the inbox): inbox='{inbox}', output='{output_dir}'"
-        )
+    # the overlap guard applies ONLY to the two-directory form: in place there
+    # is no second tree, and the staging/retained names are excluded from the
+    # candidate scan instead
+    if output_dir is not None:
+        inbox_resolved = inbox.resolve()
+        output_resolved = output_dir.resolve()
+        if (
+            inbox_resolved == output_resolved
+            or inbox_resolved in output_resolved.parents
+            or (output_resolved in inbox_resolved.parents)
+        ):
+            raise ValueError(
+                "inbox and output_dir must be separate directories (the output "
+                f"must not live inside the inbox): inbox='{inbox}', output='{output_dir}'"
+            )
 
     if not acquire_lock(lock_file):
         log_error("Another watcher seems to be running (lock file exists).")
         return
 
     inbox.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # in place: the encode still needs a real path to write to, so it lands in
+    # a working directory INSIDE the inbox - the same filesystem, so the swap's
+    # two renames stay atomic and cheap. The output directory only says where
+    # the bytes are written; the swap target is always the source.
+    staging: contextlib.AbstractContextManager[str] = (
+        contextlib.nullcontext(str(output_dir))
+        if output_dir is not None
+        else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=inbox)
+    )
+    disk_target = output_dir if output_dir is not None else inbox
+    in_place_mode = output_dir is None
 
     try:
-        while True:
-            if stop_event is not None and stop_event.is_set():
-                log("Watch stopped (stop event set).")
-                return
-            # pass-level disk guard: a full output drive would burn a full
-            # CRF probe per candidate per pass (probe, watchdog cancel,
-            # retry next pass, repeat). Skipping the pass BEFORE anything
-            # enters `known` keeps the movies eligible for when space frees
-            # up, and the adaptive poll backs off meanwhile.
-            free = disk_free_bytes(output_dir)
-            if free is not None and free < DISK_FREE_FLOOR_BYTES:
-                log_error(
-                    f"Output drive nearly full: {free / (1024**3):.1f} GB free "
-                    f"(floor 1.0 GB) => waiting. Movies stay eligible; the "
-                    "watcher retries when space frees up."
-                )
-                if once:
-                    return
-                _sleep_or_stop(sleep_interval, stop_event)
-                continue
-            candidates = find_new_movies(inbox, extensions, known)
-            for movie in candidates:
+        with staging as work_dir:
+            target_dir = Path(work_dir)
+            while True:
                 if stop_event is not None and stop_event.is_set():
                     log("Watch stopped (stop event set).")
                     return
-                if not is_stable(movie):
-                    # NOT marked known: the file is still copying and stays
-                    # eligible (it must be reconsidered once stable - the
-                    # old code added it to `known` first and never looked
-                    # at it again, starving every normal copy arrival)
-                    log(f"'{movie.name}' is not stable yet (still copying?) => later.")
-                    continue
-                known.add(str(movie.resolve()))
-                decision = decide(movie, target_vmaf, encoder)
-                if decision != "encode":
-                    log(f"Skipping '{movie.name}': {decision}.")
-                    continue
-                # quality mode, same engine path as the CLI and jobs: the
-                # CRF search decides skip-vs-encode (no size gain, target
-                # unreachable) and reports it via skipped_reason. Watch used
-                # to encode a fixed preset here - the inbox automation
-                # produced worse files than the manual path.
-                try:
-                    # hold the encode slot: encode_with_quality does not
-                    # take it itself; a running CLI/job encode makes the
-                    # watcher retry this movie on the next pass
-                    with guard_encodes(output_dir, holder="watch"):
-                        result = encode_with_quality(
-                            movie,
-                            output_dir / movie.name,
-                            target_vmaf=target_vmaf,
-                            encoder=encoder,
-                            probe_encoder_preset=probe_encoder_preset,
-                            encoder_preset=encoder_preset,
-                            encoder_threads=cap_threads(max_threads),
-                            db_file=db_file,
-                            # inbox automation must not silently depend on
-                            # plan staleness: watch always measures fresh
-                            force_reprobe=True,
-                            min_source_height=min_source_height,
-                            min_source_size_gb=min_source_size_gb,
-                            candidate_codecs=candidate_codecs,
-                            crop_sample_count=crop_sample_count,
-                        )
-                except EncodeBusyError as e:
-                    log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
-                    known.discard(str(movie.resolve()))  # eligible again next pass
-                    continue
-                except Cancelled as e:
-                    # disk watchdog (free space hit the floor) or user cancel:
-                    # partial output already removed by the engine; retry
-                    # when space freed up (or the user re-ran watch)
-                    log_error(f"Encoding '{movie.name}' cancelled: {e} => retry next pass.")
-                    known.discard(str(movie.resolve()))
-                    continue
-                if result.skipped_reason:
-                    log(f"Skipping '{movie.name}': {result.skipped_reason}.")
-                elif result.success:
-                    log(
-                        f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
-                        f"(VMAF {result.achieved_vmaf}), "
-                        f"{result.saved_percent:.1f}% saved (source left untouched)."
+                # pass-level disk guard: a full output drive would burn a full
+                # CRF probe per candidate per pass (probe, watchdog cancel,
+                # retry next pass, repeat). Skipping the pass BEFORE anything
+                # enters `known` keeps the movies eligible for when space frees
+                # up, and the adaptive poll backs off meanwhile.
+                free = disk_free_bytes(disk_target)
+                if free is not None and free < DISK_FREE_FLOOR_BYTES:
+                    log_error(
+                        f"Output drive nearly full: {free / (1024**3):.1f} GB free "
+                        f"(floor 1.0 GB) => waiting. Movies stay eligible; the "
+                        "watcher retries when space frees up."
                     )
-                else:
-                    log_error(f"Encoding '{movie.name}' failed: {result.error}")
+                    if once:
+                        return
+                    _sleep_or_stop(sleep_interval, stop_event)
+                    continue
+                candidates = find_new_movies(inbox, extensions, known)
+                for movie in candidates:
+                    if stop_event is not None and stop_event.is_set():
+                        log("Watch stopped (stop event set).")
+                        return
+                    if not is_stable(movie):
+                        # NOT marked known: the file is still copying and stays
+                        # eligible (it must be reconsidered once stable - the
+                        # old code added it to `known` first and never looked
+                        # at it again, starving every normal copy arrival)
+                        log(f"'{movie.name}' is not stable yet (still copying?) => later.")
+                        continue
+                    known.add(str(movie.resolve()))
+                    decision = decide(movie, target_vmaf, encoder)
+                    if decision != "encode":
+                        log(f"Skipping '{movie.name}': {decision}.")
+                        continue
+                    # quality mode, same engine path as the CLI and jobs: the
+                    # CRF search decides skip-vs-encode (no size gain, target
+                    # unreachable) and reports it via skipped_reason. Watch used
+                    # to encode a fixed preset here - the inbox automation
+                    # produced worse files than the manual path.
+                    try:
+                        # hold the encode slot: encode_with_quality does not
+                        # take it itself; a running CLI/job encode makes the
+                        # watcher retry this movie on the next pass
+                        with guard_encodes(target_dir, holder="watch"):
+                            result = encode_with_quality(
+                                movie,
+                                target_dir / movie.name,
+                                target_vmaf=target_vmaf,
+                                encoder=encoder,
+                                probe_encoder_preset=probe_encoder_preset,
+                                encoder_preset=encoder_preset,
+                                encoder_threads=cap_threads(max_threads),
+                                db_file=db_file,
+                                # inbox automation must not silently depend on
+                                # plan staleness: watch always measures fresh
+                                force_reprobe=True,
+                                min_source_height=min_source_height,
+                                min_source_size_gb=min_source_size_gb,
+                                candidate_codecs=candidate_codecs,
+                                crop_sample_count=crop_sample_count,
+                            )
+                    except EncodeBusyError as e:
+                        log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
+                        known.discard(str(movie.resolve()))  # eligible again next pass
+                        continue
+                    except Cancelled as e:
+                        # disk watchdog (free space hit the floor) or user cancel:
+                        # partial output already removed by the engine; retry
+                        # when space freed up (or the user re-ran watch)
+                        log_error(f"Encoding '{movie.name}' cancelled: {e} => retry next pass.")
+                        known.discard(str(movie.resolve()))
+                        continue
+                    if result.skipped_reason:
+                        log(f"Skipping '{movie.name}': {result.skipped_reason}.")
+                    elif result.success:
+                        if in_place_mode:
+                            _swap(db_file, movie, result.output)
+                            log(
+                                f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
+                                f"(VMAF {result.achieved_vmaf}), "
+                                f"{result.saved_percent:.1f}% saved (original retained)."
+                            )
+                        else:
+                            log(
+                                f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
+                                f"(VMAF {result.achieved_vmaf}), "
+                                f"{result.saved_percent:.1f}% saved (source left untouched)."
+                            )
+                    else:
+                        log_error(f"Encoding '{movie.name}' failed: {result.error}")
 
-            sleep_interval = next_poll_interval(sleep_interval, poll_interval, bool(candidates))
-            if once:
-                return
-            _sleep_or_stop(sleep_interval, stop_event)
+                sleep_interval = next_poll_interval(sleep_interval, poll_interval, bool(candidates))
+                if once:
+                    return
+                _sleep_or_stop(sleep_interval, stop_event)
     except KeyboardInterrupt:
         log("Watch stopped (current state is kept).")
     finally:
         release_lock(lock_file)
+
+
+def _swap(db_file: Path | None, source: Path, output: Path) -> None:
+    """Swaps a verified encode into the source's path, retaining the original.
+
+    The watcher's in-place form writes its encode into a staging directory and
+    then moves it here, so no second copy survives in the watched tree. Size is a
+    gate even though the engine already refused a grown encode: this is the last
+    code before a file enters the library. A failed swap never loses the source -
+    replace.swap renames the original back when the second rename fails.
+
+    Args:
+        db_file (Path | None): The database file, or None for a stateless run
+            (the swap still happens, but no ledger row is written).
+        source (Path): The library file the output replaces.
+        output (Path): The verified encoded file.
+    """
+    from shrinkray import db, replace
+
+    size_before = source.stat().st_size
+    size_after = output.stat().st_size
+    if size_after >= size_before:
+        log_error(
+            f"Not replacing '{source.name}': the output is not smaller "
+            f"({size_before} -> {size_after} bytes)"
+        )
+        return
+    try:
+        staged = replace.stage(output, source)
+        retained = replace.swap(source, staged)
+    except replace.SwapError as error:
+        log_error(f"Not replacing '{source.name}': {error}")
+        return
+    if db_file is not None:
+        connection = db.connect(db_file)
+        try:
+            db.add_retained(connection, source, retained, None, size_before, size_after)
+        finally:
+            connection.close()
+    output.unlink(missing_ok=True)
+    log(
+        f"Replaced '{source.name}': the original is retained at "
+        f"'{retained.name}' ({size_before / (1024**3):.2f} GB); delete it when "
+        "you are satisfied (see the retained command)."
+    )

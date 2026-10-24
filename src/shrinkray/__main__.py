@@ -1226,7 +1226,14 @@ def watch_mode(
         readable=True,
         help="Directory to watch for new movies.",
     ),
-    output_dir: Path = typer.Argument(..., help="Directory for the encoded files."),
+    output_dir: Path | None = typer.Argument(
+        None,
+        help=(
+            "Directory for the encoded files. Omit it to encode IN PLACE: each "
+            "verified output takes the source's own path and the original is "
+            "renamed aside and kept (never deleted)."
+        ),
+    ),
     target_vmaf: float = typer.Option(
         DEFAULT_TARGET_VMAF,
         "--target-vmaf",
@@ -1264,9 +1271,10 @@ def watch_mode(
 ) -> None:
     """Watches a folder and encodes newly arrived movies automatically.
 
-    Sources stay untouched (outputs land in the output directory), so the
-    library only changes when you swap the files yourself. Stop with Ctrl+C;
-    the running encode finishes first.
+    With no output directory the encode lands IN PLACE: the verified output takes
+    the source's own path and the original is renamed aside and kept. Naming an
+    output directory keeps the older behaviour of writing a second copy there.
+    Stop with Ctrl+C; the running encode finishes first.
     """
     from shrinkray.engine.watch import watch
 
