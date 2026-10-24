@@ -6,6 +6,13 @@ tagged in git; the GitHub release for each tag carries the same notes.
 ## [Unreleased]
 ### Added
 
+- **The pull-first install path is documented** (issue #175): the README's
+  Container section and docs/docker.md's Running-it section lead with
+  `docker pull ghcr.io/bennischober/shrinkray:latest` + a single `docker run`
+  (mounts + token), build-from-source is the development fallback, and the
+  compose file's published-image line is ready to un-comment. docs/docker.md
+  records the registry decision and the tag scheme.
+
 - **`scripts/verify_fullmovie.py` runs from anywhere uv exists** (issue
   #179): the script carries PEP 723 inline metadata, so the manual
   full-movie VMAF check works against an installed ShrinkRay without the
