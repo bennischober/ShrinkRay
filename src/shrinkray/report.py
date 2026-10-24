@@ -271,7 +271,7 @@ def generate_report(db_path: Path, output: Path) -> None:
         row_dict["note"] = note
         enriched.append(row_dict)
 
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     html = (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
