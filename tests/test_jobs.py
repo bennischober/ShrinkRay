@@ -89,7 +89,7 @@ class TestJobs(unittest.TestCase):
             with (
                 mock.patch("shrinkray.quality._probe_movie", side_effect=fake_probe),
                 mock.patch("shrinkray.quality.find_handbrake", return_value=str(stub)),
-                mock.patch("shrinkray.encode.disk_free_bytes", return_value=1_000_000),
+                mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=1_000_000),
                 self.assertRaises(Cancelled) as ctx,
             ):
                 encode_with_quality(src, out, progress=None)

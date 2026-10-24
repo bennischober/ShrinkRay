@@ -321,7 +321,7 @@ def finished_movies(
     Returns:
         set[str]: The movie paths (as strings) that can be skipped.
     """
-    from shrinkray.encode import durations_match
+    from shrinkray.engine.pipeline import durations_match
 
     finished: set[str] = set()
     for movie in movies:

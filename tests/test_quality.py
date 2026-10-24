@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from shrinkray import db, encode, quality, service
+from shrinkray import db, quality, service
 from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import search as engine_search
 
@@ -223,7 +223,7 @@ class TestQuality(unittest.TestCase):
         self.assertEqual(command[command.index("--encoder-preset") + 1], "medium")
 
     def test_min_encode_seconds_guard(self):
-        self.assertEqual(encode.MIN_ENCODE_SECONDS, 90.0)
+        self.assertEqual(engine_plan.MIN_ENCODE_SECONDS, 90.0)
         # the guard lives in the encode path => importable constant
 
     def test_parse_crop_line(self):
@@ -361,7 +361,7 @@ class TestPlanReuse(unittest.TestCase):
 
         with (
             patch.object(quality, "probe_duration_seconds", return_value=600.0),
-            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
                 quality,
                 "_source_snapshot",
@@ -424,7 +424,7 @@ class TestPlanReuse(unittest.TestCase):
 
         with (
             patch.object(quality, "probe_duration_seconds", return_value=600.0),
-            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
                 quality,
                 "_source_snapshot",
@@ -604,7 +604,7 @@ class TestPlanReuse(unittest.TestCase):
 
         with (
             patch.object(quality, "probe_duration_seconds", return_value=600.0),
-            patch("shrinkray.encode.check_disk_space", return_value=(True, "")),
+            patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
                 quality,
                 "_source_snapshot",
@@ -1110,7 +1110,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         vmaf_tools._vmaf_style = None
         try:
             with (
-                patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
                 patch(
                     "shrinkray.tools.vmaf.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffmpeg", timeout=60),
@@ -1641,7 +1641,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
-                patch("shrinkray.encode.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
                 patch(
                     "shrinkray.engine.samples.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
