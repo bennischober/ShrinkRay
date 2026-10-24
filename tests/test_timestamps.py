@@ -8,7 +8,6 @@ both must carry the date and the seconds so a captured log line answers
 
 import re
 import unittest
-from datetime import datetime, timezone
 
 from shrinkray import report
 from shrinkray.logger import CONSOLE_FORMAT
