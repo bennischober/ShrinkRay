@@ -16,9 +16,9 @@ from unittest import mock
 from fastapi import Request, Response
 from fastapi.testclient import TestClient
 
-import shrinkray.app as app_module
-from shrinkray.app import AUTH_TOKEN_ENV, AppState
-from shrinkray.app import app as fast_app
+import shrinkray.server.app as app_module
+from shrinkray.server.app import AUTH_TOKEN_ENV, AppState
+from shrinkray.server.app import app as fast_app
 
 TOKEN = "s3cret-token"
 

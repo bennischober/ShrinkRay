@@ -21,7 +21,7 @@ class TestDb(unittest.TestCase):
         """
         from fastapi.testclient import TestClient
 
-        from shrinkray import app as app_module
+        from shrinkray.server import app as app_module
 
         client = TestClient(app_module.app)
         response = client.put("/api/config", json={"language": "de"})
@@ -390,9 +390,9 @@ class TestDb(unittest.TestCase):
         """The /api/library payload carries the schema-v5 encode metrics."""
         from fastapi.testclient import TestClient
 
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState
-        from shrinkray.app import app as fast_app
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
 
         file_id = db.upsert_file(
             self.connection,
@@ -446,9 +446,9 @@ class TestDb(unittest.TestCase):
         becomes nearly free)."""
         from fastapi.testclient import TestClient
 
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState
-        from shrinkray.app import app as fast_app
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
 
         app_module.state = AppState(Path(self.tmp.name) / "test.db")
         try:
@@ -488,9 +488,9 @@ class TestDb(unittest.TestCase):
 
         from fastapi.testclient import TestClient
 
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState
-        from shrinkray.app import app as fast_app
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
 
         with tempfile.TemporaryDirectory() as media_tmp:
             movie_path = str(Path(media_tmp) / "detail-movie.mkv")
@@ -652,10 +652,10 @@ class TestDb(unittest.TestCase):
         visible wherever the estimate is shown."""
         from fastapi.testclient import TestClient
 
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState
-        from shrinkray.app import app as fast_app
+        import shrinkray.server.app as app_module
         from shrinkray.quality import HDR_ESTIMATE_NOTE
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
 
         with tempfile.TemporaryDirectory() as media_tmp:
             app_module.state = AppState(Path(self.tmp.name) / "test.db")
@@ -751,9 +751,9 @@ class TestDb(unittest.TestCase):
         unchanged library comes back as null while the rest stays fresh."""
         from fastapi.testclient import TestClient
 
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState
-        from shrinkray.app import app as fast_app
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
 
         file_id = db.upsert_file(
             self.connection,
@@ -877,8 +877,8 @@ class TestDb(unittest.TestCase):
         """The SSE frame generator seeds a hello on connect, streams
         published progress as data frames, pings when idle, and
         unregisters the subscriber when the stream ends (no leak)."""
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState, _sse_stream
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState, _sse_stream
 
         app_module.state = AppState(Path(self.tmp.name) / "test.db")
         try:
@@ -917,9 +917,9 @@ class TestDb(unittest.TestCase):
         else (a file manager window must never open outside the roots)."""
         from fastapi.testclient import TestClient
 
-        import shrinkray.app as app_module
-        from shrinkray.app import AppState
-        from shrinkray.app import app as fast_app
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
 
         # an explicit real root: the reveal test must not depend on the
         # allowlist a previous test happened to leave behind
