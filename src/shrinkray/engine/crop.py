@@ -2,9 +2,9 @@
 
 Moved verbatim from quality.py: the ffmpeg cropdetect runner and the
 bar-decision logic (only bars every sample agrees on are removed; noise
-bars below MIN_BAR_PERCENT are ignored). helpers.check_black_bars is the
-scan-side detector and stays put until phase 5 merges the two detectors
-(the record: one detector, one home).
+bars below MIN_BAR_PERCENT are ignored). The scan-side flag detector
+(has_black_bars) lives here too: one module owns both detectors until
+the timeline detector (docs/black-bar-spike.md follow-up) replaces them.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from shrinkray.logger import log
 from shrinkray.tools.ffprobe import FFPROBE_TIMEOUT
@@ -187,3 +188,62 @@ def detect_crop_rect(
             rects.append(rect)
 
     return intersect_crop_rects(rects, frame)
+
+
+def has_black_bars(
+    file: Path,
+    dimensions: dict[str, Any],
+    min_width: int = 100,
+    min_height: int = 100,
+) -> int:
+    """Checks if a movie has (relevant) black bars by using the ffmpeg cropdetect filter.
+
+    Some frames in the middle of the movie are checked against the codec data
+    (using a threshold to be sure its not just some pixels that can be cut).
+
+    Args:
+        file (Path): Path to the movie file.
+        dimensions (dict): Dictionary with the 'width' and 'height' of the video.
+        min_width (int): Minimum width difference to detect black bars.
+        min_height (int): Minimum height difference to detect black bars.
+
+    Returns:
+        int: 1 if black bars were detected, 0 if not (or it could not be checked).
+    """
+    if dimensions["width"] is None or dimensions["height"] is None:
+        return 0
+
+    try:
+        pres = subprocess.run(
+            [
+                "ffmpeg",
+                "-ss",
+                "90",
+                "-i",
+                str(file),
+                "-vframes",
+                "10",
+                "-vf",
+                "cropdetect",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+        cdetect = str(pres.stderr)
+    except (OSError, subprocess.SubprocessError):
+        return 0
+
+    # cropdetect may not find any crop => no black bars
+    rect = parse_crop_line(cdetect)
+    if rect is None:
+        return 0
+    w, h = rect[0], rect[1]
+
+    if w + min_width < dimensions["width"]:
+        return 1
+    if h + min_height < dimensions["height"]:
+        return 1
+    return 0

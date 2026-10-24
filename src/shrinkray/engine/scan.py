@@ -18,9 +18,9 @@ from typing import TYPE_CHECKING
 
 from shrinkray import db, resources
 from shrinkray.db import MovieRecord
+from shrinkray.engine.crop import has_black_bars
 from shrinkray.helpers import (
     SIZE_UNIT,
-    check_black_bars,
     convert_unit,
     create_movie_progress,
     get_other_codecs,
@@ -341,7 +341,7 @@ def process_movie(
         compression_rate = round(size / (timestr_to_int(ret["duration"]) / 3600), 2)
 
     # check for cropping
-    ret["crop"] = check_black_bars(
+    ret["crop"] = has_black_bars(
         filename,
         ret["dimensions"],
         min_width=config.black_bar_min_width,
