@@ -97,7 +97,7 @@ def _bars_note(scan_bars: int | None, plan_crop: str | None) -> str:
     )
 
 
-def _summary_cards(rows: list[dict]) -> str:
+def _summary_cards(rows: list[dict], retained: sqlite3.Row | None = None) -> str:
     """Renders the summary cards from all latest-encode rows."""
     total = len(rows)
     encodes = [r for r in rows if r["decision"] == "encode"]
@@ -120,7 +120,13 @@ def _summary_cards(rows: list[dict]) -> str:
         f"{missing_card}"
         f'<div class="card green"><div class="num">{_fmt_gb(saved_bytes)}</div>'
         f'<div class="lbl">Disk space saved ({saved_percent:.1f}%)</div></div>'
-        "</div>"
+        + (
+            f'<div class="card blue"><div class="num">{_fmt_gb(retained["bytes"])}</div>'
+            f'<div class="lbl">Retained originals ({retained["n"]}, reclaimable)</div></div>'
+            if retained is not None and retained["n"]
+            else ""
+        )
+        + "</div>"
     )
 
 
@@ -245,6 +251,10 @@ def generate_report(db_path: Path, output: Path) -> None:
         ORDER BY f.category, f.name
         """
     ).fetchall()
+
+    retained_total = connection.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(size_before), 0) AS bytes FROM retained"
+    ).fetchone()
     connection.close()
 
     enriched = []
@@ -279,7 +289,7 @@ def generate_report(db_path: Path, output: Path) -> None:
         f'<style>{_CSS}</style></head><body><div class="wrap">'
         "<h1>ShrinkRay Report</h1>"
         f'<div class="sub">Generated {generated} from {_esc(db_path.name)}</div>'
-        f"{_summary_cards(enriched)}"
+        f"{_summary_cards(enriched, retained_total)}"
         f"{_category_table(enriched)}"
         f"{_movie_table(enriched)}"
         f"<footer>ShrinkRay · quality-measured re-encoding · "

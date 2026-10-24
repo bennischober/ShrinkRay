@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtWhen, humanizeError, jobPaths, type Movie, type Status, type Job } from '../api'
+  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtWhen, humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
   import { progressFor } from '../progress.svelte'
 
   /** Path equality that survives separator and case differences. */
@@ -20,6 +20,7 @@
     scanPaths,
     outputDir,
     sparkSamples = [],
+    retainedFiles = [],
     ondismiss,
     ongoto,
     onopenmovie,
@@ -41,8 +42,11 @@
      * the sparkline's buffer lives at app level so it survives page
      * switches and never writes what it reads */
     sparkSamples?: number[]
+    /** the retention ledger's rows (App.svelte) — the panel totals the
+     * present ones; the rows themselves are the Retained page's job */
+    retainedFiles?: RetainedFile[]
     ondismiss: (id: number | null) => void
-    ongoto: (page: 'overview' | 'library' | 'jobs' | 'config') => void
+    ongoto: (page: 'overview' | 'library' | 'jobs' | 'config' | 'retained') => void
     onopenmovie: (movie: Movie) => void
     oncancel?: (id: number | null) => void
     cancelling?: boolean
@@ -507,6 +511,27 @@
         </div>
       {/if}
     </section>
+
+    <!-- ══ retained originals: the space the operator may reclaim ══ -->
+    <!-- the ledger's rows are the Retained page's job; the overview totals
+         them so the pile is visible without a click (issue #182). Show
+         always — the pile IS actionable (delete in the file manager) — but
+         a zero pile reads as noise, so it renders only when present rows
+         exist -->
+    {#if retainedFiles.filter((f) => f.present).length > 0}
+      {@const present = retainedFiles.filter((f) => f.present)}
+      {@const totalBytes = present.reduce((sum, f) => sum + f.size_before, 0)}
+      <section class="panel">
+        <div class="panel-head">
+          <span class="legend">RETAINED ORIGINALS — RECLAIMABLE</span>
+          <button class="nav-link" onclick={() => ongoto('retained')}>RETAINED →</button>
+        </div>
+        <div class="dim pad mono">
+          {present.length} original{present.length === 1 ? '' : 's'} · {fmtGb(totalBytes)} held aside —
+          each has a verified encode in the library; delete them in your file manager when satisfied
+        </div>
+      </section>
+    {/if}
   </div>
 
   <!-- ══ per-category bars: where the bytes live ══ -->
