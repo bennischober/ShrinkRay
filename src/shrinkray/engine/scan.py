@@ -27,7 +27,7 @@ from shrinkray.helpers import (
     timestr_to_int,
 )
 from shrinkray.logger import log, log_warning
-from shrinkray.media import get_data
+from shrinkray.tools.ffprobe import get_data
 
 if TYPE_CHECKING:
     from shrinkray.config import Conf

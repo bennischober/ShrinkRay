@@ -38,7 +38,7 @@ from shrinkray.engine.search import (
     sample_count_for,
 )
 from shrinkray.logger import log
-from shrinkray.tools.ffprobe import probe_duration_seconds
+from shrinkray.tools.ffprobe import get_data, probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 
 # the codec gate: which source codecs are candidates at all (issue #21)
@@ -157,7 +157,6 @@ def source_codec(movie: Path) -> str | None:
         str | None: The video stream's codec name, or None.
     """
     from shrinkray.config import load_config
-    from shrinkray.media import get_data
 
     try:
         data = get_data(movie, load_config())
@@ -183,7 +182,6 @@ def source_height(movie: Path) -> int | None:
         int | None: The video stream's height in pixels, or None.
     """
     from shrinkray.config import load_config
-    from shrinkray.media import get_data
 
     try:
         data = get_data(movie, load_config())
@@ -209,7 +207,6 @@ def is_hdr_file(movie: Path) -> bool:
         bool: True if the video stream is detected as HDR.
     """
     from shrinkray.config import load_config
-    from shrinkray.media import get_data
 
     try:
         data = get_data(movie, load_config())
