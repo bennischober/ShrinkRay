@@ -16,9 +16,7 @@ bisect measures and decides with the same local toolchain, but absolute
 scores and chosen CRFs are only comparable between similar libvmaf builds.
 """
 
-import json
 import shutil
-import subprocess
 import tempfile
 import threading
 from collections.abc import Callable
@@ -64,6 +62,12 @@ from shrinkray.engine.encoders import (
 )
 from shrinkray.engine.encoders import (
     encoder_for as encoder_for,
+)
+from shrinkray.engine.pipeline import (
+    _output_bitrate as _output_bitrate,
+)
+from shrinkray.engine.pipeline import (
+    _source_snapshot as _source_snapshot,
 )
 from shrinkray.engine.plan import (
     CANDIDATE_CODECS as CANDIDATE_CODECS,
@@ -224,83 +228,6 @@ ProgressCallback = Callable[[dict], None]
 # every 10th frame measured) - full decode of a 2-hour 4K movie takes hours,
 # a sub-sampled pass minutes, the score stays honest
 VERIFY_SUBSAMPLE_THRESHOLD_BYTES = 2 * 1024**3
-
-
-def _source_snapshot(movie: Path) -> dict:
-    """Reads the source file's resolution/codec/duration/bitrate for encode records.
-
-    The encode record must be self-contained: the files table row can change
-    on a later re-scan, so the benchmark data snapshots what was true at
-    encode time. The bitrate feeds the generation-drift documentation
-    (input_bitrate/output_bitrate on the encodes row).
-
-    Args:
-        movie (Path): The source file.
-
-    Returns:
-        dict: width/height/codec/duration/bitrate (None where unknown).
-    """
-    from shrinkray.tools.ffprobe import probe_duration_seconds
-
-    duration = probe_duration_seconds(movie)
-    width = height = None
-    codec = None
-    bitrate = None
-    try:
-        proc = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_streams",
-                "-show_format",
-                str(movie),
-            ],
-            capture_output=True,
-            timeout=30,
-        )
-        if proc.returncode == 0:
-            data = json.loads(proc.stdout.decode())
-            streams = data.get("streams", [])
-            video: dict = next((s for s in streams if s.get("codec_type") == "video"), {})
-            width = video.get("width")
-            height = video.get("height")
-            codec = video.get("codec_name")
-            # the file bitrate (video+audio+containers); the video stream's
-            # own bit_rate is often absent => fall back to the format level
-            raw = video.get("bit_rate") or data.get("format", {}).get("bit_rate")
-            if raw:
-                bitrate = round(float(raw) / 1_000_000, 2)
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
-    return {
-        "width": width,
-        "height": height,
-        "codec": codec,
-        "duration": duration,
-        "bitrate": bitrate,
-    }
-
-
-def _output_bitrate(output_file: Path, duration: float | None) -> float | None:
-    """Computes the output bitrate in MBit/s from size and duration.
-
-    Size/duration is the honest number for the drift chain (a ffprobe of
-    the output would re-read the container and return the same sum).
-
-    Args:
-        output_file (Path): The encoded file.
-        duration (float | None): The duration in seconds (shared by both
-            sides — the truncation check above verified equality).
-
-    Returns:
-        float | None: Bitrate in MBit/s, None when unknowable.
-    """
-    if not duration or duration <= 0 or not output_file.is_file():
-        return None
-    return round(output_file.stat().st_size * 8 / duration / 1_000_000, 2)
 
 
 def _probe_movie(
