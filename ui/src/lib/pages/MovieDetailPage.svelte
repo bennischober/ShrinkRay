@@ -24,8 +24,6 @@
     targetVmaf,
     allJobs,
     onclose,
-    onencode,
-    onplan,
     onjobs,
     backTo = 'library',
   }: {
@@ -35,8 +33,6 @@
      * /api/jobs per detail-open (zero extra round-trips). */
     allJobs: Job[]
     onclose: () => void
-    onencode: (path: string) => void
-    onplan: (path: string) => void
     /** Navigate to the jobs page (the trail's "all jobs" link). */
     onjobs: () => void
     backTo?: 'overview' | 'library' | 'jobs'
@@ -99,15 +95,6 @@
     if (e.key === 'Escape') onclose()
   }
 
-  async function act(kind: 'plan' | 'encode') {
-    encodeBusy = true
-    try {
-      if (kind === 'encode') onencode(movie.path)
-      else onplan(movie.path)
-    } finally {
-      encodeBusy = false
-    }
-  }
 
   function revealInExplorer() {
     if (revealBusy) return
@@ -324,8 +311,6 @@
     </div>
     <div class="hero-actions">
       {#if revealError}<span class="mono bad reveal-err">{revealError}</span>{/if}
-      <button class="act" onclick={() => act('plan')} disabled={encodeBusy}>PLAN</button>
-      <button class="act primary" onclick={() => act('encode')} disabled={encodeBusy}>ENCODE</button>
       <button class="act quiet" onclick={revealInExplorer} disabled={revealBusy} title="Open the containing folder in the file manager">
         {revealBusy ? 'OPENING…' : 'FOLDER'}
       </button>

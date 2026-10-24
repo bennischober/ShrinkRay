@@ -93,19 +93,18 @@ remove. It is also the smaller attack surface — a status page needs no authori
 model beyond the token that guards the network, and no route that can start work by
 accident.
 
-> **Implementation status.** The dashboard is currently a **full control surface**, not
-a status view: it enqueues scan/plan/encode jobs (`LibraryPage.svelte:173`, `:198`,
-`:201`, `:212`, `:213`), cancels and retries them (`JobsPage.svelte:180`, `:182`),
-starts and stops the watchdog (`App.svelte:648`), and edits `config.json`
-(`ConfigPage.svelte:97`). Moving it to observe-only — and giving Mode B the automatic
-loop that makes an observe-only dashboard sufficient — is tracked in
-[ISSUES.md](ISSUES.md).
+> **Implementation status.** The dashboard is **observe-only** (issue #134). The
+enqueue/cancel/retry buttons, the watchdog start/stop toggle and the `config.json` editor
+are gone, and so are the routes behind them: `POST /api/jobs`, `POST /api/jobs/{id}/cancel`,
+`POST /api/watch/{action}` and `PUT /api/config` no longer exist. What remains is reads —
+the collection, the running job with live progress, the plan, what was reclaimed, what
+failed and why, and the retained originals. The app starts the backlog and the watcher
+itself, so a container needs no browser to make progress.
 
-> **Implementation status.** Mode B is implemented. Mode A's input shapes (a single file,
-a glob), its database-free default, and its in-place default are **not implemented yet** —
-the CLI currently takes a folder plus a required output directory, always opens the
-database, and writes to the output directory unless `--replace` is passed. The gap is
-tracked in [ISSUES.md](ISSUES.md) and must not be read as working.
+> **Implementation status.** Both modes are implemented. Mode A accepts a file, a folder or
+a glob, creates no database unless `--db` is passed, and encodes in place when no output
+directory is given (the original is renamed aside and kept). Mode B scans, plans and encodes
+the backlog on start and watches the tree for new and changed files.
 
 ## Product Purpose
 

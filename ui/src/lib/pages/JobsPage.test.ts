@@ -4,7 +4,7 @@ import JobsPage from './JobsPage.svelte'
 import type { Job } from '../api'
 
 /** The jobs page is the audit trail — the render test pins the contract a
- * reader depends on: the legend count, the RETRY/CANCEL controls, the
+ * reader depends on: the legend count, the absence of steering controls, the
  * expandable detail with payload JSON, and the PARTIAL state for a done job
  * with failed outcomes. Callbacks are spies; assertions are on the DOM. */
 
@@ -27,13 +27,12 @@ describe('JobsPage render', () => {
   it('renders the audit-trail legend and every history row', () => {
     render(JobsPage, {
       history: [job(), job({ id: 2, kind: 'scan', state: 'running', result: null })],
-      oncancel: () => {},
-      onretry: () => {},
       onopenMovie: () => {},
     })
     expect(screen.getByText(/2 OF 2 ENTRIES/)).toBeTruthy()
-    // a running job offers CANCEL; the detail toggle is always present
-    expect(screen.getByText('CANCEL')).toBeTruthy()
+    // issue #134: the dashboard observes, it does not steer - no CANCEL
+    expect(screen.queryByText('CANCEL')).toBeNull()
+    expect(screen.getAllByText('DETAIL').length).toBeGreaterThan(0)
     expect(screen.getAllByText('DETAIL').length).toBe(2)
   })
 
@@ -49,24 +48,20 @@ describe('JobsPage render', () => {
     })
     const { container } = render(JobsPage, {
       history: [j],
-      oncancel: () => {},
-      onretry: () => {},
       onopenMovie: () => {},
     })
     // the state span says DONE · PARTIAL; the error note carries a RETRY
     const stateSpan = container.querySelector('.state')!
     expect(stateSpan.textContent).toContain('PARTIAL')
-    expect(screen.getAllByText('RETRY').length).toBeGreaterThan(0)
+    expect(screen.queryByText('RETRY')).toBeNull()
   })
 
   it('a failed job offers RETRY', () => {
     render(JobsPage, {
       history: [job({ state: 'failed', error: 'API 503: unavailable' })],
-      oncancel: () => {},
-      onretry: () => {},
       onopenMovie: () => {},
     })
-    expect(screen.getAllByText('RETRY').length).toBeGreaterThan(0)
+    expect(screen.queryByText('RETRY')).toBeNull()
     expect(screen.getByText(/still starting/)).toBeTruthy()
   })
 
@@ -74,8 +69,6 @@ describe('JobsPage render', () => {
     const j = job({ payload: { path: '/m/a', quality: true, target_vmaf: 95 } })
     const { container } = render(JobsPage, {
       history: [j],
-      oncancel: () => {},
-      onretry: () => {},
       onopenMovie: () => {},
     })
     const toggle = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
@@ -91,8 +84,6 @@ describe('JobsPage render', () => {
     const j = job({ payload: { paths: ['/m/a'] } })
     const { container } = render(JobsPage, {
       history: [j],
-      oncancel: () => {},
-      onretry: () => {},
       onopenMovie: () => {},
     })
     const link = container.querySelector<HTMLButtonElement>('button.movie-link')
@@ -103,8 +94,6 @@ describe('JobsPage render', () => {
     const j = job({ payload: { paths: ['/m/a', '/m/b'] } })
     const { container } = render(JobsPage, {
       history: [j],
-      oncancel: () => {},
-      onretry: () => {},
       onopenMovie: () => {},
     })
     expect(container.querySelector('button.movie-link')).toBeNull()

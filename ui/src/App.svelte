@@ -352,105 +352,10 @@
   // encode crops the bars it finds, so there is nothing to arm.
 
 
-  async function enqueue(
-    kind: 'scan' | 'plan' | 'encode',
-    paths?: string[],
-  ) {
-    if (pendingKind !== null) return
-    if (kindQueued(kind)) {
-      // informational, not an error — it gets the quiet notice channel,
-      // not the red alert strip (red is for failure only)
-      notice = `${kind} is already queued — it runs next`
-      return
-    }
-    const targets = paths ?? scanPaths
-    if (targets.length === 0) {
-      notice = paths ? 'select at least one movie' : 'at least one movie folder is required'
-      return
-    }
-    pendingKind = kind
-    persist()
-    try {
-      await api.enqueue({
-        kind,
-        path: targets[0],
-        paths: targets.slice(1),
-        output_dir: kind === 'encode' ? outputDir || undefined : undefined,
-        quality: kind !== 'scan',
-        target_vmaf: Math.min(100, Math.max(70, Number(targetVmaf) || 96)),
-        workers: kind === 'scan' ? workers : null,
-      })
-      await refresh()
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
-    } finally {
-      pendingKind = null
-    }
-  }
-
-  async function cancelJob(id: number | null) {
-    if (id === null || pendingKind !== null) return
-    pendingKind = 'cancel'
-    try {
-      await api.cancel(id)
-      await refresh()
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
-    } finally {
-      pendingKind = null
-    }
-  }
-
-  async function toggleWatcher() {
-    if (!status) return
-    try {
-      if (status.watcher === 'running') {
-        await api.watch('stop')
-      } else {
-        await api.watch('start', scanPaths[0], outputDir)
-      }
-      await refresh()
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
-    }
-  }
-
   // retry: re-enqueue the job with ITS OWN scope and parameters (never the
   // current form — a failed single-movie encode must not become a
   // whole-library run)
-  async function retryJob(job: Job) {
-    if (pendingKind !== null) return
-    // a row of a removed kind is history only: it has no payload to replay
-    if (job.kind === 'legacy') return
-    // replay the STORED payload verbatim (issue #100): re-deriving settings
-    // from the current form state would run the job with TODAY's knobs
-    // while the history row records the original run - the row and the
-    // execution would disagree. The payload IS the enqueue body.
-    void replayJob(job.payload as Record<string, unknown>)
-  }
-
-  async function replayJob(payload: Record<string, unknown>) {
-    const kind = payload.kind as 'scan' | 'plan' | 'encode' | undefined
-    if (kind !== 'scan' && kind !== 'plan' && kind !== 'encode') return
-    if (pendingKind !== null) return
-    pendingKind = kind
-    persist()
-    try {
-      await api.enqueue({ ...payload, kind } as Parameters<typeof api.enqueue>[0])
-      await refresh()
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e)
-    } finally {
-      pendingKind = null
-    }
-  }
-
   // per-movie actions (encode/plan a single title from its page)
-  async function encodeOne(path: string) {
-    if (pendingKind !== null) return
-    void enqueue('encode', [path])
-  }
-
   // jobs → movie: a single-movie job row links to its title's detail page.
   // The movie must be in the snapshot's library (the detail page's props
   // come from it); when the library hasn't arrived yet, the deep-link
@@ -556,11 +461,10 @@
         title={theme === 'dark' ? 'Switch to the light working bench' : 'Switch to the dark cinema ground'}>
         {theme === 'dark' ? '◐ DARK' : '◑ LIGHT'}
       </button>
-      <button class="legend watcher" class:on={status?.watcher === 'running'} onclick={toggleWatcher}
-        aria-label={status?.watcher === 'running' ? 'Stop the background watcher' : 'Start the background watcher'}
-        aria-pressed={status?.watcher === 'running'}>
+      <span class="legend watcher" class:on={status?.watcher === 'running'}
+        title={status?.watcher === 'running' ? 'The background watcher is running' : 'The background watcher is stopped'}>
         {status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER'}
-      </button>
+      </span>
       <span class="legend shortcut-hint mono">{SHORTCUT_LEGEND}</span>
     </div>
   </aside>
@@ -605,8 +509,6 @@
         {targetVmaf}
         allJobs={history}
         onclose={closeDetail}
-        onencode={encodeOne}
-        onplan={(p) => enqueue('plan', [p])}
         onjobs={() => goto('jobs')}
         backTo={detailFrom}
       />
@@ -628,7 +530,6 @@
           ondismiss={dismissFailed}
           ongoto={goto}
           onopenmovie={(m) => openDetail(m, 'overview')}
-          oncancel={cancelJob}
           cancelling={pendingKind === 'cancel'}
         />
       </div>
@@ -637,20 +538,9 @@
           {movies}
           {selectedPaths}
           {targetVmaf}
-          scanning={kindQueued('scan')}
-          pending={pendingKind !== null}
           runningMovie={runningProgress?.movie ?? null}
           runningPercent={runningProgress?.percent ?? null}
           plannedPaths={planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)}
-          onenqueue={(kind, paths) => {
-            // whole-library encode (no explicit paths) gets the preflight:
-            // scope + measured estimate before the loudest verb fires
-            if (kind === 'encode' && !paths) {
-              requestEncodeAll()
-              return
-            }
-            enqueue(kind, paths)
-          }}
           onopenmovie={(m) => openDetail(m, 'library')}
           ontoggle={(path, checked) => {
             const next = new Set(selectedPaths)
@@ -668,7 +558,7 @@
         />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
-        <JobsPage {history} oncancel={cancelJob} onretry={retryJob} onopenMovie={(p) => openDetailFromJobs(p)} />
+        <JobsPage {history} onopenMovie={(p) => openDetailFromJobs(p)} />
       </div>
       <div class="pages" class:hidden={page !== 'retained'}>
         <RetainedPage files={retainedFiles} onrecover={() => void loadRetained()} />
@@ -702,10 +592,7 @@
       — sources are never touched; results land in {outputDir || 'the output folder'}.
     </div>
     <div class="bars-buttons">
-      <button class="mono deny" onclick={closeEncodeAll}>NOT NOW</button>
-      <button class="mono confirm primary" onclick={() => { pendingEncodeAll = false; void enqueue('encode', undefined) }}>
-        ENCODE ALL
-      </button>
+      <button class="mono deny" onclick={closeEncodeAll}>CLOSE</button>
     </div>
   </div>
 {/if}
@@ -908,8 +795,6 @@
     font-size: var(--fs-legend);
     letter-spacing: var(--track-legend);
   }
-  .bars-buttons .confirm { border-color: var(--red); color: var(--red); }
-  .bars-buttons .confirm:hover { background: var(--red); color: var(--ground); }
   .bars-buttons .deny:hover { border-color: var(--ink-dim); }
 
   /* the preflight variant: an amber ceremony for a REVERSIBLE verb.
@@ -921,12 +806,6 @@
     border-top-color: var(--amber);
     background: repeating-linear-gradient(45deg, rgba(224, 164, 94, 0.08) 0 4px, transparent 4px 8px), var(--panel);
   }
-  .bars-confirm.encode-preflight .bars-buttons .confirm {
-    border-color: var(--teal);
-    color: var(--ground);
-    background: var(--teal);
-  }
-  .bars-confirm.encode-preflight .bars-buttons .confirm:hover { filter: brightness(1.08); background: var(--teal); color: var(--ground); }
 
   @media (max-width: 900px) {
     .console { flex-direction: column; }

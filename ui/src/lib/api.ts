@@ -362,29 +362,8 @@ export const api = {
     return request<MovieDetail>(`/api/movie?${params}`)
   },
   config: () => request<Config>('/api/config'),
-  saveConfig: (config: Config) =>
-    request<Config>('/api/config', { method: 'PUT', body: JSON.stringify(config) }),
-  enqueue: (body: {
-    kind: JobKind
-    path?: string
-    paths?: string[]
-    output_dir?: string
-    quality?: boolean
-    target_vmaf?: number
-    overwrite?: boolean
-    workers?: number | null
-    rescan?: boolean
-    hash?: boolean
-  }) => request<Job>('/api/jobs', { method: 'POST', body: JSON.stringify(body) }),
-  cancel: (id: number) =>
-    request<{ cancelled: number }>(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   reveal: (path: string) =>
     request<{ revealed: string }>('/api/reveal', { method: 'POST', body: JSON.stringify({ path }) }),
-  watch: (action: 'start' | 'stop', inbox?: string, output_dir?: string) =>
-    request<{ watcher: string }>(`/api/watch/${action}`, {
-      method: 'POST',
-      body: JSON.stringify({ inbox, output_dir }),
-    }),
 }
 
 /** Formats a byte count as a GB string ('—' for empty). */
