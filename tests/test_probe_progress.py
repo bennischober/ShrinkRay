@@ -5,9 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from shrinkray import quality
+from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine import plan as engine_plan
+from shrinkray.engine import samples as engine_samples
 from shrinkray.engine import search as engine_search
+from shrinkray.tools import ffprobe as tools_ffprobe
+from shrinkray.tools import vmaf as tools_vmaf
 
 
 class TestProbeProgress(unittest.TestCase):
@@ -31,7 +34,7 @@ class TestProbeProgress(unittest.TestCase):
             patch("shrinkray.engine.samples._run", side_effect=fake_run),
             tempfile.TemporaryDirectory() as tmp,
         ):
-            quality.extract_samples(
+            engine_samples.extract_samples(
                 Path("movie.mkv"),
                 Path(tmp),
                 3,
@@ -52,10 +55,10 @@ class TestProbeProgress(unittest.TestCase):
         events: list[dict] = []
         with (
             patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-            patch.object(quality, "probe_crf", side_effect=lambda *a, **k: 95.0),
+            patch.object(engine_search, "probe_crf", side_effect=lambda *a, **k: 95.0),
             patch.object(engine_search, "probe_crf", side_effect=lambda *a, **k: 95.0),
         ):
-            chosen, _achieved, probes = quality.find_optimal_crf(
+            chosen, _achieved, probes = engine_search.find_optimal_crf(
                 Path("movie.mkv"),
                 Path("work"),
                 "hb",
@@ -90,7 +93,7 @@ class TestProbeProgress(unittest.TestCase):
                 patch.object(engine_search, "_run", side_effect=fake_run),
                 patch.object(engine_search, "measure_vmaf", return_value=None),
             ):
-                factor = quality.estimate_size_factor(
+                factor = engine_search.estimate_size_factor(
                     [(sample, 10.0)],
                     Path(tmp),
                     "hb",
@@ -117,17 +120,17 @@ class TestProbeProgress(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(
                     engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
                 ) as fake,
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(quality, "probe_crf", return_value=95.0),
+                patch.object(engine_search, "probe_crf", return_value=95.0),
                 patch.object(engine_search, "probe_crf", return_value=95.0),
             ):
-                quality.plan_quality(src)
+                engine_plan.plan_quality(src)
         self.assertEqual(fake.call_count, 1)
 
     def test_plan_quality_threads_progress_to_pipeline(self):
@@ -139,7 +142,7 @@ class TestProbeProgress(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(quality, "probe_duration_seconds", return_value=600.0),
+                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(
                     engine_plan, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
@@ -150,7 +153,7 @@ class TestProbeProgress(unittest.TestCase):
                 ) as fake_estimate,
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
             ):
-                result = quality.plan_quality(src, progress=events.append)
+                result = engine_plan.plan_quality(src, progress=events.append)
         self.assertTrue(result.success)
         fake_search.assert_called_once()
         self.assertIsNotNone(fake_search.call_args.kwargs.get("progress"))
@@ -161,16 +164,18 @@ class TestProbeProgress(unittest.TestCase):
         """The encode's PROBE phase streams steps too (before HandBrake's
         own percent lines take over) — same shared pipeline as plan."""
         with (
-            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
-            patch.object(quality, "_source_snapshot", return_value=None),
-            patch.object(quality, "_probe_movie", return_value=(20, 95.0, [], None)) as fake_probe,
-            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(engine_pipeline, "_source_snapshot", return_value=None),
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None)
+            ) as fake_probe,
+            patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
             tempfile.TemporaryDirectory() as tmp,
         ):
             src = Path(tmp) / "in.mkv"
             src.write_bytes(b"x" * 8)
-            quality.encode_with_quality(
+            engine_pipeline.encode_with_quality(
                 src,
                 Path(tmp) / "out.mkv",
                 progress=lambda data: None,
@@ -182,16 +187,18 @@ class TestProbeProgress(unittest.TestCase):
         final encode: the cap exists to keep cores free on a shared machine,
         and probing runs for minutes before the final encode starts."""
         with (
-            patch.object(quality, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
-            patch.object(quality, "_source_snapshot", return_value=None),
-            patch.object(quality, "_probe_movie", return_value=(20, 95.0, [], None)) as fake_probe,
-            patch.object(quality, "find_handbrake", return_value="hb"),
+            patch.object(engine_pipeline, "_source_snapshot", return_value=None),
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None)
+            ) as fake_probe,
+            patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
             tempfile.TemporaryDirectory() as tmp,
         ):
             src = Path(tmp) / "in.mkv"
             src.write_bytes(b"x" * 8)
-            quality.encode_with_quality(
+            engine_pipeline.encode_with_quality(
                 src,
                 Path(tmp) / "out.mkv",
                 encoder_threads=4,
@@ -215,7 +222,7 @@ class TestProbeProgress(unittest.TestCase):
         ):
             src = Path(tmp) / "in.mkv"
             src.write_bytes(b"x" * 8)
-            quality.plan_quality(src, encoder_threads=4)
+            engine_plan.plan_quality(src, encoder_threads=4)
         self.assertEqual(fake_search.call_args.kwargs.get("encoder_threads"), 4)
         self.assertEqual(fake_estimate.call_args.kwargs.get("encoder_threads"), 4)
 
@@ -238,7 +245,7 @@ class TestProbeProgress(unittest.TestCase):
                 patch.object(engine_search, "_run", side_effect=fake_run),
                 patch.object(engine_search, "measure_vmaf") as fake_measure,
             ):
-                factor = quality.estimate_size_factor(
+                factor = engine_search.estimate_size_factor(
                     [(sample, 10.0)], Path(tmp), "hb", 32, sample, 10.0, "x265", "medium"
                 )
         self.assertEqual(factor, 0.5)
@@ -262,9 +269,11 @@ class TestProbeProgress(unittest.TestCase):
                     engine_search, "build_encode_command", return_value=["hb", "-o", str(encoded)]
                 ),
                 patch.object(engine_search, "_run", side_effect=fake_run),
-                patch.object(quality, "detect_vmaf_style", side_effect=RuntimeError("no libvmaf")),
+                patch.object(
+                    tools_vmaf, "detect_vmaf_style", side_effect=RuntimeError("no libvmaf")
+                ),
             ):
-                factor = quality.estimate_size_factor(
+                factor = engine_search.estimate_size_factor(
                     [(sample, 10.0)], Path(tmp), "hb", 32, sample, 10.0, "x265", "medium"
                 )
         self.assertEqual(factor, 0.5)

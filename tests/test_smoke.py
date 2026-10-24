@@ -25,7 +25,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from shrinkray import db, service
-from shrinkray.quality import encode_with_quality, plan_quality
+from shrinkray.engine import pipeline as engine_pipeline
+from shrinkray.engine.pipeline import encode_with_quality, plan_quality
 
 BINARIES_OK = shutil.which("HandBrakeCLI") is not None and shutil.which("ffmpeg") is not None
 
@@ -100,15 +101,12 @@ class TestSmokePlanReuse(unittest.TestCase):
             calls.append(args[0] if args else kwargs.get("input_file"))
             return real_probe(*args, **kwargs)
 
-        from shrinkray import quality
-
-        real_probe = quality._probe_movie
+        real_probe = engine_pipeline._probe_movie
         return spy
 
     def test_plan_run_then_encode_skips_probing(self):
         """The full cycle: a recorded plan makes the encode start at the
         planned CRF without running a single probe encode."""
-        from shrinkray import quality
 
         plan_result = plan_quality(self.clip, db_file=self.db_file)
         self.assertTrue(
@@ -121,7 +119,9 @@ class TestSmokePlanReuse(unittest.TestCase):
         self.assertEqual(plans, 1, "the plan run must record its decision")
 
         calls: list = []
-        with mock.patch.object(quality, "_probe_movie", side_effect=self._plan_probe_spy(calls)):
+        with mock.patch.object(
+            engine_pipeline, "_probe_movie", side_effect=self._plan_probe_spy(calls)
+        ):
             result = encode_with_quality(
                 self.clip,
                 self.root / "out1" / "clip.mkv",
@@ -142,14 +142,15 @@ class TestSmokePlanReuse(unittest.TestCase):
     def test_changed_target_reprobes(self):
         """A fingerprint mismatch (different target VMAF) must fall back to
         the real probe pipeline - never a silent stale reuse."""
-        from shrinkray import quality
 
         plan_result = plan_quality(self.clip, db_file=self.db_file)
         self.assertTrue(plan_result.success, plan_result.skipped_reason)
         service.record_plan(self.connection, self.clip, plan_result, self.config)
 
         calls: list = []
-        with mock.patch.object(quality, "_probe_movie", side_effect=self._plan_probe_spy(calls)):
+        with mock.patch.object(
+            engine_pipeline, "_probe_movie", side_effect=self._plan_probe_spy(calls)
+        ):
             result = encode_with_quality(
                 self.clip,
                 self.root / "out2" / "clip.mkv",

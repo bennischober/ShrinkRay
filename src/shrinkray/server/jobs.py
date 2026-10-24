@@ -22,9 +22,9 @@ from enum import Enum
 from pathlib import Path
 
 from shrinkray.config import Conf
-from shrinkray.encode import cap_threads
-from shrinkray.quality import DEFAULT_TARGET_VMAF, Cancelled
-from shrinkray.tools.process import apply_config
+from shrinkray.engine.pipeline import cap_threads
+from shrinkray.engine.search import DEFAULT_TARGET_VMAF
+from shrinkray.tools.process import Cancelled, apply_config
 
 # how many terminated (done/failed/cancelled) job rows the history keeps.
 # Terminated rows are the job trail (outcomes, errors, retry affordances);
@@ -651,7 +651,7 @@ def execute_scan(
     for path in payload_paths(payload):
         if path.is_file():
             # single movie file (per-movie action)
-            from shrinkray.scanner import process_movie
+            from shrinkray.engine.scan import process_movie
 
             data, error = process_movie(path, path.parent, config)
             if data is not None:
@@ -786,9 +786,8 @@ def execute_encode(
         dict: The per-movie outcome summary.
     """
     from shrinkray.config import load_config
-    from shrinkray.encode import encode_movies
     from shrinkray.engine.lock import EncodeBusyError
-    from shrinkray.quality import encode_with_quality
+    from shrinkray.engine.pipeline import encode_movies, encode_with_quality
     from shrinkray.service import (
         finished_movies,
         record_fixed_results,

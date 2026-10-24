@@ -31,7 +31,7 @@ from subprocess import run as run_subprocess
 from unittest import skipUnless
 
 from shrinkray import config as config_helper
-from shrinkray.quality import DEFAULT_ENCODER, encoder_for
+from shrinkray.engine.encoders import DEFAULT_ENCODER, encoder_for
 from shrinkray.tools import ffprobe as read_media
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"

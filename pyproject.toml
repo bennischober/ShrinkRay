@@ -23,6 +23,7 @@ shrinkray = "shrinkray.__main__:app"
 [dependency-groups]
 dev = [
     "httpx2>=2.13.1",
+    "import-linter>=2.15",
     "mypy>=2.4.0",
     "playwright>=1.64.0",
     "pytest>=8.4",
@@ -145,3 +146,43 @@ show_missing = true
 # a floor so a regression is a visible failure instead of a slow slide;
 # raise it deliberately as coverage improves, never lower it to pass a PR
 fail_under = 70
+
+[tool.importlinter]
+root_package = "shrinkray"
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture (issue #97)"
+type = "layers"
+layers = [
+    "shrinkray.__main__",
+    "shrinkray.server",
+    "shrinkray.service",
+    "shrinkray.report",
+    "shrinkray.engine",
+    "shrinkray.tools",
+    "shrinkray.db",
+    "shrinkray.config",
+    "shrinkray.logger",
+]
+
+[[tool.importlinter.contracts]]
+name = "Foundation imports nothing internal (issue #97)"
+type = "forbidden"
+source_modules = [
+    "shrinkray.db",
+    "shrinkray.config",
+    "shrinkray.logger",
+    "shrinkray.telemetry",
+]
+forbidden_modules = [
+    "shrinkray.engine",
+    "shrinkray.tools",
+    "shrinkray.server",
+    "shrinkray.service",
+    "shrinkray.report",
+    "shrinkray.encode",
+    "shrinkray.quality",
+    "shrinkray.watch",
+    "shrinkray.scanner",
+    "shrinkray.helpers",
+]

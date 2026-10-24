@@ -15,12 +15,12 @@ from typing import TYPE_CHECKING
 from shrinkray import db
 from shrinkray.config import DEFAULT_PROBE_ENCODER_PRESET
 from shrinkray.db import MovieRecord
-from shrinkray.encode import probe_duration_seconds as probe_duration
+from shrinkray.tools.ffprobe import probe_duration_seconds as probe_duration
 
 if TYPE_CHECKING:
     from shrinkray.config import Conf
-    from shrinkray.encode import EncodeResult
-    from shrinkray.quality import QualityResult
+    from shrinkray.engine.pipeline import EncodeResult
+    from shrinkray.engine.plan import QualityResult
 
 
 @dataclass

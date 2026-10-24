@@ -18,13 +18,15 @@ from shrinkray.engine.pipeline import (
     DISK_FREE_FLOOR_BYTES,
     cap_threads,
     disk_free_bytes,
+    encode_with_quality,
 )
 from shrinkray.engine.plan import MIN_ENCODE_SECONDS
+from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
-from shrinkray.quality import DEFAULT_TARGET_VMAF, Cancelled, encode_with_quality
 from shrinkray.replace import RETAINED_SUFFIX, STAGING_SUFFIX
 from shrinkray.tools.ffprobe import probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
+from shrinkray.tools.process import Cancelled
 
 # a file is stable when its size is unchanged between two checks ...
 STABLE_CHECK_INTERVAL = 30.0

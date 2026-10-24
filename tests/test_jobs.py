@@ -7,7 +7,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from shrinkray import db, jobs, quality
+from shrinkray import db
+from shrinkray.engine import search as engine_search
+from shrinkray.server import jobs
 
 
 class TestJobs(unittest.TestCase):
@@ -26,7 +28,7 @@ class TestJobs(unittest.TestCase):
         """The cancel event terminates an in-flight subprocess (regression:
         cancel was only checked between movies, so a long probe or encode
         ran to completion despite the user cancelling)."""
-        from shrinkray.quality import _run
+        from shrinkray.tools.process import _run
 
         cancel = threading.Event()
         # a process that runs until killed (long enough to cancel mid-flight)
@@ -51,7 +53,8 @@ class TestJobs(unittest.TestCase):
 
     def test_check_cancel_raises(self):
         """_check_cancel raises Cancelled when the event is set."""
-        from shrinkray.quality import Cancelled, _check_cancel
+        from shrinkray.engine.pipeline import _check_cancel
+        from shrinkray.tools.process import Cancelled
 
         _check_cancel(None)  # disabled check never raises
         event = threading.Event()
@@ -68,7 +71,8 @@ class TestJobs(unittest.TestCase):
         partial output already removed."""
         import tempfile
 
-        from shrinkray.quality import Cancelled, encode_with_quality
+        from shrinkray.engine.pipeline import encode_with_quality
+        from shrinkray.tools.process import Cancelled
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -87,8 +91,8 @@ class TestJobs(unittest.TestCase):
                 return 20, 95.2, [], None
 
             with (
-                mock.patch("shrinkray.quality._probe_movie", side_effect=fake_probe),
-                mock.patch("shrinkray.quality.find_handbrake", return_value=str(stub)),
+                mock.patch("shrinkray.engine.pipeline._probe_movie", side_effect=fake_probe),
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
                 mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=1_000_000),
                 self.assertRaises(Cancelled) as ctx,
             ):
@@ -135,7 +139,7 @@ class TestJobs(unittest.TestCase):
             encoder_preset="3",
             probe_encoder_preset="5",
             crop=None,
-            crf_range=quality.DEFAULT_CRF_RANGE,
+            crf_range=engine_search.DEFAULT_CRF_RANGE,
             sample_count=3,
             sample_seconds=10.0,
             crop_sample_count=10,
@@ -268,7 +272,7 @@ class TestJobs(unittest.TestCase):
         from unittest.mock import patch
 
         with (
-            patch("shrinkray.quality.encode_with_quality", fake_encode_with_quality),
+            patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode_with_quality),
             patch(
                 "shrinkray.service.record_quality_results",
                 lambda *a, **k: SimpleNamespace(encoded=True, skipped=False),

@@ -23,7 +23,9 @@ from shrinkray.config import (
     DEFAULT_PROBE_ENCODER_PRESET,
     load_config,
 )
-from shrinkray.encode import cap_threads
+from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
+from shrinkray.engine.pipeline import cap_threads
+from shrinkray.engine.samples import DEFAULT_SAMPLE_COUNT, DEFAULT_SAMPLE_EVERY
 from shrinkray.engine.scan import (
     find_movies,
     get_category,
@@ -31,18 +33,13 @@ from shrinkray.engine.scan import (
     resolve_input_paths,
     scan_movies,
 )
+from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.helpers import calc_time, generate_string, sanitize_number
 from shrinkray.logger import log, log_error
-from shrinkray.quality import (
-    DEFAULT_SAMPLE_COUNT,
-    DEFAULT_SAMPLE_EVERY,
-    DEFAULT_TARGET_VMAF,
-    HDR_ESTIMATE_NOTE,
-)
-from shrinkray.quality import (
+from shrinkray.report import generate_report
+from shrinkray.tools.process import (
     Cancelled as _EncodeCancelled,
 )
-from shrinkray.report import generate_report
 from shrinkray.tools.process import apply_config
 
 if TYPE_CHECKING:
@@ -709,8 +706,7 @@ def _record_encodes(
         probe_encoder_preset (str): The PROBE's speed preset (measurement).
         encoder_preset (str): The FINAL encode's speed preset (output).
     """
-    from shrinkray.encode import encode_movies
-    from shrinkray.quality import encode_with_quality
+    from shrinkray.engine.pipeline import encode_movies, encode_with_quality
 
     # already encoded AND output still present? (unless --overwrite)
     # => batch resume: an interrupted run skips everything it finished before
@@ -922,7 +918,7 @@ def plan(
     full probing pipeline, so it takes roughly as long as the probing part
     of a real encode run.
     """
-    from shrinkray.quality import plan_quality
+    from shrinkray.engine.plan import plan_quality
 
     config = load_config(config_file=config_file)
     apply_config(config)

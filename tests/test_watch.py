@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 from unittest.mock import patch
 
-from shrinkray import quality
+from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import watch as watch_mod
 
 
@@ -35,7 +35,7 @@ class TestWatch(unittest.TestCase):
 
             def fake_quality(m, o, **kwargs):
                 seen.append(m)
-                return quality.QualityResult(
+                return engine_plan.QualityResult(
                     input=m, output=o, success=False, skipped_reason="no size gain"
                 )
 
@@ -108,7 +108,7 @@ class TestWatch(unittest.TestCase):
 
             def fake_quality(m, o, **kwargs):
                 probed.append(m)
-                return quality.QualityResult(input=m, output=o, success=True)
+                return engine_plan.QualityResult(input=m, output=o, success=True)
 
             with (
                 mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
@@ -244,7 +244,7 @@ class TestWatch(unittest.TestCase):
         same CRF search as CLI/jobs) - not the old fixed-preset path."""
 
         from shrinkray.engine import watch as watch_mod
-        from shrinkray.quality import QualityResult
+        from shrinkray.engine.plan import QualityResult
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "in"
@@ -286,7 +286,7 @@ class TestWatch(unittest.TestCase):
         skip log, not an encode error."""
 
         from shrinkray.engine import watch as watch_mod
-        from shrinkray.quality import QualityResult
+        from shrinkray.engine.plan import QualityResult
 
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "in"
@@ -358,7 +358,7 @@ class TestWatch(unittest.TestCase):
 
             def fake_quality(m, o, **kwargs):
                 seen.append(kwargs.get("db_file"))
-                return quality.QualityResult(input=m, output=o, success=True)
+                return engine_plan.QualityResult(input=m, output=o, success=True)
 
             # backdate the mtime: a fresh file is below STABLE_MIN_AGE and
             # would never reach the encode call
@@ -392,7 +392,7 @@ class TestWatch(unittest.TestCase):
 
             def fake_quality(m, o, **kwargs):
                 seen.append((kwargs.get("probe_encoder_preset"), kwargs.get("encoder_preset")))
-                return quality.QualityResult(input=m, output=o, success=True)
+                return engine_plan.QualityResult(input=m, output=o, success=True)
 
             old = time.time() - 7200
             os.utime(movie, (old, old))
@@ -590,7 +590,7 @@ class TestWatchLibraryTree(unittest.TestCase):
     def _encode_once(self, seen: list, roots: list[Path] | None = None) -> None:
         def fake_quality(m, o, **kwargs):
             seen.append(Path(m))
-            return quality.QualityResult(input=m, output=o, success=True)
+            return engine_plan.QualityResult(input=m, output=o, success=True)
 
         with (
             mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
@@ -633,7 +633,7 @@ class TestWatchLibraryTree(unittest.TestCase):
 
         def fake_quality(m, o, **kwargs):
             seen.append(Path(m))
-            return quality.QualityResult(input=m, output=o, success=True)
+            return engine_plan.QualityResult(input=m, output=o, success=True)
 
         def fake_sleep(interval, stop_event):
             # the first pass encoded the movie: stop before the second pass

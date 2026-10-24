@@ -443,14 +443,14 @@ class TestStatelessModeA(unittest.TestCase):
         self.assertTrue(db_file.exists(), "an explicit --db was not created")
 
     def test_a_stateless_plan_creates_no_database(self) -> None:
-        with patch("shrinkray.quality.plan_quality", return_value=_skipped_plan(self.movie)):
+        with patch("shrinkray.engine.plan.plan_quality", return_value=_skipped_plan(self.movie)):
             self._run("plan", str(self.movie))
         self.assertFalse((self.root / "metadata.db").exists())
 
     def test_a_stateless_plan_passes_no_db_file_to_the_engine(self) -> None:
         """No database means no plan cache: the engine gets db_file=None."""
         with patch(
-            "shrinkray.quality.plan_quality", return_value=_skipped_plan(self.movie)
+            "shrinkray.engine.plan.plan_quality", return_value=_skipped_plan(self.movie)
         ) as fake:
             self._run("plan", str(self.movie))
         self.assertIsNone(fake.call_args.kwargs["db_file"])
@@ -458,7 +458,7 @@ class TestStatelessModeA(unittest.TestCase):
 
 def _skipped_plan(movie: Path) -> "object":
     """Builds a skipped plan result for the mocked plan command."""
-    from shrinkray.quality import QualityResult
+    from shrinkray.engine.plan import QualityResult
 
     return QualityResult(
         input=movie,
@@ -494,7 +494,7 @@ class TestEncodeInPlace(unittest.TestCase):
 
     def _encode(self, *argv: str) -> "object":
         """Runs encode with the engine faked to write a smaller output."""
-        from shrinkray.quality import QualityResult
+        from shrinkray.engine.plan import QualityResult
 
         def fake_encode(movie, output, **kwargs):
             Path(output).parent.mkdir(parents=True, exist_ok=True)
@@ -515,7 +515,7 @@ class TestEncodeInPlace(unittest.TestCase):
         previous = os.getcwd()
         os.chdir(self.root)
         try:
-            with patch("shrinkray.quality.encode_with_quality", side_effect=fake_encode):
+            with patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode):
                 return runner.invoke(app, list(argv))
         finally:
             os.chdir(previous)
