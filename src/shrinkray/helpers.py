@@ -1,6 +1,4 @@
-import subprocess
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 from rich.progress import (
@@ -175,71 +173,6 @@ def get_other_codecs(other_codecs: list[dict[str, Any]]) -> str:
         str: Comma separated codec names, e.g. 'aac, subrip'.
     """
     return ", ".join(codec["name"] for codec in other_codecs)
-
-
-def check_black_bars(
-    file: Path,
-    dimensions: dict[str, Any],
-    min_width: int = 100,
-    min_height: int = 100,
-) -> int:
-    """Checks if a movie has (relevant) black bars by using the ffmpeg cropdetect filter.
-
-    Some frames in the middle of the movie are checked against the codec data
-    (using a threshold to be sure its not just some pixels that can be cut).
-
-    Args:
-        file (Path): Path to the movie file.
-        dimensions (dict): Dictionary with the 'width' and 'height' of the video.
-        min_width (int): Minimum width difference to detect black bars.
-        min_height (int): Minimum height difference to detect black bars.
-
-    Returns:
-        int: 1 if black bars were detected, 0 if not (or it could not be checked).
-    """
-    if dimensions["width"] is None or dimensions["height"] is None:
-        return 0
-
-    try:
-        pres = subprocess.run(
-            [
-                "ffmpeg",
-                "-ss",
-                "90",
-                "-i",
-                str(file),
-                "-vframes",
-                "10",
-                "-vf",
-                "cropdetect",
-                "-f",
-                "null",
-                "-",
-            ],
-            capture_output=True,
-            timeout=60,
-        )
-        cdetect = str(pres.stderr)
-    except (OSError, subprocess.SubprocessError):
-        return 0
-
-    # cropdetect may not find any crop => no black bars
-    if "crop=" not in cdetect:
-        return 0
-
-    cres = cdetect.split("crop=")
-    dres = cres[1].split(":")
-    try:
-        w = int(dres[0].split("'")[0])
-        h = int(dres[1].split("'")[0])
-    except (IndexError, ValueError):
-        return 0
-
-    if w + min_width < dimensions["width"]:
-        return 1
-    if h + min_height < dimensions["height"]:
-        return 1
-    return 0
 
 
 def create_movie_progress() -> Progress:
