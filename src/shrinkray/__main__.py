@@ -5,7 +5,9 @@ service, watch, report, db) — this module only defines the commands, their
 options and the console presentation.
 """
 
+import contextlib
 import csv
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -369,7 +371,14 @@ def encode(
         ...,
         help="A movie file, a folder, or a glob pattern (e.g. D:\\Movies).",
     ),
-    output_dir: Path = typer.Argument(..., help="Directory for the encoded files."),
+    output_dir: Path | None = typer.Argument(
+        None,
+        help=(
+            "Directory for the encoded files. Omit it to encode IN PLACE: each "
+            "verified output takes the source's own path and the original is "
+            "renamed aside and kept (never deleted)."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be encoded without encoding."
     ),
@@ -437,8 +446,8 @@ def encode(
         "--replace",
         help=(
             "Swap each verified encode into its source's path, renaming the "
-            "original aside and keeping it (never deleted). Off by default: "
-            "without it the output is written to the output directory."
+            "original aside and keeping it (never deleted). Implied when no "
+            "output directory is given, so it only matters alongside one."
         ),
     ),
     probe_encoder_preset: str = typer.Option(
@@ -509,27 +518,37 @@ def encode(
             log_error(str(e))
             raise typer.Exit(1) from e
         _, movies, _ = scan_movies(root, config, connection=connection, exclude=output_dir)
-        _record_encodes(
-            connection,
-            movies,
-            output_dir,
-            config,
-            dry_run,
-            overwrite,
-            quality,
-            target_vmaf,
-            verify,
-            workers,
-            threads,
-            db_file,
-            replan,
-            probe_encoder_preset,
-            encoder_preset,
-            crop_samples,
-            sample_every,
-            sample_count,
-            replace,
+        # in place: the encode needs a real path, so it lands in a working
+        # directory INSIDE the library root - the same filesystem, so the swap's
+        # two renames stay atomic and cheap. The output directory only says
+        # where the bytes are written; the swap target is always the source.
+        work: contextlib.AbstractContextManager[str] = (
+            contextlib.nullcontext(str(output_dir))
+            if output_dir is not None
+            else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=root)
         )
+        with work as staging:
+            _record_encodes(
+                connection,
+                movies,
+                Path(staging),
+                config,
+                dry_run,
+                overwrite,
+                quality,
+                target_vmaf,
+                verify,
+                workers,
+                threads,
+                db_file,
+                replan,
+                probe_encoder_preset,
+                encoder_preset,
+                crop_samples,
+                sample_every,
+                sample_count,
+                output_dir is None or replace,
+            )
     finally:
         if connection is not None:
             connection.close()
