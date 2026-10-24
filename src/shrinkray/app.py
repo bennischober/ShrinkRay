@@ -1409,6 +1409,9 @@ def run_app(
             $SHRINKRAY_TOKEN configured (issue #36). An open dashboard on a
             LAN is reachable by every device on that LAN, so this is a
             startup failure, not a warning.
+        ValueError: If the toolchain cannot measure VMAF or cannot encode AV1
+            (issue #132). A resident process on such a host would accept jobs
+            and fail them one by one; refusing at startup is the honest answer.
     """
     if not _is_loopback(host) and _configured_token() is None:
         raise ValueError(
@@ -1416,6 +1419,15 @@ def run_app(
             f"${AUTH_TOKEN_ENV} to a secret token, or bind 127.0.0.1. "
             "A published port with no auth is reachable by every device "
             "on the network (issue #36)."
+        )
+    from shrinkray.service import toolchain_problems
+
+    problems = toolchain_problems()
+    if problems:
+        raise ValueError(
+            "refusing to start on an unusable toolchain:\n  "
+            + "\n  ".join(problems)
+            + "\nRun the doctor command to see this without starting the app."
         )
     global state
     allow_roots(allowed_roots or _default_roots())

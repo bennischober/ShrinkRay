@@ -213,7 +213,8 @@ class TestDoctorCli(unittest.TestCase):
                 db.MovieRecord(path=movie, mtime=100.0, size=1, name="movie", category="C"),
             )
             runner = CliRunner()
-            result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
+            with patch("shrinkray.service.toolchain_problems", return_value=[]):
+                result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertIn("healthy", result.output)
 
@@ -234,7 +235,8 @@ class TestDoctorCli(unittest.TestCase):
                 ),
             )
             runner = CliRunner()
-            result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
+            with patch("shrinkray.service.toolchain_problems", return_value=[]):
+                result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
             self.assertEqual(result.exit_code, 1, result.output)
             self.assertIn("dead path", result.output)
             self.assertIn("gone.mkv", result.output)
@@ -554,3 +556,95 @@ class TestEncodeInPlace(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertTrue((out / "one.mkv").exists(), "the output was not written")
         self.assertEqual(self.movie.read_bytes(), b"x" * 100, "the source was touched")
+
+
+class TestToolchainPreflight(unittest.TestCase):
+    """Issue #132: an unusable toolchain is refused before any work starts.
+
+    doctor reported "Library is healthy" on a host that cannot measure a single
+    file, and the app served jobs it could only fail. The libvmaf probe existed
+    but only lazily from the encode path, and nothing checked that HandBrakeCLI
+    knows the svt_av1 encoder at all.
+    """
+
+    def test_a_missing_handbrake_is_reported_with_the_minimum_version(self) -> None:
+        from shrinkray import service
+
+        with patch("shrinkray.tools.handbrake.find_handbrake", return_value=None):
+            problems = service.toolchain_problems()
+        handbrake = [p for p in problems if "HandBrakeCLI" in p]
+        self.assertEqual(len(handbrake), 1, problems)
+        self.assertIn("1.6", handbrake[0], "the minimum version must be named")
+
+    def test_a_handbrake_without_svt_av1_is_reported(self) -> None:
+        from shrinkray import service
+
+        with (
+            patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+            patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=False),
+            patch("shrinkray.tools.handbrake.handbrake_version", return_value="1.4.2"),
+        ):
+            problems = service.toolchain_problems()
+        handbrake = [p for p in problems if "svt_av1" in p]
+        self.assertEqual(len(handbrake), 1, problems)
+        self.assertIn("1.4.2", handbrake[0], "the actual version must be named")
+        self.assertIn("1.6", handbrake[0], "the minimum version must be named")
+
+    def test_an_unmeasurable_vmaf_is_reported(self) -> None:
+        from shrinkray import service
+
+        with (
+            patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+            patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
+            patch(
+                "shrinkray.tools.vmaf.detect_vmaf_style",
+                side_effect=RuntimeError("ffmpeg has no libvmaf filter!"),
+            ),
+        ):
+            problems = service.toolchain_problems()
+        vmaf = [p for p in problems if "VMAF" in p]
+        self.assertEqual(len(vmaf), 1, problems)
+        self.assertIn("no libvmaf filter", vmaf[0])
+
+    def test_a_complete_toolchain_reports_nothing(self) -> None:
+        from shrinkray import service
+
+        with (
+            patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+            patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
+            patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+        ):
+            self.assertEqual(service.toolchain_problems(), [])
+
+    def test_the_app_refuses_to_start_on_a_broken_toolchain(self) -> None:
+        from shrinkray import app as app_module
+
+        with (
+            patch("shrinkray.tools.handbrake.find_handbrake", return_value=None),
+            patch(
+                "shrinkray.tools.vmaf.detect_vmaf_style",
+                side_effect=RuntimeError("ffmpeg has no libvmaf filter!"),
+            ),
+            patch.object(app_module, "allow_roots"),
+            patch.object(app_module, "AppState"),
+            self.assertRaises(ValueError) as raised,
+        ):
+            app_module.run_app(Path("unused.db"))
+        message = str(raised.exception)
+        self.assertIn("unusable toolchain", message)
+        self.assertIn("HandBrakeCLI", message)
+        self.assertIn("libvmaf", message)
+
+    def test_the_doctor_refuses_a_broken_toolchain(self) -> None:
+        """doctor must fail loudly instead of reporting a healthy library."""
+        from shrinkray import service
+
+        with (
+            patch("shrinkray.tools.handbrake.find_handbrake", return_value=None),
+            patch(
+                "shrinkray.tools.vmaf.detect_vmaf_style",
+                side_effect=RuntimeError("ffmpeg has no libvmaf filter!"),
+            ),
+        ):
+            problems = service.toolchain_problems()
+        self.assertEqual(len(problems), 2, problems)

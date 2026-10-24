@@ -1183,6 +1183,7 @@ def doctor(
         raise typer.Exit(1)
 
     from shrinkray.service import doctor as run_doctor
+    from shrinkray.service import toolchain_problems
 
     connection = db.connect(db_file)
     try:
@@ -1190,9 +1191,22 @@ def doctor(
     finally:
         connection.close()
 
-    if not findings:
+    # the toolchain is checked FIRST: "library is healthy" on a host that
+    # cannot measure a single file is the honest-failure rule broken
+    problems = toolchain_problems()
+    for problem in problems:
+        log_error(problem)
+
+    if not findings and not problems:
         console.print("[green]Library is healthy: no findings.[/green]")
         return
+    if not findings:
+        console.print(
+            "[green]The library itself is healthy: no findings.[/green] The "
+            "toolchain above cannot do the one thing this tool does, so this is "
+            "not a usable host."
+        )
+        raise typer.Exit(1)
     table = Table(title=f"Doctor findings ({len(findings)})", title_justify="left")
     table.add_column("File", overflow="fold")
     table.add_column("Issue", overflow="fold")

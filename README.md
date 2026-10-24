@@ -185,7 +185,8 @@ uv sync
 #    distro is old (a static build also ships libvmaf - verified working)
 sudo apt install ffmpeg        # or: see johnvansickle.com static builds
 
-# 3. HandBrake CLI (optional - the tool degrades gracefully without it)
+# 3. HandBrake CLI >= 1.6 (required for AV1 output: it needs the svt_av1
+#    encoder id, which older builds do not know)
 sudo apt install handbrake-cli
 
 # 4. try it
