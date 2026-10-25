@@ -589,6 +589,25 @@ def retained_list(conn: sqlite3.Connection = Depends(db_access)) -> list[dict]:
     ]
 
 
+def _reveal_available() -> bool:
+    """Whether this host can open a file manager window (issue #239).
+
+    The reveal action spawns the OS opener; a container has no desktop
+    and no opener binary, so the button hides instead of promising a
+    folder window that would end in a 500. Windows has os.startfile
+    built in; elsewhere the opener binary decides.
+
+    Returns:
+        bool: True when a reveal can plausibly work here.
+    """
+    if os.name == "nt":
+        return True
+    import shutil as _shutil
+
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    return _shutil.which(opener) is not None
+
+
 @app.get("/api/status")
 def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     """Returns the app status: queue depth, running job, watcher state.
@@ -615,6 +634,10 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         # an edited config.json that was NOT applied (issue #247): the app
         # keeps running on the previous settings, and the operator must see why
         "config_error": config_module.config_error,
+        # the reveal capability (issue #239): a container has no desktop and
+        # no opener binary, so the button hides instead of promising a
+        # folder window that would end in a 500
+        "reveal_available": _reveal_available(),
     }
 
 
