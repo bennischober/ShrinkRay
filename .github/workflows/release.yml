@@ -90,6 +90,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Smoke-test the image (one-shot CLI)
+        # the entrypoint is `shrinkray` (issue #242): arguments must reach the
+        # CLI, not be appended to `serve`
+        run: |
+          docker run --rm ${{ env.IMAGE }}:${{ github.ref_name }} --help | grep -q "encode"
+          docker run --rm ${{ env.IMAGE }}:${{ github.ref_name }} encode --help | grep -q -- "--dry-run"
+
       - name: Smoke-test the image (boot + healthcheck)
         run: |
           docker run -d --name smoke \

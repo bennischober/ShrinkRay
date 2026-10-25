@@ -130,26 +130,26 @@ USER shrinkray
 # local dev run never starts encoding.
 COPY container-config.json /app/config.json
 
+# `shrinkray` is the entrypoint so the image runs either mode (issue #242): no
+# arguments start the resident server below, any arguments are one CLI command,
+# e.g. `docker run --rm -v lib:/media <image> encode /media/film.mkv`.
 # --root is not optional on Linux: the default allowlist is the current
 # directory when no drive root exists, so without it every library path is a 403.
-# serve is the resident mode's name (issue #202); `app` stays as a hidden
-# alias so this entrypoint and every existing deployment keep working. The
-# config comes from $SHRINKRAY_CONFIG (compose points it at /data/config.json,
-# the operator's mount) with the baked /app/config.json as the fallback when
-# nothing is set or mounted — issue #236 part 3: an explicit --config here
-# would override the operator's mount, so the entrypoint passes none.
-ENTRYPOINT ["shrinkray", "serve", "--db", "/data/metadata.db", "--host", "0.0.0.0", "--root", "/media"]
-CMD []
+# serve is the resident mode's name (issue #202); `app` stays a hidden alias.
+# The config comes from $SHRINKRAY_CONFIG (compose points it at
+# /data/config.json, the operator's mount) with the baked /app/config.json as
+# the fallback when nothing is set or mounted — issue #236 part 3: an explicit
+# --config here would override the operator's mount, so the command passes none.
+ENTRYPOINT ["shrinkray"]
+CMD ["serve", "--db", "/data/metadata.db", "--host", "0.0.0.0", "--root", "/media"]
 
 EXPOSE 8420
 
-# /api/status is the app's own summary; no new endpoint is needed. The app
-# requires the token on every request of a non-loopback bind (issue #36), and
-# the container binds 0.0.0.0 — so the healthcheck sends it too (the compose
-# healthcheck already did; the image-level one used to 401, found by the #165
-# smoke test).
+# /api/status is the app's own summary; no new endpoint is needed. The script
+# sends the token (the bind is non-loopback, issue #36) and reports a one-shot
+# CLI container as healthy, since only the server has a status to check (#242).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["python", "-c", "import os,urllib.request,sys; req=urllib.request.Request('http://127.0.0.1:8420/api/status', headers={'Authorization': 'Bearer '+os.environ['SHRINKRAY_TOKEN']}); sys.exit(0 if urllib.request.urlopen(req, timeout=3).status == 200 else 1)"]
+  CMD ["python", "/app/tools/healthcheck.py"]
 
 # ── stage 4: the dev target (the gate runs inside it) ─────────────────────
 FROM runtime AS dev

@@ -14,10 +14,10 @@ stated with the reason.
 > (PRODUCT.md "Deployment target"): the WebUI button opens the read-only dashboard,
 > the Console button opens a shell that prints what to type (`shrinkray setup` to
 > configure, `shrinkray encode /media/<path>` for one file). That changes three
-> things below, none built yet: `/data` becomes the appdata folder holding *all*
-> operator state (config, database, pause flag, generated token), the image needs
-> `shrinkray` as its entrypoint so the console can run any command (issue #242), and
-> the fixed-UID decision is reopened for `PUID`/`PGID`.
+> things below: `/data` becomes the appdata folder holding *all* operator state
+> (config, database, pause flag, generated token), the image takes `shrinkray` as its
+> entrypoint so the console can run any command (issue #242, **done** — see *One-shot
+> runs*), and the fixed-UID decision is reopened for `PUID`/`PGID`.
 
 ## What shipped
 
@@ -63,7 +63,10 @@ stated with the reason.
   (`/app`) finds it. Before this fix the entrypoint's `--config` overrode the env var,
   so a mounted config was silently dead.
 - **Healthcheck** on `GET /api/status`, which is the app's own summary; no new
-  endpoint was needed.
+  endpoint was needed. It lives in `tools/healthcheck.py` and checks only a server:
+  a one-shot CLI container reports healthy rather than turning `unhealthy` for the
+  hours an encode takes (issue #242). Docker still shows a *stopped* container as
+  `unhealthy`; that is Docker's bookkeeping, not a failed check.
 - **CPU quota is honoured.** `os.cpu_count()` reports the machine, not the
   container's share, so `resources.cpu_count()` prefers `os.process_cpu_count()`
   (3.13+) and falls back for 3.10-3.12. Without it a `--cpus=4` container would
@@ -201,8 +204,59 @@ SHRINKRAY_TOKEN=... MEDIA_DIR=/path/to/library docker compose up -d
 ```
 
 The healthcheck calls `GET /api/status` with the token. `--root /media` is in the
-entrypoint because the default allowlist on Linux is the working directory, so
+default command because the default allowlist on Linux is the working directory, so
 without it every library path is a 403.
+
+The image's entrypoint is `shrinkray` and its default command is `serve --db
+/data/metadata.db --host 0.0.0.0 --root /media` (issue #242). Anything you pass after the
+image name **replaces that whole command**: to change a server flag, spell out the full
+`serve ...` command, e.g. `docker run ... <image> serve --db /data/metadata.db --host
+0.0.0.0 --root /media --port 9000`.
+
+## One-shot runs (no server)
+
+The image runs either mode. With no arguments it starts the resident server; with
+arguments it runs one CLI command and exits. Nothing is installed on the host: ffmpeg
+(with libvmaf) and HandBrakeCLI come from the image.
+
+```bash
+IMAGE=ghcr.io/bennischober/shrinkray:latest
+
+# what would change, without writing anything
+docker run --rm -v /srv/media:/media "$IMAGE" encode /media/Movies --dry-run
+
+# encode one file in place: the original is renamed to <name>.shrinkray-original and kept
+docker run --rm \
+  -v /srv/media:/media \
+  -v /srv/shrinkray-scratch:/tmp/shrinkray \
+  "$IMAGE" encode /media/Movies/film.mkv
+
+# predict without encoding
+docker run --rm -v /srv/media:/media "$IMAGE" plan /media/Movies
+```
+
+A one-shot run needs no token, no published port and no database: it is the same
+stateless CLI as a native install. Things to know:
+
+- **Paths are container paths.** Mount the library at `/media` and name files as
+  `/media/...`.
+- **Mount scratch for anything film-sized.** Probes and verification write to
+  `/tmp/shrinkray`; without a volume that lands in the container's writable layer.
+- **The library must be writable by uid 1000** (the image's user) for an in-place
+  encode. Runtime `PUID`/`PGID` is issue #248; running the image under another
+  `--user` is untested, and its built-in scratch folder belongs to uid 1000.
+- **The config is the image's** (`/app/config.json`, found from the working directory:
+  the common video extensions; `auto_backlog` is irrelevant to a one-shot run). To use
+  your own, mount it and set `-e SHRINKRAY_CONFIG=/data/config.json` (the same
+  resolution the server uses, issue #236) or pass `--config`.
+- **A stateless run records nothing**, so `shrinkray retained list` has no database
+  to read: the original sits beside the encoded file as `<name>.shrinkray-original`.
+  To list what the *resident* app retained, run `retained list --db /data/metadata.db`
+  with its `/data` volume mounted.
+- **Detach anything long.** An encode runs for as long as the container does; start it
+  with `-d` instead of `--rm` in the foreground and follow it with `docker logs -f`, so
+  a closed terminal cannot take it down mid-run. A cancelled encode leaves the source in
+  place: the swap only happens once the encode has finished.
 
 ## Observing it (issue #168)
 

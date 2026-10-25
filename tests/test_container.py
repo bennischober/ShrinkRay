@@ -5,7 +5,10 @@ the CPU share it is given is the one it plans with. Both are checkable here
 without building the image, which is what keeps them from rotting.
 """
 
+import json
 import os
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,6 +16,9 @@ from unittest import mock
 from shrinkray.tools import process as resources
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "tools"))
+
+import healthcheck  # noqa: E402 - tools/ is not a package; the path is set above
 
 
 class TestCpuCount(unittest.TestCase):
@@ -126,11 +132,62 @@ class TestDockerfile(unittest.TestCase):
         self.assertIn("/media", self.text)
 
     def test_the_healthcheck_uses_the_status_route(self) -> None:
-        self.assertIn("/api/status", self.text)
+        self.assertIn("tools/healthcheck.py", self.text)
+        self.assertIn("/api/status", (REPO / "tools" / "healthcheck.py").read_text())
+
+    def test_the_cli_is_the_entrypoint_and_serve_the_default_command(self) -> None:
+        """The image runs either mode (issue #242): with no arguments the
+        resident server starts, any arguments are one CLI command. A `serve`
+        baked into ENTRYPOINT appended `encode ...` to the server's argv."""
+        runtime = self.text.split("FROM runtime AS dev")[0]
+        entrypoints = [ln for ln in runtime.splitlines() if ln.startswith("ENTRYPOINT ")]
+        commands = [ln for ln in runtime.splitlines() if ln.startswith("CMD ")]
+        self.assertEqual(len(entrypoints), 1)
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(json.loads(entrypoints[0].removeprefix("ENTRYPOINT ")), ["shrinkray"])
+        command = json.loads(commands[0].removeprefix("CMD "))
+        self.assertEqual(command[0], "serve")
+        self.assertIn("--root", command)
+        self.assertIn("/data/metadata.db", command)
 
     def test_the_scratch_dir_is_a_volume(self) -> None:
         """Probe scratch is sized to the film; the container layer is not."""
         self.assertIn("/tmp/shrinkray", self.text)  # noqa: S108 - asserting the Dockerfile text, not opening it
+
+
+class TestHealthcheck(unittest.TestCase):
+    """tools/healthcheck.py (issue #242): only the server has a status to
+    check. A one-shot CLI container must not turn `unhealthy` for the hours an
+    encode takes, and must never need a token it was not given."""
+
+    def _cmdline(self, tmp: str, *argv: str) -> Path:
+        path = Path(tmp) / "cmdline"
+        path.write_bytes(b"\0".join(arg.encode() for arg in argv) + b"\0")
+        return path
+
+    def test_the_server_is_recognised(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for command in ("serve", "app"):
+                with self.subTest(command=command):
+                    cmdline = self._cmdline(
+                        tmp, "/app/.venv/bin/python", "/app/.venv/bin/shrinkray", command, "--db"
+                    )
+                    self.assertTrue(healthcheck.runs_server(cmdline))
+
+    def test_a_one_shot_command_is_healthy_without_a_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cmdline = self._cmdline(
+                tmp, "/app/.venv/bin/python", "/app/.venv/bin/shrinkray", "encode", "/media/x.mkv"
+            )
+            with mock.patch.object(healthcheck.urllib.request, "urlopen") as urlopen:
+                self.assertEqual(healthcheck.main(cmdline), 0)
+            urlopen.assert_not_called()
+
+    def test_a_path_segment_named_app_is_not_the_server(self) -> None:
+        """`/app/...` paths are whole argv elements, never the `app` alias."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cmdline = self._cmdline(tmp, "/app/.venv/bin/shrinkray", "plan", "/media/app")
+            self.assertFalse(healthcheck.runs_server(cmdline))
 
 
 if __name__ == "__main__":

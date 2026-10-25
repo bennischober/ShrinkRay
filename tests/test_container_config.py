@@ -41,8 +41,13 @@ class TestContainerConfig(unittest.TestCase):
         resolution order), so the mounted config was silently dead. The
         entrypoint passes none; the env var decides."""
         content = DOCKERFILE.read_text(encoding="utf-8")
-        entrypoint = next(line for line in content.splitlines() if line.startswith("ENTRYPOINT"))
-        self.assertNotIn("--config", entrypoint, "the entrypoint pins a config path again")
+        # since issue #242 the server's argv is ENTRYPOINT + CMD of the runtime
+        # stage; a --config in either one would pin the path again
+        runtime = content.split("FROM runtime AS dev")[0]
+        argv = [ln for ln in runtime.splitlines() if ln.startswith(("ENTRYPOINT", "CMD"))]
+        self.assertEqual(len(argv), 2)
+        for line in argv:
+            self.assertNotIn("--config", line, "the server's command pins a config path again")
 
     def test_the_two_argument_sets_resolve_differently_and_correctly(self) -> None:
         """The issue's required test: resolve_config_path under the compose
