@@ -80,7 +80,7 @@ window.
 
 The 2026-10-23 note (after a friend's Textual client) concluded that a full TUI
 would duplicate the dashboard and proposed only a rich `Live` layout inside a
-`shrinkray watch` command for SSH monitoring. That command no longer exists (the
+watch subcommand for SSH monitoring. That command no longer exists (the
 watch loop runs inside `serve`, issue #202), and the dashboard became read-only
 (issue #134), which removed the duplication argument. Two patterns from that note
 remain adopted: PEP 723 inline script dependencies (`scripts/verify_fullmovie.py`,
