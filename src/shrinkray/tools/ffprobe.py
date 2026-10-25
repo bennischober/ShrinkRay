@@ -89,6 +89,19 @@ def run_ffprobe(path: Path) -> dict:
             capture_output=True,
             timeout=FFPROBE_TIMEOUT,
         )
+    except FileNotFoundError:
+        # the interpreter's error for an absent binary is errno-13 on WSL
+        # (its /init interop turns the failed execve into EACCES) - naming
+        # the raw OSError sent the operator to chmod a file that does not
+        # exist (issue #195)
+        raise RuntimeError(
+            f"ffprobe not found! Install ffmpeg (https://ffmpeg.org/download.html) "
+            f"so '{path}' can be probed."
+        ) from None
+    except PermissionError:
+        raise RuntimeError(
+            "ffprobe could not be executed: check that the binary is executable, or install ffmpeg"
+        ) from None
     except (OSError, subprocess.SubprocessError) as e:
         raise RuntimeError(f"ffprobe failed for '{path}': {e}") from e
 

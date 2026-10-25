@@ -18,6 +18,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **`scan` fails honestly when every file failed to read** (issue #196): the run guarded its output on the FOUND list, so an all-error scan exited 0 and wrote a fabricated report (`Total;None;0` in the CSV). Now the outputs (table, `movies.txt`, CSV) are written only when at least one file was read, an all-error scan exits 1 with a summary naming the count, a partial scan keeps exit 0 with its per-file errors, and the empty-folder case keeps its warning and exit 0.
 
+- **A missing ffprobe/ffmpeg is reported as missing, not as "Permission denied"** (issue #195): on WSL a failed execve of an absent binary surfaces as `PermissionError [Errno 13]`, so the raw-OSError interpolation sent the operator to chmod a file that does not exist. `run_ffprobe` and `detect_vmaf_style` now catch `FileNotFoundError` (names the binary and the install action) and `PermissionError` (names the executable-bit cause) separately; every other failure keeps its old message.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

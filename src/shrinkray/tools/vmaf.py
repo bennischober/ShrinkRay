@@ -55,10 +55,23 @@ def detect_vmaf_style(binary: str = FFMPEG_BINARY) -> str:
             capture_output=True,
             timeout=FFPROBE_TIMEOUT,
         )
+    except FileNotFoundError:
+        # errno-13 on WSL (its /init interop turns the failed execve into
+        # EACCES): naming the raw OSError sent the operator to chmod a file
+        # that does not exist (issue #195)
+        raise RuntimeError(
+            f"ffmpeg ('{binary}') not found! Install a build with libvmaf support "
+            f"(https://ffmpeg.org/download.html)."
+        ) from None
+    except PermissionError:
+        raise RuntimeError(
+            f"ffmpeg ('{binary}') could not be executed: check that the binary "
+            f"is executable, or install a build with libvmaf support."
+        ) from None
     except (OSError, subprocess.SubprocessError) as e:
         raise RuntimeError(
-            f"ffmpeg ('{binary}') not found or did not answer within "
-            f"{FFPROBE_TIMEOUT}s! Install a build with libvmaf support. ({e})"
+            f"ffmpeg ('{binary}') did not answer within {FFPROBE_TIMEOUT}s! "
+            f"Install a build with libvmaf support. ({e})"
         ) from e
     options = proc.stdout.decode(errors="replace")
     if "libvmaf" not in options and "libvmaf" not in proc.stderr.decode(errors="replace"):
