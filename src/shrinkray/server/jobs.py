@@ -859,6 +859,14 @@ def execute_encode(
                 "cancelled": False,
             }
         root = first[0].parent
+        # the backlog's payload names a DIRECTORY (the scanned root, e.g.
+        # /media): staging inside its PARENT would create the working dir at
+        # `/` in the container and the job would fail with PermissionError on
+        # every boot (issue #335). The watcher stages inside roots[0] itself
+        # (watch.py); the job must agree. A single-file payload keeps the
+        # parent form, so its staging stays on the file's own filesystem.
+        if first[0].is_dir():
+            root = first[0]
     else:
         root = None
     staging: contextlib.AbstractContextManager[str] = (
