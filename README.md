@@ -316,6 +316,45 @@ the next start.
 > Decisions stay consistent because probing measures and decides with the local
 > toolchain.
 
+## Which files get encoded: the gate chain
+
+Every file walks the same chain of cheap questions before any expensive step
+runs — the same order for `encode`, `plan`, the boot backlog and the
+watchdog, because there is exactly one decision path (issue #202 removed the
+last fork). A gate that fails skips the file cheaply; no later gate runs.
+
+| # | Gate | Question | Default | If it fails |
+|---|---|---|---|---|
+| 1 | Duration | At least 90 s? | fixed | skip — not a movie |
+| 2 | Resolution | At least 1080p tall? (`eligibility.min_source_height`) | 1080p | skip — a lower-resolution source saves too little |
+| 3 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
+| 4 | Codec age | H.264 or newer? | `h264` floor | skip — an older codec is never re-encoded (decision: issue #224) |
+| 5 | Bar detection | Which bars does EVERY sampled frame share? | — | never skips — "no bars" is a normal outcome |
+| 6 | CRF search | Largest CRF that meets the VMAF target? | 96 | skip — target unreachable |
+| 7 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
+| 8 | Encode | One full encode at the chosen CRF, with the crop | — | — |
+
+The two rows people ask about:
+
+- **Rows 2-4 are the "not worth it" gates** you asked for: a 480p DVD rip
+  fails row 2 today, an MPEG-2/Xvid/VC-1 rip fails row 4, and a small file
+  fails row 3 the moment you set a floor. All three are config keys under
+  `eligibility`, and all three are checked before any ffmpeg probe runs — a
+  skipped file costs one `ffprobe`, not an encode.
+- **Row 7 is the real answer to "is this file already efficient?"**: the
+  search measures a size probe at the most aggressive CRF and again at the
+  chosen CRF, and skips when the encode would grow the file. "Already
+  small" is a measurement per file, not a threshold — a well-encoded 4 GB
+  H.264 movie is skipped by evidence even with every floor set to 0.
+
+Bars are deliberately NOT a gate: a file is never encoded *in order to*
+remove bars (issue #128), but any file that gets encoded for size reasons
+leaves with its bars removed — the encoder is already re-encoding every
+frame, so the crop is free. Whether older codecs with bars should become
+candidates is an open product decision (issue #224). The full walk-through
+with every scenario and the history of each gate is
+[docs/encode-decision.md](docs/encode-decision.md).
+
 ## Configuration
 
 Optional `config.json` (defaults are used when missing). `file.extensions`
