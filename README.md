@@ -482,10 +482,11 @@ docker pull ghcr.io/bennischober/shrinkray:latest
 
 docker run -d --name shrinkray-app \
   --publish 8420:8420 \
-  --env SHRINKRAY_TOKEN='a-long-random-secret' \
   --volume /srv/media:/media \
   --volume /srv/shrinkray-data:/data \
   ghcr.io/bennischober/shrinkray:latest
+
+cat /srv/shrinkray-data/token   # the dashboard token, generated on first start
 ```
 
 The same image runs the one-shot CLI with no server, no token and nothing installed
@@ -516,9 +517,10 @@ docker build --target dev     -t shrinkray:dev   .
 
 `dev` runs the seven gate commands inside the image. `runtime` is the deployment
 shape; see [docs/docker.md](docs/docker.md) for the volumes, the `--root`
-requirement on Linux, and the fact that publishing a port **requires**
-`SHRINKRAY_TOKEN` (the app refuses to bind `0.0.0.0` without one, and there is
-no TLS - terminate it at a reverse proxy).
+requirement on Linux, and the fact that publishing a port **requires** a token:
+the image generates one into `/data/token` when `SHRINKRAY_TOKEN` is unset (the
+app refuses to bind `0.0.0.0` without one, and there is no TLS - terminate it at
+a reverse proxy).
 
 ### Web UI (ui/)
 The dashboard is a Svelte 5 + Vite + TypeScript app in `ui/`. Node.js is only

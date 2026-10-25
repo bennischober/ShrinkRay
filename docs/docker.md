@@ -83,10 +83,15 @@ stated with the reason.
 
 ## Two things a reader must know
 
-1. **Publishing a port requires a token.** The app refuses to bind a non-loopback
-   address without `SHRINKRAY_TOKEN` (issue #36), so the compose file passes one and
-   the healthcheck sends it. There is still no TLS: terminate it at a reverse proxy,
-   and do not read the token as making a plain-HTTP port safe.
+1. **Publishing a port requires a token, and the image makes one.** The app refuses
+   to bind a non-loopback address without a token (issue #36). Set `SHRINKRAY_TOKEN`
+   to choose it yourself; leave it unset and the server generates one on first start
+   into `/data/token` (`SHRINKRAY_TOKEN_FILE`, issue #249): 32 random bytes, file mode
+   0600, reused on every later start, never logged. Read it from the appdata folder
+   (`cat <data folder>/token`) and paste it into the dashboard once. Delete the file
+   to have a new one generated. The healthcheck reads the same source. There is still
+   no TLS: terminate it at a reverse proxy, and do not read the token as making a
+   plain-HTTP port safe.
 2. **The library is mounted writable because Mode B encodes in place.** The resident
    app's watch mode rewrites files at their own paths: the encode lands in a staging
    folder inside the library, is verified, and is then swapped in with the original
@@ -202,16 +207,17 @@ docker pull ghcr.io/bennischober/shrinkray:latest
 
 docker run -d --name shrinkray \
   -p 8420:8420 \
-  -e SHRINKRAY_TOKEN='a-long-random-secret' \
   -v /srv/media:/media \
   -v /srv/shrinkray-data:/data \
   ghcr.io/bennischober/shrinkray:latest
+
+cat /srv/shrinkray-data/token     # the generated dashboard token
 ```
 
 Or via compose (un-comment the `image:` line, comment the `build:` block):
 
 ```bash
-SHRINKRAY_TOKEN=... MEDIA_DIR=/path/to/library docker compose up -d
+MEDIA_DIR=/path/to/library docker compose up -d   # SHRINKRAY_TOKEN=... to choose the token
 ```
 
 The healthcheck calls `GET /api/status` with the token. `--root /media` is in the
@@ -265,11 +271,11 @@ nothing that comes with the image. One flat folder, one file per kind of state:
 |---|---|
 | `config.json` | the settings (created from the image's defaults on first start, issue #247) |
 | `metadata.db` (+ `-wal`, `-shm`) | the catalog, plans, encodes and retained originals |
+| `token` | the generated dashboard token, mode 0600, when `SHRINKRAY_TOKEN` is unset (issue #249) |
 | `logs/` | failure bundles, written beside the database |
 
-New state goes into the same folder under a name of its own (the generated dashboard
-token of #249, the pause flag of #250), never into the image and never into the
-library.
+New state goes into the same folder under a name of its own (the pause flag of #250),
+never into the image and never into the library.
 
 ## One-shot runs (no server)
 
