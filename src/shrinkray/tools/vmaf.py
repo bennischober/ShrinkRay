@@ -148,7 +148,17 @@ def build_vmaf_command(
         "format=yuv420p10le"
     )
 
-    if hdr:
+    if hdr and crop is not None:
+        # crop BEFORE tone-map (issue #307): the reference's baked bars must
+        # not influence the tone-map, and the distorted input arrives already
+        # cropped by HandBrake (--crop), so the sizes only match after the
+        # reference is cropped to the same geometry.
+        top, bottom, left, right = crop
+        filtergraph = (
+            f"[1:v]crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}[rc];"
+            f"[rc]{tonemap}[r];[0:v]{tonemap}[d];[d][r]{vmaf}"
+        )
+    elif hdr:
         # tone-map both sides to their SDR twins before comparing
         filtergraph = f"[0:v]{tonemap}[d];[1:v]{tonemap}[r];[d][r]{vmaf}"
     elif crop is not None:
