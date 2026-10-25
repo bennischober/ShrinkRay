@@ -149,7 +149,8 @@ the claim, because `--verify` arrived in v0.11.7.
   a probe cheap; whether 20 s would move the score is unmeasured (#306's baseline covers it).
 - **HDR is tone-mapped to SDR before scoring** (`tools/vmaf.py:145-149`, both inputs through the same
   hable chain): the v0.6.1 model is SDR-trained, so scoring the PQ signal directly would measure the
-  tone-mapping mismatch, not the encode. ab-av1 scores the PQ signal directly. HDR carries a separate
+  tone-mapping mismatch, not the encode. When bars are present the reference is cropped first
+  (issue #307's fix) so the bars cannot influence the tone-map and the geometries match. ab-av1 scores the PQ signal directly. HDR carries a separate
   target (`HDR_VMAF_OFFSET`, `engine/encoders.py:32`) for the same reason.
 - **Probe samples encode at SVT-AV1 preset 5, the final encode at preset 3** (`config.py`, issue #22):
   a probe measures the CRF, and a slower preset is believed to be at least as good at the same CRF, so
