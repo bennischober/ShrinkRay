@@ -303,7 +303,7 @@ def encode(
     cancel = threading.Event()
     _previous_handlers: dict = {}
 
-    def _cancel_on_signal(signum, frame):
+    def _cancel_on_signal(signum: int, frame: object) -> None:
         cancel.set()
 
     for sig in (
@@ -315,7 +315,7 @@ def encode(
         with contextlib.suppress(OSError, ValueError):
             _previous_handlers[sig] = _signal.signal(sig, _cancel_on_signal)
 
-    def _restore_signals():
+    def _restore_signals() -> None:
         for sig, handler in _previous_handlers.items():
             with contextlib.suppress(OSError, ValueError):
                 _signal.signal(sig, handler)
@@ -793,7 +793,7 @@ def plan(
     cancel = threading.Event()
     _previous_handlers: dict = {}
 
-    def _cancel_on_signal(signum, frame):
+    def _cancel_on_signal(signum: int, frame: object) -> None:
         cancel.set()
 
     for sig in (
@@ -805,7 +805,7 @@ def plan(
         with contextlib.suppress(OSError, ValueError):
             _previous_handlers[sig] = _signal.signal(sig, _cancel_on_signal)
 
-    def _restore_signals():
+    def _restore_signals() -> None:
         for sig, handler in _previous_handlers.items():
             with contextlib.suppress(OSError, ValueError):
                 _signal.signal(sig, handler)
