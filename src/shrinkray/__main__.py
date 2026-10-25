@@ -33,7 +33,6 @@ from shrinkray.engine.scan import (
     scan_movies,
 )
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
-from shrinkray.helpers import calc_time
 from shrinkray.logger import log, log_error
 from shrinkray.tools.process import (
     Cancelled as _EncodeCancelled,
@@ -70,89 +69,8 @@ __all__ = [
     "find_movies",
     "get_category",
     "get_name",
-    "print_summary",
-    "print_table",
     "scan_movies",
 ]
-
-
-def print_table(movies_by_category: dict, total_time: str | None, total_size: float) -> None:
-    """Prints the scanned movies as a rich table to the console.
-
-    Args:
-        movies_by_category (dict): Categories as keys and movie lists as values.
-        total_time (str | None): Total duration as 'HH:MM:SS' string.
-        total_size (float): Total size in GB.
-    """
-    table = Table(
-        title=f"Scanned {sum(len(m) for m in movies_by_category.values())} movies "
-        f"in {len(movies_by_category)} categories",
-        title_justify="left",
-        row_styles=["", "dim"],
-    )
-    table.add_column("Category", style="cyan", no_wrap=True, max_width=16)
-    table.add_column("Name", style="bold", max_width=28, overflow="ellipsis")
-    table.add_column("Duration", justify="right", no_wrap=True)
-    table.add_column("Size GB", justify="right", no_wrap=True)
-    table.add_column("GB/h", justify="right", no_wrap=True)
-    table.add_column("Codec", no_wrap=True)
-    table.add_column("Res", justify="center", no_wrap=True)
-    table.add_column("FPS", justify="right", no_wrap=True)
-    table.add_column("Bars", justify="center", no_wrap=True)
-    table.add_column("HDR", justify="center", no_wrap=True)
-
-    for category, movies in movies_by_category.items():
-        for index, movie in enumerate(movies):
-            dimensions = movie["dimensions"]
-            table.add_row(
-                category if index == 0 else "",
-                str(movie["name"]),
-                str(movie["duration"]),
-                f"{movie['size']:.2f}",
-                f"{movie['compression_rate']:.2f}",
-                str(movie["codec"]),
-                f"{dimensions['width']}x{dimensions['height']}",
-                str(movie["fps"]),
-                "yes" if movie["crop"] else "",
-                "yes" if movie["hdr"] else "",
-            )
-        # divider between categories
-        table.add_section()
-
-    # total row
-    table.add_row(
-        "",
-        "Total",
-        str(total_time),
-        f"{total_size:.2f}",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        style="bold green",
-    )
-
-    console.print(table)
-
-
-def print_summary(movies_by_category: dict, total_time: str | None, total_size: float) -> None:
-    """Prints a summary of the scanned movies to the console.
-
-    Args:
-        movies_by_category (dict): Categories as keys and movie lists as values.
-        total_time (str | None): Total duration as 'HH:MM:SS' string.
-        total_size (float): Total size in GB.
-    """
-    movie_count = sum(len(movies) for movies in movies_by_category.values())
-    console.print(
-        f"[green]Scanned [bold]{movie_count}[/bold] movies "
-        f"in [bold]{len(movies_by_category)}[/bold] categories."
-    )
-    console.print(
-        f"Total duration: [bold]{total_time}[/bold], total size: [bold]{total_size:.2f} GB[/bold]"
-    )
 
 
 @app.command("app", hidden=True)
@@ -971,3 +889,48 @@ def doctor(
         table.add_row(finding.movie, finding.issue, finding.detail or "—")
     console.print(table)
     raise typer.Exit(1)  # non-zero exit: scripts/cron can detect unhealth
+
+
+def calc_time(lhs: str | None, rhs: str | None) -> str | None:
+    """Adds two 'HH:MM:SS' time strings and returns the sum.
+
+    Args:
+        lhs (str | None): The first time as 'HH:MM:SS' string (or None).
+        rhs (str | None): The second time as 'HH:MM:SS' string (or None).
+
+    Returns:
+        str | None: The sum as 'HH:MM:SS' string.
+    """
+    if lhs is None:
+        return rhs
+    if rhs is None:
+        return lhs
+
+    lhs_parts = lhs.split(":")
+    if len(lhs_parts) < 2:
+        return rhs
+
+    rhs_parts = rhs.split(":")
+    if len(rhs_parts) < 2:
+        return lhs
+
+    try:
+        # add seconds first
+        seconds = int(float(lhs_parts[2])) + int(float(rhs_parts[2]))
+        # check for seconds > 60
+        minutes = int(seconds / 60)
+        # add rest to seconds
+        seconds = seconds % 60
+
+        # add existing minutes
+        minutes += int(lhs_parts[1]) + int(rhs_parts[1])
+        hours = int(minutes / 60)
+        minutes = minutes % 60
+
+        # add existing hours
+        hours += int(lhs_parts[0]) + int(rhs_parts[0])
+    except ValueError:
+        return lhs
+
+    # checks for putting a 0 before the time value
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
