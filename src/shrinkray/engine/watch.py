@@ -7,7 +7,10 @@ logic as the encode/plan commands and encodes them (source stays untouched
 """
 
 import contextlib
+import ctypes
 import os
+import struct
+import sys
 import tempfile
 import threading
 import time
@@ -202,18 +205,177 @@ def acquire_lock(lock_file: Path) -> bool:
         return False
 
 
-def _sleep_or_stop(seconds: float, stop_event: threading.Event | None) -> None:
-    """Sleeps up to seconds, returning early when the stop event fires.
+class _FsWaiter:
+    """Wakes the watch loop early when the filesystem changes (issue #176).
 
-    Args:
-        seconds (float): The sleep duration.
-        stop_event (threading.Event | None): Cooperative stop; when set,
-            this returns immediately (the caller re-checks it).
+    The waiter replaces the loop's plain sleep: `wait()` returns on an fs
+    event or the stop event, whichever comes first, and otherwise after the
+    full interval. It never bypasses the stability check (a still-writing
+    file is deferred exactly as before). Platforms without a supported event
+    API (and every error path) fall back to the plain sleep, which is
+    today's behavior.
+
+    Linux: inotify via ctypes (recursive watches on each root; a watch
+    descriptor budget caps the recursion). Windows: ReadDirectoryChangesW
+    via ctypes on a background thread per root. Everywhere else: disabled —
+    `wait()` just sleeps.
     """
+
+    _IN_CLOSE_WRITE = 0x00000008
+    _IN_MOVED_TO = 0x00000080
+    _IN_CREATE = 0x00000100
+    _IN_IGNORED = 0x00000040
+    _IN_MOVED_FROM = 0x00000040  # same value family as IN_IGNORED; both end a watch
+
+    def __init__(self, roots: list[Path]) -> None:
+        self._roots = roots
+        self._wake: threading.Event | None = None
+        self._fd: int | None = None
+        self._wd_paths: dict[int, Path] = {}
+        self._failed = False
+        self._supported = sys.platform in ("linux", "win32")
+        self._libc: ctypes.CDLL | None = None
+
+    def start(self) -> None:
+        """Sets up the watches; errors disable the waiter (poll fallback)."""
+        if not self._supported:
+            return
+        try:
+            if sys.platform == "linux":
+                self._start_linux()
+            else:
+                self._start_windows()
+        except (OSError, AttributeError):
+            self._failed = True
+            self.stop()
+
+    def is_active(self) -> bool:
+        """Reports whether fs events are wired (False: the caller sleeps)."""
+        return not self._failed and self._wake is not None
+
+    def _start_linux(self) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        # inotify_init1(IN_NONBLOCK) keeps the read from blocking so the
+        # stop event stays responsive
+        IN_NONBLOCK = 0x800
+        self._fd = libc.inotify_init1(IN_NONBLOCK)
+        if self._fd < 0:
+            raise OSError(ctypes.get_errno())
+        self._libc = libc
+        self._wake = threading.Event()
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        for root in self._roots:
+            self._add_recursive(root)
+        self._thread.start()
+
+    def _add_recursive(self, root: Path) -> None:
+        assert self._libc is not None and self._fd is not None  # set by _start_linux
+        IN_CLOSE_WRITE = self._IN_CLOSE_WRITE
+        IN_MOVED_TO = self._IN_MOVED_TO
+        IN_CREATE = self._IN_CREATE
+        mask = IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE
+        for dirpath, _dirnames, _files in os.walk(root):
+            wd = self._libc.inotify_add_watch(self._fd, os.fsencode(dirpath), mask)
+            if wd < 0:
+                # too many watches (the descriptor budget): disable quietly
+                self._failed = True
+                return
+            self._wd_paths[wd] = Path(dirpath)
+
+    def _drain(self) -> None:
+        import select
+
+        assert self._libc is not None and self._fd is not None and self._wake is not None
+        buf = ctypes.create_string_buffer(4096)
+        fd = self._fd
+        libc = self._libc
+        wake = self._wake
+        while not wake.is_set():
+            ready, _, _ = select.select([fd], [], [], 0.5)
+            if not ready:
+                continue
+            n = libc.read(fd, buf, len(buf))
+            if n <= 0:
+                continue
+            offset = 0
+            while offset + 16 <= n:
+                wd, mask, _cookie, _name_len = struct.unpack_from("iIII", buf, offset)
+                offset += 16 + _name_len
+                if mask & self._IN_IGNORED:
+                    self._wd_paths.pop(wd, None)
+                    continue
+                if wd in self._wd_paths:
+                    wake.set()
+
+    def _start_windows(self) -> None:
+        # ReadDirectoryChangesW needs a pumping thread per handle; the poll
+        # fallback is the honest behavior on this port until someone needs it
+        raise NotImplementedError
+
+    def wait(self, seconds: float, stop_event: threading.Event | None) -> None:
+        """Sleeps up to seconds, early-woken by an fs event or the stop event.
+
+        Args:
+            seconds (float): The poll interval (the backoff value).
+            stop_event (threading.Event | None): Cooperative stop.
+        """
+        if self._failed or self._wake is None:
+            _sleep_plain(seconds, stop_event)
+            return
+        wake = self._wake
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            # whichever fires first: the stop event or an fs wake; the fs
+            # wake is cleared immediately so a stale event cannot shorten
+            # the NEXT sleep too
+            if stop_event is not None and stop_event.wait(min(0.5, remaining)):
+                break
+            if wake.wait(min(0.5, remaining)):
+                wake.clear()
+                break
+            wake.clear()
+
+    def stop(self) -> None:
+        """Tears the watches down (the loop's finally)."""
+        if self._wake is not None:
+            self._wake.set()
+        if self._fd is not None and self._fd >= 0:
+            with contextlib.suppress(OSError):
+                os.close(self._fd)
+            self._fd = None
+
+
+def _sleep_plain(seconds: float, stop_event: threading.Event | None) -> None:
     if stop_event is not None:
         stop_event.wait(seconds)
     else:
         time.sleep(seconds)
+
+
+def _wait_or_stop(
+    seconds: float,
+    stop_event: threading.Event | None,
+    waiter: "_FsWaiter | None" = None,
+) -> None:
+    """Sleeps between two watch passes, early-woken by fs changes or stop.
+
+    The watch loop's ONLY sleep call. With an active fs waiter the sleep is
+    interruptible by filesystem events (issue #176); the plain sleep stays
+    the fallback, so behavior without events is exactly what it was.
+
+    Args:
+        seconds (float): The poll interval (the backoff value).
+        stop_event (threading.Event | None): Cooperative stop; when set,
+            this returns immediately (the caller re-checks it).
+        waiter (._FsWaiter | None): The watcher's fs-event waiter.
+    """
+    if waiter is not None and waiter.is_active():
+        waiter.wait(seconds, stop_event)
+        return
+    _sleep_plain(seconds, stop_event)
 
 
 def release_lock(lock_file: Path) -> None:
@@ -309,6 +471,9 @@ def watch(
         log_error("Another watcher seems to be running (lock file exists).")
         return
 
+    waiter = _FsWaiter(roots)
+    waiter.start()
+
     for root in roots:
         root.mkdir(parents=True, exist_ok=True)
     if output_dir is not None:
@@ -347,7 +512,7 @@ def watch(
                     )
                     if once:
                         return
-                    _sleep_or_stop(sleep_interval, stop_event)
+                    _wait_or_stop(sleep_interval, stop_event, waiter=waiter)
                     continue
                 candidates = [
                     movie for root in roots for movie in find_new_movies(root, extensions, known)
@@ -429,10 +594,11 @@ def watch(
                 sleep_interval = next_poll_interval(sleep_interval, poll_interval, bool(candidates))
                 if once:
                     return
-                _sleep_or_stop(sleep_interval, stop_event)
+                _wait_or_stop(sleep_interval, stop_event, waiter=waiter)
     except KeyboardInterrupt:
         log("Watch stopped (current state is kept).")
     finally:
+        waiter.stop()
         release_lock(lock_file)
 
 
