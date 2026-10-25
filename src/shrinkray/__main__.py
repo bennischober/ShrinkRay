@@ -354,16 +354,17 @@ def _swap_into_place(
     if not outcome.replaced:
         return
     retained = outcome.retained_path
+    gb = (outcome.size_after or 0) / (1024**3)
     if connection is not None:
         console.print(
             f"[green]Replaced '{source.name}': the original is retained at "
-            f"'{retained.name}' ({output.stat().st_size / (1024**3):.2f} GB); delete it "
+            f"'{retained.name}' ({gb:.2f} GB); delete it "
             f"when you are satisfied (see `shrinkray retained list`).[/green]"
         )
     else:
         console.print(
             f"[green]Replaced '{source.name}': the original is retained at "
-            f"'{retained.name}' ({output.stat().st_size / (1024**3):.2f} GB); delete it "
+            f"'{retained.name}' ({gb:.2f} GB); delete it "
             f"when you are satisfied. This run used no database, so the swap is "
             f"not in `retained list`.[/green]"
         )

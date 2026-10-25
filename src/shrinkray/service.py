@@ -59,11 +59,17 @@ class SwapOutcome:
         retained_path (Path | None): Where the original was moved (None when
             the swap was declined and the source was never touched).
         reason (str | None): Why the swap was declined (None on success).
+        size_before (int | None): The source's size before the swap (None
+            when declined); the caller's reporting needs it AFTER the swap,
+            when the staged file no longer exists.
+        size_after (int | None): The new file's size (None when declined).
     """
 
     replaced: bool
     retained_path: Path | None = None
     reason: str | None = None
+    size_before: int | None = None
+    size_after: int | None = None
 
 
 def swap_encode_into_place(
@@ -121,7 +127,12 @@ def swap_encode_into_place(
             size_after,
         )
     output.unlink(missing_ok=True)
-    return SwapOutcome(replaced=True, retained_path=retained)
+    return SwapOutcome(
+        replaced=True,
+        retained_path=retained,
+        size_before=size_before,
+        size_after=size_after,
+    )
 
 
 def _encode_discarded(connection: sqlite3.Connection | None, encode_id: int | None) -> None:
