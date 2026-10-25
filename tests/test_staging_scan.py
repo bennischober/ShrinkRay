@@ -55,7 +55,9 @@ class TestStagingPathsAreNeverCandidates(unittest.TestCase):
         deep.write_bytes(b"partial")
         found = engine_scan.find_movies(self.root, [".mkv"])
         self.assertEqual(found, [self.root / "movie.mkv"])
-        self.assertEqual(watch_mod.find_new_movies(self.root, [".mkv"], set()), [self.root / "movie.mkv"])
+        self.assertEqual(
+            watch_mod.find_new_movies(self.root, [".mkv"], set()), [self.root / "movie.mkv"]
+        )
 
     def test_the_predicate_lives_beside_the_names_it_filters(self) -> None:
         """One helper owns the rule, so the two walkers cannot drift apart.
