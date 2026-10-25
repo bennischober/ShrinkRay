@@ -10,7 +10,7 @@ file is the module map plus the rules that bind the whole package. `engine/`,
 
 | Question | Module | Notes |
 |---|---|---|
-| CLI commands, tables, progress | `__main__.py` (936 L) | typer: `encode`, `plan`, `serve` (+ hidden `app`), `retained`, `doctor`; no business logic |
+| CLI commands, tables, progress | `__main__.py` (936 L) | typer: `encode`, `plan`, `serve` (+ hidden `app`), `retained`, `doctor`; no business logic. `setup` (the TUI, issue #244) is decided, not built |
 | Config schema, defaults, flat facade | `config.py` (442 L) | pydantic sections + `Conf`; loading has no side effects |
 | sqlite schema, migrations, queries | `db.py` (1318 L) | `SCHEMA_VERSION = 16` (`db.py:10`), `MIGRATIONS`, `prune_missing` |
 | Swap-in-place, retained originals | `replace.py` (263 L) | `stage`/`swap`/`recover`; `RETAINED_SUFFIX` (`replace.py:37`) |

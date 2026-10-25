@@ -10,6 +10,15 @@ source build is the development path. The trade-offs recorded below are the
 ones the build actually had to respect; where a decision was made, it is
 stated with the reason.
 
+> **Direction (issue #244).** The deployment target is an **Unraid Community App**
+> (PRODUCT.md "Deployment target"): the WebUI button opens the read-only dashboard,
+> the Console button opens a shell that prints what to type (`shrinkray setup` to
+> configure, `shrinkray encode /media/<path>` for one file). That changes three
+> things below, none built yet: `/data` becomes the appdata folder holding *all*
+> operator state (config, database, pause flag, generated token), the image needs
+> `shrinkray` as its entrypoint so the console can run any command (issue #242), and
+> the fixed-UID decision is reopened for `PUID`/`PGID`.
+
 ## What shipped
 
 - **Published to GHCR on release tags** (issue #165): a `v*` tag runs the
@@ -149,6 +158,11 @@ fresh" cost. Details below.
 2. **PUID/PGID.** A fixed non-root user built with `--build-arg UID/GID`, not
    entrypoint-driven user fixing. It is one `useradd` in the Dockerfile instead
    of a runtime step that can fail in ways a stranger has to debug.
+   **Reopened by issue #244:** an Unraid template passes the user to run as at
+   runtime (`PUID`/`PGID`, conventionally 99/100, plus `UMASK`), and a pull-and-run
+   image cannot be rebuilt per host. The trade-off above still stands — a runtime
+   user switch is a step that can fail — so the follow-up must make it fail loudly
+   at start (unwritable `/data` or `/media` is a refusal, never a dead watcher).
 3. **Docker is THE deployment channel.** The image is the NAS path; the
    systemd unit (`deploy/shrinkray.service`) was removed with the container
    path established (2026-10-25).
