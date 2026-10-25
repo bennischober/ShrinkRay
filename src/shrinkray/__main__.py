@@ -948,25 +948,48 @@ def doctor(
     rows whose output vanished, and with --probe-all corrupt/truncated
     files. Read-only: doctor never repairs anything (delete-flagging
     stays the scan's job with its grace period).
-    """
-    if not db_file.is_file():
-        log_error(f"Database '{db_file}' not found! Run a scan first.")
-        raise typer.Exit(1)
 
+    With no database (a fresh install) the library check is skipped and
+    the TOOLCHAIN check still runs: "run doctor" is the last install
+    step on every route (issue #241) - a host that cannot measure a
+    single file is not usable, database or not.
+    """
     from shrinkray.service import all_problems
     from shrinkray.service import doctor as run_doctor
+
+    # the toolchain is checked FIRST: "library is healthy" on a host that
+    # cannot measure a single file is the honest-failure rule broken
+    problems = all_problems()
+    for problem in problems:
+        # log_error reaches the log; console.print reaches the operator's
+        # terminal AND the test runner's capture (the install check's whole
+        # point is the message being seen, issue #241)
+        log_error(problem)
+        console.print(f"[red]{problem}[/red]")
+
+    if not db_file.is_file():
+        # a fresh install: the library check cannot run (and must not
+        # create a database just to report on it); the toolchain result
+        # above is the install check (issue #241)
+        if problems:
+            console.print(
+                "[red]The toolchain cannot do the one thing this tool does "
+                "(see the problems above); fix the toolchain before the "
+                "first encode.[/red]"
+            )
+            raise typer.Exit(1)
+        console.print(
+            "[green]Toolchain is healthy.[/green] No database found at "
+            f"'{db_file}' - the library check is skipped until a run "
+            "creates one."
+        )
+        return
 
     connection = db.connect(db_file)
     try:
         findings = run_doctor(connection, probe_all=probe_all)
     finally:
         connection.close()
-
-    # the toolchain is checked FIRST: "library is healthy" on a host that
-    # cannot measure a single file is the honest-failure rule broken
-    problems = all_problems()
-    for problem in problems:
-        log_error(problem)
 
     if not findings and not problems:
         console.print("[green]Library is healthy: no findings.[/green]")
