@@ -882,6 +882,9 @@ def plan(
         min=0,
         help="Per-encode thread cap for the probes (0 = all cores).",
     ),
+    no_table: bool = typer.Option(
+        False, "--no-table", help="Do not print the results as table to the console."
+    ),
     probe_encoder_preset: str = typer.Option(
         DEFAULT_PROBE_ENCODER_PRESET,
         "--probe-encoder-preset",
@@ -997,7 +1000,8 @@ def plan(
                 "bars removed" if result.crop is not None else "",
             )
 
-        console.print(table)
+        if not no_table:
+            console.print(table)
         if errors:
             if plans:
                 console.print(

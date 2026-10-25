@@ -96,25 +96,39 @@ class TestHdrFixture(unittest.TestCase):
     def test_fixture_still_probes_as_recorded(self):
         """Fixture decay check: re-probe the committed clip and assert the
         color signature still matches the recorded dict (catches accidental
-        re-encoding or corruption of the binary fixture)."""
-        proc = run_subprocess(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_streams",
-                "-of",
-                "json",
-                str(CLIP),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        stream = json.loads(proc.stdout)["streams"][0]
+        re-encoding or corruption of the binary fixture).
+
+        The probe is retried once on a truncated/garbled stdout: under heavy
+        load (WSL2/drvfs, parallel test runs) ffprobe occasionally returns a
+        partial stream with exit 0 - a probe of a static file is idempotent,
+        so a retry measures the same thing (observed ~1 in 3 full-suite runs
+        locally; never in CI)."""
+        stdout = ""
+        for attempt in range(2):
+            proc = run_subprocess(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_streams",
+                    "-of",
+                    "json",
+                    str(CLIP),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            stdout = proc.stdout
+            try:
+                stream = json.loads(stdout)["streams"][0]
+                break
+            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                if attempt == 1:
+                    self.fail(f"ffprobe returned unusable stdout twice: {e!r}: {stdout[:80]!r}")
         for key in ("codec_name", "pix_fmt", "color_space", "color_transfer", "color_primaries"):
             self.assertEqual(
                 stream.get(key),

@@ -14,6 +14,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **`plan` exits 1 when nothing could be planned** (issue #203): `encode` already failed loudly on an unusable toolchain; `plan` rendered the identical failure as an error row and exited 0. Now an all-error plan is a failed command, a plan with results alongside error rows still succeeds (a partial answer is an answer), and an all-skipped plan stays at 0 (a skip is a decision, not a failure).
 
+- **`plan --no-table` prints the plan without the rich table** (issue #201): `scan` already had the flag for scripted runs; `plan` — the other read-only, scripted command — now accepts the same `--no-table` (no box-drawing characters or ANSI codes in a pipe), while the summary line and the `--db` plan cache keep working unchanged.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added
