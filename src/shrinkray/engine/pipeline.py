@@ -362,10 +362,14 @@ def tracks_survived(
         else:
             wanted = None
         expected_in = sum(
-            n for (k, lang), n in counts_in.items() if k == kind and (wanted is None or lang in wanted)
+            n
+            for (k, lang), n in counts_in.items()
+            if k == kind and (wanted is None or lang in wanted)
         )
         got_out = sum(
-            n for (k, lang), n in counts_out.items() if k == kind and (wanted is None or lang in wanted)
+            n
+            for (k, lang), n in counts_out.items()
+            if k == kind and (wanted is None or lang in wanted)
         )
         if got_out < expected_in:
             missing.append(f"{expected_in - got_out} {kind} track(s)")

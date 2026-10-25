@@ -83,11 +83,15 @@ class TestEncode(unittest.TestCase):
                 # the defaults: fra audio is outside the filter (expected
                 # missing, NOT a failure) and eng subtitles are inside it
                 ok, detail = tracks_survived(
-                    src, out, audio_languages=["deu", "eng", "und", "jpn"], subtitle_languages=["eng", "deu", "und"]
+                    src,
+                    out,
+                    audio_languages=["deu", "eng", "und", "jpn"],
+                    subtitle_languages=["eng", "deu", "und"],
                 )
                 self.assertFalse(ok)
                 self.assertNotIn("audio", detail)
                 self.assertIn("1 subtitle track(s)", detail)
+
                 # the eng subtitle SURVIVES: only the fra loss remains, and
                 # the filter covers it => the check passes
                 def fake_counts_ok(file: Path):
@@ -95,9 +99,14 @@ class TestEncode(unittest.TestCase):
                         return {("audio", "deu"): 1, ("audio", "fra"): 1, ("subtitle", "eng"): 1}
                     return {("audio", "deu"): 1, ("subtitle", "eng"): 1}
 
-                with mock.patch("shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts_ok):
+                with mock.patch(
+                    "shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts_ok
+                ):
                     ok, detail = tracks_survived(
-                        src, out, audio_languages=["deu", "eng", "und", "jpn"], subtitle_languages=["eng", "deu", "und"]
+                        src,
+                        out,
+                        audio_languages=["deu", "eng", "und", "jpn"],
+                        subtitle_languages=["eng", "deu", "und"],
                     )
                     self.assertTrue(ok)
                     self.assertEqual(detail, "")
@@ -149,6 +158,7 @@ class TestEncode(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(detail.startswith("unverifiable:"))
         self.assertNotIn("1 audio track", detail)
+
     def test_the_encode_command_carries_the_240_contract(self):
         """Issue #240: the container is pinned to MKV, the copy mask covers
         the passthru vocabulary, the fallback is lossless, chapters survive,
@@ -1047,7 +1057,6 @@ class TestEncodeLock(unittest.TestCase):
             finally:
                 connection.close()
 
-
     def test_encode_quality_cli_passes_the_language_filters(self):
         """The CLI quality path hands the config's language filters to the
         engine (issue #240): _record_encodes reads them from the loaded
@@ -1103,6 +1112,7 @@ class TestEncodeLock(unittest.TestCase):
                 self.assertEqual(captured["subtitle_languages"], ["eng", "deu", "und"])
             finally:
                 connection.close()
+
     def test_build_vmaf_command_subsample(self):
         """n_subsample lands in the filtergraph only when > 1 (None/0/1
         measure every frame)."""

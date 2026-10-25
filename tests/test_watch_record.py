@@ -60,7 +60,7 @@ class TestWatchRecordsItsOutcomes(unittest.TestCase):
         def fake_encode(movie, output, **kwargs):
             return self._encode_result(output)
 
-        def fake_swap(db_file, source, output, encode_id=None):
+        def fake_swap(db_file, source, output, encode_id=None, error=None):
             recorded.append(("swap", source, output, encode_id))
 
         stack = ExitStack()

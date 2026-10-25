@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
+from shrinkray.config import Conf as Conf
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import (
