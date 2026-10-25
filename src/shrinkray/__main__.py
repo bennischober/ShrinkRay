@@ -338,6 +338,7 @@ def _swap_into_place(
     source: Path,
     output: Path,
     encode_id: int | None = None,
+    error: str | None = None,
 ) -> None:
     """Swaps a verified encode into the source's path, reporting it to the console.
 
@@ -352,10 +353,12 @@ def _swap_into_place(
         source: The library file the output replaces.
         output: The verified encoded file.
         encode_id: The encode row the run just wrote (None: stateless).
+        error: A verification finding from the encode (a swap on an unverified
+            artifact would make the finding permanent; None: nothing to check).
     """
     from shrinkray import service
 
-    outcome = service.swap_encode_into_place(connection, source, output, encode_id)
+    outcome = service.swap_encode_into_place(connection, source, output, encode_id, error)
     if not outcome.replaced:
         return
     retained = outcome.retained_path
@@ -583,6 +586,16 @@ def _record_encodes(
                                     movie,
                                     output_dir / movie.name,
                                     outcome.encode_id if outcome else None,
+                                    error=result.error,
+                                )
+                            if result.error is not None:
+                                # a verification finding must not hide behind
+                                # the green line (review finding 1: an error
+                                # the user cannot see is a bug); with replace,
+                                # the swap above declined and kept the original
+                                console.print(
+                                    f"[yellow]Encoded '{movie.name}' with a finding: "
+                                    f"{result.error}[/yellow]"
                                 )
                         elif result.skipped_reason is not None:
                             # guardrail skip => record it so future runs do not re-probe

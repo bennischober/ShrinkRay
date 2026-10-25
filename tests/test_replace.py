@@ -56,6 +56,27 @@ class TestSwap(unittest.TestCase):
             replace.swap(self.source, staged)
         self.assertEqual(self.source.read_bytes(), b"ORIGINAL" * 100)
 
+
+    def test_a_verification_finding_declines_the_swap(self):
+        """Review finding 1: a swap on an artifact with a verification finding
+        (a lost track, an unverifiable probe) would make the finding permanent:
+        it is declined, the source is untouched, and the encode row is corrected
+        to discarded (issue #232 contract)."""
+        from shrinkray import db, service
+
+        db_file = self.root / "metadata.db"
+        connection = db.connect(db_file)
+        outcome = service.swap_encode_into_place(
+            connection,
+            self.source,
+            self.output,
+            None,
+            error="output lost 1 audio track(s)",
+        )
+        self.assertFalse(outcome.replaced)
+        self.assertIn("failed verification", outcome.reason or "")
+        self.assertEqual(self.source.read_bytes(), b"ORIGINAL" * 100)
+        connection.close()
     def test_a_failed_copy_raises_and_leaves_the_source_alone(self) -> None:
         missing = self.root / "enc" / "gone.mkv"
         with self.assertRaises(replace.SwapError):

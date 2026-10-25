@@ -77,6 +77,7 @@ def swap_encode_into_place(
     source: Path,
     output: Path,
     encode_id: int | None = None,
+    error: str | None = None,
 ) -> SwapOutcome:
     """Swaps a verified encode into the source's path, retaining the original.
 
@@ -91,7 +92,9 @@ def swap_encode_into_place(
     swap clears the encode row's output_file (issue #232): the encode is
     discarded with its staging directory, so the row must not point at a path
     that is about to vanish - that lie is what made `doctor` report every
-    in-place encode as vanished.
+    in-place encode as vanished. A swap is also declined when the caller
+    reports a verification finding (the `error` argument): the artifact stays
+    whole and the source is never touched.
 
     Args:
         connection: The database connection, or None for a stateless run (the
@@ -99,10 +102,26 @@ def swap_encode_into_place(
         source: The library file the output replaces.
         output: The verified encoded file.
         encode_id: The encode row the caller just wrote (None: stateless).
+        error: A non-fatal verification finding from the encode (e.g. issue
+            #240's 1:1 check, where the artifact itself is fine but tracks
+            were lost). A declined swap keeps the artifact, never touches
+            the source.
 
     Returns:
         SwapOutcome: What happened (replaced / declined, and why).
     """
+    if error is not None:
+        # the artifact is fine (the picture measured at target), but the
+        # encode broke a promise the swap would make permanent: a lost track
+        # cannot be recovered from the swapped-in file, and the operator
+        # never asked for a library file with fewer tracks. Decline, keep
+        # the original, and say why (issue #240, review finding 1). The
+        # encode row is corrected like any declined swap (issue #232): the
+        # artifact is discarded with its staging directory.
+        reason = f"the encode failed verification: {error}"
+        log_error(f"Not replacing '{source.name}': {reason}")
+        _encode_discarded(connection, encode_id)
+        return SwapOutcome(replaced=False, reason=reason)
     size_before = source.stat().st_size
     size_after = output.stat().st_size
     if size_after >= size_before:

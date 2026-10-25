@@ -35,8 +35,8 @@ class TestEncode(unittest.TestCase):
 
             def fake_counts(file: Path):
                 if file == src:
-                    return {"audio": 2, "subtitle": 1}
-                return {"audio": 1, "subtitle": 0}
+                    return {("audio", "deu"): 2, ("subtitle", "eng"): 1}
+                return {("audio", "deu"): 1}
 
             with mock.patch("shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts):
                 ok, detail = tracks_survived(src, out)
@@ -54,13 +54,101 @@ class TestEncode(unittest.TestCase):
             out.write_bytes(b"x")
 
             def fake_counts(file: Path):
-                return {"audio": 2, "subtitle": 1}
+                return {("audio", "deu"): 2, ("subtitle", "eng"): 1}
 
             with mock.patch("shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts):
                 ok, detail = tracks_survived(src, out)
         self.assertTrue(ok)
         self.assertEqual(detail, "")
 
+    def test_tracks_survived_honours_the_language_filters(self):
+        """Review finding 2 (mechanical half): a track the configured filter
+        removes on purpose is expected missing - only a track the filter
+        should have kept can fail the check."""
+        from shrinkray.engine.pipeline import tracks_survived
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mkv"
+            out = Path(tmp) / "out.mkv"
+            src.write_bytes(b"x")
+            out.write_bytes(b"x")
+
+            # source: deu + fra audio, eng subtitles; output: only deu audio
+            def fake_counts(file: Path):
+                if file == src:
+                    return {("audio", "deu"): 1, ("audio", "fra"): 1, ("subtitle", "eng"): 1}
+                return {("audio", "deu"): 1}
+
+            with mock.patch("shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts):
+                # the defaults: fra audio is outside the filter (expected
+                # missing, NOT a failure) and eng subtitles are inside it
+                ok, detail = tracks_survived(
+                    src, out, audio_languages=["deu", "eng", "und", "jpn"], subtitle_languages=["eng", "deu", "und"]
+                )
+                self.assertFalse(ok)
+                self.assertNotIn("audio", detail)
+                self.assertIn("1 subtitle track(s)", detail)
+                # the eng subtitle SURVIVES: only the fra loss remains, and
+                # the filter covers it => the check passes
+                def fake_counts_ok(file: Path):
+                    if file == src:
+                        return {("audio", "deu"): 1, ("audio", "fra"): 1, ("subtitle", "eng"): 1}
+                    return {("audio", "deu"): 1, ("subtitle", "eng"): 1}
+
+                with mock.patch("shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts_ok):
+                    ok, detail = tracks_survived(
+                        src, out, audio_languages=["deu", "eng", "und", "jpn"], subtitle_languages=["eng", "deu", "und"]
+                    )
+                    self.assertTrue(ok)
+                    self.assertEqual(detail, "")
+                # no filter: both losses are failures (the 1:1 default)
+                ok, detail = tracks_survived(src, out)
+                self.assertFalse(ok)
+                self.assertIn("1 audio track(s)", detail)
+                self.assertIn("1 subtitle track(s)", detail)
+
+    def test_tracks_survived_matches_both_639_2_spellings(self):
+        """HandBrake accepts B and T codes; the muxer tags the output with
+        whichever spelling the container carried. deu/ger and fra/fre are
+        the same language for the 1:1 check."""
+        from shrinkray.engine.pipeline import tracks_survived
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mkv"
+            out = Path(tmp) / "out.mkv"
+            src.write_bytes(b"x")
+            out.write_bytes(b"x")
+
+            def fake_counts(file: Path):
+                if file == src:
+                    return {("audio", "deu"): 1, ("audio", "fra"): 1}
+                # the muxer wrote B-code tags
+                return {("audio", "ger"): 1, ("audio", "fre"): 1}
+
+            with mock.patch("shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts):
+                ok, detail = tracks_survived(src, out, audio_languages=["deu", "fre"])
+        self.assertTrue(ok)
+        self.assertEqual(detail, "")
+
+    def test_tracks_survived_reports_unverifiable_as_failure(self):
+        """Review finding 4: an ffprobe failure is UNMEASURED, not passed -
+        the check fails with unverifiable, and the swap gate treats an
+        unverified artifact like a broken one."""
+        from shrinkray.engine.pipeline import tracks_survived
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mkv"
+            out = Path(tmp) / "out.mkv"
+            src.write_bytes(b"x")
+            out.write_bytes(b"x")
+            with mock.patch(
+                "shrinkray.engine.pipeline._stream_counts",
+                side_effect=RuntimeError("ffprobe not found"),
+            ):
+                ok, detail = tracks_survived(src, out)
+        self.assertFalse(ok)
+        self.assertTrue(detail.startswith("unverifiable:"))
+        self.assertNotIn("1 audio track", detail)
     def test_the_encode_command_carries_the_240_contract(self):
         """Issue #240: the container is pinned to MKV, the copy mask covers
         the passthru vocabulary, the fallback is lossless, chapters survive,
@@ -119,6 +207,23 @@ class TestEncode(unittest.TestCase):
         command = build_encode_command("hb", Path("in.mkv"), Path("out.mkv"), 20, "svt_av1", "3")
         self.assertNotIn("--audio-lang-list", command)
         self.assertNotIn("--subtitle-lang-list", command)
+
+    def test_the_container_follows_the_source_extension(self):
+        """Review finding 3: the muxer is pinned (av_mkv) for an .mkv source
+        only - a non-MKV source keeps the extension-derived muxer so its
+        bytes and name agree; the 1:1 check catches what that muxer drops."""
+        from shrinkray.tools.handbrake import build_encode_command
+
+        mkv = build_encode_command("hb", Path("in.mkv"), Path("out.mkv"), 20, "svt_av1", "3")
+        self.assertIn("-f", mkv)
+        self.assertEqual(mkv[mkv.index("-f") + 1], "av_mkv")
+
+        mp4 = build_encode_command("hb", Path("in.mp4"), Path("out.mp4"), 20, "svt_av1", "3")
+        self.assertNotIn("-f", mp4)
+
+        # uppercase suffix: same rule
+        m4v = build_encode_command("hb", Path("in.MKV"), Path("out.MKV"), 20, "svt_av1", "3")
+        self.assertIn("-f", m4v)
 
     def test_build_command(self):
         command = tools_handbrake.build_command(
@@ -942,6 +1047,62 @@ class TestEncodeLock(unittest.TestCase):
             finally:
                 connection.close()
 
+
+    def test_encode_quality_cli_passes_the_language_filters(self):
+        """The CLI quality path hands the config's language filters to the
+        engine (issue #240): _record_encodes reads them from the loaded
+        config, never a literal."""
+        import tempfile
+
+        from shrinkray.__main__ import _record_encodes
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db_file = root / "metadata.db"
+            connection = db.connect(db_file)
+            try:
+                captured: dict = {}
+
+                def fake_quality(movie_in, output_file, **kwargs):
+                    captured["audio_languages"] = kwargs.get("audio_languages")
+                    captured["subtitle_languages"] = kwargs.get("subtitle_languages")
+                    return QualityResult(
+                        input=movie_in,
+                        output=output_file,
+                        success=True,
+                        input_size=100,
+                        output_size=50,
+                    )
+
+                with (
+                    mock.patch(
+                        "shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_quality
+                    ),
+                    mock.patch("shrinkray.__main__.record_quality_results"),
+                ):
+                    _record_encodes(
+                        connection,
+                        [movie],
+                        root / "enc",
+                        config_helper.load_config(),
+                        dry_run=False,
+                        overwrite=False,
+                        quality=True,
+                        target_vmaf=95.0,
+                        verify=False,
+                        threads=None,
+                        db_file=db_file,
+                        encoder_preset="6",
+                    )
+                # the config's lists reach the engine (the reference lists,
+                # loaded from config, not restated in the CLI)
+                self.assertEqual(captured["audio_languages"], ["deu", "eng", "und", "jpn"])
+                self.assertEqual(captured["subtitle_languages"], ["eng", "deu", "und"])
+            finally:
+                connection.close()
     def test_build_vmaf_command_subsample(self):
         """n_subsample lands in the filtergraph only when > 1 (None/0/1
         measure every frame)."""

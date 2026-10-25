@@ -1437,6 +1437,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 stop_event=state.watch_stop,
                 db_file=state.db_file,
                 settings=settings_for_next_file,
+                load_config=refresh_config,
                 record=record_watch_outcome,
             )
         except Exception as e:

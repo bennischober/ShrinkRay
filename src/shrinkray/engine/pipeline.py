@@ -141,10 +141,10 @@ from shrinkray.engine.search import (
 from shrinkray.logger import log, log_error
 from shrinkray.tools import process as resources
 from shrinkray.tools.ffprobe import (
-    FFPROBE_TIMEOUT as FFPROBE_TIMEOUT,
+    probe_duration_seconds as probe_duration_seconds,
 )
 from shrinkray.tools.ffprobe import (
-    probe_duration_seconds as probe_duration_seconds,
+    run_ffprobe as run_ffprobe,
 )
 from shrinkray.tools.handbrake import (
     HANDBRAKE_BINARY as HANDBRAKE_BINARY,
@@ -307,63 +307,111 @@ class EncodeResult:
         return round((1 - self.output_size / self.input_size) * 100, 2)
 
 
-def tracks_survived(input_file: Path, output_file: Path) -> tuple[bool, str]:
-    """Checks that the encoded output kept every audio and subtitle track.
+def tracks_survived(
+    input_file: Path,
+    output_file: Path,
+    audio_languages: list[str] | None = None,
+    subtitle_languages: list[str] | None = None,
+) -> tuple[bool, str]:
+    """Checks that the encoded output kept every track the encode must keep.
 
     "Audio and subtitles are copied 1:1" is a claim this function makes
     testable (issue #240): HandBrake drops tracks silently when the muxer
     cannot carry them (PGS/DVB subtitles on MP4) or a filter removes them.
     A mismatch is a FAILURE of the 1:1 promise, reported per track kind.
 
+    The configured language filters (issue #240) set what the encode is
+    ALLOWED to drop: a track whose language is outside an active filter is
+    expected missing and never flags the check (review finding 2) - only a
+    track the filter should have kept can be lost. A filter that matches no
+    track at all is still honoured: the operator asked for it.
+
     Args:
         input_file (Path): The source file.
         output_file (Path): The encoded file.
+        audio_languages (list | None): The configured audio filter (None or
+            empty: every language must survive).
+        subtitle_languages (list | None): Same, for subtitle tracks.
 
     Returns:
-        tuple: (True, "") when every track survived or nothing could be
-            verified; (False, detail) naming the missing tracks.
+        tuple: (True, "") when every track survived; (False, detail) naming
+            the missing tracks; (False, "unverifiable: ...") when the
+            streams could not be counted (a swap caller must treat that
+            like a failure - an unverified artifact does not enter the
+            library).
     """
     try:
         counts_in = _stream_counts(input_file)
         counts_out = _stream_counts(output_file)
-    except (OSError, ValueError):
-        # cannot verify (ffprobe missing/broken) => do not report failure
-        return True, ""
+    except (RuntimeError, OSError, ValueError) as e:
+        # ffprobe missing/timed out/failed: unmeasured, not "passed" (review
+        # finding 4) - and never a crash after the encode completed
+        return False, f"unverifiable: {e}"
     missing: list[str] = []
-    for kind in ("audio", "subtitle"):
-        a, b = counts_in.get(kind, 0), counts_out.get(kind, 0)
-        if b < a:
-            missing.append(f"{a - b} {kind} track(s)")
+    for kind, kept_languages in (
+        ("audio", audio_languages),
+        ("subtitle", subtitle_languages),
+    ):
+        if kept_languages:
+            # the filter narrows the promise: a language outside it may be
+            # dropped; a language inside it (B/T code spellings both) must
+            # survive. Tracks without a language tag count as "und" and a
+            # filter that does not list "und" may drop them.
+            wanted = {lang.strip().lower() for lang in kept_languages if lang.strip()}
+            wanted |= _639_2_variants(wanted)
+        else:
+            wanted = None
+        expected_in = sum(
+            n for (k, lang), n in counts_in.items() if k == kind and (wanted is None or lang in wanted)
+        )
+        got_out = sum(
+            n for (k, lang), n in counts_out.items() if k == kind and (wanted is None or lang in wanted)
+        )
+        if got_out < expected_in:
+            missing.append(f"{expected_in - got_out} {kind} track(s)")
     if missing:
         return False, "output lost " + " and ".join(missing)
     return True, ""
 
 
-def _stream_counts(file: Path) -> dict[str, int]:
-    """Counts the audio/subtitle streams via ffprobe (one subprocess)."""
-    import json as _json
+def _639_2_variants(codes: set[str]) -> set[str]:
+    """Adds the ISO 639-2/B spellings of the given T-code language set.
 
-    proc = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-            str(file),
-        ],
-        capture_output=True,
-        timeout=FFPROBE_TIMEOUT,
-    )
-    if proc.returncode != 0:
-        raise OSError(f"ffprobe failed for '{file}'")
-    streams = _json.loads(proc.stdout.decode()).get("streams", [])
-    counts: dict[str, int] = {}
+    HandBrake's --audio-lang-list accepts both the B and the T code, but the
+    muxer and ffprobe tag the OUTPUT stream with whichever spelling the
+    container carried (mkv tags are B codes: ger/deu, fre/fra). The check
+    compares the SAME spelling on both sides by normalizing both to the set
+    of all variants.
+    """
+    bib = {"ger": "deu", "fre": "fra"}
+    variants: set[str] = set()
+    for code in codes:
+        variants.add(code)
+        if code in bib:
+            variants.add(bib[code])
+        elif code in bib.values():
+            variants.add(next(k for k, v in bib.items() if v == code))
+    return variants
+
+
+def _stream_counts(file: Path) -> dict[tuple[str, str], int]:
+    """Counts audio/subtitle streams per (kind, language) via ffprobe.
+
+    tools.ffprobe.run_ffprobe is the one ffprobe implementation (review
+    finding 5: no second subprocess copy in the engine); its RuntimeError
+    (missing binary, timeout, bad json) is the caller's unverifiable case.
+    The language is the normalized ISO 639-2 code (uppercase -> lowercase,
+    a "und" default for a stream ffprobe tags no language); the per-language
+    shape is what lets the 1:1 check tell a muxer's drop from a track the
+    configured language filter removed on purpose (review finding 2).
+    """
+    streams = run_ffprobe(file).get("streams", [])
+    counts: dict[tuple[str, str], int] = {}
     for s in streams:
         kind = s.get("codec_type")
         if kind in ("audio", "subtitle"):
-            counts[kind] = counts.get(kind, 0) + 1
+            lang = (s.get("tags") or {}).get("language", "und") or "und"
+            counts[(kind, lang.strip().lower())] = counts.get((kind, lang.strip().lower()), 0) + 1
     return counts
 
 
@@ -1682,11 +1730,17 @@ def encode_with_quality(
     verified_vmaf: float | None = None
     verified_subsample: int | None = None
     # the 1:1 promise's check (issue #240): every audio and subtitle track
-    # the source had must survive the encode. A lost track is reported in
-    # the result's error (and the record) — the artifact is NOT deleted:
-    # the picture is fine, but the operator must see the muxer's silent
-    # drop instead of discovering it at playback time.
-    tracks_ok, tracks_detail = tracks_survived(input_file, output_file)
+    # the encode must keep survives it. A lost track is reported in the
+    # result's error (and the record) - the artifact is NOT deleted: the
+    # picture is fine, but the operator must see the muxer's silent drop
+    # instead of discovering it at playback time. The configured language
+    # filters set what the encode may drop (review finding 2).
+    tracks_ok, tracks_detail = tracks_survived(
+        input_file,
+        output_file,
+        audio_languages=audio_languages,
+        subtitle_languages=subtitle_languages,
+    )
     if not tracks_ok:
         log_error(f"'{input_file.name}': {tracks_detail} (issue #240's 1:1 check).")
     if verify:

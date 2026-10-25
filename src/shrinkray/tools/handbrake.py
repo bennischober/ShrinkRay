@@ -119,6 +119,10 @@ def build_encode_command(
             together: --audio-lang-list alone sets selection to first.
         subtitle_languages (list | None): Same, for subtitle tracks.
 
+    The container follows the source's extension (an .mkv source pins
+    av_mkv; anything else is muxed by its own extension) so a file's bytes
+    and its name never disagree; the 1:1 check verifies what the muxer kept.
+
     Returns:
         list[str]: The command as argument list.
     """
@@ -151,11 +155,15 @@ def build_encode_command(
         # crops break the VMAF comparison (dimension mismatch) and change
         # the output resolution of the library
         command += ["--crop", "0:0:0:0"]
+    if input_file.suffix.lower() == ".mkv":
+        # the container is PINNED for MKV sources: an explicit muxer cannot
+        # drift from the output name (issue #240). A non-MKV source keeps
+        # the extension-derived muxer (bytes and name must agree), and the
+        # 1:1 check catches whatever that muxer drops silently - a dropped
+        # track fails the encode's verification and blocks the swap
+        # (review finding 3).
+        command += ["-f", "av_mkv"]
     command += [
-        # the container is PINNED: a .mp4 source must not produce an MP4,
-        # whose muxer silently drops PGS/DVB subtitles (issue #240)
-        "-f",
-        "av_mkv",
         # keep all audio and subtitle tracks, copy audio => no quality loss
         "--all-audio",
         "--all-subtitles",

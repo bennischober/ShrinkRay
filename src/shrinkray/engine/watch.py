@@ -443,6 +443,7 @@ def watch(
     subtitle_languages: list[str] | None = None,
     progress: ProgressCallback | None = None,
     settings: Callable[[], WatchSettings] | None = None,
+    load_config: Callable[[], "Conf"] | None = None,
     record: Callable[[Path, QualityResult, Path | None], int | None] | None = None,
 ) -> None:
     """Watches the inbox and encodes newly arrived movies.
@@ -481,6 +482,12 @@ def watch(
             changed config takes effect at the next file and an idle watcher
             still notices it (the resident app passes one, issue #247). None:
             the fixed arguments above apply to every file.
+        load_config (Callable[[], Conf] | None): The operator's configuration
+            provider, used ONLY to fill the language filters when the caller
+            passed none (review finding 6: the built-in defaults must not be
+            a silent narrowing filter; the resident app passes its loader so
+            a saved change applies at the next file). None (default): the
+            built-in defaults - no filtering, the 1:1 behaviour.
         record (Callable[[Path, QualityResult, Path | None], int | None] | None):
             Persisted one encode's (or skip's) outcome (issue #232): called as
             record(movie, result, final_output) where final_output is the path
@@ -494,7 +501,7 @@ def watch(
 
     from shrinkray.config import Conf
 
-    _conf = Conf({})
+    _conf = Conf({}) if load_config is None else load_config()
     current = WatchSettings(
         max_threads=max_threads,
         target_vmaf=target_vmaf,
@@ -712,7 +719,17 @@ def watch(
                             else None
                         )
                         if in_place_mode:
-                            _swap(db_file, movie, result.output, encode_id)
+                            _swap(db_file, movie, result.output, encode_id, error=result.error)
+                            if result.error is not None:
+                                # the swap declined (a verification finding —
+                                # a lost track or an unverifiable probe, review
+                                # findings 1+4): the green "Done" below would
+                                # read as a replacement, so say what happened
+                                log_error(
+                                    f"Not replacing '{movie.name}': {result.error} "
+                                    "=> the original is kept."
+                                )
+                                continue
                             log(
                                 f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
                                 f"(VMAF {result.achieved_vmaf}), "
@@ -738,7 +755,13 @@ def watch(
         release_lock(lock_file)
 
 
-def _swap(db_file: Path | None, source: Path, output: Path, encode_id: int | None = None) -> None:
+def _swap(
+    db_file: Path | None,
+    source: Path,
+    output: Path,
+    encode_id: int | None = None,
+    error: str | None = None,
+) -> None:
     """Swaps a verified encode into the source's path, retaining the original.
 
     The watcher's in-place form writes its encode into a staging directory and

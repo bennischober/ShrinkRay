@@ -54,11 +54,11 @@ No `--preset` is passed, so every encode runs on HandBrakeCLI's built-in
 | `VideoMultiPass` | `true` | not passed | no effect — HandBrake forces single-pass for SVT-AV1 in CRF mode |
 | `VideoColorRange` | `limited` | `CLI Default` also `limited` | already matches |
 | `VideoPasshtruHDRDynamicMetadata` | `all` | template default `all` | already matches |
-| `FileFormat` | `av_mkv` | muxer autodetected from the output extension | **gap** — an `.mp4` source yields MP4, which drops PGS/DVB subtitles |
+| `FileFormat` | `av_mkv` | pinned `av_mkv` for an `.mkv` source; extension-derived for anything else | landed — issue #240: the muxer can never drift from the name on an MKV source; a non-MKV source keeps bytes/name agreement and the 1:1 check catches what its muxer drops (a dropped track blocks the swap) |
 | `Optimize` | `false` | `--optimize` always | no effect on MKV — the fast-start option is an MP4 muxer setting |
 | `AudioTrackSelectionBehavior` | `all` | `--all-audio` | already matches |
-| `AudioCopyMask` | 10 codecs incl. `mp2`, `opus` | `CLI Default`'s 8 (no `mp2`, no `opus`) | **gap** — those two are transcoded to AAC |
-| `AudioEncoderFallback` | `none` | `CLI Default`'s `aac` | **gap** — a track with no passthru is lossily re-encoded; `none` would drop it instead |
+| `AudioCopyMask` | 10 codecs incl. `mp2`, `opus` | `--audio-copy-mask` with the 12 names 1.6-1.11 knows | landed — issue #240: `mp2` and `opus` pass through instead of being transcoded to AAC |
+| `AudioEncoderFallback` | `none` | `--audio-fallback flac24` | landed — issue #240: a track with no passthru is re-encoded losslessly (same samples); `none` would drop it, `aac` would re-encode lossily |
 | `AudioLanguageList` | `deu, eng, und, jpn` | `handbrake.audio_languages` (the reference lists) | landed — issue #240: config keys with the reference lists as defaults, empty = no filter |
 | `SubtitleTrackSelectionBehavior` | `all` | `--all-subtitles` | already matches |
 | `SubtitleLanguageList` | `eng, deu, und` | `handbrake.subtitle_languages` | landed — issue #240 |
@@ -69,7 +69,7 @@ No `--preset` is passed, so every encode runs on HandBrakeCLI's built-in
 | `PictureAutoCrop` / `PictureCropMode` | `true` / `0` | `--crop` with the measured rect, or `0:0:0:0` | **we differ** — bars come from our own detector, and an auto-crop would break the VMAF geometry |
 | `PictureWidth` / `PictureHeight` | `3840` / `2160` | not passed (no cap) | **we differ** — a cap would downscale anything above 4K; ShrinkRay never changes resolution except by cropping |
 | `PictureAllowUpscaling` | `false` | not passed (`CLI Default` does not upscale either) | already matches |
-| `ChapterMarkers` | `true` | not passed (`CLI Default` also `true`) | already matches — worth pinning explicitly |
+| `ChapterMarkers` | `true` | `--markers` | landed — issue #240: chapters survive the encode by flag, not by CLI Default's default |
 | `MetadataPassthru` | `true` | absent from `CLI Default`, filled `true` by the template | already matches |
 | `PresetName` / `Default` / `Type` / `Folder` | preset metadata | n/a | not a setting |
 | `AudioList[0].AudioMixdown` | `stereo` | not passed (Auto Passthru copies, no mixdown) | **never** — a stereo mixdown of a 5.1 track is not a copy |
@@ -107,14 +107,15 @@ source (`encavcodecaudio.c` maps it to `AV_SAMPLE_FMT_S16`), and the bare name
 
 ## Open decisions
 
-**Language filtering.** The reference preset lists four audio and three subtitle
-languages. Today ShrinkRay keeps every track in every language, because both lists are
-empty in `CLI Default` and an empty list falls through to `any`. Adopting the lists
-narrows that, and a dropped track cannot be rescued by the lossless fallback — the
-filter runs first. The intended shape is a config key (empty = no filter) defaulting to
-the reference lists, so the narrowing is visible in `config.json` rather than implied by
-a preset. `--audio-lang-list` on its own also sets the selection behaviour to `first`;
-only `--all-audio` restores `all`, so the two flags must always travel together.
+**Language filtering defaults.** The reference preset lists four audio and three
+subtitle languages. ShrinkRay's `handbrake.audio_languages` /
+`handbrake.subtitle_languages` keys ship those lists as their defaults (issue #240's
+maintainer decision), and an empty list means no filter: every track, every language —
+the strict 1:1 behaviour. A language outside an active filter is dropped before the
+lossless fallback can rescue it, and the track-count verification does not flag a
+track the configured filter removed on purpose. `--audio-lang-list` on its own also
+sets the selection behaviour to `first`; only `--all-audio` restores `all`, so the two
+flags must always travel together.
 
 **Encoder tune.** `VideoTune: ssim` is a real encoder change (SVT `tune=2` instead of
 `0`). If it is adopted, the plan fingerprint (`db.get_valid_plan`) must gain the tune,
