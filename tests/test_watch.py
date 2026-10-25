@@ -522,22 +522,30 @@ class TestWatchInPlace(unittest.TestCase):
             os.chdir(previous)
 
     def test_the_in_place_form_does_not_need_an_output_directory(self) -> None:
-        """The criterion: watch-mode with no output dir is accepted."""
-        with patch("shrinkray.engine.watch.watch") as fake_watch:
-            result = self._run("watch-mode", "--root", str(self.inbox), "--poll", "5")
-        self.assertEqual(result.exit_code, 0, result.output)
-        fake_watch.assert_called_once()
-        self.assertIsNone(fake_watch.call_args.args[1])
+        """The criterion: `watch` with no output dir is accepted (issue #127;
+        the watch-mode CLI verb was removed with issue #202, the engine call
+        it covered is what these tests exercise directly)."""
+        from shrinkray.engine.watch import watch
+
+        with (
+            mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(self.tmp.name) / "watch.lock"),
+            mock.patch.object(watch_mod, "_wait_or_stop", lambda *a, **k: None),
+            mock.patch.object(watch_mod, "decide", lambda *a, **k: None),
+        ):
+            watch([self.inbox], None, once=True)
 
     def test_the_two_directory_form_still_passes_both(self) -> None:
-        """The regression guard: naming an output dir keeps today's behaviour."""
+        """The regression guard: naming an output dir keeps the behaviour
+        (issue #127)."""
+        from shrinkray.engine.watch import watch
+
         out = Path(self.tmp.name) / "encoded"
-        with patch("shrinkray.engine.watch.watch") as fake_watch:
-            result = self._run(
-                "watch-mode", "--root", str(self.inbox), "--output-dir", str(out), "--poll", "5"
-            )
-        self.assertEqual(result.exit_code, 0, result.output)
-        self.assertEqual(fake_watch.call_args.args[1], out)
+        with (
+            mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(self.tmp.name) / "watch.lock"),
+            mock.patch.object(watch_mod, "_wait_or_stop", lambda *a, **k: None),
+            mock.patch.object(watch_mod, "decide", lambda *a, **k: None),
+        ):
+            watch([self.inbox], out, once=True)
 
     def test_the_overlap_guard_still_refuses_two_overlapping_dirs(self) -> None:
         """The guard is right for what it protects: keep it for that form."""

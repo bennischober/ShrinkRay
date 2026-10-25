@@ -6,7 +6,6 @@ options and the console presentation.
 """
 
 import contextlib
-import csv
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -34,9 +33,8 @@ from shrinkray.engine.scan import (
     scan_movies,
 )
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
-from shrinkray.helpers import calc_time, generate_string, sanitize_number
+from shrinkray.helpers import calc_time
 from shrinkray.logger import log, log_error
-from shrinkray.report import generate_report
 from shrinkray.tools.process import (
     Cancelled as _EncodeCancelled,
 )
@@ -45,27 +43,24 @@ from shrinkray.tools.process import apply_config
 if TYPE_CHECKING:
     import sqlite3
 
-    from rich.live import Live
     from rich.progress import TaskID
 
     from shrinkray.config import Conf
 
 from shrinkray.service import (
     finished_movies,
-    record_fixed_results,
     record_plan,
     record_quality_results,
 )
 
 app = typer.Typer(
-    help="A short python script to get video meta data.",
+    help="Quality-measured video library compressor: re-encodes a collection "
+    "at measured quality (VMAF-driven CRF search) and removes baked-in black bars.",
     no_args_is_help=True,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
 
-OUTPUT_FILE = Path("movies.txt")
-CSV_FILE = Path("output.csv")
 DB_FILE = Path("metadata.db")
 
 # re-exports for backwards compatibility (tests and third parties import
@@ -78,78 +73,7 @@ __all__ = [
     "print_summary",
     "print_table",
     "scan_movies",
-    "write_csv",
-    "write_output",
 ]
-
-
-def write_output(
-    movies_by_category: dict,
-    total_time: str | None,
-    total_size: float,
-    separator: str,
-    output_file: Path = OUTPUT_FILE,
-) -> None:
-    """Writes the processed data to the output file.
-
-    Args:
-        movies_by_category (dict): Categories as keys and movie lists as values.
-        total_time (str | None): Total duration as 'HH:MM:SS' string.
-        total_size (float): Total size in GB.
-        separator (str): The separator between the columns.
-        output_file (Path): Path of the output file.
-    """
-    with open(output_file, "w+", encoding="UTF8") as text:
-        # write csv / file header
-        header = [
-            "CATEGORY",
-            "NAME",
-            "DURATION",
-            "SIZE",
-            "CODEC",
-            "BITRATE",
-            "ASPECT RATIO",
-            "RESOLUTION",
-            "GB/h",
-            "FPS",
-            "BARS",
-            "HDR",
-            "OTHER CODECS",
-            "AUDIO LANGUAGES",
-        ]
-        text.write(separator.join(header) + "\n")
-
-        # iterate through parent dictionary
-        for movies in movies_by_category.values():
-            # write value for category / index in dictionary
-            rows = ""
-
-            for value in movies:
-                # only show the category once per category block
-                use_cat = value is movies[0]
-                rows += generate_string(value, separator, use_cat)
-
-            text.write(rows)
-
-        # write total duration and size
-        total = ["Total", str(total_time), sanitize_number(total_size)]
-        total.extend([""] * (len(header) - len(total)))
-        text.write(separator.join(total) + "\n")
-
-
-def write_csv(separator: str, output_file: Path = OUTPUT_FILE, csv_file: Path = CSV_FILE) -> None:
-    """Converts the output file into a real csv file.
-
-    Args:
-        separator (str): The separator between the columns.
-        output_file (Path): Path of the txt input file.
-        csv_file (Path): Path of the csv output file.
-    """
-    with open(output_file, encoding="utf-8") as in_file:
-        lines = [line.rstrip("\n").split(separator) for line in in_file if line.strip()]
-        with open(csv_file, "w+", newline="", encoding="iso-8859-1") as out_file:
-            writer = csv.writer(out_file, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL)
-            writer.writerows(lines)
 
 
 def print_table(movies_by_category: dict, total_time: str | None, total_size: float) -> None:
@@ -231,7 +155,8 @@ def print_summary(movies_by_category: dict, total_time: str | None, total_size: 
     )
 
 
-@app.command("app")
+@app.command("app", hidden=True)
+@app.command("serve")
 def app_command(
     db_file: Path = typer.Option(
         DB_FILE, "--db", help="Path of the sqlite database file (scan cache/history)."
@@ -283,103 +208,6 @@ def _totals(movies_by_category: dict) -> tuple:
 
 
 @app.command()
-def scan(
-    path: str = typer.Argument(
-        ...,
-        help="A movie file, a folder, or a glob pattern (e.g. D:\\Movies).",
-    ),
-    csv_output: bool = typer.Option(
-        False, "--csv", "-csv", help="Also write the data as csv file."
-    ),
-    output_file: Path = typer.Option(
-        OUTPUT_FILE, "--output", "-o", help="Path of the output file."
-    ),
-    workers: int = typer.Option(
-        0,
-        "--workers",
-        "-w",
-        min=0,
-        help="Number of parallel workers (0 = automatic, 1 = sequential).",
-    ),
-    no_table: bool = typer.Option(
-        False, "--no-table", help="Do not print the results as table to the console."
-    ),
-    rescan: bool = typer.Option(
-        False, "--rescan", help="Re-probe all files even if they are cached."
-    ),
-    hash_files: bool = typer.Option(
-        False, "--hash", help="Compute a fast content hash for new/changed files."
-    ),
-    db_file: Path | None = typer.Option(
-        None,
-        "--db",
-        help=(
-            "Path of the sqlite database file (scan cache/history). Omit it and "
-            "the run stays stateless: no database is created or read."
-        ),
-    ),
-    config_file: Path = typer.Option(
-        None,
-        "--config",
-        help="Path of the config.json file (default: next to the db, or $SHRINKRAY_CONFIG).",
-    ),
-) -> None:
-    """Scans the movie folder and writes the metadata to a text file."""
-    config = load_config(config_file=config_file)
-    apply_config(config)
-    # scan reads media with ffprobe only: refuse when IT is missing, but do
-    # not demand the encode toolchain for a cataloging run (issue #194)
-    from shrinkray.service import toolchain_problems
-
-    ffprobe_problems = toolchain_problems()["ffprobe"]
-    if ffprobe_problems:
-        for problem in ffprobe_problems:
-            log_error(problem)
-        raise typer.Exit(1)
-    connection = db.connect(db_file) if db_file is not None else None
-    try:
-        root, files = resolve_input_paths(path, config.extensions)
-    except FileNotFoundError as e:
-        log_error(str(e))
-        raise typer.Exit(1) from e
-    try:
-        movies_by_category, _movies, error_messages = scan_movies(
-            root,
-            config,
-            workers=workers if workers > 0 else None,
-            connection=connection,
-            rescan=rescan,
-            compute_hash=hash_files,
-            db_file=db_file,
-            files=files,
-        )
-    finally:
-        if connection is not None:
-            connection.close()
-
-    if movies_by_category:
-        total_time, total_size = _totals(movies_by_category)
-        write_output(movies_by_category, total_time, total_size, config.separator, output_file)
-        if not no_table:
-            print_table(movies_by_category, total_time, total_size)
-        print_summary(movies_by_category, total_time, total_size)
-
-        if csv_output:
-            csv_file = output_file.with_suffix(".csv")
-            write_csv(config.separator, output_file, csv_file)
-            console.print(f"Written '{csv_file}'.")
-    elif error_messages:
-        # every found file failed to read: a fabricated report (Total;None;0)
-        # would be worse than none - the run failed, say so (issue #196)
-        log_error(f"None of the {len(error_messages)} file(s) could be read; see the errors above.")
-        raise typer.Exit(1)
-
-    # show errors
-    for er in error_messages:
-        log_error(er)
-
-
-@app.command()
 def encode(
     path: str = typer.Argument(
         ...,
@@ -400,11 +228,13 @@ def encode(
         False, "--overwrite", help="Re-encode files even if the output already exists."
     ),
     quality: bool = typer.Option(
-        False,
-        "--quality",
+        True,
+        "--quality/--fixed",
+        hidden=True,
         help=(
-            "Probe VMAF quality per movie and pick the largest CRF that keeps "
-            "perceptual quality (slower, smaller files)."
+            "Accepted for one release: quality mode IS the only encode mode "
+            "(the fixed-preset path was removed with issue #202). --fixed "
+            "is also accepted but ignored; both flags change nothing."
         ),
     ),
     target_vmaf: float = typer.Option(
@@ -485,16 +315,6 @@ def encode(
             "run --probe-encoder-preset."
         ),
     ),
-    workers: int = typer.Option(
-        0,
-        "--workers",
-        "-w",
-        min=0,
-        help=(
-            "Number of concurrent encodes (fixed mode only; 0 = automatic, "
-            "1 = sequential). Each encode gets a share of the CPU threads."
-        ),
-    ),
     threads: int = typer.Option(
         0,
         "--threads",
@@ -562,7 +382,6 @@ def encode(
                 quality,
                 target_vmaf,
                 verify,
-                workers,
                 threads,
                 db_file,
                 replan,
@@ -704,7 +523,6 @@ def _record_encodes(
     quality: bool,
     target_vmaf: float,
     verify: bool,
-    workers: int,
     threads: int | None,
     db_file: Path | None,
     replan: bool = False,
@@ -724,16 +542,15 @@ def _record_encodes(
         config (Conf): The config settings.
         dry_run (bool): Only show what would be encoded.
         overwrite (bool): Whether existing output files may be replaced.
-        quality (bool): Use VMAF-driven quality mode.
+        quality (bool): Accepted as a no-op alias (quality mode IS the only mode).
         target_vmaf (float): VMAF quality floor for quality mode.
         verify (bool): Full-file VMAF verification after each encode.
-        workers (int): Number of concurrent encodes (fixed mode).
         db_file (Path): The database file (failure-evidence logs location).
         replan (bool): Ignore stored plans and re-probe (quality mode).
         probe_encoder_preset (str): The PROBE's speed preset (measurement).
         encoder_preset (str): The FINAL encode's speed preset (output).
     """
-    from shrinkray.engine.pipeline import encode_movies, encode_with_quality
+    from shrinkray.engine.pipeline import encode_with_quality
 
     # already encoded AND output still present? (unless --overwrite)
     # => batch resume: an interrupted run skips everything it finished before
@@ -741,7 +558,7 @@ def _record_encodes(
     if not overwrite and not dry_run and connection is not None:
         encoded_paths = finished_movies(connection, movies, output_dir)
 
-    if not dry_run and quality:
+    if not dry_run:
         try:
             # the whole quality run holds the encode slot once (probes and
             # final encodes all write into output_dir)
@@ -835,32 +652,6 @@ def _record_encodes(
         except (RuntimeError, FileNotFoundError) as e:
             log_error(str(e))
             raise typer.Exit(1) from e
-        return
-
-    results: list = []
-    try:
-        results = encode_movies(
-            movies,
-            output_dir,
-            preset=config.handbrake_preset,
-            encoder=config.handbrake_encoder,
-            dry_run=dry_run,
-            overwrite=overwrite,
-            workers=workers if workers > 0 else None,
-            max_threads=cap_threads(threads or config.handbrake_max_threads),
-            db_file=db_file,
-        )
-    except (RuntimeError, FileNotFoundError) as e:
-        log_error(str(e))
-        raise typer.Exit(1) from e
-
-    # record the encodes of this run in the database
-    if connection is not None:
-        record_fixed_results(connection, results, config)
-    if replace:
-        for fixed_result in results:
-            if fixed_result.success:
-                _swap_into_place(connection, fixed_result.input, fixed_result.output)
 
 
 @app.command()
@@ -872,7 +663,10 @@ def plan(
     quality: bool = typer.Option(
         True,
         "--quality/--fixed",
-        help="Plan quality mode (VMAF-driven) or the fixed preset.",
+        hidden=True,
+        help="Accepted for one release: planning is always quality mode "
+        "(the fixed-preset plan was removed with issue #202); both flags "
+        "change nothing.",
     ),
     target_vmaf: float = typer.Option(
         DEFAULT_TARGET_VMAF,
@@ -1122,90 +916,6 @@ def retained(
 
 
 @app.command()
-def report(
-    db_file: Path = typer.Option(DB_FILE, "--db", help="Path of the sqlite database file."),
-    output: Path = typer.Option(
-        Path("report.html"), "--output", "-o", help="Path of the HTML report."
-    ),
-) -> None:
-    """Generates a self-contained HTML report from the database."""
-    if not db_file.is_file():
-        log_error(f"Database '{db_file}' not found! Run a scan first.")
-        raise typer.Exit(1)
-
-    generate_report(db_file, output)
-    console.print(f"[green]Report written to '{output}'.[/green]")
-
-
-@app.command("compare")
-def compare(
-    movie: Path = typer.Argument(
-        ...,
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        help="The movie file whose encode history (generation chain) to show.",
-    ),
-    db_file: Path = typer.Option(DB_FILE, "--db", help="Path of the sqlite database file."),
-) -> None:
-    """Shows the provenance chain of a movie: every generation with its data.
-
-    Each row documents one generation: codec, bitrate, size, CRF/VMAF (when
-    quality mode) and the generation number. Re-encoding an encode chains a
-    new row automatically — this is how generation drift becomes visible
-    per title (e.g. rip 18.4 Mbit/s -> encode 14.9 Mbit/s).
-    """
-    if not db_file.is_file():
-        log_error(f"Database '{db_file}' not found! Run a scan first.")
-        raise typer.Exit(1)
-
-    connection = db.connect(db_file)
-    try:
-        movie_str = str(movie.resolve())
-        # the chain: rows whose output is this file, plus rows whose input
-        # is this file (a re-encode of it) — ordered by generation
-        rows = connection.execute(
-            """
-            SELECT e.*, f.name FROM encodes e
-            JOIN files f ON f.id = e.file_id
-            WHERE e.output_file = ? OR e.source_file = ? OR f.path = ?
-            ORDER BY e.generation, e.id
-            """,
-            (movie_str, movie_str, movie_str),
-        ).fetchall()
-        real = [r for r in rows if r["output_size"] > 0]
-        if not real:
-            console.print(
-                f"[yellow]No encodes recorded for '{movie.name}' yet — "
-                "run an encode first.[/yellow]"
-            )
-            return
-        table = Table(title=f"Provenance chain of {movie.name}", title_justify="left")
-        table.add_column("Gen", justify="right")
-        table.add_column("Codec")
-        table.add_column("Bitrate", justify="right")
-        table.add_column("Size", justify="right")
-        table.add_column("CRF", justify="right")
-        table.add_column("VMAF", justify="right")
-        table.add_column("Encoded", justify="right")
-        for r in real:
-            bitrate = f"{r['input_bitrate']:.2f}" if r["input_bitrate"] is not None else "—"
-            vmaf = f"{r['achieved_vmaf']:.2f}" if r["achieved_vmaf"] is not None else "—"
-            table.add_row(
-                str(r["generation"]),
-                r["source_codec"] or "—",
-                bitrate,
-                f"{r['input_size'] / (1024**3):.2f} GB",
-                str(r["chosen_crf"] or "—"),
-                vmaf,
-                str(r["encoded_at"] or "—"),
-            )
-        console.print(table)
-    finally:
-        connection.close()
-
-
-@app.command()
 def doctor(
     db_file: Path = typer.Option(DB_FILE, "--db", help="Path of the sqlite database file."),
     probe_all: bool = typer.Option(
@@ -1261,201 +971,3 @@ def doctor(
         table.add_row(finding.movie, finding.issue, finding.detail or "—")
     console.print(table)
     raise typer.Exit(1)  # non-zero exit: scripts/cron can detect unhealth
-
-
-def _watch_display(
-    roots: list[Path],
-    output_dir: Path | None,
-    poll_interval: int,
-) -> tuple["Live", "Callable[[dict], None]"]:
-    """Builds the watch mode's live display (issue #178): a rich Live panel
-    with the watched roots, the output mode, the disk free vs floor and a
-    percent bar for the current encode, fed by the engine's progress events.
-
-    The display is a renderer over the events, never the loop itself: on a
-    non-TTY rich degrades Live to plain prints (the log lines keep flowing
-    as before), and --no-live skips the panel entirely.
-
-    Args:
-        roots (list[Path]): The watched roots (header line).
-        output_dir (Path | None): The output directory, or None for in-place
-            (the header says which mode).
-        poll_interval (int): Seconds between passes (header line).
-
-    Returns:
-        tuple[Live, Callable]: The Live instance (use as a context manager)
-        and the progress callback to hand to watch().
-    """
-    from rich.live import Live
-    from rich.table import Table
-    from rich.text import Text
-
-    from shrinkray.engine.pipeline import DISK_FREE_FLOOR_BYTES, disk_free_bytes
-
-    console = Console()
-
-    def render() -> Table:
-        table = Table.grid(padding=(0, 2))
-        mode = "in place (originals retained)" if output_dir is None else f"-> {output_dir}"
-        free = disk_free_bytes(output_dir if output_dir is not None else roots[0])
-        free_s = (
-            f"{free / (1024**3):.1f} GB free (floor {DISK_FREE_FLOOR_BYTES / (1024**3):.1f} GB)"
-            if free is not None
-            else "disk: unknown"
-        )
-        table.add_row(Text("ShrinkRay watch", style="bold"), Text(mode, style="dim"))
-        table.add_row(
-            Text("watching", style="dim"),
-            Text(", ".join(str(r) for r in roots), style="cyan"),
-        )
-        table.add_row(Text("poll", style="dim"), Text(f"{poll_interval}s · {free_s}", style="dim"))
-        status = _watch_state.get("status") or "waiting for new files..."
-        style = (
-            "green"
-            if _watch_state.get("done")
-            else ("amber" if _watch_state.get("percent") is not None else "")
-        )
-        table.add_row(Text("now", style="dim"), Text(str(status), style=style or "white"))
-        return table
-
-    _watch_state.clear()
-    _watch_state["status"] = None
-    _watch_state["percent"] = None
-    _watch_state["done"] = False
-
-    def callback(data: dict) -> None:
-        if data.get("stage") == "encode" and "percent" in data:
-            _watch_state["status"] = (
-                f"encoding '{data.get('movie', 'movie')}' at {data['percent']:.0f}%"
-            )
-            _watch_state["percent"] = float(data["percent"])
-        elif data.get("stage") == "probe":
-            _watch_state["status"] = f"probing: {data.get('detail', '...')}"
-            _watch_state["percent"] = None
-
-    live = Live(render(), console=console, refresh_per_second=4, screen=False)
-    return live, callback
-
-
-_watch_state: dict = {}
-
-
-@app.command()
-def watch_mode(
-    root: list[Path] = typer.Option(
-        ...,
-        "--root",
-        exists=True,
-        file_okay=False,
-        readable=True,
-        help=(
-            "Folder to watch (repeatable). The tree is walked recursively, so a "
-            "new or changed file anywhere under it is picked up."
-        ),
-    ),
-    output_dir: Path | None = typer.Option(
-        None,
-        "--output-dir",
-        help=(
-            "Directory for the encoded files. Omit it to encode IN PLACE: each "
-            "verified output takes the source's own path and the original is "
-            "renamed aside and kept (never deleted)."
-        ),
-    ),
-    target_vmaf: float = typer.Option(
-        DEFAULT_TARGET_VMAF,
-        "--target-vmaf",
-        min=1.0,
-        max=100.0,
-        help="VMAF quality floor.",
-    ),
-    crop_samples: int = typer.Option(
-        10,
-        "--crop-samples",
-        min=1,
-        help="cropdetect windows per movie (more samples can only shrink the crop).",
-    ),
-    sample_every: float = typer.Option(
-        600.0,
-        "--sample-every",
-        min=0.0,
-        help=(
-            "Seconds of runtime per probe window (coverage stays a fixed "
-            "fraction of the file; 0 falls back to --sample-count)."
-        ),
-    ),
-    sample_count: int = typer.Option(
-        3,
-        "--sample-count",
-        min=1,
-        help="Probe windows, overriding --sample-every when set explicitly.",
-    ),
-    poll: int = typer.Option(60, "--poll", min=5, help="Seconds between inbox checks."),
-    live: bool = typer.Option(
-        True,
-        "--live/--no-live",
-        help=(
-            "Render a live status panel (roots, disk, current encode with a "
-            "percent bar). --no-live restores the plain log stream; a non-TTY "
-            "session degrades automatically."
-        ),
-    ),
-    config_file: Path = typer.Option(
-        None,
-        "--config",
-        help="Path of the config.json file (default: $SHRINKRAY_CONFIG or ./config.json).",
-    ),
-) -> None:
-    """Watches a folder and encodes newly arrived movies automatically.
-
-    With no output directory the encode lands IN PLACE: the verified output takes
-    the source's own path and the original is renamed aside and kept. Naming an
-    output directory keeps the older behaviour of writing a second copy there.
-    Stop with Ctrl+C; the running encode finishes first.
-    """
-    from shrinkray.engine.watch import watch
-
-    config = load_config(config_file=config_file)
-    apply_config(config)
-    roots = [Path(r) for r in root]
-    if not live:
-        try:
-            watch(
-                roots,
-                output_dir,
-                target_vmaf=target_vmaf,
-                encoder=config.handbrake_encoder,
-                probe_encoder_preset=config.handbrake_probe_encoder_preset,
-                encoder_preset=config.handbrake_encoder_preset,
-                poll_interval=float(poll),
-                max_threads=cap_threads(config.handbrake_max_threads),
-                db_file=DB_FILE,
-                min_source_height=config.min_source_height,
-            )
-        except (RuntimeError, FileNotFoundError) as e:
-            log_error(str(e))
-            raise typer.Exit(1) from e
-        return
-    live_display, progress_callback = _watch_display(roots, output_dir, poll)
-    try:
-        with live_display:
-            watch(
-                roots,
-                output_dir,
-                target_vmaf=target_vmaf,
-                encoder=config.handbrake_encoder,
-                probe_encoder_preset=config.handbrake_probe_encoder_preset,
-                encoder_preset=config.handbrake_encoder_preset,
-                poll_interval=float(poll),
-                max_threads=cap_threads(config.handbrake_max_threads),
-                db_file=DB_FILE,
-                min_source_height=config.min_source_height,
-                progress=progress_callback,
-            )
-    except (RuntimeError, FileNotFoundError) as e:
-        log_error(str(e))
-        raise typer.Exit(1) from e
-
-
-if __name__ == "__main__":
-    app()

@@ -4,6 +4,10 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ## [Unreleased]
 
+### Removed
+
+- **The CLI is one product: `encode`, `plan`, `serve`, `retained`, `doctor`** (issue #202): the nine-command surface was sediment from three earlier products, and three of the commands contradicted the product contract — `encode` without `--quality` ran an unmeasured fixed-preset encode that could take a library file's path, `plan --fixed` advertised a mode that did not exist, and `watch-mode` was a second watcher beside the resident app's that could not share its database. Removed: the fixed-preset encode path (`encode` is always VMAF-measured now; `--quality` is accepted and ignored, `--fixed` too), `scan` (the catalog wrote `movies.txt`/`output.csv` artifacts no product surface reads; scanning stays the resident backlog's first job), `report` (the CLI command AND the dashboard's `/report` route — the fossil per the issue's comment; the provenance surface is the dashboard's per-title chain), `compare` (its provenance chain is the dashboard's), and `watch-mode` (the resident `serve` owns watching). `app` is renamed to `serve` with `app` kept as a hidden alias, so the container entrypoint and the systemd unit keep working — both now say `serve`. `doctor` stays as the maintainer's health check (per the issue's comment, it is debugging and stays undocumented in PRODUCT.md).
+
 ### Added
 
 - **The resident watcher's output directory is configurable via `$SHRINKRAY_WATCH_OUTPUT`** (issue #193): the resident app hardcoded in-place encoding, so a read-only `/media` (test containers, special setups) crashed the watch thread on its staging folder with no way to point the encodes elsewhere — the operator could mount writable (the default, per #198) but nothing more. The env var points the watcher at a writable volume; the app validates the path at boot (creates it, checks writability) and refuses to start on a bad path, so a typo fails loudly instead of killing the watcher hours later. Zef-X's decision on the issue: writable `/media` by default, the env var for the exceptions.

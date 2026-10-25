@@ -102,9 +102,9 @@ Installs uv, the GPL ffmpeg build, HandBrake and the repository to
 
 ```powershell
 cd ~\.shrinkray
-uv run shrinkray scan 'D:\Movies'
-uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
-uv run shrinkray app        # the dashboard on http://127.0.0.1:8420
+uv run shrinkray encode 'D:\Movies' --dry-run        # preview what would change
+uv run shrinkray encode 'D:\Movies'
+uv run shrinkray serve        # the dashboard on http://127.0.0.1:8420
 ```
 
 > A file, a folder or a glob all work as the input, and no database is created unless you
@@ -114,7 +114,7 @@ uv run shrinkray app        # the dashboard on http://127.0.0.1:8420
 **Already have uv?** Run straight from GitHub without cloning:
 
 ```bash
-uvx shrinkray scan 'D:\Movies'
+uvx shrinkray encode 'D:\Movies' --dry-run
 
 # shrink it (quality-measured, black bars removed)
 uvx shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
@@ -142,7 +142,7 @@ builds the dashboard (when Node is present). Re-running is safe.
 <summary><strong>Option B — run directly from GitHub (no clone, uv users)</strong></summary>
 
 ```bash
-uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray scan 'D:\Movies'
+uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray encode 'D:\Movies' --dry-run
 ```
 
 </details>
@@ -154,7 +154,7 @@ uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray scan 'D:\Movi
 git clone https://github.com/bennischober/ShrinkRay.git
 cd ShrinkRay
 uv sync
-uv run shrinkray scan 'D:\Movies'
+uv run shrinkray encode 'D:\Movies' --dry-run
 ```
 
 </details>
@@ -190,8 +190,8 @@ sudo apt install ffmpeg        # or: see johnvansickle.com static builds
 sudo apt install handbrake-cli
 
 # 4. try it
-uv run shrinkray scan /srv/media/movies
-uv run shrinkray app            # dashboard on http://localhost:8420
+uv run shrinkray encode /srv/media/movies --dry-run
+uv run shrinkray serve            # dashboard on http://localhost:8420
 ```
 
 For a headless box that should run the app at boot there is a systemd unit
@@ -217,53 +217,34 @@ and probes run below normal priority and each encode can be thread-capped
 
 ## Commands
 
-### `scan` — catalog your library
-
-```bash
-uv run shrinkray scan 'D:\Movies' --csv
-```
-
-| Option | Effect |
-|---|---|
-| `--csv` | additionally write the results as a CSV file |
-| `--output / -o` | path of the output file |
-| `--workers / -w N` | parallel workers (`0` = auto, `1` = sequential) |
-| `--no-table` | skip the console table |
-| `--rescan` | force a full re-probe, ignoring the cache |
-| `--hash` | store a fast content hash (first/last MB) |
-
-Scans are cached in `metadata.db` (sqlite) when you pass `--db`: unchanged files (same
-mtime and size) are not probed again, so repeated scans are much faster. Without `--db`
-no database is created or read — a one-shot run is stateless.
-
 ### `encode` — shrink your library
 
 ```bash
 # quality-measured, in place (the default: original renamed aside, kept)
-uv run shrinkray encode 'D:\Movies' --quality
-
-# fixed preset, in place (fast, predictable)
 uv run shrinkray encode 'D:\Movies'
 
 # write a second copy into an output directory instead
-uv run shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
+uv run shrinkray encode 'D:\Movies' 'D:\Encoded'
 
 # with options
 uv run shrinkray encode 'D:\Movies' \
-    --quality --target-vmaf 96
+    --target-vmaf 96
 ```
+
+Every encode is **quality-measured**: a VMAF-driven CRF search per movie picks
+the largest CRF that keeps perceptual quality, bars are detected and removed,
+and a grown output is refused. There is no fixed-preset mode (issue #202
+removed it: an unmeasured encode can take a library file's path).
 
 | Option | Effect |
 |---|---|
-| `--quality` | VMAF-driven CRF search per movie (see above) |
-| `--target-vmaf N` | quality floor for quality mode (default: `96`) |
+| `--target-vmaf N` | quality floor (default: `96`) |
 | `--probe-encoder-preset N` | the PROBES' encoder speed preset (`5` default; SVT-AV1 speed 0-10, higher = slower; a measurement setting — changing it invalidates stored plans) |
 | `--encoder-preset N` | the FINAL encode's speed preset (`3` default; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows per movie (more samples can only shrink the crop) |
 | `--dry-run` | show what would be encoded, without encoding |
 | `--overwrite` | re-encode even if the output already exists |
-| `--workers / -w N` | concurrent encodes, each capped to a CPU share (default: sequential — one x265 encode already uses all cores) |
 
 **Batch-safe:** every finished encode is recorded, so an interrupted run skips
 its completed work on the next start. Movies whose quality target is provably
@@ -291,20 +272,10 @@ predicted savings land far above the real ones — measured on an HDR 4K title:
 `plan` command, the dashboard's plan display) carries this note; plan an HDR
 title expecting the real number to be much smaller than the prediction.
 
-### `report` — the library as one page
+### `serve` — the resident application
 
 ```bash
-uv run shrinkray report --output report.html
-```
-
-Generates a self-contained HTML page (dark theme, no external assets) from
-the database: summary cards, a per-category breakdown and a per-movie table
-with decision, sizes, CRF and VMAF. Read-only — regenerate any time.
-
-### `app` — the resident application
-
-```bash
-uv run shrinkray app            # http://127.0.0.1:8420
+uv run shrinkray serve            # http://127.0.0.1:8420
 ```
 
 Starts the resident application: a local server owning the job queue and the
@@ -327,7 +298,7 @@ reachable by every device on that LAN, including guests' phones and any compromi
 IoT device. To expose it deliberately, set a token:
 
 ```sh
-SHRINKRAY_TOKEN='a-long-random-secret' uv run shrinkray app --host 0.0.0.0
+SHRINKRAY_TOKEN='a-long-random-secret' uv run shrinkray serve --host 0.0.0.0
 ```
 
 The token lives in the environment, never in `config.json` (which is a tracked file).
@@ -338,28 +309,6 @@ loopback development flow is unchanged — no token, no prompt. TLS is deliberat
 left to a reverse proxy. Stop with Ctrl+C; the running job's state is recovered on
 the next start.
 
-### `watch-mode` - watch the library tree
-
-```bash
-# in place: the verified output takes the source path, original renamed aside
-uv run shrinkray watch-mode --root 'D:\Movies'
-
-# several folders, written to an output directory instead
-uv run shrinkray watch-mode --root 'D:\Movies' --root 'E:\Archive' \
-    --output-dir 'D:\Encoded'
-```
-
-The standalone variant of the app's watch loop. It walks each `--root` folder
-**recursively**, so a new file anywhere in the tree is picked up without a
-restart - not only what someone drops into one inbox. A file that is still being
-written waits until it is stable; a **changed** file (same path, new mtime or size)
-is a new question and is re-decided.
-
-With no output directory the encode lands **in place**, so the original is
-renamed aside and kept - and the retained originals are never picked up as new
-movies on a later pass. Naming an output directory keeps the older behaviour of
-writing a second copy there. Use the `app` command instead when you want this to
-run continuously alongside the dashboard.
 > [!NOTE]
 > VMAF scores are only comparable within the same libvmaf version: the same
 > encode scored 95.76 on ffmpeg 5 (libvmaf v2) and 94.40 on ffmpeg 9 (libvmaf v3).

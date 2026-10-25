@@ -27,7 +27,7 @@ Type=simple
 # Alternative: replace %i with a fixed username and copy the file without @.
 User=%i
 # the app was installed via the README's Linux section (uv tool or venv):
-ExecStart=/home/%i/.local/bin/shrinkray app --db /home/%i/.shrinkray/metadata.db
+ExecStart=/home/%i/.local/bin/shrinkray serve --db /home/%i/.shrinkray/metadata.db
 Restart=on-failure
 RestartSec=5
 # sqlite durability on power loss: the db lives in the home dir; keep at

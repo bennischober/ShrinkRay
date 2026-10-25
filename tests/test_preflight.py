@@ -58,43 +58,6 @@ class TestToolchainPreflight(unittest.TestCase):
         self.assertTrue(ffprobe_lines, f"no ffprobe entry in {problems}")
         self.assertIn("install ffmpeg", ffprobe_lines[0])
 
-    def test_scan_without_ffprobe_refuses_before_probing(self) -> None:
-        with (
-            patch("shrinkray.service.shutil.which", return_value=None),
-            patch("shrinkray.engine.scan.process_movie") as probe,
-        ):
-            code, output = self._run("scan", str(self.movie))
-        self.assertEqual(code, 1, "scan ran without ffprobe")
-        self.assertIn("ffprobe", output)
-        probe.assert_not_called()
-
-    def test_scan_without_handbrake_still_works(self) -> None:
-        """HandBrake is not a scan prerequisite: cataloging must not demand it."""
-        record = {
-            "category": "a",
-            "name": "a.mkv",
-            "duration": "00:00:01",
-            "size": 8,
-            "codec": "h264",
-            "bitrate": None,
-            "aspect_ratio": None,
-            "dimensions": {"width": 1920, "height": 1080},
-            "compression_rate": 2.5,
-            "fps": None,
-            "crop": False,
-            "hdr": False,
-            "other_codecs": "",
-            "audio_languages": "",
-        }
-        with (
-            # the ffprobe check must PASS here (the point: HandBrake missing
-            # does not matter), so mock which to a present ffprobe
-            patch("shrinkray.service.shutil.which", return_value="ffprobe"),
-            patch("shrinkray.engine.scan.process_movie", return_value=(record, None)),
-        ):
-            code, _output = self._run("scan", str(self.movie))
-        self.assertEqual(code, 0, "scan refused for a missing encode tool")
-
     def test_plan_without_ffprobe_refuses(self) -> None:
         with patch("shrinkray.service.shutil.which", return_value=None):
             code, output = self._run("plan", str(self.movie))

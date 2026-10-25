@@ -1,6 +1,6 @@
-"""One named file must touch exactly one file (issue #197): the three CLI
+"""One named file must touch exactly one file (issue #197): The remaining CLI
 commands resolved a file to its PARENT folder and rescanned it, so a flat
-library named by one file got batch-scanned/planned/encoded. The fix passes
+library named by one file got batch-planned/encoded. The fix passes
 resolve_input_paths' file list through scan_movies' new `files` parameter.
 """
 
@@ -49,30 +49,6 @@ class TestSingleFileScope(unittest.TestCase):
             return runner.invoke(app, list(argv)).output
         finally:
             os.chdir(previous)
-
-    def test_scan_on_one_file_scans_one_movie(self) -> None:
-        with (
-            _toolchain_present(),
-            patch("shrinkray.engine.scan.process_movie", return_value=({}, None)) as probe,
-        ):
-            self._run("scan", "a.mkv")
-        self.assertEqual(probe.call_count, 1, "a one-file scan scanned the folder")
-
-    def test_scan_on_a_folder_scans_the_folder(self) -> None:
-        with (
-            _toolchain_present(),
-            patch("shrinkray.engine.scan.process_movie", return_value=({}, None)) as probe,
-        ):
-            self._run("scan", str(self.root))
-        self.assertEqual(probe.call_count, 3, "a folder scan did not walk the folder")
-
-    def test_scan_on_a_glob_scans_the_matched_files(self) -> None:
-        with (
-            _toolchain_present(),
-            patch("shrinkray.engine.scan.process_movie", return_value=({}, None)) as probe,
-        ):
-            self._run("scan", "*.mkv")
-        self.assertEqual(probe.call_count, 3, "a glob scan did not match its files")
 
     def test_plan_on_one_file_plans_one_movie(self) -> None:
         def fake_plan(movie, **kwargs):
