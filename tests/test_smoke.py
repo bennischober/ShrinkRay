@@ -3,7 +3,11 @@
 Skipped by default everywhere (CI, local gate): the suite's contract is
 no binaries required. Run explicitly with real binaries on PATH:
 
-    SHRINKRAY_SMOKE=1 uv run pytest tests/test_smoke.py -v
+    SHRINKRAY_SMOKE=1 uv run pytest tests/test_smoke.py -v --no-cov
+
+--no-cov because pyproject's addopts enforce the suite-wide coverage floor,
+which one file never reaches: without it the run fails even when every
+smoke test passes (issue #295).
 
 Why this exists: the stall-watchdog false positive (8e86d82) passed
 every stub-based test while killing real encodes - stub behavior is not
