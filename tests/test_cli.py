@@ -133,6 +133,44 @@ class TestDoctorCli(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertIn("healthy", result.output)
 
+    def test_doctor_without_a_database_checks_the_toolchain_only(self):
+        """Issue #241: a fresh install has no database, and 'run doctor' is
+        the last install step - the toolchain check must run WITHOUT a
+        database, print that the library check was skipped, and exit 0 when
+        the toolchain is healthy."""
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "fresh.db"
+            runner = CliRunner()
+            with patch("shrinkray.service.all_problems", return_value=[]):
+                result = runner.invoke(app, ["doctor", "--db", str(missing)])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Toolchain is healthy", result.output)
+            self.assertIn("skipped", result.output)
+            self.assertFalse(missing.exists(), "doctor created a database to report on it")
+
+    def test_doctor_without_a_database_still_fails_on_a_broken_toolchain(self):
+        """The install check must catch the broken-toolchain case: no db +
+        missing libvmaf => non-zero exit and the vmaf message named."""
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "fresh.db"
+            runner = CliRunner()
+            with patch(
+                "shrinkray.service.all_problems",
+                return_value=["ffmpeg has no libvmaf filter: the CRF search cannot measure."],
+            ):
+                result = runner.invoke(app, ["doctor", "--db", str(missing)])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("libvmaf", result.output)
+            self.assertIn("toolchain", result.output.lower())
+
     def test_doctor_finding_exits_one(self):
         """A dead path produces the findings table and exit 1 (scripts/
         cron can detect unhealth)."""

@@ -25,6 +25,7 @@ from shrinkray.config import (
     seed_config_from_env,
 )
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
+from shrinkray.engine.lock import guard_encodes
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.scan import (
     find_movies,
@@ -325,6 +326,7 @@ def encode(
                 sample_every,
                 sample_count,
                 output_dir is None or replace,
+                library_root=root if output_dir is None else None,
             )
     finally:
         if connection is not None:
@@ -352,7 +354,29 @@ def _latest_encode_id(connection: "sqlite3.Connection", source: Path) -> int | N
     return int(latest["id"]) if latest is not None else None
 
 
-def _swap_into_place(connection: "sqlite3.Connection | None", source: Path, output: Path) -> None:
+def _encode_discarded(connection: "sqlite3.Connection | None", encode_id: int | None) -> None:
+    """Records that a written encode's artifact was discarded (issue #232).
+
+    A declined swap leaves the encode in its staging directory, which the run
+    deletes on exit. The row written a moment earlier points at that staging
+    path; it must record the discard instead, or `doctor` reports a vanished
+    output for a swap that was REFUSED - the healthy case.
+
+    Args:
+        connection: The database connection, or None for a stateless run.
+        encode_id: The encode row to correct (None: nothing to correct).
+    """
+    if connection is None or encode_id is None:
+        return
+    db.set_encode_output(connection, encode_id, None)
+
+
+def _swap_into_place(
+    connection: "sqlite3.Connection | None",
+    source: Path,
+    output: Path,
+    encode_id: int | None = None,
+) -> None:
     """Swaps a verified encode into the source's path, retaining the original.
 
     The swap gate is the check the encode already passed: the output exists,
@@ -373,6 +397,11 @@ def _swap_into_place(connection: "sqlite3.Connection | None", source: Path, outp
             swap still happens, but no ledger row is written).
         source: The library file the output replaces.
         output: The verified encoded file.
+        encode_id: The encode row the run just wrote (None: stateless). A
+            DECLINED swap clears the row's output_file (issue #232): the
+            encode is discarded with its staging directory, so the row must
+            not point at a path that is about to vanish - that lie is what
+            made `doctor` report every in-place encode as vanished.
     """
     from shrinkray import replace as replace_module
 
@@ -383,12 +412,14 @@ def _swap_into_place(connection: "sqlite3.Connection | None", source: Path, outp
             f"Not replacing '{source.name}': the output is not smaller "
             f"({size_before} -> {size_after} bytes)"
         )
+        _encode_discarded(connection, encode_id)
         return
     try:
         staged = replace_module.stage(output, source)
         retained = replace_module.swap(source, staged)
     except replace_module.SwapError as error:
         log_error(f"Not replacing '{source.name}': {error}")
+        _encode_discarded(connection, encode_id)
         return
     if connection is not None:
         db.add_retained(
@@ -466,6 +497,7 @@ def _record_encodes(
     sample_every: float | None = None,
     sample_count: int | None = None,
     replace: bool = False,
+    library_root: Path | None = None,
 ) -> None:
     """Runs the encoding and records the results in the database.
 
@@ -483,6 +515,12 @@ def _record_encodes(
         replan (bool): Ignore stored plans and re-probe (quality mode).
         probe_encoder_preset (str): The PROBE's speed preset (measurement).
         encoder_preset (str): The FINAL encode's speed preset (output).
+        library_root (Path | None): The directory the swap renames inside when
+            the run replaces sources in place (issue #230): the contended
+            resource in that mode is the LIBRARY, not the per-run staging
+            directory, so the encode slot must be keyed on it. None when the
+            run writes into a real output directory (that directory is the
+            contended resource and stays the lock's target).
     """
     # the config values are the defaults: a flag not given falls back to
     # quality.sample_every / quality.sample_count (issue #236 part 2 - the
@@ -503,8 +541,11 @@ def _record_encodes(
     if not dry_run:
         try:
             # the whole quality run holds the encode slot once (probes and
-            # final encodes all write into output_dir)
-            from shrinkray.engine.lock import guard_encodes
+            # final encodes all write into output_dir). In place the slot is
+            # keyed on the LIBRARY root (issue #230): the staging directory is
+            # a fresh per-run path nothing else ever locks, so a slot on it
+            # excluded no one, and two encoders of one file raced on the
+            # deterministic swap staging name.
             from shrinkray.engine.pause import manual_encode, state_dir_for_cli
 
             if sys.stdin.isatty() and sys.stdout.isatty():
@@ -519,7 +560,7 @@ def _record_encodes(
             # runs (issue #250); the marker goes away when the run ends
             with (
                 manual_encode(state_dir_for_cli(db_file)),
-                guard_encodes(output_dir, holder="encode-cli"),
+                guard_encodes(library_root or output_dir, holder="encode-cli"),
             ):
                 # live progress for the whole quality run: a 4-hour encode
                 # must not look like a hang. The engine streams
@@ -589,9 +630,27 @@ def _record_encodes(
                                 f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
                             )
                             if connection is not None:
-                                record_quality_results(connection, movie, result, config)
+                                outcome = record_quality_results(
+                                    connection,
+                                    movie,
+                                    result,
+                                    config,
+                                    # in place the artifact's real location is the
+                                    # source's own path once the swap succeeds
+                                    # (issue #232); the row records it up front and
+                                    # a DECLINED swap clears it, because the encode
+                                    # is then discarded with its staging directory
+                                    final_output=movie if replace else None,
+                                )
+                            else:
+                                outcome = None
                             if replace:
-                                _swap_into_place(connection, movie, output_dir / movie.name)
+                                _swap_into_place(
+                                    connection,
+                                    movie,
+                                    output_dir / movie.name,
+                                    outcome.encode_id if outcome else None,
+                                )
                         elif result.skipped_reason is not None:
                             # guardrail skip => record it so future runs do not re-probe
                             console.print(
@@ -940,25 +999,48 @@ def doctor(
     rows whose output vanished, and with --probe-all corrupt/truncated
     files. Read-only: doctor never repairs anything (delete-flagging
     stays the scan's job with its grace period).
-    """
-    if not db_file.is_file():
-        log_error(f"Database '{db_file}' not found! Run a scan first.")
-        raise typer.Exit(1)
 
+    With no database (a fresh install) the library check is skipped and
+    the TOOLCHAIN check still runs: "run doctor" is the last install
+    step on every route (issue #241) - a host that cannot measure a
+    single file is not usable, database or not.
+    """
     from shrinkray.service import all_problems
     from shrinkray.service import doctor as run_doctor
+
+    # the toolchain is checked FIRST: "library is healthy" on a host that
+    # cannot measure a single file is the honest-failure rule broken
+    problems = all_problems()
+    for problem in problems:
+        # log_error reaches the log; console.print reaches the operator's
+        # terminal AND the test runner's capture (the install check's whole
+        # point is the message being seen, issue #241)
+        log_error(problem)
+        console.print(f"[red]{problem}[/red]")
+
+    if not db_file.is_file():
+        # a fresh install: the library check cannot run (and must not
+        # create a database just to report on it); the toolchain result
+        # above is the install check (issue #241)
+        if problems:
+            console.print(
+                "[red]The toolchain cannot do the one thing this tool does "
+                "(see the problems above); fix the toolchain before the "
+                "first encode.[/red]"
+            )
+            raise typer.Exit(1)
+        console.print(
+            "[green]Toolchain is healthy.[/green] No database found at "
+            f"'{db_file}' - the library check is skipped until a run "
+            "creates one."
+        )
+        return
 
     connection = db.connect(db_file)
     try:
         findings = run_doctor(connection, probe_all=probe_all)
     finally:
         connection.close()
-
-    # the toolchain is checked FIRST: "library is healthy" on a host that
-    # cannot measure a single file is the honest-failure rule broken
-    problems = all_problems()
-    for problem in problems:
-        log_error(problem)
 
     if not findings and not problems:
         console.print("[green]Library is healthy: no findings.[/green]")

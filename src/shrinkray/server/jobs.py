@@ -837,7 +837,7 @@ def execute_encode(
         dict: The per-movie outcome summary.
     """
     from shrinkray.config import load_config, refresh_config
-    from shrinkray.engine.lock import EncodeBusyError
+    from shrinkray.engine.lock import EncodeBusyError, guard_encodes
     from shrinkray.engine.pipeline import encode_movies, encode_with_quality
     from shrinkray.service import (
         finished_movies,
@@ -888,26 +888,35 @@ def execute_encode(
                     }
                 )
             try:
-                result = encode_with_quality(
-                    movie,
-                    output_dir / movie.name,
-                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
-                    encoder=config.handbrake_encoder,
-                    probe_encoder_preset=payload.get(
-                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
-                    ),
-                    encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    progress=progress,
-                    cancel=cancel,
-                    db_file=_db_file_of(connection),
-                    encoder_threads=cap_threads(config.handbrake_max_threads),
-                    verify=payload.get("verify", False),
-                    min_source_height=config.min_source_height,
-                    min_source_width=config.min_source_width,
-                    min_source_size_gb=config.min_source_size_gb,
-                    candidate_codecs=tuple(config.candidate_codecs),
-                    crop_sample_count=config.crop_sample_count,
-                )
+                # hold the encode slot: encode_with_quality does not take it
+                # itself, and this loop previously took NO slot at all - a CLI
+                # encode running beside the app encoded the same file
+                # concurrently (issue #230). Keyed on the output directory: it
+                # is the contended resource of this mode. Per movie, never
+                # nested with the fixed branch's run-level slot.
+                with guard_encodes(output_dir, holder="encode-job"):
+                    result = encode_with_quality(
+                        movie,
+                        output_dir / movie.name,
+                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                        encoder=config.handbrake_encoder,
+                        probe_encoder_preset=payload.get(
+                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                        ),
+                        encoder_preset=payload.get(
+                            "encoder_preset", config.handbrake_encoder_preset
+                        ),
+                        progress=progress,
+                        cancel=cancel,
+                        db_file=_db_file_of(connection),
+                        encoder_threads=cap_threads(config.handbrake_max_threads),
+                        verify=payload.get("verify", False),
+                        min_source_height=config.min_source_height,
+                        min_source_width=config.min_source_width,
+                        min_source_size_gb=config.min_source_size_gb,
+                        candidate_codecs=tuple(config.candidate_codecs),
+                        crop_sample_count=config.crop_sample_count,
+                    )
             except EncodeBusyError as e:
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
                 continue
