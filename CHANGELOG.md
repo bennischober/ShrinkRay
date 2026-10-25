@@ -30,6 +30,10 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **The commands preflight their toolchain** (issue #194): `toolchain_problems()` never checked ffprobe, and only `doctor`/`run_app` called it — a host without ffprobe passed the doctor clean and then failed every file in `scan`/`plan`/`encode`, one error line at a time (scan exited 0). The check now includes ffprobe, the entries are grouped by prerequisite so each command gates on what IT needs (`scan`: ffprobe only; `plan`/`encode`: everything), and the refusal happens before any work, mirroring doctor's wording.
 
+### Changed
+
+- **CI tests the supported floor and the shipped interpreter, not three points between** : the test matrix drops Python 3.12 and keeps 3.10 and 3.15 — 3.10 enforces the `requires-python = ">=3.10"` promise (PR #217 proved its worth when 3.15-local missed an annotation NameError that 3.10 caught), 3.15 is the interpreter the container actually ships, and 3.12 sat between two tested versions catching almost nothing at ~90 s of CI time per push.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added
