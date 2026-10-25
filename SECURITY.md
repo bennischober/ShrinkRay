@@ -32,19 +32,23 @@ The resident server has token-based authentication (issue #36). How it works:
 - The token comes from $SHRINKRAY_TOKEN. Never from `config.json`, which is a
   tracked file.
 - **Loopback default:** with no token set, the server assumes a local
-  development session and binds to `127.0.0.1` only.
+  development session, binds to `127.0.0.1` only, and does NOT authenticate:
+  every route is open to any process or user on that machine. Authentication
+  is on only when a token is configured.
 - **Public bind requires a token:** the app refuses to start on a non-loopback
   address with no token configured - an open dashboard on a LAN cannot happen
   by accident.
-- **Generated tokens (containers, issue #267):** with $SHRINKRAY_TOKEN unset,
-  the container generates a secret at boot, stores it in
-  $SHRINKRAY_TOKEN_FILE's path and prints it to the console, so the
-  dashboard is protected without operator setup.
+- **Generated tokens (issue #249):** with $SHRINKRAY_TOKEN unset and
+  $SHRINKRAY_TOKEN_FILE set (the image sets it; a native install does not),
+  the server generates a secret on first start and stores it in that file
+  (mode 0600). It is never logged: read it from the file, or from the
+  container's interactive console banner. The dashboard is protected without
+  operator setup.
 
-Every route - all twelve GET routes and the single POST - sits behind the same
-token middleware; there are no unauthenticated routes. The middleware is
-registered before the routes, so a NEW route cannot be added unauthenticated
-by accident. `/api/events` additionally accepts the token as `?token=`
+When a token is configured, every route - all twelve GET routes and the
+single POST - sits behind the same token middleware. Because it is HTTP
+middleware wrapping the whole app, a NEW route cannot be added
+unauthenticated by accident. `/api/events` additionally accepts the token as `?token=`
 because EventSource cannot set headers - the one documented exception.
 
 The one state-changing route is `POST /api/reveal` (opens a file-manager
@@ -60,7 +64,10 @@ cancels or reconfigures work (issue #134) - there is no enqueue, cancel or
 config-write route to attack.
 
 Binding the server to a LAN interface is your decision; with a token set it
-is the supported shape (that is the container's default). This section must
+is the supported shape (that is the container's default). There is no TLS:
+the token travels in plain HTTP, so anyone who can observe the network
+traffic can read it. Put a TLS-terminating reverse proxy in front if the
+network is not trusted (see docs/docker.md). This section must
 stay in sync with the README's dashboard section - if one changes, change
 both.
 
