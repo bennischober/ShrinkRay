@@ -30,7 +30,7 @@ from shrinkray.engine.plan import MIN_ENCODE_SECONDS
 from shrinkray.engine.samples import ProgressCallback
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
-from shrinkray.replace import RETAINED_SUFFIX, STAGING_SUFFIX
+from shrinkray.replace import is_staging_path
 from shrinkray.tools.ffprobe import probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 from shrinkray.tools.process import Cancelled
@@ -95,15 +95,12 @@ def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list
     # windows glob is case-insensitive => deduplicate, then filter known.
     # the retained originals and staging copies are NEVER movies: in place the
     # library holds <name> and <name>.shrinkray-original side by side, and
-    # re-encoding a retained original would double the library on every pass
+    # re-encoding a retained original would double the library on every pass.
+    # The staging DIRECTORY (the in-place working dir) and everything inside it
+    # is the same non-movie class: an in-flight or crashed run's encode must
+    # not be picked up as a new arrival (issue #237).
     unique = list(dict.fromkeys(movies))
-    return [
-        m
-        for m in unique
-        if _identity(m) not in known
-        and not m.name.endswith(RETAINED_SUFFIX)
-        and not m.name.endswith(STAGING_SUFFIX)
-    ]
+    return [m for m in unique if _identity(m) not in known and not is_staging_path(m)]
 
 
 def _identity(path: Path) -> str:
