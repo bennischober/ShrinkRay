@@ -1,8 +1,6 @@
 # ui/ — ShrinkRay Console (Svelte 5 + Vite)
 
-Score 14 (file count 3, subdirs 2, code ratio 2, own config 1, entry module 2, symbol
-density 2, exports 2; reference centrality below threshold) — a second toolchain and
-design system beside the Python core, so it earns its own file. Repo-wide rules (gate,
+A second toolchain and design system beside the Python core, so it earns its own file. Repo-wide rules (gate,
 commit, issue workflow) live in the root `AGENTS.md`; the design record is the ROOT
 `DESIGN.md` (there is no `ui/DESIGN.md`).
 
