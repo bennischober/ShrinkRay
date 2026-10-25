@@ -37,9 +37,35 @@ SMOKE_ENV = os.environ.get("SHRINKRAY_SMOKE")
 TOLERANCE = 0.1  # |ShrinkRay - ab-av1| per pair (issue #306's proposal)
 
 
+class _AbAv1Mixin(unittest.TestCase):
+    """The shared ab-av1 invocation (both parity classes need it)."""
+
+    def _ab_av1_vmaf(self, reference: Path, distorted: Path, vfilter: str | None = None) -> float:
+        cmd = [
+            AB_AV1 or "ab-av1",
+            "vmaf",
+            "--reference",
+            str(reference),
+            "--distorted",
+            str(distorted),
+            # ab-av1's DEFAULT_VMAF_FPS is 25: without this the two inputs are re-timed
+            # to 25 fps and the SDR deltas stop being 0.0000 for a reason unrelated
+            # to the measurement. 0 disables the override.
+            "--vmaf-fps",
+            "0",  # score the source's own timestamps (ShrinkRay does)
+        ]
+        if vfilter:
+            cmd += ["--reference-vfilter", vfilter]
+        print("ABAV1 CMD: " + " ".join(cmd))
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        if proc.returncode != 0:
+            self.fail(f"ab-av1 vmaf failed: {proc.stderr[-400:]}")
+        return float(proc.stdout.strip().splitlines()[-1])
+
+
 @unittest.skipUnless(SMOKE_ENV, "smoke: opt-in (SHRINKRAY_SMOKE=1)")
 @unittest.skipUnless(FFMPEG_OK and AB_AV1, "real ffmpeg + ab-av1 required on PATH")
-class TestVmafParityAgainstAbAv1(unittest.TestCase):
+class TestVmafParityAgainstAbAv1(_AbAv1Mixin):
     """The measurement yardstick: measure_vmaf vs ab-av1 vmaf, same pairs."""
 
     def setUp(self) -> None:
@@ -118,25 +144,6 @@ class TestVmafParityAgainstAbAv1(unittest.TestCase):
         ]
         subprocess.run(cmd, check=True, timeout=600)
         return dest
-
-    def _ab_av1_vmaf(self, reference: Path, distorted: Path, vfilter: str | None = None) -> float:
-        cmd = [
-            AB_AV1 or "ab-av1",
-            "vmaf",
-            "--reference",
-            str(reference),
-            "--distorted",
-            str(distorted),
-            "--vmaf-fps",
-            "0",  # score the source's own timestamps (ShrinkRay does)
-        ]
-        if vfilter:
-            cmd += ["--reference-vfilter", vfilter]
-        print("ABAV1 CMD: " + " ".join(cmd))
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-        if proc.returncode != 0:
-            self.fail(f"ab-av1 vmaf failed: {proc.stderr[-400:]}")
-        return float(proc.stdout.strip().splitlines()[-1])
 
     def _check(
         self,
@@ -234,6 +241,8 @@ class TestVmafParityAgainstAbAv1(unittest.TestCase):
         ref = self._clip("ref4k.mkv", size="3840x2160")
         dis = self.root / "dis4k.mkv"
         self._encode(ref, dis, crf="28")
+        # hold=False: #312 flips this pair to held once #309 (the 4k model)
+        # lands - until then the pair guards nothing, by design.
         self._check(
             "2160p (ab-av1's 4k model)",
             ref,
@@ -280,6 +289,8 @@ class TestVmafParityAgainstAbAv1(unittest.TestCase):
         )
         dis = self.root / "dishdr.mkv"
         self._encode(ref, dis, crf="28", pix_fmt="yuv420p10le")
+        # hold=False: the tone-map deviation is #310's documented behaviour;
+        # #312 decides whether the pair is ever held (it is not expected to be).
         self._check(
             "HDR10 (reported, not held)",
             ref,
@@ -295,12 +306,16 @@ class TestVmafParityAgainstAbAv1(unittest.TestCase):
     FFMPEG_OK and AB_AV1 and shutil.which("HandBrakeCLI"),
     "real ffmpeg + ab-av1 + HandBrakeCLI required on PATH",
 )
-class TestVmafParityProbeSample(unittest.TestCase):
+class TestVmafParityProbeSample(_AbAv1Mixin):
     """The open-GOP probe-sample pair (needs HandBrakeCLI for the encode).
 
     The sample is exactly what engine/samples.extract_samples produces (a
     stream-copied window), encoded by HandBrake at the probe preset the way
     probe_crf does - the one pair that exercises the real probe pipeline.
+
+    UNTESTED AS OF #306's baseline: the baseline host has no HandBrakeCLI
+    (apt's is 1.3.1, below the 1.6 minimum), so this pair has never executed.
+    The first run with HandBrakeCLI present must paste the delta on #306.
     """
 
     def test_probe_sample_parity(self) -> None:
