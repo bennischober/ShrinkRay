@@ -405,8 +405,9 @@ to its quality** and whether its **frame matches its content**.
   plain HTTP, so on an untrusted network put a TLS-terminating reverse proxy in
   front. See the auth roadmap for what is deliberately still out of scope
   (per-user sessions).
-- HDR10 is processed, not supported (issue #358): HDR sources (tagged bt2020 or
-  PQ) are neither blocked nor validated. Quality is measured on a tone-mapped SDR
+- HDR10 is processed, not supported (issue #358): HDR sources (by default a
+  bt2020nc colour space or a PQ transfer, `codec.hdr`) are neither blocked nor
+  validated. Quality is measured on a tone-mapped SDR
   copy (VMAF has no HDR model) against a fixed 95.5 target the configured
   required VMAF does not change (#361), HDR10 metadata survival is not verified
   per file, and Dolby Vision is not handled (#104).

@@ -89,9 +89,9 @@ wasted.
 > [!NOTE]
 > **HDR10 sources are processed, not guaranteed** (issue
 > [#358](https://github.com/bennischober/ShrinkRay/issues/358)). They are
-> neither blocked nor validated: a file tagged bt2020 or PQ (`codec.hdr`) is
-> treated as HDR, always encodes 10-bit, and — because VMAF has no HDR model —
-> is measured on a tone-mapped SDR copy of both files against a fixed HDR
+> neither blocked nor validated: by default (`codec.hdr`) a file whose colour
+> space is bt2020nc or whose transfer is PQ (smpte2084) is treated as HDR, is
+> re-encoded only to 10-bit, and — because VMAF has no HDR model — is measured on a tone-mapped SDR copy of both files against a fixed HDR
 > target of 95.5, which `--target-vmaf` and `quality.target_vmaf` do not
 > change ([#361](https://github.com/bennischober/ShrinkRay/issues/361)). That
 > score is an approximation — on the one real HDR10 pair compared so far it
