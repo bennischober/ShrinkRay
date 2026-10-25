@@ -501,8 +501,10 @@ permissions and what a stateless run records.
 
 Pin a release with the version tag (`ghcr.io/bennischober/shrinkray:v0.4.0`);
 `docker inspect` on the image shows the version label without starting it.
-The image runs as a non-root user (override with `--build-arg UID/GID` on a
-source build) and expects the volume layout below.
+The image runs every command as the user you pass in `PUID`/`PGID` (default
+1000/1000, never root; Unraid: 99/100 — see
+[docs/docker.md](docs/docker.md#running-as-your-user)) and expects the volume layout
+below.
 
 Build from source instead (for development or an untagged checkout): two
 targets, one file:
