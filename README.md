@@ -368,7 +368,10 @@ run continuously alongside the dashboard.
 
 ## Configuration
 
-Optional `config.json` (defaults are used when missing). **One location, one
+Optional `config.json` (defaults are used when missing). `file.extensions`
+defaults to `.mkv` alone (issue #204): a library of `.mp4` files scans nothing
+until the list is extended — the shipped container config carries the common
+video containers for exactly that reason. **One location, one
 order** (issue #58) — the dashboard and the engine read the same file:
 
 1. `--config PATH` (every command; an explicit file wins over everything),

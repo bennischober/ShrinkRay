@@ -8,6 +8,10 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **`watch` wakes on filesystem events instead of only polling** (issue #176): between passes the loop sleeps on an inotify waiter (Linux) that fires on file creation, close and moves anywhere under a watched root, so a movie that lands in the inbox starts encoding within seconds instead of after the backoff window. The adaptive poll stays the fallback and the reconciler — a wake never bypasses the stability check — and platforms without a supported event API (and every setup error) degrade to exactly today's polling behavior.
 
+### Fixed
+
+- **The published container sees the common video containers, not just `.mkv`** (issue #204): the image's baked `config.json` now sets `file.extensions` to `.mkv`, `.mp4`, `.m4v`, `.avi`, `.mov`, `.ts`, `.m2ts`, `.webm` — before, the code default (`.mkv` alone) made a mounted `.mp4` library scan nothing while `scan`/`encode` still exited 0. The README states the narrow code default explicitly.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

@@ -125,7 +125,7 @@ USER shrinkray
 # the container's config: auto_backlog is the fire-and-forget contract (issue #126)
 # - a fresh container scans, plans and encodes the library with no client. The key
 # is off by default outside the image, so a local dev run never starts encoding.
-RUN printf '{\n  "app": { "auto_backlog": true }\n}\n' > /app/config.json
+RUN printf '{\n  "app": { "auto_backlog": true },\n  "file": { "extensions": [".mkv", ".mp4", ".m4v", ".avi", ".mov", ".ts", ".m2ts", ".webm"] }\n}\n' > /app/config.json
 
 # --root is not optional on Linux: the default allowlist is the current
 # directory when no drive root exists, so without it every library path is a 403.

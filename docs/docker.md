@@ -36,6 +36,11 @@ stated with the reason.
   scores that are not comparable with anyone else's.
 - **Non-root by default** (`--build-arg UID/GID`), so everything written on a bind
   mount is host-owned.
+- **The baked config carries the common video containers** (issue #204): the
+  image's `config.json` sets `file.extensions` to `.mkv`, `.mp4`, `.m4v`, `.avi`,
+  `.mov`, `.ts`, `.m2ts`, `.webm` — without it the code default (`.mkv` alone)
+  made a mounted `.mp4` library scan nothing, and the container logged a warning
+  and exited 0. The README documents the narrow code default.
 - **Volumes:** `/media` (library, read-only by default), `/data` (the database AND
   `config.json` - the app writes config next to the db), `/output` (encoded files for
   the non-replace flow), and `/tmp/shrinkray` (probe scratch, which is sized to the
