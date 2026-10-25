@@ -131,12 +131,14 @@ def _cancel_on_terminal_close() -> Iterator[threading.Event]:
     engine's children run in their own session, so they never see the
     terminal's SIGHUP: without a handler the CLI died, its HandBrake child
     kept encoding orphaned, and the staging directory was never cleaned up.
-    The first signal only sets the yielded event. The engine checks it
-    between steps, terminates its own child tree and raises Cancelled, so
-    the CLI unwinds through its normal cleanup paths. A second signal
-    raises KeyboardInterrupt, so a step that does not check the event (a
-    scan, a crop pass) can still be aborted. The previous handlers come
-    back on every exit path.
+    A signal only sets the yielded event. The engine checks it every poll
+    tick, terminates its own child tree and raises Cancelled, so the CLI
+    unwinds through its normal cleanup paths. A repeated signal changes
+    nothing: closing a terminal under bash delivers SIGHUP twice, and an
+    exception raised from the handler would unwind past the child's
+    termination, orphaning it. The previous handlers come back on every
+    exit path. Callers enter the scope only around the engine work, where
+    a child runs; a scan before it keeps the default signal behaviour.
 
     Yields:
         threading.Event: Set when the first signal arrives.
@@ -144,8 +146,6 @@ def _cancel_on_terminal_close() -> Iterator[threading.Event]:
     cancel = threading.Event()
 
     def _on_signal(signum: int, frame: FrameType | None) -> None:
-        if cancel.is_set():
-            raise KeyboardInterrupt
         cancel.set()
 
     if sys.platform == "win32":

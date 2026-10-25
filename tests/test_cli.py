@@ -368,7 +368,11 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
                     if hb_pid is None:
                         time_mod.sleep(0.2)
                 self.assertIsNotNone(hb_pid, "the HandBrake stub never started")
-                # the terminal closes: SIGHUP to the CLI
+                # the terminal closes: interactive bash forwards SIGHUP to
+                # its job, then the kernel sends SIGHUP again to the old
+                # foreground group - two signals in quick succession
+                proc.send_signal(signal.SIGHUP)
+                time_mod.sleep(0.01)
                 proc.send_signal(signal.SIGHUP)
                 # the CLI must EXIT (not hang), well inside the stub's 60s
                 try:
@@ -401,15 +405,15 @@ if __name__ == "__main__":
 
 
 class TestCancelOnTerminalClose(unittest.TestCase):
-    """The signal scope behind issue #326: the first signal cancels, a second
-    aborts, and the previous handlers come back on every exit path."""
+    """The signal scope behind issue #326: a signal cancels, a repeated one
+    changes nothing, and the previous handlers come back on every exit path."""
 
     def setUp(self) -> None:
         import signal
 
         self.before = signal.getsignal(signal.SIGINT)
 
-    def test_the_first_signal_sets_the_event_and_a_second_aborts(self) -> None:
+    def test_a_signal_sets_the_event_and_a_repeated_one_is_absorbed(self) -> None:
         import signal
 
         from shrinkray.__main__ import _cancel_on_terminal_close
@@ -419,8 +423,9 @@ class TestCancelOnTerminalClose(unittest.TestCase):
             assert callable(handler)
             handler(signal.SIGINT, None)
             self.assertTrue(cancel.is_set())
-            with self.assertRaises(KeyboardInterrupt):
-                handler(signal.SIGINT, None)
+            # raising here would unwind past the engine's terminate_tree
+            handler(signal.SIGINT, None)
+            self.assertTrue(cancel.is_set())
         self.assertIs(signal.getsignal(signal.SIGINT), self.before)
 
     def test_the_previous_handlers_return_when_the_body_raises(self) -> None:
