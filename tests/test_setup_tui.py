@@ -39,7 +39,11 @@ class TestSetupApp(unittest.TestCase):
         self.config.write_text(
             json.dumps(
                 {
-                    "handbrake": {"max_threads": 4},
+                    "handbrake": {
+                        "max_threads": 4,
+                        "audio_languages": ["deu", "eng", "und", "jpn"],
+                        "subtitle_languages": ["eng", "deu", "und"],
+                    },
                     "language": "de",  # a key the UI does not show
                     "codec": {
                         "hdr": {"color_space": ["bt2020nc"], "color_transfer": ["smpte2084"]}
