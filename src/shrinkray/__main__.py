@@ -299,17 +299,14 @@ def encode(
         if sys.platform == "win32"
         else [_signal.SIGHUP, _signal.SIGINT, _signal.SIGTERM]
     ):
-        try:
+        # not the main thread / unsupported on this platform: degrade
+        with contextlib.suppress(OSError, ValueError):
             _previous_handlers[sig] = _signal.signal(sig, _cancel_on_signal)
-        except (OSError, ValueError):
-            pass  # not the main thread / unsupported on this platform: degrade
 
     def _restore_signals():
         for sig, handler in _previous_handlers.items():
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 _signal.signal(sig, handler)
-            except (OSError, ValueError):
-                pass
 
     # encode probes and re-encodes: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems
@@ -788,10 +785,8 @@ def plan(
 
     def _restore_signals():
         for sig, handler in _previous_handlers.items():
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 _signal.signal(sig, handler)
-            except (OSError, ValueError):
-                pass
 
     connection = db.connect(db_file) if db_file is not None else None
     try:
