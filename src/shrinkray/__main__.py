@@ -778,10 +778,9 @@ def plan(
         if sys.platform == "win32"
         else [_signal.SIGHUP, _signal.SIGINT, _signal.SIGTERM]
     ):
-        try:
+        # not the main thread / unsupported: degrade
+        with contextlib.suppress(OSError, ValueError):
             _previous_handlers[sig] = _signal.signal(sig, _cancel_on_signal)
-        except (OSError, ValueError):
-            pass  # not the main thread / unsupported: degrade
 
     def _restore_signals():
         for sig, handler in _previous_handlers.items():
