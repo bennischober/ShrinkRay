@@ -126,13 +126,13 @@ the claim, because `--verify` arrived in v0.11.7.
 **What matches ab-av1's method:**
 
 - The model is Netflix's **vmaf_v0.6.1** (shipped as package data; `model_path=` on legacy ffmpeg,
-  `model=path=` on modern — `tools/vmaf.py:134-137`), the model ab-av1 defaults to — at resolutions up
+  `model=path=` on modern — `tools/vmaf.py:134-138`), the model ab-av1 defaults to — at resolutions up
   to 2560x1440. Above that, ab-av1 v0.11.7 switches to **vmaf_4k_v0.6.1** and `--vmaf-scale auto`
   bicubic-upscales content below 1728x972 (towards 1080p) or 3456x1944 (towards 4K) — ShrinkRay
   always scores vmaf_v0.6.1 at native resolution, no scaling. That is a MEASUREMENT difference, not a
   search difference, and it is open issue **#309** (the 2160p parity pair in #306's harness reports
   the gap: ~4.1 VMAF on the same input).
-- The per-window score is libvmaf's **pooled mean** (`pooled_metrics.vmaf.mean`, `tools/vmaf.py:190`).
+- The per-window score is libvmaf's **pooled mean** (`pooled_metrics.vmaf.mean`, `tools/vmaf.py:207`).
 - The per-CRF decision statistic is the **mean of the per-sample means** (`VMAF_STATISTIC = "mean",
   `engine/search.py:44`, issue #15) — the same aggregate ab-av1 reports.
 - The comparison runs inside one ffmpeg invocation with both inputs in a single filtergraph
@@ -147,7 +147,7 @@ the claim, because `--verify` arrived in v0.11.7.
   `engine/samples.py:152`); ab-av1 cuts 20 s by frame count (`-frames:v`). A duration cut can end a
   frame early at most; a frame-count cut on variable-frame-rate content varies in wall time. 10 s keeps
   a probe cheap; whether 20 s would move the score is unmeasured (#306's baseline covers it).
-- **HDR is tone-mapped to SDR before scoring** (`tools/vmaf.py:145-149`, both inputs through the same
+- **HDR is tone-mapped to SDR before scoring** (`tools/vmaf.py:145-151`, both inputs through the same
   hable chain): the v0.6.1 model is SDR-trained, so scoring the PQ signal directly would measure the
   tone-mapping mismatch, not the encode. When bars are present the reference is cropped first
   (issue #307's fix) so the bars cannot influence the tone-map and the geometries match. ab-av1 scores the PQ signal directly. HDR carries a separate
@@ -156,7 +156,7 @@ the claim, because `--verify` arrived in v0.11.7.
   a probe measures the CRF, and a slower preset is believed to be at least as good at the same CRF, so
   the sample measurement errs safe. **Believed, not measured** — the error direction is recorded, not
   quantified. ab-av1 encodes probes and final at one preset.
-- **The reference is cropped to the encoded geometry** (`tools/vmaf.py:157`): bar removal is part
+- **The reference is cropped to the encoded geometry** (`tools/vmaf.py:157-167`): bar removal is part
   of every encode, so the distorted output is smaller than the source; scoring it against the uncropped
   reference would measure the bars, not the encode. The crop itself is NOT a deviation: ab-av1's
   `--reference-vfilter crop=...` is the same mechanism (its help text exists for exactly this), and
