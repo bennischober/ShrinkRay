@@ -13,7 +13,8 @@ remembers why.
 Built to run unattended on a server against a whole collection — fire and forget —
 with a watchdog for new arrivals and a web dashboard for status. The CLI is a first-class
 product: every capability works without the resident process, and it can be pointed at a
-single file, a folder, or a glob.
+single file, a folder, or a glob. The target home is an **Unraid Community App**: the
+dashboard to watch it, the container's console to configure it (see [Direction](#direction)).
 
 **It shrinks files. It does not manage a library** — no renaming, moving,
 organizing, matching or deduplicating. That belongs to the tooling that already
@@ -46,7 +47,8 @@ It scans the collection into its own sqlite database, detects black bars for eve
 runs the CRF search for the ones that pass the gates, works through the backlog on its
 own, and keeps a watchdog on the folder so new and changed files are picked up within
 seconds. The dashboard is its status window — what is running, what is planned, what is
-left, what was reclaimed — not a control panel.
+left, what was reclaimed — not a control panel. Configuration and control belong to the
+terminal (planned: `shrinkray setup`, see [Direction](#direction)).
 
 > [!IMPORTANT]
 > **The one-shot shape is what runs today.** `encode` takes a file, a folder or a glob, and
@@ -536,6 +538,23 @@ to a whole library. See [PRODUCT.md](PRODUCT.md) for the contract and the
 [issue tracker](https://github.com/bennischober/ShrinkRay/issues) for the work that
 gets it there.
 
+The concrete target is an **Unraid Community App** (issue #244), built on two surfaces
+with separate jobs:
+
+- **The dashboard observes.** The WebUI button opens it: what is running, planned,
+  remaining, reclaimed and retained. It cannot start, stop or reconfigure anything.
+- **The terminal controls.** The Console button opens a shell in the container that
+  prints what to type: `shrinkray setup`, a terminal UI that configures everything
+  (required VMAF, thread caps, eligibility gates) and pauses or resumes the backlog;
+  `shrinkray encode /media/<path>` to shrink one file right now, during which the
+  watcher pauses; `shrinkray retained` to recover originals.
+- **Everything the operator chose lives in the appdata folder** (`/data`): config,
+  database, pause state and a token generated on first start, so restarts and image
+  updates keep it.
+
+None of the terminal surface is built yet; [docs/tui.md](docs/tui.md) records the
+decision and the open design work.
+
 The target behaviour, per file:
 
 - **Watch, scan, record, decide.** A watchdog watches the library folder. When a file
@@ -614,7 +633,7 @@ on your `PATH` (the tool also checks the default install locations).
   walked through) · [docs/plan-reuse.md](docs/plan-reuse.md) (the plan
   cache) · [docs/black-bar-spike.md](docs/black-bar-spike.md) (the bar
   detector's measured data) · [docs/tui.md](docs/tui.md) (the terminal
-  surface idea)
+  surface: decided, not built)
 - [FFmpeg documentation](https://ffmpeg.org/ffmpeg.html) ·
   [cropdetect filter](https://ffmpeg.org/ffmpeg-filters.html#cropdetect) ·
   [libvmaf](https://github.com/Netflix/vmaf)

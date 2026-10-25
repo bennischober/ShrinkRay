@@ -9,7 +9,9 @@ commit, issue workflow) live in the root `AGENTS.md`; the design record is the R
 ## OVERVIEW
 A read-only status window over the resident app: one `/api/snapshot` poll carries
 status + jobs + library, `/api/events` streams progress, `/api/movie` fetches one
-title's full history. It starts nothing. `npm run build` writes `ui/dist`, served by
+title's full history. It starts nothing — configuration and control live in the
+terminal (`shrinkray setup`, issue #244), so a settings form or a pause button here is
+a product-rule violation. `npm run build` writes `ui/dist`, served by
 `src/shrinkray/server/app.py` (`_ui_dist()`; `/` no-cache, `/assets/*` immutable).
 
 ## STRUCTURE

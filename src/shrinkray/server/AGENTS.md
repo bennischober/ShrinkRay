@@ -4,7 +4,10 @@ Why this file (score 12, distinct domain): nothing else in the package listens o
 socket, and this subtree owns the security boundary (token, path containment) plus the
 in-memory job queue and progress bus. 4 modules / 2541 L, and `shrinkray.server` is
 named 61 times outside the subtree. Read `src/shrinkray/AGENTS.md` first for the
-layering; root AGENTS.md owns the "dashboard is a status window" product rule.
+layering; root AGENTS.md owns the "dashboard is a status window" product rule. Control
+(configure, pause/resume) belongs to the terminal and reaches the resident process
+through `/data`, never through a route here (issue #244) — a control endpoint is a
+product-rule violation, not a feature.
 
 ## MODULE MAP
 

@@ -9,10 +9,11 @@ web
 ## Stack
 
 A Svelte 5 + Vite dashboard served by the resident Python app (FastAPI), plus a
-first-class CLI. The backend is an orchestrator: all heavy work is delegated to
-external binaries (`ffprobe`, `ffmpeg`, `HandBrakeCLI`) via `subprocess`. No
-build-step-heavy SPA framework; the dashboard is an **observability surface for the
-resident mode**, not the product and not a control panel (see *Operating modes*).
+first-class CLI with a terminal UI for configuration and control. The backend is an
+orchestrator: all heavy work is delegated to external binaries (`ffprobe`, `ffmpeg`,
+`HandBrakeCLI`) via `subprocess`. No build-step-heavy SPA framework; the dashboard is
+an **observability surface for the resident mode**, not the product and not a control
+panel. Control lives in the terminal (see *Operating modes* and *Deployment target*).
 
 ## Users
 
@@ -41,7 +42,8 @@ It is a companion to the media-stack tools, not a competitor to any of them:
   automation on the tree stays safe.
 - The **web dashboard is reachable from any browser** on the network — no desktop
   app, no SSH tunnel. It is an observability surface (see *Operating modes*), not a
-  control panel.
+  control panel. Configuration and control happen in the terminal, through the
+  container's console (see *Deployment target*).
 
 This section names the ecosystem in prose only: no code path may import, probe,
 parse for, or depend on any of these tools (see the scope boundary in AGENTS.md).
@@ -50,13 +52,18 @@ parse for, or depend on any of these tools (see the scope boundary in AGENTS.md)
 
 - **Now:** a shared-secret token (`SHRINKRAY_TOKEN`, issue #36) gates any
   non-loopback bind; on a trusted LAN the practical deployment is token-or-nothing
-  at the operator's discretion. Reverse-proxy termination is documented
+  at the operator's discretion. **Planned (issue #244):** the container generates a
+  token on first start when none is set, stores it in `/data` and shows it in the
+  console banner, so a non-loopback bind is never tokenless and never needs the
+  operator to invent a secret. Reverse-proxy termination is documented
   (docs/docker.md); there is no TLS in the app.
 - **Later:** proper per-user authentication — the shape (session login,
   proxy-forwarded identity, OIDC) is a future decision, deliberately not made here.
   The deferral is safe because the dashboard is **read-only in intent** (issue
   #134): nothing in the UI can start, cancel or reconfigure work, so an open
-  dashboard leaks information, never control.
+  dashboard leaks information, never control. Control is reachable only from a
+  shell on the host or in the container (the terminal surface, issue #244), which
+  the network never exposes.
 
 ## Operating modes
 
@@ -81,6 +88,15 @@ the operator can delete it themselves once satisfied.
 
 The database is an optimization for repeated runs, not a prerequisite. Mode A must work
 with no `metadata.db` present and must not create one unless asked.
+
+Mode A is also the answer to **"I have one video that needs to be smaller"**: on a desktop,
+or from the console of a running container, `shrinkray encode <path>` re-encodes that one
+file with no library scan behind it. The run lives in the terminal that started it, and the
+CLI says so when it starts: closing that terminal cancels the encode (the source is
+untouched until the verified result is swapped in). When a resident watcher runs beside it,
+the watcher **pauses** for the duration of the manual encode and resumes afterwards; the
+CLI signals this through the shared state on disk, never by calling the resident process
+(issue #244).
 
 ### Mode B — fire and forget (the resident mode)
 
@@ -132,10 +148,83 @@ the collection, the running job with live progress, the plan, what was reclaimed
 failed and why, and the retained originals. The app starts the backlog and the watcher
 itself, so a container needs no browser to make progress.
 
+### The terminal is where the operator configures and controls
+
+Everything the dashboard deliberately cannot do happens in the terminal. `shrinkray setup`
+is a terminal UI (TUI) that configures **everything** an operator may change: the
+required VMAF, thread caps, the eligibility gates (resolution floor, minimum file size),
+and the rest of `config.json`; and, where a resident process runs, **pause and resume**
+of the backlog. The watched folder is not a setting: it is whatever is mounted at
+`/media`.
+
+The split is by role, not by convenience. A browser on the LAN can observe; changing what
+the machine does requires a shell on the host or in the container, which the network never
+exposes. So the TUI talks to the resident process through the state it already shares on
+disk (the config file and a pause flag in `/data`), never through a network route — the
+dashboard stays read-only by construction, not by discipline.
+
+Rules the TUI must keep:
+
+- **It edits settings, it does not loosen product rules.** The 1080p resolution floor
+  may be **raised** (for example to encode 4K only), never lowered: below 1080p a
+  re-encode saves too little to be worth the work. The same holds for every rule in
+  *Product Purpose* — the TUI exposes the settings those rules leave open, nothing more.
+- **It says what a change costs.** A setting that is part of the stored plan fingerprint
+  (the required VMAF, the probe preset) invalidates every cached plan; the TUI names that
+  consequence before it saves.
+- **A saved change applies at the next file.** A running encode finishes with the settings
+  it started with.
+- **The same TUI works on a native install**, editing that install's config. Pause and
+  resume appear only where a resident process is running.
+
 > **Implementation status.** Both modes are implemented. Mode A accepts a file, a folder or
 a glob, creates no database unless `--db` is passed, and encodes in place when no output
 directory is given (the original is renamed aside and kept). Mode B scans, plans and encodes
-the backlog on start and watches the tree for new and changed files.
+the backlog on start and watches the tree for new and changed files. **The terminal surface
+is not built** (issue #244 records the direction; the build is split into follow-up issues):
+there is no `shrinkray setup`, no console banner, no pause, and a manual encode does not
+pause the watcher yet. Today the configuration is `config.json`, edited by hand, followed by
+a restart.
+
+## Deployment target: an Unraid Community App (issue #244)
+
+The resident mode's intended home is a home server, and the concrete target is an
+**Unraid Community App**: one container, installed from the Community Applications catalog,
+pointed at a share, left running. The shape follows the established "open the console and
+follow the steps" pattern of Unraid apps:
+
+- **WebUI button → the dashboard.** Read-only: what is running, planned, remaining,
+  reclaimed and retained.
+- **Console button → a shell in the container that prints what to type.** The banner is
+  the operator's manual:
+
+  ```text
+  ShrinkRay — the resident encoder is running.
+    Configure, pause or resume:   shrinkray setup
+    Encode one file now:          shrinkray encode /media/<path>
+    List or recover originals:    shrinkray retained
+    Dashboard:                    http://<server>:8420   (token: ...)
+  ```
+
+- **`/data` is the appdata folder** (e.g. `/mnt/user/appdata/shrinkray`): config, database,
+  pause state and the generated token live there, so everything survives a restart and an
+  image update. Nothing the operator chose lives in the image.
+- **`/media` is the library share**, mounted writable because the resident mode encodes in
+  place; the watched folder is exactly this mount.
+- **Files are written as the operator's user.** Unraid templates pass the user and group to
+  run as (`PUID`/`PGID`, with `UMASK`); a file written to the share as any other owner is a
+  support ticket. This reopens the fixed-UID decision in `docs/docker.md` for this target.
+- **The token is generated when absent** (see *Auth roadmap*); a template field may set it
+  instead.
+
+The same image runs the one-shot CLI with no server at all (`docker run --rm ... encode
+/media/<file>`, issue #242), so a desktop user with one video and an Unraid operator with a
+library use one artifact.
+
+> **Implementation status.** Not built. The image runs the resident mode only (its
+entrypoint pins `serve`, issue #242), as a fixed UID, with its config baked into the image
+(issue #236). The template, the banner, `PUID`/`PGID`, the generated token and the Community
+Applications listing are follow-up issues of #244.
 
 ## Product Purpose
 
@@ -228,23 +317,26 @@ to its quality** and whether its **frame matches its content**.
 
 ## Operating Context
 
-- Headless Linux server or NAS, run as a container (the target install) or from a
-  source checkout with `uv`; the CLI also runs on a Windows workstation for
-  development and for one-off runs.
+- Headless Linux server or NAS, run as a container (the target install, an Unraid
+  Community App — see *Deployment target*) or from a source checkout with `uv`; the CLI
+  also runs on a Windows workstation for development and for one-off runs.
 - The library arrives as one bind-mounted directory tree of **already-organized**
   files. ShrinkRay reads it, decides per file, and writes only inside it.
 - **Mode A needs no state.** A one-shot CLI run against a file, folder or glob works
   from a bare checkout with no database, no config, and no resident process.
-- **Mode B owns its state.** The container keeps its sqlite database and its
-  `config.json` on a volume beside the library, never inside it.
+- **Mode B owns its state.** The container keeps its sqlite database, its
+  `config.json`, its pause state and its token on the `/data` volume (Unraid's appdata
+  folder) beside the library, never inside it and never in the image.
 - HandBrakeCLI + ffmpeg (with `libvmaf`) are external binaries baked into the
   image; a pinned image is also what makes VMAF scores comparable across runs.
 - Encodes run for hours. The service must be a polite guest: idle priority, thread
   caps, and a stall watchdog, so playback on the same box keeps its cores.
 - The dashboard is reached over the LAN and is **read-only in intent**: it reports
   Mode B's state (running, planned, remaining, reclaimed, retained) and does not start
-  work. The CLI is a first-class product: every capability is available without the
-  resident process, and automation may drive it alone.
+  work. The terminal is the control surface: `shrinkray setup` configures and pauses,
+  `shrinkray encode` runs a single file. The CLI is a first-class product: every
+  capability is available without the resident process, and automation may drive it
+  alone.
 - Files appear and change continuously. A watchdog notices every stable new or
   changed file, re-scans it, and re-decides it without being asked.
 
@@ -256,6 +348,9 @@ to its quality** and whether its **frame matches its content**.
 - **The dashboard observes, it does not steer**: it shows the collection's state, the
   running job, the plan, what remains and what was reclaimed. It is Mode B's status
   window; it is not a second control path into the library.
+- **The terminal configures and controls** (planned, issue #244): `shrinkray setup` edits
+  every setting and pauses or resumes the backlog; a manual `shrinkray encode` pauses the
+  resident watcher while it runs. No network route reaches either.
 - **One encode mode**: VMAF-driven CRF search per file against the required VMAF
   (96 by default; sampled probes, measured quality), then one full encode at the
   winning setting. Every re-encode, bar removal included, goes through it. The
@@ -267,7 +362,9 @@ to its quality** and whether its **frame matches its content**.
 - **Skip guardrails**: already-efficient sources, unreachable targets, too-short
   files, and encodes that would not shrink are skipped and remembered.
 - **Eligibility limits**: files below 1080p or in a codec older than H.264 are
-  never re-encoded.
+  never re-encoded. The resolution floor may be raised in configuration, never
+  lowered below 1080p (issue #244; today `config.json` still accepts a lower
+  `min_source_height`, which is a defect against this rule).
 - **Source-codec gate**: the CRF search runs on every eligible file. H.264 is the
   floor; MPEG-2/VC-1 and older are never re-encoded. Size alone decides whether a
   re-encode happens, for every codec.

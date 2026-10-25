@@ -4,7 +4,8 @@ A Svelte 5 + Vite + TypeScript single-page app served by the resident Python
 app (`src/shrinkray/server/app.py` serves `ui/dist` at `/`). It is the
 resident mode's status window: what is running, planned, remaining and
 reclaimed — it observes, it does not steer (see PRODUCT.md's "Ecosystem
-position" and issue #134).
+position" and issue #134). Configuring and controlling belong to the terminal
+(PRODUCT.md, issue #244).
 
 ## Commands
 
