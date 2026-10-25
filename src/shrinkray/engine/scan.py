@@ -382,6 +382,7 @@ def scan_movies(
     compute_hash: bool = False,
     exclude: Path | None = None,
     on_movie: Callable[[int, dict | None, str | None], None] | None = None,
+    files: list[Path] | None = None,
 ) -> tuple[dict, list[Path], list[str]]:
     """Scans the root directory for movies and collects their metadata.
 
@@ -405,6 +406,10 @@ def scan_movies(
         exclude (Path | None): Directory to exclude (e.g. the encode output).
         on_movie (callable | None): Called as on_movie(index, data, error)
             after each movie completes, for progressive UI updates.
+        files (list[Path] | None): The explicit movie list (a single named
+            file or a glob's matches, resolved by resolve_input_paths);
+            when given, the root is NOT walked (issue #197: a one-file
+            command must touch exactly that file, not its folder).
 
     Returns:
         tuple: Movies by category, all found movies and error messages.
@@ -412,7 +417,7 @@ def scan_movies(
     movies_by_category: dict[str, list[dict]] = {}
 
     # search for movie files with the configured extensions, recursive
-    movies = find_movies(root, config.extensions, exclude=exclude)
+    movies = files if files is not None else find_movies(root, config.extensions, exclude=exclude)
     if not movies:
         # nothing found: the folder may have been emptied or renamed — the
         # database still needs to reconcile (flagging, not deleting, thanks

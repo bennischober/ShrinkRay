@@ -329,7 +329,7 @@ def scan(
     apply_config(config)
     connection = db.connect(db_file) if db_file is not None else None
     try:
-        root, _ = resolve_input_paths(path, config.extensions)
+        root, files = resolve_input_paths(path, config.extensions)
     except FileNotFoundError as e:
         log_error(str(e))
         raise typer.Exit(1) from e
@@ -341,6 +341,7 @@ def scan(
             connection=connection,
             rescan=rescan,
             compute_hash=hash_files,
+            files=files,
         )
     finally:
         if connection is not None:
@@ -516,11 +517,13 @@ def encode(
         # the output directory must never be a scan target (previous outputs
         # would be re-encoded/re-probed)
         try:
-            root, _ = resolve_input_paths(path, config.extensions, exclude=output_dir)
+            root, files = resolve_input_paths(path, config.extensions, exclude=output_dir)
         except FileNotFoundError as e:
             log_error(str(e))
             raise typer.Exit(1) from e
-        _, movies, _ = scan_movies(root, config, connection=connection, exclude=output_dir)
+        _, movies, _ = scan_movies(
+            root, config, connection=connection, exclude=output_dir, files=files
+        )
         # in place: the encode needs a real path, so it lands in a working
         # directory INSIDE the library root - the same filesystem, so the swap's
         # two renames stay atomic and cheap. The output directory only says
@@ -934,11 +937,11 @@ def plan(
     connection = db.connect(db_file) if db_file is not None else None
     try:
         try:
-            root, _ = resolve_input_paths(path, config.extensions)
+            root, files = resolve_input_paths(path, config.extensions)
         except FileNotFoundError as e:
             log_error(str(e))
             raise typer.Exit(1) from e
-        _, movies, _ = scan_movies(root, config, connection=connection)
+        _, movies, _ = scan_movies(root, config, connection=connection, files=files)
 
         threads_cap = cap_threads(threads or config.handbrake_max_threads)
 
