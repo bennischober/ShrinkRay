@@ -872,10 +872,12 @@ class TestEncodeLock(unittest.TestCase):
                         db_file=db_file,
                         encoder_preset="6",
                     )
-                # the config's lists reach the engine (the reference lists,
-                # loaded from config, not restated in the CLI)
-                self.assertEqual(captured["audio_languages"], ["deu", "eng", "und", "jpn"])
-                self.assertEqual(captured["subtitle_languages"], ["eng", "deu", "und"])
+                # the config's lists reach the engine (loaded from config,
+                # not restated in the CLI); the DEFAULT config is empty —
+                # every track kept (issue #297's decision) — so the CLI
+                # passes no filter lists at all
+                self.assertEqual(captured["audio_languages"], [])
+                self.assertEqual(captured["subtitle_languages"], [])
             finally:
                 connection.close()
 
