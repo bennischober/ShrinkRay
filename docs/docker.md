@@ -279,6 +279,15 @@ nothing that comes with the image. One flat folder, one file per kind of state:
 New state goes into the same folder under a name of its own, never into the image and
 never into the library.
 
+## The console
+
+Opening a shell in the container (Unraid's Console button, or `docker exec -it
+<container> sh`) prints what to type, computed from the container's state (issue #251):
+whether the server runs, how to encode one file, list retained originals, change settings
+and pause, and the dashboard's token. It prints once per console, for interactive shells
+only, so `docker exec <container> <command>` output stays clean; the shell itself runs as
+`PUID`/`PGID` (see *Running as your user*).
+
 ## Pausing
 
 The resident app starts no new file while it is paused; the file it is working on
