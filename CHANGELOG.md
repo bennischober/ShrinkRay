@@ -32,6 +32,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ### Fixed
 
+- **The documented smoke-test command passes when the smoke tests do** (issue #295): `tests/test_smoke.py` told contributors to run `SHRINKRAY_SMOKE=1 uv run pytest tests/test_smoke.py -v`, which inherits the suite-wide coverage floor and always exited 1 (about 11% coverage from one file) even with every smoke test green. The command now carries `--no-cov`, matching CONTRIBUTING.md.
+
 - **ui/AGENTS.md's gotchas name only things that exist** (issue #294): the "Two dead surfaces" bullet described symbols removed by #239 (\`requestEncodeAll\`, the preflight-only-CLOSE ceremony, the inert Overview CANCEL) — every one verified absent on \`main\` with \`git grep\` before removal; the hardcoded-defaults and shortcut-legend notes stay (both verified true, the legend mismatch marked as real).
 - **A library below a folder named `.shrinkray-*` is visible again** (issue #286): the staging filter checked the ABSOLUTE path, so any ancestor above the library whose name starts with `.shrinkray-` (say `/mnt/.shrinkray-archive/library`) made every movie in it invisible to the scan and the watcher; the predicate now scopes the prefix check to the walk root, and the staging folders themselves (below the root) are still filtered. Both walkers pass their root.
 
