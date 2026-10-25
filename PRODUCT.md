@@ -363,8 +363,7 @@ to its quality** and whether its **frame matches its content**.
   files, and encodes that would not shrink are skipped and remembered.
 - **Eligibility limits**: files below 1080p or in a codec older than H.264 are
   never re-encoded. The resolution floor may be raised in configuration, never
-  lowered below 1080p (issue #244; today `config.json` still accepts a lower
-  `min_source_height`, which is a defect against this rule).
+  lowered below 1080p (issue #244; enforced when the config loads, issue #246).
 - **Source-codec gate**: the CRF search runs on every eligible file. H.264 is the
   floor; MPEG-2/VC-1 and older are never re-encoded. Size alone decides whether a
   re-encode happens, for every codec.

@@ -23,6 +23,7 @@ from pathlib import Path
 
 from rich.progress import Progress
 
+from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT
 from shrinkray.engine.crop import (
     CROP_DETECT_LIMIT as CROP_DETECT_LIMIT,
 )
@@ -1225,7 +1226,7 @@ def encode_with_quality(
     verify: bool = False,
     force_reprobe: bool = False,
     use_probe_cache: bool = True,
-    min_source_height: int = 0,
+    min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
@@ -1256,8 +1257,8 @@ def encode_with_quality(
             directory for failure evidence (None => cwd metadata.db).
         encoder_threads (int | None): Thread limit for the probe encodes
             AND the final encode (None = no limit).
-        min_source_height (int): Skip sources below this height (0 = gate
-            off).
+        min_source_height (int): Skip sources below this height (the 1080p
+            floor by default; a caller may raise it, never lower it).
         min_source_size_gb (float): Skip sources below this size (0 = gate
             off).
         candidate_codecs (tuple[str, ...]): Source codecs that are

@@ -14,6 +14,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT
 from shrinkray.engine.crop import (
     DEFAULT_CROP_SAMPLE_COUNT,
     detect_crop_rect,
@@ -309,7 +310,7 @@ def plan_quality(
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
     samples: list[tuple[Path, float]] | None = None,
-    min_source_height: int = 0,
+    min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
@@ -343,9 +344,10 @@ def plan_quality(
         progress (callable | None): Callback progress(dict) for live step
             updates of the probing pipeline (flow to the UI, never
             persisted — the same events the console prints as log lines).
-        min_source_height (int): Skip sources below this height (0 = gate
-            off). A lower-resolution source has too few pixels to save
-            meaningfully, so the probe cost buys nothing.
+        min_source_height (int): Skip sources below this height (the 1080p
+            floor by default; a caller may raise it, never lower it). A
+            lower-resolution source has too few pixels to save meaningfully,
+            so the probe cost buys nothing.
         min_source_size_gb (float): Skip sources below this size (0 = gate
             off). Probe cost is roughly constant per file while the payoff
             scales with size, so the smallest files have the worst

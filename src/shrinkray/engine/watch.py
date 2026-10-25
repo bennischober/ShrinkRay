@@ -16,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 
+from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.engine.pipeline import (
     DISK_FREE_FLOOR_BYTES,
@@ -413,7 +414,7 @@ def watch(
     max_threads: int | None = None,
     stop_event: threading.Event | None = None,
     db_file: Path | None = None,
-    min_source_height: int = 0,
+    min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = ("h264",),
     crop_sample_count: int = 10,

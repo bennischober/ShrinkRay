@@ -22,6 +22,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ### Fixed
 
+- **The 1080p resolution floor can no longer be configured away, and `plan` applies the eligibility gates** (issue #246): `eligibility.min_source_height` below 1080 (including `0`, which used to switch the gate off) is now rejected when the config loads, with a message naming the rule; raising it (e.g. `2160` for 4K only) still works. The engine's own default is the 1080p floor instead of `0`, so a caller that omits the argument gets the rule rather than disabling it. That omission was live in the `plan` command, which passed none of the three eligibility gates: it probed and recorded plans for sub-1080p, below-size-floor and old-codec sources that `encode` then skipped, and a raised floor in `config.json` never reached it.
+
 - **The release workflow parses again** : the gate step's name introduced with the gate-script change carried an unquoted `: ` inside the YAML mapping value, which made the whole workflow file unparseable — GitHub registered that as a startup failure with zero jobs on every push to any branch (8 consecutive red runs), and the next `v*` tag release would have failed the same way. The name now uses a dash; every workflow file and the compose file parse clean.
 
 - **The published container sees the common video containers, not just `.mkv`** (issue #204): the image's baked `config.json` now sets `file.extensions` to `.mkv`, `.mp4`, `.m4v`, `.avi`, `.mov`, `.ts`, `.m2ts`, `.webm` — before, the code default (`.mkv` alone) made a mounted `.mp4` library scan nothing while `scan`/`encode` still exited 0. The README states the narrow code default explicitly.

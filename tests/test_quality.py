@@ -1565,11 +1565,13 @@ class TestSubprocessTimeouts(unittest.TestCase):
         fake_extract.assert_not_called()
         fake_hb.assert_not_called()
 
-    def test_min_source_height_gate_is_off_by_default(self):
-        """A 720p source is a normal candidate when no floor is configured.
+    def test_min_source_height_gate_defaults_to_the_1080p_floor(self):
+        """A caller that passes no floor gets the product's 1080p floor.
 
-        The gate must be opt-in: a source that would previously be probed must
-        still be probed when the operator has not asked for a resolution floor.
+        The engine default used to be 0 (gate off), so a caller that forgot
+        the argument silently disabled a product rule - which is how the
+        `plan` command came to probe 720p sources that `encode` skips
+        (issue #246).
         """
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "movie.mkv"
@@ -1577,20 +1579,43 @@ class TestSubprocessTimeouts(unittest.TestCase):
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_plan, "source_height", return_value=720),
-                patch.object(engine_plan, "find_handbrake", return_value="hb"),
-                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
-                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(
-                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
-                ),
-                patch.object(
-                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
-                ),
+                patch.object(engine_plan, "extract_samples") as fake_extract,
+                patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
                 result = engine_plan.plan_quality(src)
-        self.assertTrue(result.success)
-        self.assertIsNone(result.skipped_reason)
+        self.assertEqual(result.skipped_reason, "resolution too low")
+        fake_extract.assert_not_called()
+        fake_hb.assert_not_called()
+
+    def test_a_raised_floor_skips_1080p_in_plan_and_encode_alike(self):
+        """A 4K-only floor skips a 1080p source in BOTH plan and encode.
+
+        `plan` predicts and `encode` decides; a raised floor that only one of
+        them honours would predict encodes that never happen (issue #246).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "source_height", return_value=1080),
+                patch.object(engine_plan, "extract_samples") as fake_extract,
+            ):
+                planned = engine_plan.plan_quality(src, min_source_height=2160)
+            with (
+                patch.object(engine_pipeline, "_source_snapshot", return_value={"height": 1080}),
+                patch.object(engine_plan, "is_hdr_file", return_value=False),
+                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_pipeline, "_probe_movie") as fake_probe,
+            ):
+                encoded = engine_pipeline.encode_with_quality(
+                    src, Path(tmp) / "out.mkv", min_source_height=2160
+                )
+        self.assertEqual(planned.skipped_reason, "resolution too low")
+        self.assertEqual(encoded.skipped_reason, "resolution too low")
+        self.assertIn("2160p", encoded.error or "")
+        fake_extract.assert_not_called()
+        fake_probe.assert_not_called()
 
     def test_min_source_height_gate_unknown_height_is_not_skipped(self):
         """An unreadable height must not silently exclude a file.

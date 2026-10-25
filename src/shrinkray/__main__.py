@@ -708,6 +708,11 @@ def plan(
                     encoder_threads=threads_cap,
                     probe_encoder_preset=probe_encoder_preset,
                     encoder_preset=encoder_preset,
+                    # the same gates encode applies: a plan that ignores them
+                    # predicts encodes that encode then skips (issue #246)
+                    min_source_height=config.min_source_height,
+                    min_source_size_gb=config.min_source_size_gb,
+                    candidate_codecs=tuple(config.candidate_codecs),
                 )
             except (RuntimeError, FileNotFoundError) as e:
                 table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
