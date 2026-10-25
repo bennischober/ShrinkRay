@@ -113,6 +113,70 @@ The one place this document goes **beyond** the PS1 is bar removal: the PS1 only
 (`-DetectCrop`, a measurement aid), while ShrinkRay now applies it to every encode. That is a deliberate
 difference, not a drift — the PS1 was a CRF finder, and ShrinkRay also does the encode.
 
+## Measurement reference: ab-av1
+
+The measurement goal is parity with `ab-av1 crf-search` where applicable, so a score ShrinkRay reports
+can be compared with one ab-av1 would produce for the same input. The parity tolerance itself — how far
+the two may drift on the same input before something is wrong — is the empirical baseline issue **#306**
+owns; this section documents the mechanics, each checked against the code (`tools/vmaf.py`,
+`engine/samples.py`, `engine/search.py`). Every ab-av1 statement below describes **v0.11.7** (the
+version #306 pins; its recipe was read at `main` `ed5f5461f0aa`) — version behaviour is part of
+the claim, because `--verify` arrived in v0.11.7.
+
+**What matches ab-av1's method:**
+
+- The model is Netflix's **vmaf_v0.6.1** (shipped as package data; `model_path=` on legacy ffmpeg,
+  `model=path=` on modern — `tools/vmaf.py:134-137`), the model ab-av1 defaults to — at resolutions up
+  to 2560x1440. Above that, ab-av1 v0.11.7 switches to **vmaf_4k_v0.6.1** and `--vmaf-scale auto`
+  bicubic-upscales content below 1728x972 (towards 1080p) or 3456x1944 (towards 4K) — ShrinkRay
+  always scores vmaf_v0.6.1 at native resolution, no scaling. That is a MEASUREMENT difference, not a
+  search difference, and it is open issue **#309** (the 2160p parity pair in #306's harness reports
+  the gap: ~4.1 VMAF on the same input).
+- The per-window score is libvmaf's **pooled mean** (`pooled_metrics.vmaf.mean`, `tools/vmaf.py:190`).
+- The per-CRF decision statistic is the **mean of the per-sample means** (`VMAF_STATISTIC = "mean",
+  `engine/search.py:44`, issue #15) — the same aggregate ab-av1 reports.
+- The comparison runs inside one ffmpeg invocation with both inputs in a single filtergraph
+  (`[0:v][1:v]libvmaf=...`), as ab-av1's does.
+
+**Deliberate deviations, each with its reason:**
+
+- **Sample windows sit between 10% and 90% of the runtime** (`engine/samples.py:56-57`): lead-in and
+  credits are not representative of the movie's encode difficulty. ab-av1 spaces its windows over the
+  whole file.
+- **Windows are 10 s, cut by duration** (`DEFAULT_SAMPLE_SECONDS = 10.0`, `-t` at
+  `engine/samples.py:152`); ab-av1 cuts 20 s by frame count (`-frames:v`). A duration cut can end a
+  frame early at most; a frame-count cut on variable-frame-rate content varies in wall time. 10 s keeps
+  a probe cheap; whether 20 s would move the score is unmeasured (#306's baseline covers it).
+- **HDR is tone-mapped to SDR before scoring** (`tools/vmaf.py:145-149`, both inputs through the same
+  hable chain): the v0.6.1 model is SDR-trained, so scoring the PQ signal directly would measure the
+  tone-mapping mismatch, not the encode. When bars are present the reference is cropped first
+  (issue #307's fix) so the bars cannot influence the tone-map and the geometries match. ab-av1 scores the PQ signal directly. HDR carries a separate
+  target (`HDR_VMAF_OFFSET`, `engine/encoders.py:32`) for the same reason.
+- **Probe samples encode at SVT-AV1 preset 5, the final encode at preset 3** (`config.py`, issue #22):
+  a probe measures the CRF, and a slower preset is believed to be at least as good at the same CRF, so
+  the sample measurement errs safe. **Believed, not measured** — the error direction is recorded, not
+  quantified. ab-av1 encodes probes and final at one preset.
+- **The reference is cropped to the encoded geometry** (`tools/vmaf.py:157`): bar removal is part
+  of every encode, so the distorted output is smaller than the source; scoring it against the uncropped
+  reference would measure the bars, not the encode. The crop itself is NOT a deviation: ab-av1's
+  `--reference-vfilter crop=...` is the same mechanism (its help text exists for exactly this), and
+  the #306 harness uses it. The deviation is narrower: ab-av1 has no BAR DETECTION — the operator
+  supplies the rectangle, ShrinkRay measures it.
+- **A full-file VERIFICATION re-measures the VMAF after the encode** (`engine/pipeline.py`, optionally
+  sub-sampled with `n_subsample`): the samples are 10 s windows, so the decision deserves one
+  measurement of the complete artifact. ab-av1 v0.11.7 verifies too — but it verifies DECODEABILITY
+  (`--verify`/`--verify-decode`/`--verify-duration`: the artifact decodes and has the right duration),
+  while ShrinkRay re-MEASURES the quality. What is verified differs, not whether anything is.
+
+- **Frame alignment before the filter**: ab-av1 emits `setpts=PTS-STARTPTS,settb=AVTB` on both streams
+  plus `shortest=true:ts_sync_mode=nearest` in the libvmaf options; ShrinkRay feeds both inputs to
+  libvmaf raw and relies on the container timestamps (issue **#308** owns the alignment question and
+  its cache recipe).
+
+**Search-side differences outside this milestone** (the measurement is not the search): #313 (the round
+structure of the CRF search), #314 (the size estimate), #315 (the CRF range), #316 (the minimum saving),
+#317 (the v1.0.16 models).
+
 ## Where the code disagreed, and what closed it
 
 Every row below was a real disagreement between this document and the code. All are now closed;
