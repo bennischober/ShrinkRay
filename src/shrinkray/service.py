@@ -332,7 +332,13 @@ def finished_movies(
         file_row = db.get_file_by_path(connection, movie)
         if file_row is None:
             continue
-        output_file = output_dir / movie.name
+        # in place the artifact IS the source path once the swap succeeded
+        # (issue #232): the row's output_file carries it, and a run that
+        # replaced the source finds its own work by comparing the row against
+        # the movie's path - not against a per-run staging directory, which
+        # never matched anything and made every in-place batch re-encode.
+        recorded = db.get_latest_encode_output(connection, int(file_row["id"]))
+        output_file = recorded if recorded is not None else output_dir / movie.name
         if not db.has_output_for_latest_encode(connection, int(file_row["id"]), output_file):
             continue
         # the db says encoded and the file is non-empty: verify it is whole
@@ -349,7 +355,11 @@ def finished_movies(
 
 
 def record_quality_results(
-    connection: sqlite3.Connection, movie: Path, result: QualityResult, config: Conf
+    connection: sqlite3.Connection,
+    movie: Path,
+    result: QualityResult,
+    config: Conf,
+    final_output: Path | None = None,
 ) -> EncodeOutcome:
     """Persists the result of one quality-mode encode (or skip).
 
@@ -358,6 +368,14 @@ def record_quality_results(
         movie (Path): The input movie file.
         result (QualityResult): The engine result.
         config (Conf): The config settings.
+        final_output (Path | None): The path the artifact will occupy when the
+            run replaces sources in place (issue #232) - the source's own
+            path, which a successful swap gives the encoded file. The row must
+            describe the artifact's REAL location: a row pointing at the
+            per-run staging path made `doctor` report every in-place encode
+            as vanished and broke the generation chain. None when the run
+            writes into a real output directory (the engine's output path IS
+            the artifact's location).
 
     Returns:
         EncodeOutcome: What happened (encoded / skipped / failed).
@@ -393,7 +411,9 @@ def record_quality_results(
             input_bitrate=result.input_bitrate,
             output_bitrate=result.output_bitrate,
             source_file=str(movie.resolve()),
-            output_file=str(result.output.resolve()) if result.output else None,
+            output_file=str(final_output.resolve())
+            if final_output
+            else (str(result.output.resolve()) if result.output else None),
             crf_source=result.crf_source or "probe",
             plan_created_at=result.plan_created_at,
         )

@@ -1379,6 +1379,28 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
         return
     from shrinkray.config import refresh_config
     from shrinkray.engine.watch import WatchSettings, watch
+    from shrinkray.service import record_quality_results
+
+    def record_watch_outcome(movie, result, final_output):
+        """Persists the watcher's encode outcome (issue #232).
+
+        The engine layer cannot import the service layer (the import-linter
+        contract), so the app passes the write in. The row's output_file is
+        the artifact's real location in place (the source's own path) - the
+        staging path a row used to carry was deleted seconds later, which
+        made `doctor` report every in-place encode as vanished and broke the
+        generation chain. The returned id lets a declined swap correct the
+        row to 'discarded'.
+        """
+        return state.with_lock(
+            lambda connection: record_quality_results(
+                connection,
+                movie,
+                result,
+                refresh_config(),
+                final_output=final_output,
+            )
+        )
 
     def settings_for_next_file() -> WatchSettings:
         # a config saved while the watcher runs applies at its next file
@@ -1404,6 +1426,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 stop_event=state.watch_stop,
                 db_file=state.db_file,
                 settings=settings_for_next_file,
+                record=record_watch_outcome,
             )
         except Exception as e:
             log_error(f"watch loop crashed: {e}")

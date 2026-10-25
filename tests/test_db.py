@@ -1413,5 +1413,101 @@ class TestDb(unittest.TestCase):
             self.assertIsNone(db.get_file_by_path(self.connection, root / "gone.mkv"))
 
 
+class TestInPlaceAuditTrail(unittest.TestCase):
+    """An in-place encode row must describe the artifact's real location
+    (issue #232): the row was written with the per-run staging path, which
+    the run deletes on exit - so `doctor` reported every in-place encode as
+    vanished, the generation chain never linked, and a batch never resumed.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.movie = self.root / "movie.mkv"
+        self.movie.write_bytes(b"x" * 8)
+        self.connection = db.connect(self.root / "meta.db")
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def _result(self, output: Path) -> "object":
+        from shrinkray.engine.plan import QualityResult
+
+        return QualityResult(
+            input=self.movie,
+            output=output,
+            success=True,
+            target_vmaf=96.0,
+            chosen_crf=21,
+            achieved_vmaf=95.5,
+            input_size=800,
+            output_size=400,
+        )
+
+    def test_the_row_records_the_artifacts_real_location(self) -> None:
+        """In place, the row's output_file is the source's own path."""
+        from shrinkray import service
+
+        service.record_quality_results(
+            self.connection,
+            self.movie,
+            self._result(self.root / ".shrinkray-x/movie.mkv"),
+            config_helper.Conf(),
+            final_output=self.movie,
+        )
+        row = self.connection.execute(
+            "SELECT output_file FROM encodes ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(row["output_file"], str(self.movie))
+
+    def test_the_generation_chain_links_an_in_place_reencode(self) -> None:
+        """A second in-place encode of the same path is generation 2."""
+        from shrinkray import service
+
+        service.record_quality_results(
+            self.connection,
+            self.movie,
+            self._result(self.root / ".shrinkray-x/movie.mkv"),
+            config_helper.Conf(),
+            final_output=self.movie,
+        )
+        second = service.record_quality_results(
+            self.connection,
+            self.movie,
+            self._result(self.root / ".shrinkray-y/movie.mkv"),
+            config_helper.Conf(),
+            final_output=self.movie,
+        )
+        row = self.connection.execute(
+            "SELECT generation FROM encodes ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(row["generation"], 2)
+        self.assertTrue(second.encoded)
+
+    def test_a_declined_swap_clears_the_row(self) -> None:
+        """A swap that is refused leaves the row recording 'discarded'.
+
+        The encode lives in a staging directory the run deletes on exit; a
+        row pointing at it is the false 'encode output vanished' finding.
+        """
+        from shrinkray import service
+
+        encode_id = service.save_encode(
+            self.connection,
+            self.movie,
+            "VMAF>96",
+            "svt_av1",
+            800,
+            400,
+            output_file=str(self.movie),
+        )
+        db.set_encode_output(self.connection, encode_id, None)
+        row = self.connection.execute(
+            "SELECT output_file FROM encodes WHERE id = ?", (encode_id,)
+        ).fetchone()
+        self.assertIsNone(row["output_file"])
+
+
 if __name__ == "__main__":
     unittest.main()
