@@ -123,13 +123,13 @@ uv run shrinkray serve        # the dashboard on http://127.0.0.1:8420
 > pass `--db`: a one-shot run is stateless. Omit the output directory and the encode lands in
 > the source's own path, with the original renamed aside and kept — nothing is deleted.
 
-**Already have uv?** Run straight from GitHub without cloning:
+**Already have uv?** Run straight from GitHub without cloning (the `--from git+…` form matters: the bare `uvx shrinkray` name on PyPI belongs to an unrelated project — issue #321):
 
 ```bash
-uvx shrinkray encode 'D:\Movies' --dry-run
+uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray encode 'D:\Movies' --dry-run
 
 # shrink it (quality-measured, black bars removed)
-uvx shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
+uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray encode 'D:\Movies' 'D:\Encoded'
 ```
 
 > [!TIP]
