@@ -27,7 +27,7 @@ from shrinkray.engine.pipeline import (
     disk_free_bytes,
     encode_with_quality,
 )
-from shrinkray.engine.plan import MIN_ENCODE_SECONDS
+from shrinkray.engine.plan import MIN_ENCODE_SECONDS, QualityResult
 from shrinkray.engine.samples import ProgressCallback
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
@@ -441,6 +441,7 @@ def watch(
     crop_sample_count: int = 10,
     progress: ProgressCallback | None = None,
     settings: Callable[[], WatchSettings] | None = None,
+    record: Callable[[Path, QualityResult, Path | None], int | None] | None = None,
 ) -> None:
     """Watches the inbox and encodes newly arrived movies.
 
@@ -478,6 +479,15 @@ def watch(
             changed config takes effect at the next file and an idle watcher
             still notices it (the resident app passes one, issue #247). None:
             the fixed arguments above apply to every file.
+        record (Callable[[Path, QualityResult, Path | None], int | None] | None):
+            Persisted one encode's (or skip's) outcome (issue #232): called as
+            record(movie, result, final_output) where final_output is the path
+            the artifact occupies when the run replaces sources in place, and
+            returns the encode row's id so a DECLINED swap can correct the row
+            (`_swap`). The engine layer cannot import the service layer (the
+            import-linter contract), so the caller above passes this in - the
+            resident app passes one closure, a stateless run passes None and
+            records nothing, exactly as db_file=None does.
     """
     current = WatchSettings(
         max_threads=max_threads,
@@ -665,9 +675,16 @@ def watch(
                         continue
                     if result.skipped_reason:
                         log(f"Skipping '{movie.name}': {result.skipped_reason}.")
+                        if record is not None:
+                            record(movie, result, None)
                     elif result.success:
+                        encode_id = (
+                            record(movie, result, movie if in_place_mode else None)
+                            if record
+                            else None
+                        )
                         if in_place_mode:
-                            _swap(db_file, movie, result.output)
+                            _swap(db_file, movie, result.output, encode_id)
                             log(
                                 f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
                                 f"(VMAF {result.achieved_vmaf}), "
@@ -693,7 +710,7 @@ def watch(
         release_lock(lock_file)
 
 
-def _swap(db_file: Path | None, source: Path, output: Path) -> None:
+def _swap(db_file: Path | None, source: Path, output: Path, encode_id: int | None = None) -> None:
     """Swaps a verified encode into the source's path, retaining the original.
 
     The watcher's in-place form writes its encode into a staging directory and
@@ -707,6 +724,10 @@ def _swap(db_file: Path | None, source: Path, output: Path) -> None:
             (the swap still happens, but no ledger row is written).
         source (Path): The library file the output replaces.
         output (Path): The verified encoded file.
+        encode_id (int | None): The encode row the watcher wrote for this
+            encode (issue #232). A DECLINED swap clears the row's output_file:
+            the encode is discarded with its staging directory, so the row must
+            not point at a path that is about to vanish.
     """
     from shrinkray import db, replace
 
@@ -717,12 +738,24 @@ def _swap(db_file: Path | None, source: Path, output: Path) -> None:
             f"Not replacing '{source.name}': the output is not smaller "
             f"({size_before} -> {size_after} bytes)"
         )
+        if db_file is not None and encode_id is not None:
+            connection = db.connect(db_file)
+            try:
+                db.set_encode_output(connection, encode_id, None)
+            finally:
+                connection.close()
         return
     try:
         staged = replace.stage(output, source)
         retained = replace.swap(source, staged)
     except replace.SwapError as error:
         log_error(f"Not replacing '{source.name}': {error}")
+        if db_file is not None and encode_id is not None:
+            connection = db.connect(db_file)
+            try:
+                db.set_encode_output(connection, encode_id, None)
+            finally:
+                connection.close()
         return
     if db_file is not None:
         connection = db.connect(db_file)

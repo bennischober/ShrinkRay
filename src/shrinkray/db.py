@@ -1063,6 +1063,31 @@ def add_encode(
     return int(cursor.lastrowid or 0)
 
 
+def set_encode_output(
+    connection: sqlite3.Connection, encode_id: int, output_file: str | None
+) -> None:
+    """Sets (or clears) an encode row's output_file after the fact.
+
+    The row is written before the swap that decides where the artifact ends
+    up (issue #232): a swap that succeeds leaves the row's path standing, one
+    that is declined discards the encode with its staging directory, and the
+    row must then record that the artifact no longer exists - otherwise
+    `doctor` reports a vanished file for every declined swap and the
+    generation chain links through a path that never held the artifact.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        encode_id (int): The encode row to update.
+        output_file (str | None): The path that now holds the artifact, or
+            None to record that the encode was discarded.
+    """
+    connection.execute(
+        "UPDATE encodes SET output_file = ? WHERE id = ?",
+        (output_file, encode_id),
+    )
+    connection.commit()
+
+
 def record_verification(
     connection: sqlite3.Connection,
     encode_id: int,
@@ -1158,6 +1183,23 @@ def get_latest_encode(connection: sqlite3.Connection, file_id: int) -> sqlite3.R
     """
     rows = get_encodes_for_file(connection, file_id)
     return rows[0] if rows else None
+
+
+def get_latest_encode_output(connection: sqlite3.Connection, file_id: int) -> Path | None:
+    """Returns the latest encode row's output_file as a path (None when unset).
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        file_id (int): The file id.
+
+    Returns:
+        Path | None: The recorded artifact path, or None when the latest row
+            is a skip marker or records no output.
+    """
+    latest = get_latest_encode(connection, file_id)
+    if latest is None or latest["output_size"] <= 0 or not latest["output_file"]:
+        return None
+    return Path(latest["output_file"])
 
 
 def has_output_for_latest_encode(

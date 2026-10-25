@@ -349,7 +349,29 @@ def _latest_encode_id(connection: "sqlite3.Connection", source: Path) -> int | N
     return int(latest["id"]) if latest is not None else None
 
 
-def _swap_into_place(connection: "sqlite3.Connection | None", source: Path, output: Path) -> None:
+def _encode_discarded(connection: "sqlite3.Connection | None", encode_id: int | None) -> None:
+    """Records that a written encode's artifact was discarded (issue #232).
+
+    A declined swap leaves the encode in its staging directory, which the run
+    deletes on exit. The row written a moment earlier points at that staging
+    path; it must record the discard instead, or `doctor` reports a vanished
+    output for a swap that was REFUSED - the healthy case.
+
+    Args:
+        connection: The database connection, or None for a stateless run.
+        encode_id: The encode row to correct (None: nothing to correct).
+    """
+    if connection is None or encode_id is None:
+        return
+    db.set_encode_output(connection, encode_id, None)
+
+
+def _swap_into_place(
+    connection: "sqlite3.Connection | None",
+    source: Path,
+    output: Path,
+    encode_id: int | None = None,
+) -> None:
     """Swaps a verified encode into the source's path, retaining the original.
 
     The swap gate is the check the encode already passed: the output exists,
@@ -370,6 +392,11 @@ def _swap_into_place(connection: "sqlite3.Connection | None", source: Path, outp
             swap still happens, but no ledger row is written).
         source: The library file the output replaces.
         output: The verified encoded file.
+        encode_id: The encode row the run just wrote (None: stateless). A
+            DECLINED swap clears the row's output_file (issue #232): the
+            encode is discarded with its staging directory, so the row must
+            not point at a path that is about to vanish - that lie is what
+            made `doctor` report every in-place encode as vanished.
     """
     from shrinkray import replace as replace_module
 
@@ -380,12 +407,14 @@ def _swap_into_place(connection: "sqlite3.Connection | None", source: Path, outp
             f"Not replacing '{source.name}': the output is not smaller "
             f"({size_before} -> {size_after} bytes)"
         )
+        _encode_discarded(connection, encode_id)
         return
     try:
         staged = replace_module.stage(output, source)
         retained = replace_module.swap(source, staged)
     except replace_module.SwapError as error:
         log_error(f"Not replacing '{source.name}': {error}")
+        _encode_discarded(connection, encode_id)
         return
     if connection is not None:
         db.add_retained(
@@ -586,9 +615,27 @@ def _record_encodes(
                                 f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
                             )
                             if connection is not None:
-                                record_quality_results(connection, movie, result, config)
+                                outcome = record_quality_results(
+                                    connection,
+                                    movie,
+                                    result,
+                                    config,
+                                    # in place the artifact's real location is the
+                                    # source's own path once the swap succeeds
+                                    # (issue #232); the row records it up front and
+                                    # a DECLINED swap clears it, because the encode
+                                    # is then discarded with its staging directory
+                                    final_output=movie if replace else None,
+                                )
+                            else:
+                                outcome = None
                             if replace:
-                                _swap_into_place(connection, movie, output_dir / movie.name)
+                                _swap_into_place(
+                                    connection,
+                                    movie,
+                                    output_dir / movie.name,
+                                    outcome.encode_id if outcome else None,
+                                )
                         elif result.skipped_reason is not None:
                             # guardrail skip => record it so future runs do not re-probe
                             console.print(
