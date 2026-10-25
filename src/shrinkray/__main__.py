@@ -967,3 +967,12 @@ def calc_time(lhs: str | None, rhs: str | None) -> str | None:
 
     # checks for putting a 0 before the time value
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+if __name__ == "__main__":
+    # the module entry point (issue #262): AGENTS.md names `python -m
+    # shrinkray` next to the console script, and an import without this
+    # guard exited 0 with no output - a script running it believed it had
+    # encoded. The console script calls app itself; this guard is the
+    # module form of the same call.
+    app()
