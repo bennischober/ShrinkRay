@@ -125,7 +125,7 @@ def probe_cache_key(
 
 def _cached_or_none(
     db_file: Path | None, key: str
-) -> tuple[float | None, sqlite3.Connection | None]:
+) -> tuple[float | None, int | None, sqlite3.Connection | None]:
     """Reads a probe-cache entry, returning the connection to keep it open on.
 
     Opening one short-lived connection per probe is cheap (WAL, single
@@ -138,24 +138,32 @@ def _cached_or_none(
         key (str): The probe cache key.
 
     Returns:
-        tuple: The cached value (None on miss) and the open connection
-            to hand to the cache write, or (None, None).
+        tuple: (cached score or None, the encoded byte size or None, the
+            open connection for the cache write); (None, None, None) without
+            a database. The size is None on pre-#314 rows - a size read
+            misses rather than misleads.
     """
     if db_file is None:
-        return None, None
+        return None, None, None
     from shrinkray import db as _db
 
     connection = _db.connect(db_file)
-    return _db.get_probe_score(connection, key), connection
+    entry = _db.get_probe_entry(connection, key)
+    if entry is None:
+        return None, None, connection
+    score, size = entry
+    return score, size, connection
 
 
-def _store_probe(connection: sqlite3.Connection | None, key: str, value: float) -> None:
+def _store_probe(
+    connection: sqlite3.Connection | None, key: str, value: float, encoded_size: int | None = None
+) -> None:
     """Stores one probe measurement (best-effort commit via db layer)."""
     if connection is None:
         return
     from shrinkray import db as _db
 
-    _db.save_probe_score(connection, key, value)
+    _db.save_probe_score(connection, key, value, encoded_size)
     connection.close()
 
 
@@ -336,9 +344,9 @@ def probe_crf(
             encoder_threads,
             tool_versions,
         )
-        cached, connection = (None, None)
+        cached, _cached_size, connection = (None, None, None)
         if use_probe_cache:
-            cached, connection = _cached_or_none(db_file, key)
+            cached, _cached_size, connection = _cached_or_none(db_file, key)
         if cached is not None:
             log(f"probe cache hit (CRF {crf}, sample {index + 1}/{len(samples)})")
             scores.append(cached)
@@ -369,7 +377,7 @@ def probe_crf(
         score = measure_vmaf(
             encoded, sample, workdir, crop=crop, hdr=hdr, cancel=cancel, db_file=db_file
         )
-        _store_probe(connection, key, score)
+        _store_probe(connection, key, score, encoded.stat().st_size)
         encoded.unlink()
         scores.append(score)
     return sum(scores) / len(scores)
@@ -449,9 +457,9 @@ def estimate_size_factor(
         tool_versions=_tool_versions(handbrake),
         kind="size",
     )
-    cached, connection = (None, None)
+    cached, _cached_size, connection = (None, None, None)
     if use_probe_cache:
-        cached, connection = _cached_or_none(db_file, key)
+        cached, _cached_size, connection = _cached_or_none(db_file, key)
     if cached is not None:
         log(f"probe cache hit (size probe, CRF {crf})")
         if connection is not None:
@@ -714,6 +722,7 @@ def find_optimal_crf_and_skip(
         encoder,
         probe_encoder_preset,
         crop=crop,
+        hdr=hdr,
         cancel=cancel,
         db_file=db_file,
         encoder_threads=encoder_threads,
@@ -739,6 +748,7 @@ def check_chosen_crf_shrinks(
     encoder: str,
     probe_encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
+    hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
@@ -753,10 +763,12 @@ def check_chosen_crf_shrinks(
     chosen CRF is much lower and the file much bigger. A title can pass the bound
     and still grow at the CRF that gets encoded.
 
-    This costs one sample encode. It cannot reuse the search's probes: the VMAF
-    cache is keyed kind="vmaf" and the size cache kind="size", so a VMAF probe's
-    encoded bytes are not addressable as a size measurement. Folding the two into
-    one cache entry is a separate optimization; the correctness check ships first.
+    This used to cost one sample encode; since issue #314 the VMAF probes'
+    encoded byte counts live in the cache beside their scores, so the factor
+    is the total over ALL windows when every window's entry carries a size
+    (ab-av1's estimate over all samples). A missing entry (pre-#314 rows, no
+    database, cache bypass) falls back to the single-window encode below -
+    a miss degrades to the old behaviour, never to a guess.
 
     Args:
         samples (list[tuple[Path, float]]): The sample windows.
@@ -777,6 +789,49 @@ def check_chosen_crf_shrinks(
     Returns:
         float: The encoded/source size ratio at the chosen CRF.
     """
+    # issue #314: the chosen-CRF size decision comes from ALL windows' probe
+    # encodes - the VMAF probes already encoded every window at the chosen
+    # CRF and the cache now records each encoded byte count beside its
+    # score. When every window's entry carries a size, the factor is the
+    # total encoded over the total sample bytes (ab-av1's estimate over all
+    # samples); when ANY window misses (pre-#314 cache rows, no database,
+    # cache bypass) the decision falls back to the single-window encode -
+    # a miss degrades to the old behaviour, never to a guess.
+    if db_file is not None and use_probe_cache:
+        from shrinkray import db as _db
+
+        connection = _db.connect(db_file)
+        try:
+            encoded_total = 0
+            sample_total = 0
+            complete = True
+            for _index, (sample, offset) in enumerate(samples):
+                key = probe_cache_key(
+                    movie,
+                    offset,
+                    sample_seconds,
+                    chosen,
+                    encoder,
+                    probe_encoder_preset,
+                    crop,
+                    hdr,
+                    encoder_threads,
+                    _tool_versions(handbrake),
+                )
+                entry = _db.get_probe_entry(connection, key)
+                if entry is None or entry[1] is None:
+                    complete = False
+                    break
+                encoded_total += entry[1]
+                sample_total += sample.stat().st_size
+            if complete and sample_total > 0:
+                log(
+                    f"size at chosen CRF {chosen}: all {len(samples)} probe "
+                    "windows' encoded bytes reused (issue #314)"
+                )
+                return encoded_total / sample_total
+        finally:
+            connection.close()
     return estimate_size_factor(
         samples,
         workdir,

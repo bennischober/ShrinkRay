@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 if TYPE_CHECKING:
     # engine is ABOVE db in the layer contract; the summary type arrives as
@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS probe_cache (
     key TEXT PRIMARY KEY,
     value REAL NOT NULL,
+    encoded_size INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
@@ -392,6 +393,13 @@ MIGRATIONS = {
         # the record snapshots what the decision was made from. A nullable
         # ADD COLUMN, no rewrites.
         "ALTER TABLE encodes ADD COLUMN source_bit_depth INTEGER",
+    ],
+    18: [
+        # the probe cache records the encoded bytes next to the score (issue #314):
+        # the chosen-CRF size decision reads the sizes the VMAF probes already
+        # produced instead of re-encoding one window. Old rows keep NULL => a
+        # size read misses rather than misleads.
+        "ALTER TABLE probe_cache ADD COLUMN encoded_size INTEGER",
     ],
 }
 
@@ -756,7 +764,9 @@ def save_plan(
     return int(cursor.lastrowid or 0)
 
 
-def save_probe_score(connection: sqlite3.Connection, key: str, value: float) -> None:
+def save_probe_score(
+    connection: sqlite3.Connection, key: str, value: float, encoded_size: int | None = None
+) -> None:
     """Stores one probe measurement under its content-addressed key.
 
     The cache is an optimization, never a decision input on its own: a row
@@ -768,16 +778,43 @@ def save_probe_score(connection: sqlite3.Connection, key: str, value: float) -> 
         connection (sqlite3.Connection): The database connection.
         key (str): The sha256 cache key (probe_cache_key).
         value (float): The measured VMAF score or size factor.
+        encoded_size (int | None): The probe encode's byte size, recorded
+            beside the score (issue #314): the chosen-CRF size decision
+            reads these instead of re-encoding a window. None for the
+            size-factor entries (they have no VMAF score, and their
+            single-window size is not a total).
     """
     connection.execute(
         """
-        INSERT INTO probe_cache (key, value) VALUES (?, ?)
+        INSERT INTO probe_cache (key, value, encoded_size) VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                       encoded_size = excluded.encoded_size,
                                        created_at = datetime('now')
         """,
-        (key, value),
+        (key, value, encoded_size),
     )
     connection.commit()
+
+
+def get_probe_entry(connection: sqlite3.Connection, key: str) -> tuple[float, int | None] | None:
+    """Returns a cache entry's (score, encoded_size), or None on a miss.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        key (str): The sha256 cache key (probe_cache_key).
+
+    Returns:
+        tuple | None: (value, encoded_size) — the size is None for old rows
+            (pre-#314) and for size-factor entries; the caller treats a None
+            size as a MISS for size purposes, never as zero.
+    """
+    row = connection.execute(
+        "SELECT value, encoded_size FROM probe_cache WHERE key = ?", (key,)
+    ).fetchone()
+    if row is None:
+        return None
+    size = int(row["encoded_size"]) if row["encoded_size"] is not None else None
+    return float(row["value"]), size
 
 
 def get_probe_score(connection: sqlite3.Connection, key: str) -> float | None:
