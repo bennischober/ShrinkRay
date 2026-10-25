@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from shrinkray import __version__, db
 from shrinkray.config import Conf, load_config
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
+from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error, log_warning
@@ -687,6 +688,9 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         # an edited config.json that was NOT applied (issue #247): the app
         # keeps running on the previous settings, and the operator must see why
         "config_error": config_module.config_error,
+        # why no new file starts (the operator's pause or a manual encode,
+        # issue #250), or None while the app works normally
+        "paused": pause_reason(s.db_file.resolve().parent),
         # the reveal capability (issue #239): a container has no desktop and
         # no opener binary, so the button hides instead of promising a
         # folder window that would end in a 500
@@ -1378,7 +1382,33 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
     if not roots:
         return
     from shrinkray.config import refresh_config
+    from shrinkray.engine.plan import QualityResult
     from shrinkray.engine.watch import WatchSettings, watch
+    from shrinkray.service import record_quality_results
+
+    def record_watch_outcome(
+        movie: Path, result: QualityResult, final_output: Path | None
+    ) -> int | None:
+        """Persists the watcher's encode outcome (issue #232).
+
+        The engine layer cannot import the service layer (the import-linter
+        contract), so the app passes the write in. The row's output_file is
+        the artifact's real location in place (the source's own path) - the
+        staging path a row used to carry was deleted seconds later, which
+        made `doctor` report every in-place encode as vanished and broke the
+        generation chain. The returned id lets a declined swap correct the
+        row to 'discarded'.
+        """
+        outcome = state.with_lock(
+            lambda connection: record_quality_results(
+                connection,
+                movie,
+                result,
+                refresh_config(),
+                final_output=final_output,
+            )
+        )
+        return outcome.encode_id
 
     def settings_for_next_file() -> WatchSettings:
         # a config saved while the watcher runs applies at its next file
@@ -1404,6 +1434,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 stop_event=state.watch_stop,
                 db_file=state.db_file,
                 settings=settings_for_next_file,
+                record=record_watch_outcome,
             )
         except Exception as e:
             log_error(f"watch loop crashed: {e}")

@@ -177,6 +177,10 @@ export interface Status {
    * parse or validate; the app keeps its previous settings), null when it is
    * — issue #247. Clears itself once the file is fixed. */
   config_error?: string | null
+  /** why the resident app starts no new file — the operator paused it, or a
+   * manual encode is running (issue #250) — null while it works normally.
+   * Pausing happens in the terminal, never here: the dashboard only reports. */
+  paused?: string | null
   /** the host can open a file-manager window (false in a container) */
   reveal_available?: boolean
 }

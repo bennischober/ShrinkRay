@@ -425,6 +425,10 @@
       <!-- not dismissible: it clears once the file is fixed (issue #247) -->
       <div class="api-error mono" role="alert">{status.config_error}</div>
     {/if}
+    {#if status?.paused}
+      <!-- read-only: pausing and resuming happen in the terminal (issue #250) -->
+      <div class="api-notice mono" role="status">Paused — no new file starts: {status.paused}</div>
+    {/if}
     {#if error}
       <div class="api-error mono" role="alert">
         {error}

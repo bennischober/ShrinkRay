@@ -20,13 +20,14 @@ from pathlib import Path
 
 from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
+from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import (
     DISK_FREE_FLOOR_BYTES,
     cap_threads,
     disk_free_bytes,
     encode_with_quality,
 )
-from shrinkray.engine.plan import MIN_ENCODE_SECONDS
+from shrinkray.engine.plan import MIN_ENCODE_SECONDS, QualityResult
 from shrinkray.engine.samples import ProgressCallback
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
@@ -437,6 +438,7 @@ def watch(
     crop_sample_count: int = 10,
     progress: ProgressCallback | None = None,
     settings: Callable[[], WatchSettings] | None = None,
+    record: Callable[[Path, QualityResult, Path | None], int | None] | None = None,
 ) -> None:
     """Watches the inbox and encodes newly arrived movies.
 
@@ -474,6 +476,15 @@ def watch(
             changed config takes effect at the next file and an idle watcher
             still notices it (the resident app passes one, issue #247). None:
             the fixed arguments above apply to every file.
+        record (Callable[[Path, QualityResult, Path | None], int | None] | None):
+            Persisted one encode's (or skip's) outcome (issue #232): called as
+            record(movie, result, final_output) where final_output is the path
+            the artifact occupies when the run replaces sources in place, and
+            returns the encode row's id so a DECLINED swap can correct the row
+            (`_swap`). The engine layer cannot import the service layer (the
+            import-linter contract), so the caller above passes this in - the
+            resident app passes one closure, a stateless run passes None and
+            records nothing, exactly as db_file=None does.
     """
     current = WatchSettings(
         max_threads=max_threads,
@@ -484,6 +495,10 @@ def watch(
         crop_sample_count=crop_sample_count,
     )
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
+    # the pause state lives beside the database (issue #250): no database,
+    # no resident app to pause
+    state_dir = db_file.resolve().parent if db_file is not None else None
+    paused_reason: str | None = None
     known: set[str] = set()
     lock_file = WATCH_LOCK_FILE
     sleep_interval = poll_interval
@@ -549,6 +564,21 @@ def watch(
                 # and reports it (issue #247)
                 if settings is not None:
                     current = settings()
+                # paused (by the operator, or for a manual encode, issue #250):
+                # nothing enters `known`, so every file stays eligible, and the
+                # base interval (not the idle backoff) notices a resume promptly
+                reason = pause_reason(state_dir)
+                if reason is not None:
+                    if reason != paused_reason:
+                        log(f"Watcher paused: {reason}. Files stay eligible.")
+                    paused_reason = reason
+                    if once:
+                        return
+                    _wait_or_stop(poll_interval, stop_event, waiter=waiter)
+                    continue
+                if paused_reason is not None:
+                    log("Watcher resumed.")
+                    paused_reason = None
                 # pass-level disk guard: a full output drive would burn a full
                 # CRF probe per candidate per pass (probe, watchdog cancel,
                 # retry next pass, repeat). Skipping the pass BEFORE anything
@@ -579,6 +609,10 @@ def watch(
                         # at it again, starving every normal copy arrival)
                         log(f"'{movie.name}' is not stable yet (still copying?) => later.")
                         continue
+                    # a manual encode or a pause can begin mid-pass: hold this
+                    # file and the rest back; the next pass reports the pause
+                    if pause_reason(state_dir) is not None:
+                        break
                     known.add(_identity(movie))
                     if settings is not None:
                         current = settings()
@@ -626,11 +660,28 @@ def watch(
                         log_error(f"Encoding '{movie.name}' cancelled: {e} => retry next pass.")
                         known.discard(_identity(movie))
                         continue
+                    except RuntimeError as e:
+                        # a per-file failure (unreadable, unprobeable, encode
+                        # error): logged with the file's name, and the WATCHER
+                        # CONTINUES - one corrupt file must not end the loop
+                        # that runs unattended for months (issue #260). The
+                        # file is already in `known` (marked above), so it is
+                        # not retried until it changes; whether it should be
+                        # retried at all is #231's failure-memory decision.
+                        log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
+                        continue
                     if result.skipped_reason:
                         log(f"Skipping '{movie.name}': {result.skipped_reason}.")
+                        if record is not None:
+                            record(movie, result, None)
                     elif result.success:
+                        encode_id = (
+                            record(movie, result, movie if in_place_mode else None)
+                            if record
+                            else None
+                        )
                         if in_place_mode:
-                            _swap(db_file, movie, result.output)
+                            _swap(db_file, movie, result.output, encode_id)
                             log(
                                 f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
                                 f"(VMAF {result.achieved_vmaf}), "
@@ -656,7 +707,7 @@ def watch(
         release_lock(lock_file)
 
 
-def _swap(db_file: Path | None, source: Path, output: Path) -> None:
+def _swap(db_file: Path | None, source: Path, output: Path, encode_id: int | None = None) -> None:
     """Swaps a verified encode into the source's path, retaining the original.
 
     The watcher's in-place form writes its encode into a staging directory and
@@ -670,6 +721,10 @@ def _swap(db_file: Path | None, source: Path, output: Path) -> None:
             (the swap still happens, but no ledger row is written).
         source (Path): The library file the output replaces.
         output (Path): The verified encoded file.
+        encode_id (int | None): The encode row the watcher wrote for this
+            encode (issue #232). A DECLINED swap clears the row's output_file:
+            the encode is discarded with its staging directory, so the row must
+            not point at a path that is about to vanish.
     """
     from shrinkray import db, replace
 
@@ -680,12 +735,24 @@ def _swap(db_file: Path | None, source: Path, output: Path) -> None:
             f"Not replacing '{source.name}': the output is not smaller "
             f"({size_before} -> {size_after} bytes)"
         )
+        if db_file is not None and encode_id is not None:
+            connection = db.connect(db_file)
+            try:
+                db.set_encode_output(connection, encode_id, None)
+            finally:
+                connection.close()
         return
     try:
         staged = replace.stage(output, source)
         retained = replace.swap(source, staged)
     except replace.SwapError as error:
         log_error(f"Not replacing '{source.name}': {error}")
+        if db_file is not None and encode_id is not None:
+            connection = db.connect(db_file)
+            try:
+                db.set_encode_output(connection, encode_id, None)
+            finally:
+                connection.close()
         return
     if db_file is not None:
         connection = db.connect(db_file)

@@ -20,6 +20,7 @@ from shrinkray.tools import process as resources
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "tools"))
 
+import console_banner  # noqa: E402 - tools/ is not a package; the path is set above
 import healthcheck  # noqa: E402 - tools/ is not a package; the path is set above
 
 
@@ -246,6 +247,78 @@ class TestHealthcheck(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cmdline = self._cmdline(tmp, "/app/.venv/bin/shrinkray", "plan", "/media/app")
             self.assertFalse(healthcheck.runs_server(cmdline))
+
+
+class TestConsoleBanner(unittest.TestCase):
+    """tools/console_banner.py (issue #251): the console's printed manual must
+    be true for the container it runs in, and name only real commands."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data = Path(self.tmp.name)
+        self.env = mock.patch.dict(
+            os.environ,
+            {
+                "SHRINKRAY_CONFIG": str(self.data / "config.json"),
+                "SHRINKRAY_TOKEN_FILE": str(self.data / "token"),
+            },
+        )
+        self.env.start()
+        os.environ.pop("SHRINKRAY_TOKEN", None)
+
+    def tearDown(self) -> None:
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def _cmdline(self, *argv: str) -> Path:
+        path = self.data / "cmdline"
+        path.write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+        return path
+
+    def _server(self) -> str:
+        return console_banner.banner(self._cmdline("/app/.venv/bin/shrinkray", "serve"))
+
+    def test_a_running_server_shows_the_dashboard_and_its_token(self) -> None:
+        (self.data / "token").write_text("generated-token\n", encoding="utf-8")
+        text = self._server()
+        self.assertIn("the resident encoder is running", text)
+        self.assertIn("token: generated-token", text)
+        self.assertIn(f"touch {self.data / 'paused'}", text)
+
+    def test_a_missing_token_is_said_not_hidden(self) -> None:
+        self.assertIn("open to the network", self._server())
+
+    def test_a_paused_server_says_how_to_resume(self) -> None:
+        (self.data / "paused").touch()
+        self.assertIn(f"Resume with:      rm {self.data / 'paused'}", self._server())
+
+    def test_a_manual_encode_is_shown_as_the_reason_to_wait(self) -> None:
+        from shrinkray.engine.pause import manual_encode
+
+        with manual_encode(self.data):
+            self.assertIn("a manual encode is running", self._server())
+
+    def test_a_one_shot_container_does_not_claim_a_server(self) -> None:
+        text = console_banner.banner(
+            self._cmdline("/app/.venv/bin/shrinkray", "encode", "/media/x.mkv")
+        )
+        self.assertIn("not the resident server", text)
+        self.assertNotIn("Dashboard", text)
+        self.assertNotIn("Pause", text)
+
+    def test_every_named_command_exists(self) -> None:
+        """A banner line naming a command the CLI lacks sends the operator
+        nowhere; this fails the day the two drift apart."""
+        import re
+
+        from typer.main import get_command
+
+        from shrinkray.__main__ import app
+
+        commands = set(get_command(app).commands)  # type: ignore[attr-defined]
+        named = set(re.findall(r"shrinkray ([a-z]+)", self._server()))
+        self.assertTrue(named)
+        self.assertLessEqual(named, commands, f"the banner names {named - commands}")
 
 
 if __name__ == "__main__":

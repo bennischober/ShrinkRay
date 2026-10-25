@@ -514,3 +514,30 @@ def process_exists(pid: int) -> bool:
         return True
     except (OSError, ValueError, subprocess.SubprocessError):
         return False
+
+
+def process_start_ticks(pid: int) -> int | None:
+    """Returns when a process started, to tell it apart from a reused pid.
+
+    Linux only: field 22 of /proc/<pid>/stat, in clock ticks since boot. Two
+    processes that ever share a pid have different start times, which matters
+    in a container, where pids restart from 1 on every start.
+
+    Args:
+        pid (int): The process id.
+
+    Returns:
+        int | None: The start time, or None when the process does not exist
+            or the platform has no /proc (the caller falls back to the pid).
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except OSError:
+        return None
+    # the command name (field 2) is parenthesised and may hold spaces or
+    # parentheses itself: count the fields after its LAST closing parenthesis
+    fields = stat[stat.rfind(")") + 2 :].split()
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError):
+        return None

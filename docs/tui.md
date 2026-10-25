@@ -37,9 +37,11 @@ window.
   single-file path. By path for now; a file picker inside the TUI may come later. It
   warns at start that closing the terminal cancels the encode, and the resident
   watcher pauses while it runs.
-- **The console banner** — printed when a shell opens in the container: what to type
-  to configure, to encode one file, to recover originals, and where the dashboard is
-  (with the generated token).
+- **The console banner** (built, issue #251) — printed once when an interactive shell
+  opens in the container (`tools/console_banner.py`, run by the shell hook): what to type
+  to encode one file, to list originals, to change settings or pause, and where the
+  dashboard is with the token. Computed from the container's state; it names only
+  commands that exist, which a test enforces.
 
 ## Constraints the build must keep
 
@@ -50,10 +52,10 @@ window.
   encode" signal is written by the CLI to shared state and honoured by the watcher;
   the CLI does not call the server. A crashed CLI must not leave the watcher paused
   forever (the encode lock's stale-holder rule is the model: dead pid = released).
-- **Today's encode lock does not do this.** It is per output directory
-  (`engine/lock.py:47`), so a one-shot encode and the watcher can run concurrently on
-  different directories, and on a collision the watcher skips the file rather than
-  pausing (`engine/watch.py:578`). The pause is a new, container-wide signal.
+- **The pause is its own signal, not the encode lock** (built, issue #250). The lock
+  is per output directory, so it could not stop a watcher working elsewhere;
+  `engine/pause.py` keeps a `paused` flag (the TUI's switch: `set_operator_paused`) and
+  one `manual-encodes/<pid>` marker per running CLI encode in the data folder.
 - **Settings, not rules.** The TUI exposes what PRODUCT.md leaves open. It cannot
   lower the 1080p floor, add a second encode mode, keep bars, or pick another output
   codec.
@@ -64,8 +66,6 @@ window.
 ## Open design work (follow-up issues)
 
 - The TUI library and the screen layout.
-- The shape of the pause flag and the config reload in the resident process.
-- The banner mechanism in the image (a shell rc file printed on interactive start).
 
 ## What this supersedes
 
