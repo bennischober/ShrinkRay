@@ -41,6 +41,13 @@ app = FastAPI(title="ShrinkRay", version=__version__)
 # config.json: that file is tracked, and a token in it would be committed.
 AUTH_TOKEN_ENV = "SHRINKRAY_TOKEN"
 
+# the resident watcher's output directory (issue #193). In place is the
+# default and needs a WRITABLE library mount; a read-only /media (test
+# containers, special setups) must be able to point the watcher's encodes at
+# a writable volume instead of crashing on its staging directory. Env var,
+# not config.json: it is deployment shape, like SHRINKRAY_TOKEN.
+WATCH_OUTPUT_ENV = "SHRINKRAY_WATCH_OUTPUT"
+
 _T = TypeVar("_T")
 
 
@@ -1240,7 +1247,21 @@ def run_app(
     _recover_interrupted_swaps()
     state.worker.start()
     auto_backlog(state, list(_allowed_roots), enabled=load_config().auto_backlog)
-    start_watch(state, list(_allowed_roots), None)
+    watch_output = os.environ.get(WATCH_OUTPUT_ENV, "") or None
+    if watch_output is not None:
+        # fail loudly at boot, not on the first encode: a path the operator
+        # typed wrong would otherwise surface as a crash INSIDE the watch
+        # thread hours later (issue #193's silent-loss failure mode)
+        resolved = Path(watch_output).resolve()
+        resolved.mkdir(parents=True, exist_ok=True)
+        if not os.access(resolved, os.W_OK):
+            log_error(
+                f"${WATCH_OUTPUT_ENV}='{watch_output}' is not writable by this "
+                "process; the watcher cannot stage encodes there."
+            )
+            sys.exit(1)
+        log(f"Watch output directory: {resolved} (from ${WATCH_OUTPUT_ENV})")
+    start_watch(state, list(_allowed_roots), Path(watch_output) if watch_output else None)
     log(f"ShrinkRay app listening on http://{host}:{port}")
 
     def monitor_memory() -> None:

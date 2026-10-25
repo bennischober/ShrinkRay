@@ -68,7 +68,11 @@ stated with the reason.
    disables the product: the watch loop crashes with `[Errno 30] Read-only file system`
    on its staging folder (issue #193 owns the startup refusal). `--replace` is a Mode A
    CLI flag and has nothing to do with the container; the compose file mounts `/media`
-   writable (issue #198).
+   writable (issue #198). For test containers and special setups that must keep
+   `/media` read-only, `SHRINKRAY_WATCH_OUTPUT=/output` (issue #193, Zef-X's decision:
+   writable default, env var for the exceptions) points the watcher's encodes at a
+   writable volume instead - the app validates the path at boot and refuses to start
+   when it is not writable, so the failure is loud, never a silent dead watcher.
 
 ## The ask
 
