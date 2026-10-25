@@ -914,3 +914,4 @@ def _swap(
         f"'{retained.name}' ({size_before / (1024**3):.2f} GB); delete it when "
         "you are satisfied (see the retained command)."
     )
+    return True
