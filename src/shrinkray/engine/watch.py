@@ -759,6 +759,12 @@ def watch(
                                 # inbox automation must not silently depend on
                                 # plan staleness: watch always measures fresh
                                 force_reprobe=True,
+                                # the resident mode verifies every encode
+                                # (issue #235): nobody watches the log in an
+                                # unattended container, and the full-file VMAF
+                                # is the only evidence the encode met the
+                                # target that the operator will ever get
+                                verify=True,
                                 min_source_height=current.min_source_height,
                                 min_source_width=current.min_source_width,
                                 min_source_size_gb=current.min_source_size_gb,

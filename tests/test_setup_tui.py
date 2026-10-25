@@ -39,7 +39,11 @@ class TestSetupApp(unittest.TestCase):
         self.config.write_text(
             json.dumps(
                 {
-                    "handbrake": {"max_threads": 4},
+                    "handbrake": {
+                        "max_threads": 4,
+                        "audio_languages": ["deu", "eng", "und", "jpn"],
+                        "subtitle_languages": ["eng", "deu", "und"],
+                    },
                     "language": "de",  # a key the UI does not show
                     "codec": {
                         "hdr": {"color_space": ["bt2020nc"], "color_transfer": ["smpte2084"]}
@@ -74,11 +78,27 @@ class TestSetupApp(unittest.TestCase):
         language filters (which decide which audio/subtitle tracks survive an
         encode — issues #330/#297) had no editor. They render and save like
         the other list fields; empty means keep every track.
+
+        The fixture starts from an EXPLICIT filter (the upgrade case: an operator
+        whose config.json already narrowed the tracks), because clearing a filter
+        must write the empty list rather than silently leave the old one in place.
         """
+        self.config.write_text(
+            json.dumps(
+                {
+                    "handbrake": {
+                        "max_threads": 4,
+                        "audio_languages": ["deu", "eng", "und", "jpn"],
+                        "subtitle_languages": ["eng", "deu", "und"],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
         app = SetupApp(self.config, None)
 
         async def steps(pilot: Pilot[None]) -> None:
-            # the defaults render (the config's lists, comma-separated)
+            # a config that sets the lists renders them comma-separated
             self.assertEqual(
                 app.query_one("#f-handbrake-audio_languages", Input).value, "deu, eng, und, jpn"
             )
@@ -90,8 +110,8 @@ class TestSetupApp(unittest.TestCase):
         run(app, steps)
         saved = self._saved()
         self.assertEqual(saved["handbrake"]["audio_languages"], ["deu", "eng"])
-        # empty list = keep every track (the documented opt-out), and the
-        # key IS written ("empty" must not mean "leave the old filter")
+        # empty list = keep every track (the documented opt-out), and the key IS
+        # written: clearing an EXISTING filter must not silently leave it in place
         self.assertEqual(saved["handbrake"]["subtitle_languages"], [])
 
     def test_a_saved_change_keeps_every_other_key(self) -> None:
