@@ -303,6 +303,26 @@ class TestEncodeJobInPlace(unittest.TestCase):
         self.assertEqual(recorded_roots, [self.root])
         self.assertEqual(result["outcomes"][0]["state"], "skipped")
 
+    def test_an_unmeasured_payload_is_rejected_not_silently_fixed(self) -> None:
+        """A payload without quality:true gets a FAILED outcome, never an
+        unmeasured encode (issue #329, invariant 6): the fixed-preset path
+        was deleted, so the branch must not exist to fall into.
+        """
+        from unittest.mock import patch
+
+        with (
+            patch("shrinkray.engine.pipeline.encode_with_quality") as fake_encode,
+            patch("shrinkray.service.record_quality_results") as fake_record,
+        ):
+            payload = {"paths": [str(self.movie)], "quality": False}
+            job = jobs.Job(kind=jobs.JobKind.ENCODE, payload=payload)
+            result = jobs.execute_encode(job, self.connection, threading.Event())
+        self.assertEqual(result["outcomes"][0]["state"], "failed")
+        self.assertIn("quality", result["outcomes"][0]["error"])
+        # the engine was never called: no encode happened
+        fake_encode.assert_not_called()
+        fake_record.assert_not_called()
+
     def test_an_output_dir_payload_keeps_the_two_directory_form(self) -> None:
         """Naming an output dir keeps the old behaviour (no swap)."""
         out = Path(self.tmp.name) / "out"
