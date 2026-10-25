@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
 
-      - name: Run checks (the gate: ruff, mypy, tests)
+      - name: Run checks (the gate - ruff, mypy, tests)
         run: tools/gate.sh --no-cov
 
       - name: Build distributions
