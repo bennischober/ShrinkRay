@@ -539,6 +539,7 @@
             <span class="num">BITRATE</span>
             <span class="num">SIZE</span>
             <span class="num">SAVED</span>
+            <span class="num">VERIFIED</span>
             <span class="num">TIME</span>
             <span class="delta"></span>
           </div>
@@ -572,6 +573,14 @@
               </span>
               <span class="num">{fmtGb(rec.output_size)}</span>
               <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
+              <!-- the full-file verification measurement (issue #235): the
+                   kept artifact measured against its source after the
+                   encode; '—' when the run had verify off -->
+              <span
+                class="num"
+                class:measured={rec.verified_vmaf != null}
+                title={rec.verified_vmaf != null ? 'full-file VMAF of the kept output, measured against the source after the encode' : 'not verified (the run had verification off or it failed)'}
+              >{rec.verified_vmaf?.toFixed(1) ?? '—'}</span>
               <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
               <span class="delta" title="delta vs the previous run (a comparison between consecutive encodes — siblings of one generation are two runs of the same source)">
                 {#if i < encodesDesc.length - 1}

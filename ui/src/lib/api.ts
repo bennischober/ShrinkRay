@@ -88,6 +88,10 @@ export interface EncodeInfo {
   probe_count?: number | null
   probe_seconds?: number | null
   tool_versions?: string | null
+  /** the full-file verification measurement (issue #235): VMAF of the kept
+   * artifact against its source, measured after the encode; null when the
+   * run had verify off or the measurement failed non-fatally */
+  verified_vmaf?: number | null
   /** schema v7 drift fields (null for pre-v7 rows); present in the
    * library list, snapshot and /api/movie alike since 3f77d08 */
   generation?: number | null
