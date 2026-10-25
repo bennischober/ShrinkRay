@@ -241,6 +241,47 @@ class TestDb(unittest.TestCase):
             self.assertIn("generation", columns)
             migrated.close()
 
+    def test_migration_v16_adds_the_crops_table(self):
+        """A v15 database gains the timeline crop cache (issue #181).
+
+        The crops table is new storage, so the migration only creates it: no
+        rewrite of existing rows, no data loss. After the migration the table
+        accepts the detector's summary and a v15-built database still passes
+        its integrity check.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v15.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (15);
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    mtime REAL NOT NULL,
+                    size INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL
+                );
+                INSERT INTO files (path, mtime, size, name, category) VALUES
+                    ('D:/Movies/a.mkv', 1.0, 1, 'movie', 'Cat');
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = db.connect(db_path)
+            version = migrated.execute("SELECT version FROM schema_version").fetchone()
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
+            columns = {row["name"] for row in migrated.execute("PRAGMA table_info(crops)")}
+            self.assertIn("bars", columns)
+            self.assertIn("input_mtime", columns)
+            self.assertIn("input_size", columns)
+            self.assertIn("ratios", columns)
+            self.assertEqual(migrated.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
+            migrated.close()
+
     def test_migration_v15_drops_plans_probed_without_bars(self):
         """A pre-v15 plan is discarded, never reused (issue #128).
 

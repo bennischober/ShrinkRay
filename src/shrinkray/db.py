@@ -3,9 +3,14 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
+
+if TYPE_CHECKING:
+    # engine is ABOVE db in the layer contract; the summary type arrives as
+    # an annotation only (a runtime import here would be an upward edge)
+    from shrinkray.engine.crop import CropSummary
 
 # how many consecutive scans a file may be missing before its row (and its
 # encode history) is hard-deleted; the grace period also protects against
@@ -102,6 +107,22 @@ CREATE TABLE IF NOT EXISTS plans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_plans_file ON plans(file_id);
+
+CREATE TABLE IF NOT EXISTS crops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    bars TEXT,
+    frame_width INTEGER NOT NULL,
+    frame_height INTEGER NOT NULL,
+    readings INTEGER NOT NULL,
+    sustained_readings INTEGER NOT NULL,
+    ratios TEXT NOT NULL DEFAULT '{}',
+    input_mtime REAL NOT NULL,
+    input_size INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_crops_file ON crops(file_id);
 
 CREATE INDEX IF NOT EXISTS idx_encodes_file ON encodes(file_id);
 
@@ -341,6 +362,27 @@ MIGRATIONS = {
         "DROP TABLE plans",
         "ALTER TABLE plans_v15 RENAME TO plans",
         "CREATE INDEX IF NOT EXISTS idx_plans_file ON plans(file_id)",
+    ],
+    16: [
+        # the timeline crop detector's cache (issue #181): one keyframe-only
+        # cropdetect pass per file VERSION, read by plan/encode and projected
+        # into the scan's flag when present. A fresh table, no rewrites.
+        """
+        CREATE TABLE IF NOT EXISTS crops (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            bars TEXT,
+            frame_width INTEGER NOT NULL,
+            frame_height INTEGER NOT NULL,
+            readings INTEGER NOT NULL,
+            sustained_readings INTEGER NOT NULL,
+            ratios TEXT NOT NULL DEFAULT '{}',
+            input_mtime REAL NOT NULL,
+            input_size INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_crops_file ON crops(file_id)",
     ],
 }
 
@@ -806,6 +848,87 @@ def get_valid_plan(
     ):
         return None
     return cast("sqlite3.Row", row)
+
+
+def save_crop_summary(
+    connection: sqlite3.Connection,
+    movie: Path,
+    summary: CropSummary,
+) -> None:
+    """Stores (upserts) the timeline detector's summary for one file version.
+
+    One row per file: the LATEST summary replaces the previous one, keyed on
+    the file's identity at write time (size + mtime). The read side validates
+    the identity exactly like the plan cache — a changed file is a miss.
+
+    Args:
+        connection: The database connection.
+        movie (Path): The source movie file.
+        summary (crop.CropSummary): The timeline detector's result.
+    """
+    row = connection.execute("SELECT id FROM files WHERE path = ?", (str(movie),)).fetchone()
+    if row is None:
+        # never scanned: the summary has no file to hang on (the scan owns
+        # the file rows); compute-uncached callers lose the cache this run
+        return
+    file_id = int(row["id"])
+    stat = movie.stat()
+    bars = None if summary.bars is None else ",".join(str(v) for v in summary.bars)
+    ratios = json.dumps([[list(rect), share] for rect, share in summary.ratios.items()])
+    connection.execute("DELETE FROM crops WHERE file_id = ?", (file_id,))
+    connection.execute(
+        """
+        INSERT INTO crops (
+            file_id, bars, frame_width, frame_height, readings,
+            sustained_readings, ratios, input_mtime, input_size
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            file_id,
+            bars,
+            summary.frame_width,
+            summary.frame_height,
+            summary.readings,
+            summary.sustained_readings,
+            ratios,
+            stat.st_mtime,
+            stat.st_size,
+        ),
+    )
+    connection.commit()
+
+
+def get_crop_row(connection: sqlite3.Connection, movie: Path) -> sqlite3.Row | None:
+    """Returns the file's cached crop row when the file is unchanged.
+
+    Identity is size + mtime (the scan cache's rule): ANY change is a miss,
+    fail-safe to recompute. The ROW is returned raw: interpreting it into a
+    summary (bars, ratios) is the engine's job — db stores, engine decides.
+
+    Args:
+        connection: The database connection.
+        movie (Path): The source movie file.
+
+    Returns:
+        sqlite3.Row | None: The raw crops row, or None.
+    """
+    if not movie.is_file():
+        return None
+    stat = movie.stat()
+    row = connection.execute(
+        """
+        SELECT c.bars, c.frame_width, c.frame_height, c.readings,
+               c.sustained_readings, c.ratios, c.input_mtime, c.input_size
+        FROM crops c JOIN files f ON f.id = c.file_id
+        WHERE f.path = ?
+        """,
+        (str(movie),),
+    ).fetchone()
+    if row is None:
+        return None
+    if abs(stat.st_mtime - row["input_mtime"]) > 1.0 or stat.st_size != row["input_size"]:
+        return None
+    return cast(sqlite3.Row, row)
 
 
 def get_cached_records(connection: sqlite3.Connection) -> dict[str, sqlite3.Row]:

@@ -350,6 +350,7 @@ def scan(
             connection=connection,
             rescan=rescan,
             compute_hash=hash_files,
+            db_file=db_file,
             files=files,
         )
     finally:

@@ -73,24 +73,46 @@ footer { margin-top: 1.5rem; color: var(--dim); font-size: .8rem; }
 """
 
 
-def _bars_note(scan_bars: int | None, plan_crop: str | None) -> str:
-    """Explains the two bar measurements when they disagree (issue #131).
+def _bars_note(scan_bars: int | None, plan_crop: str | None, ratios: str | None = None) -> str:
+    """Explains the bar measurements and the crop decision (issues #131, #181).
 
     The scan stores a 1/0 flag and the encode stores a crop rectangle, and they are
     deliberately separate measurements: the flag is a cheap pre-filter, the rectangle is the
     only value that reaches an encode. A file flagged "has bars" that then yields no crop is
     therefore not a contradiction - but it is invisible without this line, which is the whole
-    reason the issue exists.
+    reason the issue exists. When the timeline detector's summary is cached, its sustained
+    aspect-ratio table replaces the pre-filter wording with the measured breakdown.
 
     Args:
         scan_bars (int | None): The scan's 1/0 flag from files.crop.
         plan_crop (str | None): The plan's crop rectangle, 'top,bottom,left,right'.
+        ratios (str | None): The crop cache's ratio table, JSON
+            '[[[w,h,x,y],share],...]' from the crops table (issue #181).
 
     Returns:
         str: A short explanation, or '' when there is nothing to reconcile.
     """
     if not scan_bars or plan_crop:
         return ""
+    if ratios:
+        import json
+
+        try:
+            entries = json.loads(ratios)
+            table = ", ".join(
+                f"{w}x{h} ({share * 100:.0f}% of the time)"
+                for (w, h, _x, _y), share in (
+                    ((int(r[0][0]), int(r[0][1]), int(r[0][2]), int(r[0][3])), float(r[1]))
+                    for r in entries
+                )
+            )
+            if table:
+                return (
+                    f"variable picture size over the runtime: {table}; "
+                    "the encode crops only the bars every sustained segment shares"
+                )
+        except (TypeError, ValueError, IndexError, KeyError):
+            pass
     return (
         "bars flagged by scan, no crop in the plan "
         "(the flag is a cheap pre-filter; the encode measures its own rectangle)"
@@ -239,12 +261,13 @@ def generate_report(db_path: Path, output: Path) -> None:
         """
         SELECT f.path, f.name, f.category, f.duration, f.codec,
                f.width, f.height, f.missing_scans, f.crop AS scan_bars,
-               p.crop AS plan_crop,
+               p.crop AS plan_crop, c.ratios AS crop_ratios,
                e.input_size, e.output_size, e.saved_percent,
                e.chosen_crf, e.achieved_vmaf, e.preset, e.encoded_at,
                e.verified_vmaf, e.verified_subsample
         FROM files f
         LEFT JOIN plans p ON p.file_id = f.id
+        LEFT JOIN crops c ON c.file_id = f.id
         LEFT JOIN encodes e ON e.id = (
             SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
         )
@@ -271,7 +294,7 @@ def generate_report(db_path: Path, output: Path) -> None:
         else:
             decision, note = "none", ""
 
-        bars_note = _bars_note(r["scan_bars"], r["plan_crop"])
+        bars_note = _bars_note(r["scan_bars"], r["plan_crop"], r["crop_ratios"])
         if bars_note:
             note = f"{note}; {bars_note}" if note else bars_note
 
