@@ -662,6 +662,7 @@ class TestToolchainPreflight(unittest.TestCase):
         from shrinkray import service
 
         with (
+            patch("shrinkray.service.shutil.which", return_value="ffprobe"),
             patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
             patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
             patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
@@ -692,6 +693,7 @@ class TestToolchainPreflight(unittest.TestCase):
         from shrinkray import service
 
         with (
+            patch("shrinkray.service.shutil.which", return_value=None),
             patch("shrinkray.tools.handbrake.find_handbrake", return_value=None),
             patch(
                 "shrinkray.tools.vmaf.detect_vmaf_style",
@@ -699,7 +701,7 @@ class TestToolchainPreflight(unittest.TestCase):
             ),
         ):
             problems = service.all_problems()
-        self.assertEqual(len(problems), 2, problems)
+        self.assertEqual(len(problems), 3, problems)
 
 
 class TestStartupBacklog(unittest.TestCase):

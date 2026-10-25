@@ -21,8 +21,10 @@ from shrinkray.engine.plan import QualityResult
 @contextmanager
 def _toolchain_present():
     """The plan preflight (#194) checks the toolchain before any work; these
-    tests mock the engine itself, so the check must see a working one."""
+    tests mock the engine itself, so the check must see a working one
+    (CI runners have no ffprobe on PATH)."""
     with (
+        patch("shrinkray.service.shutil.which", return_value="ffprobe"),
         patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
         patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
         patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),

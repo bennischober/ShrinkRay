@@ -17,8 +17,10 @@ from shrinkray.__main__ import app
 @contextmanager
 def _toolchain_present():
     """The plan/encode preflight (#194) checks the toolchain before any work;
-    these tests mock the engine itself, so the check must see a working one."""
+    these tests mock the engine itself, so the check must see a working one
+    (CI runners have no ffprobe on PATH)."""
     with (
+        patch("shrinkray.service.shutil.which", return_value="ffprobe"),
         patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
         patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
         patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
@@ -49,17 +51,26 @@ class TestSingleFileScope(unittest.TestCase):
             os.chdir(previous)
 
     def test_scan_on_one_file_scans_one_movie(self) -> None:
-        with patch("shrinkray.engine.scan.process_movie", return_value=None) as probe:
+        with (
+            _toolchain_present(),
+            patch("shrinkray.engine.scan.process_movie", return_value=({}, None)) as probe,
+        ):
             self._run("scan", "a.mkv")
         self.assertEqual(probe.call_count, 1, "a one-file scan scanned the folder")
 
     def test_scan_on_a_folder_scans_the_folder(self) -> None:
-        with patch("shrinkray.engine.scan.process_movie", return_value=None) as probe:
+        with (
+            _toolchain_present(),
+            patch("shrinkray.engine.scan.process_movie", return_value=({}, None)) as probe,
+        ):
             self._run("scan", str(self.root))
         self.assertEqual(probe.call_count, 3, "a folder scan did not walk the folder")
 
     def test_scan_on_a_glob_scans_the_matched_files(self) -> None:
-        with patch("shrinkray.engine.scan.process_movie", return_value=None) as probe:
+        with (
+            _toolchain_present(),
+            patch("shrinkray.engine.scan.process_movie", return_value=({}, None)) as probe,
+        ):
             self._run("scan", "*.mkv")
         self.assertEqual(probe.call_count, 3, "a glob scan did not match its files")
 
