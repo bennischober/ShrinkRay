@@ -307,9 +307,11 @@ def encode(
         cancel.set()
 
     for sig in (
+        # SIGHUP via getattr: the Windows mypy view has no SIGHUP, and the
+        # runtime only reaches the else-branch on POSIX
         [_signal.SIGINT, _signal.SIGTERM]
         if sys.platform == "win32"
-        else [_signal.SIGHUP, _signal.SIGINT, _signal.SIGTERM]
+        else [getattr(_signal, "SIGHUP"), _signal.SIGINT, _signal.SIGTERM]
     ):
         # not the main thread / unsupported on this platform: degrade
         with contextlib.suppress(OSError, ValueError):
@@ -797,9 +799,11 @@ def plan(
         cancel.set()
 
     for sig in (
+        # SIGHUP via getattr: the Windows mypy view has no SIGHUP, and the
+        # runtime only reaches the else-branch on POSIX
         [_signal.SIGINT, _signal.SIGTERM]
         if sys.platform == "win32"
-        else [_signal.SIGHUP, _signal.SIGINT, _signal.SIGTERM]
+        else [getattr(_signal, "SIGHUP"), _signal.SIGINT, _signal.SIGTERM]
     ):
         # not the main thread / unsupported: degrade
         with contextlib.suppress(OSError, ValueError):
