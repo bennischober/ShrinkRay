@@ -405,7 +405,10 @@ to its quality** and whether its **frame matches its content**.
   plain HTTP, so on an untrusted network put a TLS-terminating reverse proxy in
   front. See the auth roadmap for what is deliberately still out of scope
   (per-user sessions).
-- HDR10 is supported; Dolby Vision dual-layer is not yet.
+- HDR10 is processed, not supported (issue #358): HDR sources are neither
+  blocked nor validated. Quality is measured on a tone-mapped SDR copy (VMAF has
+  no HDR model), HDR10 metadata survival is not verified per file, and Dolby
+  Vision is not handled (#104).
 - VMAF scores are only comparable within one libvmaf version.
 
 ## Brand Commitments
