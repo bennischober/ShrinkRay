@@ -37,55 +37,6 @@ def find_handbrake() -> str | None:
     return None
 
 
-def build_command(
-    binary: str,
-    input_file: Path,
-    output_file: Path,
-    preset: str,
-    encoder: str,
-    encoder_threads: int | None = None,
-) -> list[str]:
-    """Builds the HandBrakeCLI command for re-encoding a file.
-
-    Args:
-        binary (str): Path to the HandBrakeCLI binary.
-        input_file (Path): The file to re-encode.
-        output_file (Path): The target file.
-        preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
-        encoder (str): The video encoder, e.g. 'svt_av1'.
-        encoder_threads (int | None): Thread limit for the encoder
-            (for parallel encoding across multiple movies). None = no limit.
-
-    Returns:
-        list[str]: The command as argument list.
-    """
-    command = [
-        binary,
-        "--input",
-        str(input_file),
-        "--output",
-        str(output_file),
-        "--preset",
-        preset,
-        "--encoder",
-        encoder,
-        # keep all audio and subtitle tracks, copy audio => no quality loss
-        "--all-audio",
-        "--all-subtitles",
-        "--aencoder",
-        "copy",
-        "--optimize",  # web optimized => mp4/mkv file can start streaming
-    ]
-    if encoder_threads is not None:
-        # HandBrakeCLI has no thread flag, and SVT-AV1 has no `threads`
-        # option: --encopts pairs go to svt_av1_enc_parse_parameter, which
-        # would silently ignore `threads=N` (issue #21). SVT-AV1's `pin`
-        # restricts execution to the first N cores, which is what the cap
-        # means here.
-        command += ["--encopts", f"pin={encoder_threads}"]
-    return command
-
-
 def build_encode_command(
     binary: str,
     input_file: Path,

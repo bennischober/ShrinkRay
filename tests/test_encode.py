@@ -257,26 +257,6 @@ class TestEncode(unittest.TestCase):
         m4v = build_encode_command("hb", Path("in.MKV"), Path("out.MKV"), 20, "svt_av1", "3")
         self.assertIn("-f", m4v)
 
-    def test_build_command(self):
-        command = tools_handbrake.build_command(
-            "C:/HandBrake/HandBrakeCLI.exe",
-            Path("in.mkv"),
-            Path("out.mkv"),
-            "Fast 1080p30",
-            "svt_av1",
-        )
-        self.assertEqual(command[0], "C:/HandBrake/HandBrakeCLI.exe")
-        self.assertIn("--input", command)
-        self.assertIn("in.mkv", command)
-        self.assertIn("--output", command)
-        self.assertIn("out.mkv", command)
-        self.assertIn("Fast 1080p30", command)
-        self.assertIn("svt_av1", command)
-        # audio passthrough without conflicting options
-        self.assertIn("--aencoder", command)
-        self.assertNotIn("--audio", command)
-        self.assertIn("--optimize", command)
-
     def test_cap_threads(self):
         """The thread cap normalizes 0/None/negative to uncapped."""
         self.assertIsNone(engine_pipeline.cap_threads(None))
@@ -300,19 +280,11 @@ class TestEncode(unittest.TestCase):
         """No code path emits H.264 or H.265 any more (issue #21).
 
         x265 is gone from every path - not demoted to a fallback, not kept
-        as an option. The check is on the HandBrake commands only: the
+        as an option. The check is on the HandBrake command only: the
         ffmpeg sample extraction uses libx264 for intermediate clips, which
         is not an output codec.
         """
-        fixed = tools_handbrake.build_command(
-            "hb",
-            Path("in.mkv"),
-            Path("out.mkv"),
-            "Fast 1080p30",
-            engine_encoders.encoder_for(8, False),
-        )
         for command in (
-            fixed,
             tools_handbrake.build_encode_command(
                 "hb",
                 Path("in.mkv"),
@@ -335,50 +307,6 @@ class TestEncode(unittest.TestCase):
                 self.assertNotIn(gone, joined)
             self.assertIn("svt_av1", joined)
 
-    def test_build_command_with_thread_cap(self):
-        command = tools_handbrake.build_command(
-            "hb",
-            Path("in.mkv"),
-            Path("out.mkv"),
-            "Fast 1080p30",
-            "svt_av1",
-            encoder_threads=8,
-        )
-        self.assertIn("--encopts", command)
-        self.assertIn("pin=8", command)
-        # uncapped: no encopts at all
-        plain = tools_handbrake.build_command(
-            "hb", Path("in.mkv"), Path("out.mkv"), "Fast 1080p30", "svt_av1"
-        )
-        self.assertNotIn("--encopts", plain)
-
-    def test_encode_movies_max_threads_tightens_share(self):
-        """The configured cap wins when tighter than the parallel CPU share."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            with (
-                tempfile.TemporaryDirectory() as out,
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
-                    encode.EncodeResult(input=i, output=o, success=True)
-                )
-                # workers=2 on 16 cores would give a big share; the cap must win
-                engine_pipeline.encode_movies(
-                    [source],
-                    Path(out),
-                    preset="Fast 1080p30",
-                    encoder="svt_av1",
-                    workers=2,
-                    max_threads=4,
-                )
-                command = enc.call_args[0][2]
-        self.assertIn("--encopts", command)
-        self.assertIn("pin=4", command)
-
     def test_saved_percent(self):
         result = encode.EncodeResult(
             input=Path("in.mkv"),
@@ -400,32 +328,6 @@ class TestEncode(unittest.TestCase):
         # zero sizes => 0
         result = encode.EncodeResult(input=Path("in.mkv"), output=Path("out.mkv"), success=True)
         self.assertEqual(result.saved_percent, 0.0)
-
-    def test_encode_file_missing_input(self):
-        with self.assertRaises(FileNotFoundError):
-            engine_pipeline.encode_file(Path("does-not-exist.mkv"), Path("out.mkv"))
-
-    def test_encode_movies_dry_run(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            out_dir = Path(tmp) / "encoded"
-            results = engine_pipeline.encode_movies(
-                [Path("a.mkv"), Path("b.mkv")], out_dir, dry_run=True
-            )
-            self.assertEqual(len(results), 0)
-            # dry run => no output directory created
-            self.assertFalse(out_dir.exists())
-
-    def test_encode_movies_skip_existing(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            out_dir = Path(tmp)
-            (out_dir / "a.mkv").write_bytes(b"x")
-            results = engine_pipeline.encode_movies([Path("a.mkv")], out_dir)
-            # skipped => no result recorded
-            self.assertEqual(len(results), 0)
 
     def test_streamed_encode_reaps_exit_code(self):
         """The streamed encode (progress path) must reap the process: at EOF
@@ -453,34 +355,6 @@ class TestEncode(unittest.TestCase):
                 result.success or result.error == "no output file was written",
                 f"streamed run misread exit code: success={result.success} error={result.error!r}",
             )
-
-    def test_encode_movies_rich_bar_survives_percent_lines(self):
-        """Fixed mode's rich bar wiring: the engine gets a CALLABLE (not the
-        rich Progress object) - the first HandBrake percent line used to
-        raise TypeError: 'Progress' object is not callable."""
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "in.mkv"
-            src.write_bytes(b"x" * 8)
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            stub = out_dir / "hb_stub.cmd" if os.name == "nt" else out_dir / "hb_stub.sh"
-            if os.name == "nt":
-                stub.write_bytes(b"@echo off\r\necho Encoding: task 1 of 1, 42.31 %%\r\nexit 0\r\n")
-            else:
-                stub.write_bytes(b'#!/bin/sh\necho "Encoding: task 1 of 1, 42.31 %"\nexit 0\n')
-                stub.chmod(0o755)
-            with (
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
-                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
-            ):
-                # must not raise TypeError; the encode result is failure
-                # (stub writes no output) but the crash is the regression
-                results = engine_pipeline.encode_movies([src], out_dir)
-            self.assertEqual(len(results), 1)
-            self.assertFalse(results[0].success)
-            self.assertEqual(results[0].error, "no output file was written")
 
     def test_cancel_responds_during_silence(self):
         """The cancel event must interrupt an encode whose child has gone
@@ -868,136 +742,6 @@ class TestEncodeLock(unittest.TestCase):
         self.assertEqual(acquired, lock)
         lock.unlink()
 
-    def test_encode_movies_forwards_caller_progress(self):
-        """The caller's progress callback receives every encode percent event.
-
-        Regression: the loop shadowed its `progress` parameter with its own rich
-        bar, so a job's live progress (the SSE channel) fell silent for the
-        whole run and the dashboard showed no percent.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            events: list[dict] = []
-
-            def fake_encode(i, o, cmd, progress=None, db_file=None):
-                if progress is not None:
-                    progress({"stage": "encode", "percent": 42.0})
-                return encode.EncodeResult(input=i, output=o, success=True)
-
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch(
-                    "shrinkray.engine.pipeline._encode_with_command", side_effect=fake_encode
-                ),
-            ):
-                engine_pipeline.encode_movies([source], Path(tmp) / "enc", progress=events.append)
-            self.assertEqual([e.get("percent") for e in events], [42.0])
-
-    def test_encode_movies_busy_raises(self):
-        """encode_movies propagates EncodeBusyError (no clobber, no swallow)."""
-        import tempfile
-
-        from shrinkray.engine.lock import EncodeBusyError, guard_encodes
-
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            with (
-                guard_encodes(Path(tmp) / "enc"),
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                self.assertRaises(EncodeBusyError),
-            ):
-                engine_pipeline.encode_movies([source], Path(tmp) / "enc")
-
-    def test_encode_movies_reencodes_truncated_debris(self):
-        """A truncated output (interrupted encode) is removed and re-encoded,
-        not skipped forever (regression: 'output exists' trusted existence
-        alone, so crash debris blocked the movie from ever being encoded)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            debris = out_dir / "movie.mkv"
-            debris.write_bytes(b"partial garbage")  # non-empty but truncated
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=False),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
-                    encode.EncodeResult(input=i, output=o, success=True)
-                )
-                results = engine_pipeline.encode_movies([source], out_dir)
-            self.assertEqual(len(results), 1)
-            self.assertTrue(results[0].success)
-            # debris was removed BEFORE the encode (no clobber risk)
-            self.assertEqual(enc.call_count, 1)
-
-    def test_encode_movies_keeps_verified_output(self):
-        """An existing, duration-verifying output is still skipped (the
-        normal resume path must keep working)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            (out_dir / "movie.mkv").write_bytes(b"real output")
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                results = engine_pipeline.encode_movies([source], out_dir)
-            self.assertEqual(results, [])
-            enc.assert_not_called()
-
-    def test_encode_movies_empty_output_is_reencoded(self):
-        """A 0-byte output (very early crash) is re-encoded."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            (out_dir / "movie.mkv").write_bytes(b"")
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
-                    encode.EncodeResult(input=i, output=o, success=True)
-                )
-                results = engine_pipeline.encode_movies([source], out_dir)
-            self.assertEqual(len(results), 1)
-
-    def test_encode_movies_passes_db_file_for_stall_telemetry(self):
-        """The db path given to encode_movies reaches every
-        _encode_with_command call (fixed-mode jobs and CLI encode get the
-        stall watchdog's failure bundles, as quality mode already does)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            db_path = Path(tmp) / "test.db"
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
-                    encode.EncodeResult(input=i, output=o, success=True)
-                )
-                engine_pipeline.encode_movies([source], out_dir, db_file=db_path)
-            self.assertEqual(enc.call_count, 1)
-            self.assertEqual(enc.call_args.kwargs.get("db_file"), db_path)
-
     def test_quality_progress_callback_maps_percent(self):
         """The CLI progress callback maps engine percent events onto the
         rich task (encoding description + completed percent); probe step
@@ -1319,22 +1063,6 @@ class TestEncodeLock(unittest.TestCase):
             ok, _message = check_disk_space(blocker / "sub", 10)
             self.assertTrue(ok)  # degraded, not failed
             self.assertIn("could not be checked", _message)
-
-    def test_encode_movies_raises_on_full_disk(self):
-        """encode_movies refuses to start when the drive cannot hold the inputs."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x" * 100)
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch(
-                    "shrinkray.engine.pipeline.check_disk_space",
-                    return_value=(False, "no space left"),
-                ),
-                self.assertRaises(RuntimeError) as ctx,
-            ):
-                engine_pipeline.encode_movies([source], Path(tmp) / "enc")
-        self.assertIn("no space left", str(ctx.exception))
 
 
 class TestSubprocessTimeouts(unittest.TestCase):

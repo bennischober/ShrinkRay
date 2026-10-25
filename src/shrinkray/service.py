@@ -24,7 +24,6 @@ from shrinkray.tools.ffprobe import probe_duration_seconds as probe_duration
 
 if TYPE_CHECKING:
     from shrinkray.config import Conf
-    from shrinkray.engine.pipeline import EncodeResult
     from shrinkray.engine.plan import QualityResult
 
 
@@ -579,51 +578,6 @@ def record_quality_results(
         )
         return EncodeOutcome(movie=str(movie), skipped=True, error=result.error)
     return EncodeOutcome(movie=str(movie), error=result.error)
-
-
-def record_fixed_results(
-    connection: sqlite3.Connection, results: list[EncodeResult], config: Conf
-) -> list[EncodeOutcome]:
-    """Persists the results of a fixed-preset run.
-
-    An encode that did NOT shrink the file is recorded as a skip ('no size
-    gain') instead of a success: a pointless encode should never wear a
-    green chip in the UI.
-
-    Args:
-        connection: The database connection.
-        results (list[EncodeResult]): The engine results.
-        config (Conf): The config settings.
-
-    Returns:
-        list[EncodeOutcome]: One outcome per result.
-    """
-    outcomes = []
-    for encode_result in results:
-        if encode_result.success and encode_result.output_size >= encode_result.input_size:
-            save_skip(connection, encode_result.input, "no size gain")
-            outcomes.append(EncodeOutcome(movie=str(encode_result.input), skipped=True))
-            continue
-        if encode_result.success:
-            save_encode(
-                connection,
-                encode_result.input,
-                config.handbrake_preset,
-                config.handbrake_encoder,
-                encode_result.input_size,
-                encode_result.output_size,
-                encoder_preset=config.handbrake_preset,
-                source_width=encode_result.input_width,
-                source_height=encode_result.input_height,
-                source_codec=encode_result.input_codec,
-                source_duration=encode_result.input_duration,
-            )
-            outcomes.append(EncodeOutcome(movie=str(encode_result.input), encoded=True))
-        else:
-            outcomes.append(
-                EncodeOutcome(movie=str(encode_result.input), error=encode_result.error)
-            )
-    return outcomes
 
 
 @dataclass

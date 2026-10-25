@@ -4,7 +4,7 @@ A job is one unit of work the resident app executes (a scan, a plan, an
 encode run, a watch pass). Jobs are persisted in the database so their
 history and state survive restarts; the worker thread executes one job at
 a time (heavy encodes do not profit from queueing more in parallel — the
-work-queue scheduler inside encode_movies parallelizes within a job).
+work-queue scheduler inside the quality encode parallelizes within a job).
 
 Thread discipline: the worker thread owns the database connection while a
 job runs; the queue itself is protected by a lock and both the API layer
@@ -826,7 +826,7 @@ def execute_encode(
     cancel: threading.Event,
     progress: ProgressCallback | None = None,
 ) -> dict:
-    """Executes an encode job (quality or fixed mode).
+    """Executes an encode job (the measured quality path - the only mode).
 
     Args:
         job (Job): The job (payload: path, output_dir, quality, target_vmaf,
@@ -907,7 +907,7 @@ def _encode_quality_or_fixed(
     output_dir: Path,
     in_place: bool,
 ) -> dict:
-    """Runs one encode job's body (quality or fixed branch) against write_dir.
+    """Runs one encode job's body (the measured quality path) against write_dir.
 
     Args:
         job (Job): The job being executed.
@@ -927,10 +927,9 @@ def _encode_quality_or_fixed(
     """
     from shrinkray.config import refresh_config
     from shrinkray.engine.lock import EncodeBusyError, guard_encodes
-    from shrinkray.engine.pipeline import encode_movies, encode_with_quality
+    from shrinkray.engine.pipeline import encode_with_quality
     from shrinkray.service import (
         finished_movies,
-        record_fixed_results,
         record_quality_results,
         swap_encode_into_place,
     )
@@ -1065,37 +1064,19 @@ def _encode_quality_or_fixed(
                     }
                 )
     else:
-        if progress:
-            progress(
-                {"stage": "encode", "detail": f"encoding {total} movies", "done": 0, "total": total}
-            )
-        try:
-            results = encode_movies(
-                movies,
-                output_dir,
-                preset=config.handbrake_preset,
-                encoder=config.handbrake_encoder,
-                overwrite=payload.get("overwrite", False),
-                workers=payload.get("workers"),
-                max_threads=cap_threads(config.handbrake_max_threads),
-                progress=progress,
-                db_file=_db_file_of(connection),
-            )
-        except EncodeBusyError as e:
-            # another encoder owns the output dir (watch loop / CLI); the job
-            # reports it honestly instead of clobbering
-            return {
-                "outcomes": [{"movie": "*", "state": "skipped", "error": str(e)}],
-                "cancelled": False,
-            }
-        fixed = record_fixed_results(connection, results, config)
-        outcomes = [
-            {
-                "movie": o.movie,
-                "state": "encoded" if o.encoded else "failed",
-            }
-            for o in fixed
-        ]
+        # One encode mode (invariant 6, issue #329): there is no measured-less
+        # branch to fall into. A payload without quality:true is rejected, not
+        # silently "fixed" — every enqueue site must say what it wants.
+        return {
+            "outcomes": [
+                {
+                    "movie": "*",
+                    "state": "failed",
+                    "error": "encode payload has no quality flag: ShrinkRay encodes only through the measured quality path (issue #202/#329)",
+                }
+            ],
+            "cancelled": False,
+        }
 
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 

@@ -1,10 +1,12 @@
 """The encode pipeline: from movie list to verified output.
 
-Moved verbatim from encode.py (issue #97 phase 3): the batch orchestration
-(encode_file/encode_movies/_encode_pending), the command runner
+Moved verbatim from encode.py (issue #97 phase 3): the command runner
 (_encode_with_command), the disk guard (check_disk_space/disk_free_bytes)
 and the result type. The stall watchdog and its configuration stay in
 tools/process.py; the command builders stay in tools/handbrake.py.
+The fixed-preset batch encoders were deleted with the fixed path itself
+(issue #329): the measured quality
+search is the only encode mode (issue #202, invariant 6).
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ import subprocess
 import tempfile
 import threading
 import time
-from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -148,9 +149,6 @@ from shrinkray.tools.ffprobe import (
 )
 from shrinkray.tools.handbrake import (
     HANDBRAKE_BINARY as HANDBRAKE_BINARY,
-)
-from shrinkray.tools.handbrake import (
-    build_command as build_command,
 )
 from shrinkray.tools.handbrake import (
     build_encode_command as build_encode_command,
@@ -856,283 +854,6 @@ def _encode_with_command(
         input_codec=snapshot["codec"],
         input_duration=snapshot["duration"],
     )
-
-
-def encode_file(
-    input_file: Path,
-    output_file: Path,
-    preset: str = "Fast 1080p30",
-    encoder: str = "svt_av1",
-    overwrite: bool = False,
-    progress: ProgressCallback | None = None,
-) -> EncodeResult:
-    """Re-encodes a movie file with HandBrakeCLI to reduce its file size.
-
-    The HandBrakeCLI binary must be installed and findable (see find_handbrake).
-
-    Args:
-        input_file (Path): The file to re-encode.
-        output_file (Path): The target file (must not exist, or overwrite=True).
-        preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
-        encoder (e.g. str): The video encoder, e.g. 'svt_av1'.
-        overwrite (bool): Whether an existing output file may be replaced.
-        progress (callable | None): Callback progress(dict) for live updates.
-
-    Returns:
-        EncodeResult: The result of the encode.
-    """
-    if not input_file.is_file():
-        raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
-
-    handbrake = find_handbrake()
-    if handbrake is None:
-        raise RuntimeError(
-            f"'{HANDBRAKE_BINARY}' not found! Install HandBrake CLI "
-            "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
-        )
-
-    command = build_command(handbrake, input_file, output_file, preset, encoder)
-    return _encode_with_command(input_file, output_file, command, progress=progress)
-
-
-def encode_movies(
-    movies: list[Path],
-    output_dir: Path,
-    preset: str = "Fast 1080p30",
-    encoder: str = "svt_av1",
-    dry_run: bool = False,
-    overwrite: bool = False,
-    workers: int | None = None,
-    max_threads: int | None = None,
-    progress: ProgressCallback | None = None,
-    db_file: Path | None = None,
-) -> list[EncodeResult]:
-    """Re-encodes multiple movie files into an output directory.
-
-    With workers > 1, several HandBrake processes run concurrently, each
-    capped to a share of the CPU threads so the encodes do not oversubscribe
-    the machine. Results are collected by index => deterministic order.
-
-    Args:
-        movies (list[Path]): The movie files to re-encode.
-        output_dir (Path): Directory for the encoded files (created if missing).
-        preset (str): The HandBrake preset, e.g. 'Fast 1080p30'.
-        encoder (str): The video encoder, e.g. 'svt_av1'.
-        dry_run (bool): If True, only show what would be encoded.
-        overwrite (bool): Whether existing output files may be replaced.
-        workers (int | None): Number of concurrent encodes (1 = sequential,
-            None = automatic: 1, since a single SVT-AV1 encode already scales
-            across all cores).
-        max_threads (int | None): Per-encode thread cap (None/0 = all cores).
-            With workers > 1 the cap only applies when it is tighter than
-            the per-encode CPU share.
-        progress (ProgressCallback | None): The caller's live-progress
-            callback (the resident app's SSE channel); the rich bar is drawn
-            alongside it.
-        db_file (Path | None): The sqlite database file - enables the stall
-            watchdog's failure-bundle telemetry (None: no telemetry).
-
-    Returns:
-        list[EncodeResult]: The results of the encodes.
-    """
-    results: list[EncodeResult] = []
-
-    if not dry_run:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-    if dry_run:
-        for movie in movies:
-            output_file = output_dir / movie.name
-            log(f"[dry-run] Would encode '{movie}' -> '{output_file}'")
-        return results
-
-    if workers is None:
-        # a single SVT-AV1 encode already uses all cores efficiently; parallel
-        # encodes only help when the per-encode thread count is capped lower
-        workers = 1
-    workers = max(1, workers)
-
-    # one encoder per output directory: the watch loop, the job worker and
-    # CLI runs must never write the same output dir concurrently (clobbered
-    # outputs); short-lived, pid-stamped lock file, stale locks are stolen.
-    # EncodeBusyError propagates: the CLI exits with the message, the job
-    # worker fails the job with it, the watch loop logs and retries later.
-    # The slot is held BEFORE the pending-filter runs: a concurrent encoder
-    # is writing a truncated in-flight output right now - without the slot,
-    # the filter below would classify that file as debris and delete a live
-    # encode's output.
-    from shrinkray.engine.lock import guard_encodes
-
-    with guard_encodes(output_dir, holder="encode"):
-        # filter inside the slot (deterministic, before any encoding); the
-        # debris check sees only our own outputs now
-        pending: list[tuple[Path, Path]] = []
-        for movie in movies:
-            duration = probe_duration_seconds(movie)
-            if duration is not None and duration < MIN_ENCODE_SECONDS:
-                log(
-                    f"Skipping '{movie.name}': duration {duration:.0f}s is below "
-                    f"the {MIN_ENCODE_SECONDS:.0f}s minimum (not a movie?)."
-                )
-                continue
-            output_file = output_dir / movie.name
-            if output_file.exists() and not overwrite:
-                if output_file.stat().st_size == 0:
-                    log(f"Re-encoding '{movie.name}': output file is empty (0 bytes).")
-                elif not durations_match(movie, output_file):
-                    log(
-                        f"Re-encoding '{movie.name}': existing output is truncated "
-                        f"(debris from an interrupted encode) => removing it."
-                    )
-                    output_file.unlink()
-                else:
-                    log(f"Skipping '{movie.name}': output file already exists and verifies.")
-                    continue
-            pending.append((movie, output_file))
-        if not pending:
-            return results
-        # worst-case bound: the pending inputs themselves (the size estimate
-        # can be optimistic; the inputs exist and cannot shrink)
-        ok, message = check_disk_space(output_dir, sum(m.stat().st_size for m, _ in pending))
-        if not ok:
-            raise RuntimeError(message)
-        if message:
-            log(f"Warning: {message}")
-        return _encode_pending(
-            pending, preset, encoder, workers, max_threads, progress, results, db_file=db_file
-        )
-
-
-def _encode_pending(
-    pending: list[tuple[Path, Path]],
-    preset: str,
-    encoder: str,
-    workers: int,
-    max_threads: int | None,
-    progress: ProgressCallback | None,
-    results: list[EncodeResult],
-    db_file: Path | None = None,
-) -> list[EncodeResult]:
-    """Runs the actual encode loop (the caller holds the encode slot).
-
-    Args:
-        pending (list[tuple[Path, Path]]): The (movie, output_file) pairs.
-        preset (str): The HandBrake preset.
-        encoder (str): The video encoder.
-        workers (int): Number of concurrent encodes (1 = sequential).
-        max_threads (int | None): Per-encode thread cap.
-        progress: The rich progress bar.
-        results (list[EncodeResult]): The list to append results to.
-        db_file (Path | None): The sqlite database file - enables the stall
-            watchdog's failure-bundle telemetry (None: no telemetry).
-
-    Returns:
-        list[EncodeResult]: The results (same list as the results arg).
-    """
-    # longest job first: big movies start early so the tail of the run is
-    # short jobs, not an idle half machine next to one capped long encode
-    pending.sort(key=lambda pair: -(probe_duration_seconds(pair[0]) or 0))
-
-    cpu = resources.cpu_count()
-
-    def run_one(movie: Path, output_file: Path, threads: int | None) -> EncodeResult:
-        handbrake = find_handbrake()
-        if handbrake is None:
-            raise RuntimeError(
-                f"'{HANDBRAKE_BINARY}' not found! Install HandBrake CLI "
-                "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
-            )
-        # the configured cap wins over the share when it is tighter; the
-        # share only matters for parallel encodes sharing the machine
-        cap = cap_threads(max_threads)
-        if threads is not None and (cap is None or cap > threads):
-            cap = threads
-        command = build_command(
-            handbrake,
-            movie,
-            output_file,
-            preset,
-            encoder,
-            encoder_threads=cap,
-        )
-        # always stream: the streamed loop is the disk watchdog too (a
-        # blocking subprocess.run would encode unwatched)
-        return _encode_with_command(
-            movie, output_file, command, progress=percent_callback, db_file=db_file
-        )
-
-    with Progress() as bar:
-        task = bar.add_task("Encoding movies", total=len(pending))
-
-        def percent_callback(data: dict) -> None:
-            """Feeds engine percent events into the rich bar (a rich Progress
-            is not callable itself - passing it as the callback crashed on
-            the first HandBrake percent line).
-
-            The caller's own callback (the resident app's live progress) gets
-            the same events: a job that streams a percent must not fall silent
-            because the CLI also draws a bar.
-            """
-            if progress is not None:
-                progress(data)
-            if "percent" in data:
-                bar.update(task, completed=float(data["percent"]))
-
-        if workers == 1:
-            for movie, output_file in pending:
-                result = run_one(movie, output_file, None)
-                _report_encode(bar, result)
-                results.append(result)
-                bar.advance(task)
-        else:
-            # work-queue scheduling: every started encode holds a slot with a
-            # fair share of the CPU; when a slot frees, the next movie starts
-            # with the share of ALL free slots (a lone long movie reclaims the
-            # full machine as the short ones finish)
-            from concurrent.futures import ThreadPoolExecutor
-            from threading import Lock
-
-            lock = Lock()
-            running: list[int] = []  # thread budgets of running encodes
-
-            def slot_budget() -> int:
-                with lock:
-                    free = max(1, workers - len(running))
-                    # shares are equal among the encodes that would run
-                    return max(1, cpu // max(1, len(running) + free) * free)
-
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = []
-                index = 0
-                while index < len(pending) or running:
-                    with lock:
-                        free = workers - len(running)
-                    if free > 0 and index < len(pending):
-                        movie, output_file = pending[index]
-                        index += 1
-                        budget = slot_budget()
-                        with lock:
-                            running.append(budget)
-                        future = executor.submit(run_one, movie, output_file, budget)
-
-                        def done(fut: Future[EncodeResult], budget: int = budget) -> None:
-                            with lock:
-                                running.remove(budget)
-                            result = fut.result()
-                            _report_encode(bar, result)
-                            results.append(result)
-                            bar.advance(task)
-
-                        future.add_done_callback(done)
-                        futures.append(future)
-                    else:
-                        import time
-
-                        time.sleep(0.5)
-                for future in futures:
-                    future.result()
-
-    return results
 
 
 def _report_encode(progress: Progress, result: EncodeResult) -> None:
