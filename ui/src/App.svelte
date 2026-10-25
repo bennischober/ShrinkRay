@@ -689,14 +689,6 @@
     font-size: 12px;
   }
 
-  /* ══ confirmation strip ══ */
-
-  /* the preflight variant: an amber ceremony for a REVERSIBLE verb.
-     Encoding never touches a source, so it must not rent red's alarm —
-     that would teach the eye to ignore the real red ceremonies
-     (bars crop, recycle bin). Amber = work in progress; the confirm
-     button keeps its primary teal fill. */
-
   @media (max-width: 900px) {
     .console { flex-direction: column; }
     .rail {
