@@ -32,7 +32,7 @@ from shrinkray.engine.samples import ProgressCallback
 from shrinkray.engine.scan import process_movie
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
-from shrinkray.replace import is_staging_path
+from shrinkray.replace import STAGING_DIR_PREFIX, is_staging_path
 from shrinkray.tools.ffprobe import probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 from shrinkray.tools.process import Cancelled
@@ -159,7 +159,7 @@ def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list
     # is the same non-movie class: an in-flight or crashed run's encode must
     # not be picked up as a new arrival (issue #237).
     unique = list(dict.fromkeys(movies))
-    return [m for m in unique if _identity(m) not in known and not is_staging_path(m)]
+    return [m for m in unique if _identity(m) not in known and not is_staging_path(m, inbox)]
 
 
 def _identity(path: Path) -> str:
@@ -615,7 +615,7 @@ def watch(
     staging: contextlib.AbstractContextManager[str] = (
         contextlib.nullcontext(str(output_dir))
         if output_dir is not None
-        else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=roots[0])
+        else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=roots[0])
     )
     disk_target = output_dir if output_dir is not None else roots[0]
     in_place_mode = output_dir is None

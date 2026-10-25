@@ -36,6 +36,7 @@ from shrinkray.engine.scan import (
 )
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
+from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import (
     Cancelled as _EncodeCancelled,
 )
@@ -304,7 +305,7 @@ def encode(
         work: contextlib.AbstractContextManager[str] = (
             contextlib.nullcontext(str(output_dir))
             if output_dir is not None
-            else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=root)
+            else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=root)
         )
         with work as staging:
             _record_encodes(

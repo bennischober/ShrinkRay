@@ -24,6 +24,7 @@ from pathlib import Path
 
 from shrinkray.config import Conf
 from shrinkray.engine.pipeline import cap_threads
+from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
 
 # how many terminated (done/failed/cancelled) job rows the history keeps.
@@ -863,7 +864,7 @@ def execute_encode(
     staging: contextlib.AbstractContextManager[str] = (
         contextlib.nullcontext(str(output_dir))
         if output_dir is not None
-        else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=root)
+        else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=root)
     )
     with staging as staging_str:
         write_dir = Path(staging_str)
