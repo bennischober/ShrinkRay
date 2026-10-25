@@ -11,7 +11,7 @@ so a change here reaches every entry point. Root AGENTS.md has the product rules
 | Question | Module | Notes |
 |---|---|---|
 | The CRF search | `search.py` (820 L) | `bisect_crf` (`:197`), `probe_crf` (`:262`), `find_optimal_crf_and_skip` (`:592`), `SkipEncode` (`:796`), `DEFAULT_TARGET_VMAF = 96.0` (`:48`), `DEFAULT_CRF_RANGE = (14, 45)` (`:56`) |
-| The plan: gates, HDR override, reuse | `plan.py` (608 L) | `plan_quality` (`:296`), `_lookup_plan` (`:91`), `CANDIDATE_CODECS`/`MODERN_CODECS` (`:49`), `MIN_ENCODE_SECONDS = 90.0` (`:54`) |
+| The plan: gates, HDR override, reuse | `plan.py` (736 L) | `plan_quality` (`:401`), `_lookup_plan` (`:91`), `SOURCE_CODECS` whitelist (`:55`), `is_1080p_class` (`:244`), `MIN_ENCODE_SECONDS = 90.0` (`:59`) |
 | Encode + verify + batch loop | `pipeline.py` (1656 L) | `encode_with_quality` (`:1210`, 447 L), `_encode_with_command` (`:338`), `encode_movies` (`:758`), `check_disk_space` (`:207`) |
 | Black bars, one detector | `crop.py` (656 L) | keyframe timeline pass + `sustained_runs` (`:128`) + `intersect_crop_rects` (`:182`); DB-cached; `detect_crop_rect` (`:515`) is the no-database fallback |
 | Sample windows | `samples.py` (201 L) | `sample_offsets`, `extract_samples`, `DEFAULT_SAMPLE_EVERY = 600.0` (`:28`) |
@@ -23,17 +23,18 @@ so a change here reaches every entry point. Root AGENTS.md has the product rules
 ## HOW THE DECISION FLOWS
 
 `plan_quality` and `encode_with_quality` run the same gates in the same order —
-duration (`plan.py:395`), height (`:414`), size (`:436`), codec age (`:461`) —
-then bar detection, then sample extraction, then the CRF search. The only
+duration (`plan.py:499`), resolution class (`:511`), size (`:551`), codec whitelist
+(`:578`) — then bar detection, then sample extraction, then the CRF search. The only
 difference is the tail: `plan` returns a prediction, `encode` runs the full encode
 and optionally verifies. Sizing permission is a skip, never an error:
 `skipped_reason` is one of `too short`, `resolution too low`, `below min size`,
 `source codec not a candidate`, `no size gain`, `target unreachable`,
 `output not smaller` (`pipeline.py:1575`).
 
-HDR is an override, not a branch: `encoder_for(hdr)` switches to `svt_av1_10bit` and
-`plan.py:376-383` replaces the target and CRF range with the HDR pair before any
-measurement, so every stored fingerprint field carries the OVERRIDDEN values.
+HDR is an override, not a branch: `encoder_for(bit_depth, hdr)` switches to `svt_av1_10bit`
+when the source is 10-bit or HDR and `plan.py:490-497` replaces the target and CRF range
+with the HDR pair before any measurement, so every stored fingerprint field carries the
+OVERRIDDEN values.
 
 ## CONVENTIONS
 

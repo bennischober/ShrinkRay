@@ -328,9 +328,9 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 | # | Gate | Question | Default | If it fails |
 |---|---|---|---|---|
 | 1 | Duration | At least 90 s? | fixed | skip — not a movie |
-| 2 | Resolution | At least 1080p tall? (`eligibility.min_source_height`) | 1080p (may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
+| 2 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
 | 3 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
-| 4 | Codec age | H.264 or newer? | `h264` floor | skip — an older codec is never re-encoded (decision: issue #224) |
+| 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
 | 5 | Bar detection | Which bars does EVERY sampled frame share? | — | never skips — "no bars" is a normal outcome |
 | 6 | CRF search | Largest CRF that meets the VMAF target? | 96 | skip — target unreachable |
 | 7 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
@@ -577,11 +577,11 @@ The target behaviour, per file:
   appears or changes, it is scanned (codec, resolution, black bars, ...), the result
   is written to ShrinkRay's database, and whether a re-encode is needed is decided
   again from that fresh scan.
-- **Eligibility.** Files below 1080p or in a codec older than H.264 are never
-  re-encoded.
+- **Eligibility.** A source whose dimensions are both below the 1080p class, or whose
+  codec is outside the candidate list, is never re-encoded.
 - **Codec routing.** The CRF search runs on every eligible file; a re-encode happens
-  only when the file would actually get smaller. H.264 and newer are eligible; MPEG-2/VC-1
-  and older never are.
+  only when the file would actually get smaller. The candidate list is h264, hevc, vp9 and
+  av1 (extendable in config, never shrinkable); MPEG-2/VC-1 and older never are.
 - **Bar removal is part of every re-encode**, not an option: any file that is encoded has
   its bars detected and removed, so a re-encoded file is always clean. There is no flag to
   keep them, and no file is skipped for lacking them. A film whose aspect ratio changes is

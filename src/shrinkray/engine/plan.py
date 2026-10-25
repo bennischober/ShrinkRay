@@ -14,7 +14,7 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT
+from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
 from shrinkray.engine.crop import (
     DEFAULT_CROP_SAMPLE_COUNT,
     detect_crop_rect,
@@ -46,10 +46,14 @@ from shrinkray.logger import log
 from shrinkray.tools.ffprobe import get_data, probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 
-# the codec gate: which source codecs are candidates at all (issue #21)
-CANDIDATE_CODECS = ("h264",)
-MODERN_CODECS = ("hevc", "av1")
-MIN_SOURCE_CODEC = "h264"
+# the codec gate: which source codecs are candidates at all (issue #21).
+# One whitelist, spelled out: an operator's config extends it (candidate_codecs),
+# never replaces it - the product rules, not the config file, own the floor.
+# VP9 is newer than H.264 in every sense that matters here (efficiency, decoder
+# support) and was excluded only because the old two-list shape predates the
+# decision that made this a whitelist (issue #233).
+SOURCE_CODECS = ("h264", "hevc", "vp9", "av1")
+CANDIDATE_CODECS = SOURCE_CODECS
 
 # files shorter than this are not treated as encodable movies
 MIN_ENCODE_SECONDS = 90.0
@@ -173,18 +177,15 @@ def source_codec(movie: Path) -> str | None:
     return str(codec)
 
 
-def source_height(movie: Path) -> int | None:
-    """Reads the source video height for the resolution gate.
-
-    Returns None when the height cannot be determined, so the caller can treat
-    "unknown" as "do not skip": an unreadable height must never silently
-    exclude a file the operator expected to be considered.
+def _source_dimensions(movie: Path) -> dict | None:
+    """Reads the source's width/height once, for both resolution helpers.
 
     Args:
         movie (Path): The movie file.
 
     Returns:
-        int | None: The video stream's height in pixels, or None.
+        dict | None: The dimensions dict ("width"/"height" keys), or None
+            when the probe fails.
     """
     from shrinkray.config import load_config
 
@@ -193,10 +194,44 @@ def source_height(movie: Path) -> int | None:
     except (RuntimeError, OSError, ValueError):
         return None
     dimensions = data.get("dimensions") or {}
-    height = dimensions.get("height")
-    if height is None:
-        return None
-    return int(height)
+    return dimensions or None
+
+
+def is_1080p_class(
+    width: int | None,
+    height: int | None,
+    min_width: int | None = None,
+    min_height: int | None = None,
+) -> bool:
+    """Decides whether a resolution is at least the 1080p class (issue #233).
+
+    The product rule is "1080p", not "1080 tall": a 2.39:1 scope film is a
+    1080p-class master at 1920x800, and a height-only floor skipped exactly
+    the widescreen sources this tool exists to shrink. Either dimension at
+    class size qualifies. The floors default to the product's (1920/1080) and
+    may be raised by a caller; they can never be lowered below it, which the
+    config validators enforce and this signature cannot bypass.
+
+    Args:
+        width (int | None): The source's width in pixels (None when unknown).
+        height (int | None): The source's height in pixels (None when unknown).
+        min_width (int | None): The width floor to apply (None: the product's).
+        min_height (int | None): The height floor to apply (None: the product's).
+
+    Returns:
+        bool: True when either dimension meets the class floor.
+    """
+    width_floor = (
+        DEFAULT_MIN_SOURCE_WIDTH if min_width is None else max(min_width, DEFAULT_MIN_SOURCE_WIDTH)
+    )
+    height_floor = (
+        DEFAULT_MIN_SOURCE_HEIGHT
+        if min_height is None
+        else max(min_height, DEFAULT_MIN_SOURCE_HEIGHT)
+    )
+    if width is not None and width >= width_floor:
+        return True
+    return height is not None and height >= height_floor
 
 
 def is_hdr_file(movie: Path) -> bool:
@@ -336,6 +371,7 @@ def plan_quality(
     use_probe_cache: bool = True,
     samples: list[tuple[Path, float]] | None = None,
     min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
+    min_source_width: int = DEFAULT_MIN_SOURCE_WIDTH,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
@@ -369,10 +405,12 @@ def plan_quality(
         progress (callable | None): Callback progress(dict) for live step
             updates of the probing pipeline (flow to the UI, never
             persisted — the same events the console prints as log lines).
-        min_source_height (int): Skip sources below this height (the 1080p
-            floor by default; a caller may raise it, never lower it). A
-            lower-resolution source has too few pixels to save meaningfully,
-            so the probe cost buys nothing.
+        min_source_height (int): Skip sources whose height AND width are both
+            below the 1080p-class floors (1080/1920 by default; a caller may
+            raise them, never lower them). Either dimension at class size
+            qualifies: a 1920x800 scope film is a 1080p-class master
+            (issue #233). A lower-resolution source has too few pixels to
+            save meaningfully, so the probe cost buys nothing.
         min_source_size_gb (float): Skip sources below this size (0 = gate
             off). Probe cost is roughly constant per file while the payoff
             scales with size, so the smallest files have the worst
@@ -429,15 +467,30 @@ def plan_quality(
             encoder=effective_encoder,
         )
 
-    height = source_height(input_file)
-    if height is not None and height < min_source_height:
+    dimensions = _source_dimensions(input_file)
+    width = (dimensions or {}).get("width")
+    height = (dimensions or {}).get("height")
+    known_below_class = (width is not None or height is not None) and not is_1080p_class(
+        width, height, min_width=min_source_width, min_height=min_source_height
+    )
+    if known_below_class:
+        # at least one dimension was read and neither reaches the class floor;
+        # an unreadable probe stays eligible (the "unknown is not a skip" rule).
+        # The message names the caller's floors, not the product defaults: an
+        # operator who raised them to 4K must read "4K" in the skip reason.
+        shown = (
+            f"{width}x{height}"
+            if width is not None and height is not None
+            else (f"width {width}px" if width is not None else f"height {height}px")
+        )
         return QualityResult(
             input=input_file,
             output=input_file,
             success=False,
             target_vmaf=target_vmaf,
             error=(
-                f"height {height}p is below the {min_source_height}p minimum "
+                f"resolution {shown} is below the {min_source_width}x"
+                f"{min_source_height} 1080p class minimum "
                 "(a lower-resolution source saves too little to be worth the probe)"
             ),
             skipped_reason="resolution too low",
@@ -471,21 +524,23 @@ def plan_quality(
         )
 
     # every eligible file is probed; whether to encode is decided by size
-    # alone. The codec-age gate below is the only codec rule left: an older
-    # codec is never re-encoded, while H.264 and newer all take the same path
-    # (docs/encode-decision.md). An unknown codec is probed, never excluded -
-    # an unreadable value must not silently drop a file.
+    # alone. The codec whitelist below is the only codec rule left: a source
+    # codec outside it is never re-encoded, and the operator's config extends
+    # the product list but never shrinks it (docs/encode-decision.md). An
+    # unknown codec is probed, never excluded - an unreadable value must not
+    # silently drop a file.
     codec = source_codec(input_file)
 
-    if codec is not None and codec not in candidate_codecs and codec not in MODERN_CODECS:
+    if codec is not None and codec not in candidate_codecs:
         return QualityResult(
             input=input_file,
             output=input_file,
             success=False,
             target_vmaf=target_vmaf,
             error=(
-                f"source codec '{codec}' is below the {MIN_SOURCE_CODEC} minimum "
-                "(an older codec is not re-encoded)"
+                f"source codec '{codec}' is not in the candidate codec list "
+                f"({', '.join(candidate_codecs)}) - a source outside it is "
+                "never re-encoded"
             ),
             skipped_reason="source codec not a candidate",
             crf_range=crf_range,

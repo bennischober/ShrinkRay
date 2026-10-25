@@ -522,6 +522,7 @@ def _conf_to_dict(conf: Conf) -> dict:
         ),
         eligibility=EligibilitySection(
             min_source_height=conf.min_source_height,
+            min_source_width=conf.min_source_width,
             min_source_size_gb=conf.min_source_size_gb,
             candidate_codecs=conf.candidate_codecs,
         ),
@@ -1307,6 +1308,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
         return WatchSettings(
             max_threads=cap_threads(config.handbrake_max_threads),
             min_source_height=config.min_source_height,
+            min_source_width=config.min_source_width,
             min_source_size_gb=config.min_source_size_gb,
             candidate_codecs=tuple(config.candidate_codecs),
             crop_sample_count=config.crop_sample_count,

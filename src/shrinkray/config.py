@@ -75,6 +75,11 @@ DEFAULT_STALL_MINUTES = 10.0
 # meaningfully, so the probe cost is spent for nothing. The setting may raise
 # the floor (e.g. 2160 = 4K only), never lower it (issue #246)
 DEFAULT_MIN_SOURCE_HEIGHT = 1080
+# eligibility: the width arm of the same 1080p-class rule (issue #233). A
+# 2.39:1 scope film is a 1080p-class master at 1920x800, and a height-only
+# floor skipped exactly the widescreen sources this product exists for. One
+# class floor, two dimensions: either at class size qualifies.
+DEFAULT_MIN_SOURCE_WIDTH = 1920
 # cropdetect windows per movie: more samples can only shrink the crop once
 # the bars are the ones common to every sample, which is the safe direction
 # for an irreversible crop (issue #17)
@@ -88,10 +93,11 @@ DEFAULT_SAMPLE_SECONDS = 10.0
 # Probe cost is roughly constant per file while the payoff scales with size,
 # so the smallest files have the worst cost/benefit ratio
 DEFAULT_MIN_SOURCE_SIZE_GB = 0.0
-# eligibility: the source codecs that are candidates on size alone. A modern
-# codec (HEVC/AV1) is already efficient, so it is a candidate only when it has
-# bars to remove; anything older is never re-encoded (PRODUCT.md)
-DEFAULT_CANDIDATE_CODECS = ["h264"]
+# eligibility: the operator's EXTRA source codecs beyond the product whitelist
+# (SOURCE_CODECS in engine/plan.py: h264, hevc, vp9, av1). The whitelist is a
+# product rule and cannot be shrunk from config; an entry here makes one more
+# codec a candidate (e.g. "mpeg4" for a library the operator accepts re-encoding)
+DEFAULT_CANDIDATE_CODECS = []
 
 
 class HandbrakeSection(BaseModel):
@@ -210,6 +216,7 @@ class EligibilitySection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT
+    min_source_width: int = DEFAULT_MIN_SOURCE_WIDTH
     min_source_size_gb: float = Field(DEFAULT_MIN_SOURCE_SIZE_GB, ge=0)
     candidate_codecs: list[str] = Field(DEFAULT_CANDIDATE_CODECS, min_length=1)
 
@@ -223,6 +230,19 @@ class EligibilitySection(BaseModel):
                 f"{value} is below the {DEFAULT_MIN_SOURCE_HEIGHT}p floor; sources "
                 f"below {DEFAULT_MIN_SOURCE_HEIGHT}p are never re-encoded, so the "
                 f"setting may only raise it (e.g. 2160 for 4K only)"
+            )
+        return value
+
+    @field_validator("min_source_width")
+    @classmethod
+    def _width_floor_is_raise_only(cls, value: int) -> int:
+        """The 1920 width arm is the same 1080p-class rule (issue #233): a
+        config may raise it, never lower it below the class floor."""
+        if value < DEFAULT_MIN_SOURCE_WIDTH:
+            raise ValueError(
+                f"{value} is below the {DEFAULT_MIN_SOURCE_WIDTH}px floor; the "
+                f"1080p class accepts either dimension at class size, so the "
+                f"setting may only raise it"
             )
         return value
 
@@ -355,8 +375,10 @@ class Conf:
         # resources => how politely the engine behaves on a shared machine
         self.idle_priority: bool = model.resources.idle_priority
 
-        # eligibility => sources below this height/size are never re-encoded
+        # eligibility => sources below this height/width/size are never
+        # re-encoded; the codec whitelist is extended, never shrunk
         self.min_source_height: int = model.eligibility.min_source_height
+        self.min_source_width: int = model.eligibility.min_source_width
         self.min_source_size_gb: float = model.eligibility.min_source_size_gb
         self.candidate_codecs: list[str] = model.eligibility.candidate_codecs
 
