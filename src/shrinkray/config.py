@@ -117,13 +117,18 @@ class HandbrakeSection(BaseModel):
     encoder_preset: str = DEFAULT_ENCODER_PRESET
     max_threads: int = Field(DEFAULT_MAX_THREADS, ge=0)
     stall_minutes: float = Field(DEFAULT_STALL_MINUTES, ge=0)
-    # the track filters (issue #240, the reference preset's lists): ISO
-    # 639-2 codes. EMPTY = no filter = every track in every language (the
-    # old behaviour); the lists narrow it deliberately. They are FILTERS,
-    # not defaults: --audio-lang-list without --all-audio would set the
-    # selection to first, so the builder passes the pair together.
-    audio_languages: list[str] = ["deu", "eng", "und", "jpn"]
-    subtitle_languages: list[str] = ["eng", "deu", "und"]
+    # the track filters (issue #240's keys; DEFAULT EMPTY since #297's
+    # decision): ISO 639-2 codes. EMPTY = no filter = every track in every
+    # language — the DEFAULT, because PRODUCT.md promises 1:1 track copy
+    # and invariant 3 makes a track-removing default an un-opted
+    # destructive action. The reference preset's lists (audio: deu, eng,
+    # und, jpn; subtitle: eng, deu, und) are documented in
+    # docs/encode-settings.md as the example for operators who want the
+    # narrowing; they are a FILTER an operator opts into, not a default.
+    # --audio-lang-list without --all-audio would set the selection to
+    # first, so the builder passes the pair together.
+    audio_languages: list[str] = []
+    subtitle_languages: list[str] = []
 
     @field_validator("encoder")
     @classmethod
