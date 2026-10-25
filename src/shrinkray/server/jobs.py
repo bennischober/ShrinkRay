@@ -1012,7 +1012,13 @@ def _encode_quality_or_fixed(
             )
             if in_place and outcome.encoded:
                 swap = swap_encode_into_place(
-                    connection, movie, output_dir / movie.name, outcome.encode_id
+                    connection,
+                    movie,
+                    output_dir / movie.name,
+                    outcome.encode_id,
+                    # a verification finding (issue #240: a lost track, an
+                    # unverifiable probe) declines the swap
+                    error=result.error,
                 )
                 declined = not swap.replaced
             else:

@@ -116,6 +116,28 @@ class TestEncode(unittest.TestCase):
                 self.assertIn("1 audio track(s)", detail)
                 self.assertIn("1 subtitle track(s)", detail)
 
+    def test_tracks_survived_knows_every_639_2_b_t_pair(self):
+        """Review of #287: only ger/deu and fre/fra were paired, so a filter of
+        `chi` with a `zho`-tagged output reported a lost track on a good
+        encode. Every B/T pair is the same language."""
+        from shrinkray.engine.pipeline import tracks_survived
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mkv"
+            out = Path(tmp) / "out.mkv"
+            src.write_bytes(b"x")
+            out.write_bytes(b"x")
+            for b_code, t_code in (("chi", "zho"), ("cze", "ces"), ("dut", "nld"), ("wel", "cym")):
+
+                def fake_counts(file: Path, b=b_code, t=t_code):
+                    return {("audio", b): 1} if file == src else {("audio", t): 1}
+
+                with mock.patch(
+                    "shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts
+                ):
+                    ok, detail = tracks_survived(src, out, audio_languages=[b_code])
+                self.assertTrue(ok, f"{b_code}/{t_code}: {detail}")
+
     def test_tracks_survived_matches_both_639_2_spellings(self):
         """HandBrake accepts B and T codes; the muxer tags the output with
         whichever spelling the container carried. deu/ger and fra/fre are

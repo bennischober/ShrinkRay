@@ -560,9 +560,15 @@ def watch(
             records nothing, exactly as db_file=None does.
     """
 
-    from shrinkray.config import Conf
-
-    _conf = Conf({}) if load_config is None else load_config()
+    # no provider: no language filter, the strict 1:1 behaviour the docstring
+    # promises (review finding 6) - never the built-in narrowing lists
+    if load_config is None:
+        default_audio_languages: list[str] = []
+        default_subtitle_languages: list[str] = []
+    else:
+        _conf = load_config()
+        default_audio_languages = _conf.handbrake_audio_languages
+        default_subtitle_languages = _conf.handbrake_subtitle_languages
     current = WatchSettings(
         max_threads=max_threads,
         target_vmaf=target_vmaf,
@@ -571,12 +577,10 @@ def watch(
         min_source_size_gb=min_source_size_gb,
         candidate_codecs=candidate_codecs,
         crop_sample_count=crop_sample_count,
-        audio_languages=audio_languages
-        if audio_languages is not None
-        else _conf.handbrake_audio_languages,
+        audio_languages=audio_languages if audio_languages is not None else default_audio_languages,
         subtitle_languages=subtitle_languages
         if subtitle_languages is not None
-        else _conf.handbrake_subtitle_languages,
+        else default_subtitle_languages,
     )
     extensions = extensions or [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     # the pause state lives beside the database (issue #250): no database,
@@ -760,14 +764,15 @@ def watch(
                                 min_source_size_gb=current.min_source_size_gb,
                                 candidate_codecs=current.candidate_codecs,
                                 crop_sample_count=current.crop_sample_count,
-                                # a struct without the filters (tests, older callers) falls back to
-                                # the config's values - the narrowing is the default, not the exception
+                                # a struct without the filters (tests, older
+                                # callers) falls back to the same defaults as
+                                # the first pass: the provider's, or no filter
                                 audio_languages=current.audio_languages
                                 if current.audio_languages is not None
-                                else Conf({}).handbrake_audio_languages,
+                                else default_audio_languages,
                                 subtitle_languages=current.subtitle_languages
                                 if current.subtitle_languages is not None
-                                else Conf({}).handbrake_subtitle_languages,
+                                else default_subtitle_languages,
                                 progress=progress,
                             )
                     except EncodeBusyError as e:
@@ -802,16 +807,13 @@ def watch(
                             else None
                         )
                         if in_place_mode:
-                            _swap(db_file, movie, result.output, encode_id, error=result.error)
-                            if result.error is not None:
-                                # the swap declined (a verification finding —
-                                # a lost track or an unverifiable probe, review
-                                # findings 1+4): the green "Done" below would
-                                # read as a replacement, so say what happened
-                                log_error(
-                                    f"Not replacing '{movie.name}': {result.error} "
-                                    "=> the original is kept."
-                                )
+                            if not _swap(
+                                db_file, movie, result.output, encode_id, error=result.error
+                            ):
+                                # declined (a verification finding, a grown
+                                # output or a refused rename): _swap said why,
+                                # and the green "Done" below would read as a
+                                # replacement
                                 continue
                             log(
                                 f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
@@ -844,7 +846,7 @@ def _swap(
     output: Path,
     encode_id: int | None = None,
     error: str | None = None,
-) -> None:
+) -> bool:
     """Swaps a verified encode into the source's path, retaining the original.
 
     The watcher's in-place form writes its encode into a staging directory and
@@ -862,9 +864,28 @@ def _swap(
             encode (issue #232). A DECLINED swap clears the row's output_file:
             the encode is discarded with its staging directory, so the row must
             not point at a path that is about to vanish.
+        error (str | None): The encode's verification finding (issue #240: a
+            lost track, an unverifiable probe). A finding declines the swap
+            before any filesystem work: the source is never touched.
+
+    Returns:
+        bool: True when the source was replaced, False when the swap was
+            declined (the reason is logged).
     """
     from shrinkray import db, replace
 
+    def _discard_row() -> None:
+        if db_file is not None and encode_id is not None:
+            connection = db.connect(db_file)
+            try:
+                db.set_encode_output(connection, encode_id, None)
+            finally:
+                connection.close()
+
+    if error is not None:
+        log_error(f"Not replacing '{source.name}': {error} => the original is kept.")
+        _discard_row()
+        return False
     size_before = source.stat().st_size
     size_after = output.stat().st_size
     if size_after >= size_before:
@@ -872,25 +893,15 @@ def _swap(
             f"Not replacing '{source.name}': the output is not smaller "
             f"({size_before} -> {size_after} bytes)"
         )
-        if db_file is not None and encode_id is not None:
-            connection = db.connect(db_file)
-            try:
-                db.set_encode_output(connection, encode_id, None)
-            finally:
-                connection.close()
-        return
+        _discard_row()
+        return False
     try:
         staged = replace.stage(output, source)
         retained = replace.swap(source, staged)
-    except replace.SwapError as error:
-        log_error(f"Not replacing '{source.name}': {error}")
-        if db_file is not None and encode_id is not None:
-            connection = db.connect(db_file)
-            try:
-                db.set_encode_output(connection, encode_id, None)
-            finally:
-                connection.close()
-        return
+    except replace.SwapError as swap_error:
+        log_error(f"Not replacing '{source.name}': {swap_error}")
+        _discard_row()
+        return False
     if db_file is not None:
         connection = db.connect(db_file)
         try:

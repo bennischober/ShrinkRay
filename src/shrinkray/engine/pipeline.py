@@ -378,6 +378,33 @@ def tracks_survived(
     return True, ""
 
 
+# every ISO 639-2 language with distinct bibliographic (B) and terminology (T)
+# codes - the full list, so no language is reported "lost" because the muxer
+# tagged the output with the other spelling (review of #287)
+_639_2_B_TO_T = {
+    "alb": "sqi",
+    "arm": "hye",
+    "baq": "eus",
+    "bur": "mya",
+    "chi": "zho",
+    "cze": "ces",
+    "dut": "nld",
+    "fre": "fra",
+    "geo": "kat",
+    "ger": "deu",
+    "gre": "ell",
+    "ice": "isl",
+    "mac": "mkd",
+    "mao": "mri",
+    "may": "msa",
+    "per": "fas",
+    "rum": "ron",
+    "slo": "slk",
+    "tib": "bod",
+    "wel": "cym",
+}
+
+
 def _639_2_variants(codes: set[str]) -> set[str]:
     """Adds the ISO 639-2/B spellings of the given T-code language set.
 
@@ -387,7 +414,7 @@ def _639_2_variants(codes: set[str]) -> set[str]:
     compares the SAME spelling on both sides by normalizing both to the set
     of all variants.
     """
-    bib = {"ger": "deu", "fre": "fra"}
+    bib = _639_2_B_TO_T
     variants: set[str] = set()
     for code in codes:
         variants.add(code)
