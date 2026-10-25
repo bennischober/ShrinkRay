@@ -218,7 +218,8 @@ class EligibilitySection(BaseModel):
     min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT
     min_source_width: int = DEFAULT_MIN_SOURCE_WIDTH
     min_source_size_gb: float = Field(DEFAULT_MIN_SOURCE_SIZE_GB, ge=0)
-    candidate_codecs: list[str] = Field(DEFAULT_CANDIDATE_CODECS, min_length=1)
+    # the operator's EXTRA codecs: empty is the normal case (issue #271)
+    candidate_codecs: list[str] = DEFAULT_CANDIDATE_CODECS
 
     @field_validator("min_source_height")
     @classmethod

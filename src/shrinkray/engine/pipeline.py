@@ -70,6 +70,9 @@ from shrinkray.engine.plan import (
     _plan_probes as _plan_probes,
 )
 from shrinkray.engine.plan import (
+    allowed_codecs as allowed_codecs,
+)
+from shrinkray.engine.plan import (
     is_1080p_class as is_1080p_class,
 )
 from shrinkray.engine.plan import (
@@ -1267,8 +1270,9 @@ def encode_with_quality(
             (issue #233).
         min_source_size_gb (float): Skip sources below this size (0 = gate
             off).
-        candidate_codecs (tuple[str, ...]): Source codecs that are
-            candidates on size alone.
+        candidate_codecs (tuple[str, ...]): Source codecs accepted beyond the
+            product whitelist (the config's extras); the gate always applies
+            the whitelist too (issue #271).
         crop_sample_count (int): cropdetect windows per movie.
         verify (bool): Run a full-file VMAF verification after a successful
             encode (opt-in: hours of decode for a large movie; sub-sampled
@@ -1377,7 +1381,8 @@ def encode_with_quality(
     # codec whitelist below is the only codec rule left.
     codec = source_codec(input_file)
 
-    if codec is not None and codec not in candidate_codecs:
+    allowed = allowed_codecs(candidate_codecs)
+    if codec is not None and codec not in allowed:
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1385,7 +1390,7 @@ def encode_with_quality(
             target_vmaf=target_vmaf,
             error=(
                 f"source codec '{codec}' is not in the candidate codec list "
-                f"({', '.join(candidate_codecs)}) - a source outside it is "
+                f"({', '.join(allowed)}) - a source outside it is "
                 "never re-encoded"
             ),
             skipped_reason="source codec not a candidate",
