@@ -31,6 +31,12 @@ services:
       TZ: ${TZ:-UTC}
       # config.json lives beside the database, on the /data volume
       SHRINKRAY_CONFIG: /data/config.json
+      # the watcher's output directory (issue #193). Default: unset => the
+      # watcher encodes IN PLACE into the (writable) /media mount. For a
+      # read-only /media (test containers, special setups) set it to a
+      # writable volume - e.g. SHRINKRAY_WATCH_OUTPUT=/output with the
+      # /output mount below; the app validates writability at boot.
+      SHRINKRAY_WATCH_OUTPUT: ${SHRINKRAY_WATCH_OUTPUT:-}
     volumes:
       # the library: writable (Mode B encodes in place; see the header)
       - ${MEDIA_DIR:?set MEDIA_DIR to your library folder}:/media
