@@ -74,14 +74,36 @@ class TestSetupApp(unittest.TestCase):
         language filters (which decide which audio/subtitle tracks survive an
         encode — issues #330/#297) had no editor. They render and save like
         the other list fields; empty means keep every track.
+
+        Issue #365: the app now ships the filters EMPTY (every track is kept
+        unless the operator narrows them), so the editor is seeded with
+        explicit lists instead of asserting a default that #356 removed.
         """
+        self.config.write_text(
+            json.dumps(
+                {
+                    "handbrake": {
+                        "max_threads": 4,
+                        "audio_languages": ["deu", "eng", "und", "jpn"],
+                        "subtitle_languages": ["deu"],
+                    },
+                    "language": "de",  # a key the UI does not show
+                    "codec": {
+                        "hdr": {"color_space": ["bt2020nc"], "color_transfer": ["smpte2084"]}
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(self.config, 0o640)
         app = SetupApp(self.config, None)
 
         async def steps(pilot: Pilot[None]) -> None:
-            # the defaults render (the config's lists, comma-separated)
+            # the configured lists render (comma-separated), empty renders empty
             self.assertEqual(
                 app.query_one("#f-handbrake-audio_languages", Input).value, "deu, eng, und, jpn"
             )
+            self.assertEqual(app.query_one("#f-handbrake-subtitle_languages", Input).value, "deu")
             # edit + save
             self._set(app, "f-handbrake-audio_languages", "deu, eng")
             self._set(app, "f-handbrake-subtitle_languages", "")
