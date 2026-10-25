@@ -1427,6 +1427,23 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
             subtitle_languages=list(config.handbrake_subtitle_languages),
         )
 
+    def submit_watch_candidate(movie: Path) -> bool:
+        """Enqueues one discovered file's encode job (issue #231).
+
+        The watcher is a discovery loop, not a second engine: this is the
+        enqueue seam the layer contract requires (the engine cannot import
+        the server), and it hands the file to the SAME queue the boot backlog
+        uses - one worker, one set of db rows, one job history the dashboard
+        shows, and the queue's own retry semantics instead of the watcher's
+        in-memory set. The encode job consults the database before it encodes
+        (finished_movies), so a file that is already decided is skipped by the
+        job itself, not by a second decision here.
+        """
+        state.queue.enqueue(
+            Job(kind=JobKind.ENCODE, payload={"paths": [str(movie)], "quality": True})
+        )
+        return True
+
     def run_watch() -> None:
         try:
             watch(
@@ -1439,6 +1456,8 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 settings=settings_for_next_file,
                 load_config=refresh_config,
                 record=record_watch_outcome,
+                submit=submit_watch_candidate,
+                extensions=list(refresh_config().extensions),
             )
         except Exception as e:
             log_error(f"watch loop crashed: {e}")

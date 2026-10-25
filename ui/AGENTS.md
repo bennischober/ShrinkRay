@@ -1,8 +1,6 @@
 # ui/ — ShrinkRay Console (Svelte 5 + Vite)
 
-Score 14 (file count 3, subdirs 2, code ratio 2, own config 1, entry module 2, symbol
-density 2, exports 2; reference centrality below threshold) — a second toolchain and
-design system beside the Python core, so it earns its own file. Repo-wide rules (gate,
+A second toolchain and design system beside the Python core, so it earns its own file. Repo-wide rules (gate,
 commit, issue workflow) live in the root `AGENTS.md`; the design record is the ROOT
 `DESIGN.md` (there is no `ui/DESIGN.md`).
 
@@ -29,11 +27,11 @@ ui/
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Add/change a server call | `src/lib/api.ts` | `api` at :328; mirror the FastAPI field |
-| New page or route | `src/App.svelte` | `PAGES` :47, rail nav, shortcut map :130 |
-| Shared state, poll cadence | `src/App.svelte` | 1 s busy / 3 s idle / 10 s hidden (:258) |
+| Add/change a server call | `src/lib/api.ts` | `api`; mirror the FastAPI field |
+| New page or route | `src/App.svelte` | `PAGES`, rail nav, shortcut map |
+| Shared state, poll cadence | `src/App.svelte` | 1 s busy / 3 s idle / 10 s hidden |
 | Live progress | `src/lib/progress.svelte.ts` | `hello` seeds the map, `data` ticks |
-| Token prompt and 401 | `src/lib/api.ts` :206 | `TOKEN_KEY`, `isAuthFailure` |
+| Token prompt and 401 | `src/lib/api.ts` | `TOKEN_KEY`, `isAuthFailure` |
 | Colors, type, spacing | `src/tokens.css` | `:root[data-theme='dark'\|'light']` |
 
 ## CONVENTIONS
@@ -47,7 +45,7 @@ ui/
 - **Flow is not state**: SSE carries progress only; the snapshot poll is the state channel.
   Progress is never persisted and never polled.
 - **Styling**: consume `var(--token)` from `tokens.css`, scoped `<style>` per component.
-  The theme is `document.documentElement.dataset.theme` (`App.svelte:42`); tokens select on
+  The theme is `document.documentElement.dataset.theme` (`App.svelte`); tokens select on
   `:root[data-theme='dark'|'light']`. Faces are self-hosted in `src/fonts` — no CDN.
 - **Persistence split**: `localStorage` `shrinkray.token`, `ms.theme`, `ms.paths`, `ms.out`,
   `ms.vmaf`, `ms.workers`; `sessionStorage` `sr.detail`, `ms.query`, `ms.category`,
@@ -58,7 +56,7 @@ ui/
 ## ANTI-PATTERNS
 - **Calling an endpoint that does not exist.** The server has 12 GET routes plus one
   `POST /api/reveal`; `POST /api/jobs` and `POST /api/watch/start|stop` are gone and the
-  root `README.md:290-292` still advertises them. The dashboard starts no work (issue #134).
+  root `README.md` still advertises them. The dashboard starts no work (issue #134).
 - `fetch`/`EventSource` in a component, or a locally re-declared API shape: extend
   `api.ts` instead — it mirrors the FastAPI JSON, so new server fields land there first.
 - Branching a component on theme, hardcoding a hex, or adding shadows/glow/blur. Depth is
@@ -73,10 +71,10 @@ ui/
   live methods are `snapshot`, `retained`, `movie`, `config`, `reveal`. Adding a caller is
   fine; changing a shape without the server is not.
 - `App.svelte` hardcodes Windows defaults (`D:\Movies`, `D:\Encoded`) and VMAF 96;
-  `SHORTCUT_LEGEND` says `1–5: pages` while the map (:130) binds only 1-4 (Retained has none).
-- Two dead surfaces: `requestEncodeAll` (:319) has no caller and the preflight renders only
+  `SHORTCUT_LEGEND` says `1–5: pages` while the map binds only 1-4 (Retained has none).
+- Two dead surfaces: `requestEncodeAll` has no caller and the preflight renders only
   CLOSE, and `App.svelte` passes `cancelling` but never `oncancel`, so the Overview CANCEL
   button is inert. Do not cite either as a working flow.
-- `--poster-ground`/`--poster-line` (`tokens.css:58`) outlived `PosterCard.svelte`, deleted
+- `--poster-ground`/`--poster-line` (`tokens.css`) outlived `PosterCard.svelte`, deleted
   in #180; the root `DESIGN.md` still describes the demoted poster grid. `ui/README.md` is
   project documentation (rewritten 2026-10-24), not the Vite template.

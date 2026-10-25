@@ -2,7 +2,7 @@
 #
 # `runtime` is the deployment shape - a container on a server, pointed at a
 # media folder, running unattended. `dev` is the same base plus the dev group
-# and Node, so the five gate commands run in the environment they ship in.
+# and Node, so the gate (tools/gate.sh) runs in the environment they ship in.
 #
 # The toolchain is pinned by version AND sha256, never a distro package: stock
 # Debian/Ubuntu ffmpeg is built without libvmaf, so quality mode cannot run on

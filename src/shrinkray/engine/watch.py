@@ -29,6 +29,7 @@ from shrinkray.engine.pipeline import (
 )
 from shrinkray.engine.plan import MIN_ENCODE_SECONDS, QualityResult
 from shrinkray.engine.samples import ProgressCallback
+from shrinkray.engine.scan import process_movie
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
 from shrinkray.replace import is_staging_path
@@ -65,6 +66,63 @@ def next_poll_interval(current: float, base: float, found_new: bool) -> float:
     if found_new:
         return base
     return min(current * 2.0, base * MAX_POLL_MULTIPLIER)
+
+
+def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
+    """Scans one file into the database before its encode job runs (issue #231).
+
+    PRODUCT.md's watchdog contract is two halves: a stable new or changed file
+    is (1) scanned into the database and (2) re-decided from that fresh scan.
+    The engine owns the scan (`engine.scan.process_movie`), so the watcher can
+    call it without crossing a layer; the DECISION belongs to the encode job
+    the queue runs (`submit`). A failed scan returns False and the caller
+    leaves the file eligible (it is already in `known`, so the retry happens
+    when the file changes).
+
+    Args:
+        movie (Path): The file to scan.
+        root (Path): The watch root (the scan's category root).
+        db_file (Path | None): The database file; None records nothing.
+
+    Returns:
+        bool: True when the file was scanned and recorded (or nothing needed
+            recording), False when the scan failed.
+    """
+    if db_file is None:
+        return True
+    from shrinkray.config import load_config
+
+    data, error = process_movie(movie, root, load_config(), db_file=db_file)
+    if data is None:
+        log_error(f"Scanning '{movie.name}' failed: {error} => retried when the file changes.")
+        return False
+    return True
+
+
+def _known_identities_from_db(db_file: Path) -> set[str]:
+    """Builds the watcher's change-tracking keys from the scanned library.
+
+    Every row in the files table records the mtime and size its scan decided
+    from, which is exactly the watcher's identity key - so the database, not
+    an in-process set, is the memory (issue #231). A restart seeds from here
+    and resumes; a file that changed since its scan is NOT in the set (its
+    mtime/size differ) and is re-decided, which is the contract's "a changed
+    file is a new question".
+
+    Args:
+        db_file (Path): The sqlite database file (caller checked not-None).
+
+    Returns:
+        set[str]: "path:mtime:size" keys, one per scanned file.
+    """
+    from shrinkray import db
+
+    connection = db.connect(db_file)
+    try:
+        rows = connection.execute("SELECT path, mtime, size FROM files").fetchall()
+    finally:
+        connection.close()
+    return {f"{Path(row['path']).resolve()}:{row['mtime']}:{row['size']}" for row in rows}
 
 
 def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list[Path]:
@@ -445,6 +503,8 @@ def watch(
     settings: Callable[[], WatchSettings] | None = None,
     load_config: Callable[[], "Conf"] | None = None,
     record: Callable[[Path, QualityResult, Path | None], int | None] | None = None,
+    submit: Callable[[Path], bool] | None = None,
+    extensions: list[str] | None = None,
 ) -> None:
     """Watches the inbox and encodes newly arrived movies.
 
@@ -517,12 +577,18 @@ def watch(
         if subtitle_languages is not None
         else _conf.handbrake_subtitle_languages,
     )
-    extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
+    extensions = extensions or [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     # the pause state lives beside the database (issue #250): no database,
     # no resident app to pause
     state_dir = db_file.resolve().parent if db_file is not None else None
     paused_reason: str | None = None
     known: set[str] = set()
+    if db_file is not None:
+        # the scanned library IS the memory (issue #231): every file row holds
+        # the mtime+size its decision was made from, so a restart resumes
+        # instead of re-probing the whole library - the cost that made every
+        # container restart burn hours of CPU on files it had already decided
+        known = _known_identities_from_db(db_file)
     lock_file = WATCH_LOCK_FILE
     sleep_interval = poll_interval
 
@@ -643,11 +709,27 @@ def watch(
                     if decision != "encode":
                         log(f"Skipping '{movie.name}': {decision}.")
                         continue
-                    # quality mode, same engine path as the CLI and jobs: the
-                    # CRF search decides skip-vs-encode (no size gain, target
-                    # unreachable) and reports it via skipped_reason. Watch used
-                    # to encode a fixed preset here - the inbox automation
-                    # produced worse files than the manual path.
+                    if submit is not None:
+                        # the queue owns the work (issue #231): the watcher is a
+                        # discovery loop, not a second engine. The file is
+                        # SCANNED into the database here (the contract's first
+                        # half) and the encode job decides from that fresh scan
+                        # - with db rows, job history, retry and verification
+                        # all coming from the queue's own path. submit is the
+                        # enqueue seam the layer contract requires (engine
+                        # cannot import server); False means the queue refused
+                        # (e.g. the same file is already queued) and the file
+                        # stays eligible for a later pass.
+                        if _scan_into_db(movie, roots[0], db_file):
+                            if submit(movie):
+                                log(f"Queued '{movie.name}' for the backlog.")
+                            continue
+                        # the scan failed (unreadable file): log and retry when
+                        # the file changes - it is already in `known`, so a
+                        # failed read is not re-attempted until then
+                        continue
+                    # no queue in play (a stateless/test run): the direct path
+                    # below is the engine's own, and it records through `record`
                     try:
                         # hold the encode slot: encode_with_quality does not
                         # take it itself; a running CLI/job encode makes the
