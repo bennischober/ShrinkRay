@@ -20,6 +20,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ### Fixed
 
+- **The release workflow parses again** : the gate step's name introduced with the gate-script change carried an unquoted `: ` inside the YAML mapping value, which made the whole workflow file unparseable — GitHub registered that as a startup failure with zero jobs on every push to any branch (8 consecutive red runs), and the next `v*` tag release would have failed the same way. The name now uses a dash; every workflow file and the compose file parse clean.
+
 - **The published container sees the common video containers, not just `.mkv`** (issue #204): the image's baked `config.json` now sets `file.extensions` to `.mkv`, `.mp4`, `.m4v`, `.avi`, `.mov`, `.ts`, `.m2ts`, `.webm` — before, the code default (`.mkv` alone) made a mounted `.mp4` library scan nothing while `scan`/`encode` still exited 0. The README states the narrow code default explicitly.
 
 - **`plan` exits 1 when nothing could be planned** (issue #203): `encode` already failed loudly on an unusable toolchain; `plan` rendered the identical failure as an error row and exited 0. Now an all-error plan is a failed command, a plan with results alongside error rows still succeeds (a partial answer is an answer), and an all-skipped plan stays at 0 (a skip is a decision, not a failure).
@@ -41,10 +43,13 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 ### Changed
 
 - **The agent knowledge base is split into per-directory `AGENTS.md` files** (issue #223): the root file keeps the product rules, the engineering standard, the gate and the workflow, and points at one file per directory that earns one — `src/shrinkray/`, its `engine/`, `server/` and `tools/` subpackages, `tests/` and `ui/`. A directory map inside the root file could not stay true as the code moved; a file next to the code it describes is updated when that code changes. This pass also corrected the root file where it had drifted from the tree.
+- **The README documents the gate chain as a table** : "which files get encoded?" was answered only inside docs/encode-decision.md's walk-through; the README now carries the eight-gate table (duration, resolution, size floor, codec age, bar detection, CRF search, size gate, encode) with each gate's config key and default, plus the two clarifications that keep coming up — the "not worth it" gates (rows 2-4) fire before any ffmpeg probe runs, and "already efficient" is a measured outcome (row 7), not a threshold. Cross-referenced with the open old-codec-with-bars decision (issue #224).
 
 - **CI tests the supported floor and the shipped interpreter, not three points between** : the test matrix drops Python 3.12 and keeps 3.10 and 3.15 — 3.10 enforces the `requires-python = ">=3.10"` promise (PR #217 proved its worth when 3.15-local missed an annotation NameError that 3.10 caught), 3.15 is the interpreter the container actually ships, and 3.12 sat between two tested versions catching almost nothing at ~90 s of CI time per push.
 
 - **The gate, the container config and the release notes each live in one place** : the five gate commands are now `tools/gate.sh`, called unchanged by ci.yml, release.yml, the dev image's CMD and documented in AGENTS.md (four copies of one contract become one); the container's config.json is a tracked `container-config.json` COPYed into the image instead of JSON smuggled through shell escapes in a `printf` (the old form had to be parsed back out of the Dockerfile to be tested); docker-compose.yml drops its byte-identical healthcheck block (compose inherits the image's token-authenticated HEALTHCHECK); and the release job extracts the release notes with tested `tools/release_notes.py` instead of inline awk/sed pattern matching on CHANGELOG.md (same section extraction, same fallback for a mis-tagged release, now unit-tested).
+
+- **The helpers grab bag is dissolved** : `helpers.py` (190 lines, seven functions) is gone — the #63 decision record's dissolution is complete. Two functions were already dead since the CLI rework (the `movies.txt`/`output.csv` formatters), and the remaining five moved verbatim to their single consumer modules (`engine/scan.py` owns the size/time/progress helpers, `__main__.py` owns `calc_time`); the dead `print_table`/`print_summary` went with them. One module fewer, no behavior change.
 
 ## [0.4.0] - 2026-10-25
 

@@ -18,7 +18,7 @@ Flat by design: `tests/fixtures/` is the only subdirectory, and no `tests/engine
 | `test_probe_progress`, `test_watch_progress`, `test_watch_output`, `test_preflight`, `test_fs_waiter`, `test_bracket_paths`, `test_single_file_scope`, `test_plan_exit`, `test_plan_no_table` | one CLI/engine seam each — progress output, env-gated output, preflight problems, `_FsWaiter`/`_sleep_plain`, path resolution, plan exit codes |
 | `test_media`, `test_hb_probe`, `test_missing_binary`, `test_resources`, `test_hdr_fixture` | `tools.*`: frame-rate/duration parsing, `supports_svt_av1`, binary-absent degradation, RSS/`_run`, HDR detection |
 | `test_auth`, `test_metrics` | `server.app` token gate, Prometheus render |
-| `test_replace`, `test_plans`, `test_misc`, `test_timestamps`, `test_telemetry_leak` | swap-in-place retention; plans table (`db` + `service`); `helpers` conversions, `config` schema and encoder presets, subprocess timeouts; console log format; the `logs/` leak when `encode_with_quality(verify=True)` has no `db_file` |
+| `test_replace`, `test_plans`, `test_misc`, `test_timestamps`, `test_telemetry_leak` | swap-in-place retention; plans table (`db` + `service`); scan-time conversions (`engine/scan.py`), `config` schema and encoder presets, subprocess timeouts; console log format; the `logs/` leak when `encode_with_quality(verify=True)` has no `db_file` |
 | `test_container`, `test_container_config`, `test_release_notes` | repo artifacts, not the package: cgroup CPU plan, `container-config.json` + `Dockerfile` + `.dockerignore`, `tools/release_notes.py` (via `sys.path.insert`) |
 
 ## CONVENTIONS

@@ -10,14 +10,14 @@ file is the module map plus the rules that bind the whole package. `engine/`,
 
 | Question | Module | Notes |
 |---|---|---|
-| CLI commands, tables, progress | `__main__.py` (973 L) | typer: `encode`, `plan`, `serve` (+ hidden `app`), `retained`, `doctor`; no business logic |
+| CLI commands, tables, progress | `__main__.py` (936 L) | typer: `encode`, `plan`, `serve` (+ hidden `app`), `retained`, `doctor`; no business logic |
 | Config schema, defaults, flat facade | `config.py` (442 L) | pydantic sections + `Conf`; loading has no side effects |
 | sqlite schema, migrations, queries | `db.py` (1318 L) | `SCHEMA_VERSION = 16` (`db.py:10`), `MIGRATIONS`, `prune_missing` |
 | Swap-in-place, retained originals | `replace.py` (263 L) | `stage`/`swap`/`recover`; `RETAINED_SUFFIX` (`replace.py:37`) |
 | Batch resume + result persistence | `service.py` (580 L) | `record_plan`, `save_encode`, `save_skip`, `doctor`, `all_problems` |
 | Failure bundles | `telemetry.py` (102 L) | `save_failure` -> `logs/` beside the db file; best-effort by design |
 | Logging | `logger.py` (29 L) | loguru; `log`, `log_warning`, `log_error` |
-| Grab bag (dissolving, #63) | `helpers.py` (190 L) | imported by `engine/scan.py:22`, `__main__.py:36` and `tests/test_misc.py` — nowhere else |
+| Scan-time conversions | `engine/scan.py` | size/time/progress helpers moved here when `helpers.py` dissolved (#227); `__main__.py` keeps `calc_time` |
 
 `__main__.py:64` defaults the database to `metadata.db` in the cwd. `py.typed`
 (PEP 561, forced into the wheel) and `models/vmaf_v0.6.1.json` ship as package

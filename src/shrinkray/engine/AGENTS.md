@@ -16,7 +16,7 @@ so a change here reaches every entry point. Root AGENTS.md has the product rules
 | Black bars, one detector | `crop.py` (656 L) | keyframe timeline pass + `sustained_runs` (`:128`) + `intersect_crop_rects` (`:182`); DB-cached; `detect_crop_rect` (`:515`) is the no-database fallback |
 | Sample windows | `samples.py` (201 L) | `sample_offsets`, `extract_samples`, `DEFAULT_SAMPLE_EVERY = 600.0` (`:28`) |
 | HDR/SDR encoder choice | `encoders.py` (51 L) | `encoder_for` (`:36`), `DEFAULT_ENCODER`/`HDR_ENCODER` (`:14-15`) |
-| Scan -> DB rows | `scan.py` (546 L) | `scan_movies` (`:405`), `process_movie` (`:324`), `resolve_input_paths` (`:118`); pool `min(8, cpu)` (`:506`) |
+| Scan -> DB rows | `scan.py` (619 L) | `scan_movies` (`:405`), `process_movie` (`:324`), `resolve_input_paths` (`:118`); pool `min(8, cpu)` (`:506`) |
 | Inbox watchdog | `watch.py` (661 L) | `watch` (`:404`), `_FsWaiter` (`:208`), `decide` (`:150`), `next_poll_interval` (`:45`) |
 | One encoder per output dir | `lock.py` (134 L) | `guard_encodes` (`:120`), 6 h stale window (`:27`); busy raises, never waits |
 
