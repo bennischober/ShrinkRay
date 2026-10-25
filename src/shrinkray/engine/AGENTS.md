@@ -10,7 +10,7 @@ so a change here reaches every entry point. Root AGENTS.md has the product rules
 
 | Question | Module | Notes |
 |---|---|---|
-| The CRF search | `search.py` (820 L) | `bisect_crf` (`:197`), `probe_crf` (`:262`), `find_optimal_crf_and_skip` (`:592`), `SkipEncode` (`:796`), `DEFAULT_TARGET_VMAF = 96.0` (`:48`), `DEFAULT_CRF_RANGE = (14, 45)` (`:56`) |
+| The CRF search | `search.py` (820 L) | `bisect_crf` (`:197`), `probe_crf` (`:262`), `find_optimal_crf_and_skip` (`:592`), `SkipEncode` (`:796`), `DEFAULT_TARGET_VMAF` (re-exported from `config.py`, #252), `DEFAULT_CRF_RANGE = (14, 45)` (`:56`) |
 | The plan: gates, HDR override, reuse | `plan.py` (736 L) | `plan_quality` (`:401`), `_lookup_plan` (`:91`), `SOURCE_CODECS` whitelist (`:55`), `is_1080p_class` (`:244`), `MIN_ENCODE_SECONDS = 90.0` (`:59`) |
 | Encode + verify + batch loop | `pipeline.py` (1656 L) | `encode_with_quality` (`:1210`, 447 L), `_encode_with_command` (`:338`), `encode_movies` (`:758`), `check_disk_space` (`:207`) |
 | Black bars, one detector | `crop.py` (656 L) | keyframe timeline pass + `sustained_runs` (`:128`) + `intersect_crop_rects` (`:182`); DB-cached; `detect_crop_rect` (`:515`) is the no-database fallback |

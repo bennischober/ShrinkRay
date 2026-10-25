@@ -10,7 +10,6 @@ Printed by tools/container-console.sh, once per console, for interactive
 shells only: a `docker exec <container> <command>` keeps a clean stdout.
 """
 
-import os
 from pathlib import Path
 
 from healthcheck import PID1_CMDLINE, runs_server, token
@@ -30,22 +29,19 @@ def banner(cmdline: Path = PID1_CMDLINE) -> str:
     server = runs_server(cmdline)
     data = state_dir_for_cli(None) or Path("/data")
     flag = data / PAUSE_FLAG
-    config = os.environ.get("SHRINKRAY_CONFIG", str(data / "config.json"))
     lines = [
         "ShrinkRay - the resident encoder is running."
         if server
         else "ShrinkRay - this container runs a one-shot command, not the resident server.",
+        "  Configure, pause, resume: shrinkray setup",
         "  Encode one file now:      shrinkray encode /media/<path>",
         f"  List retained originals:  shrinkray retained list --db {data / 'metadata.db'}",
-        f"  Change settings:          edit {config} (applied at the next file)",
     ]
     if server:
         reason = pause_reason(data)
-        if reason is None:
-            lines.append(f"  Pause the backlog:        touch {flag}")
-        elif flag.exists():
-            lines.append(f"  Paused. Resume with:      rm {flag}")
-        else:
+        if flag.exists():
+            lines.append(f"  Paused now:               resume in shrinkray setup (or rm {flag})")
+        elif reason is not None:
             lines.append(f"  Waiting:                  {reason}")
         current = token()
         lines.append(
