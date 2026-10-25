@@ -59,7 +59,14 @@ class TestWatcherSeedsItsMemoryFromTheDatabase(unittest.TestCase):
 
     def test_a_changed_file_is_a_candidate_again(self) -> None:
         """A changed file is a new question: its mtime/size differ."""
-        self.movie.write_bytes(b"y" * 100)
+        # the SIZE changes, not just the mtime: inode timestamps are quantized
+        # to the kernel's tick (~10 ms on WSL2 and loaded CI runners), so two
+        # same-size writes inside one tick carry the SAME mtime and the
+        # identity would not change - the flake of issue #291. A rewrite that
+        # changes only the mtime within one tick is undetectable by ANY
+        # metadata; the watcher's memory contract degrades there, and the
+        # test must not depend on the clock having ticked.
+        self.movie.write_bytes(b"y" * 140)
         found = watch_mod.find_new_movies(
             self.root, [".mkv"], watch_mod._known_identities_from_db(self.db_file)
         )
