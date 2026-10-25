@@ -82,6 +82,9 @@ from shrinkray.engine.plan import (
     plan_quality as plan_quality,
 )
 from shrinkray.engine.plan import (
+    source_bit_depth as source_bit_depth,
+)
+from shrinkray.engine.plan import (
     source_codec as source_codec,
 )
 from shrinkray.engine.plan import (
@@ -1010,25 +1013,28 @@ def _report_encode(progress: Progress, result: EncodeResult) -> None:
 
 
 def _source_snapshot(movie: Path) -> dict:
-    """Reads the source file's resolution/codec/duration/bitrate for encode records.
+    """Reads the source file's resolution/codec/duration/bitrate/depth for encode records.
 
     The encode record must be self-contained: the files table row can change
     on a later re-scan, so the benchmark data snapshots what was true at
     encode time. The bitrate feeds the generation-drift documentation
-    (input_bitrate/output_bitrate on the encodes row).
+    (input_bitrate/output_bitrate on the encodes row); the bit depth is the
+    decision input the encoder choice followed (issue #234).
 
     Args:
         movie (Path): The source file.
 
     Returns:
-        dict: width/height/codec/duration/bitrate (None where unknown).
+        dict: width/height/codec/duration/bitrate/bit_depth (None where
+            unknown).
     """
-    from shrinkray.tools.ffprobe import probe_duration_seconds
+    from shrinkray.tools.ffprobe import bit_depth, probe_duration_seconds
 
     duration = probe_duration_seconds(movie)
     width = height = None
     codec = None
     bitrate = None
+    depth = None
     try:
         proc = subprocess.run(
             [
@@ -1051,6 +1057,7 @@ def _source_snapshot(movie: Path) -> dict:
             width = video.get("width")
             height = video.get("height")
             codec = video.get("codec_name")
+            depth = bit_depth(video)
             # the file bitrate (video+audio+containers); the video stream's
             # own bit_rate is often absent => fall back to the format level
             raw = video.get("bit_rate") or data.get("format", {}).get("bit_rate")
@@ -1064,6 +1071,7 @@ def _source_snapshot(movie: Path) -> dict:
         "codec": codec,
         "duration": duration,
         "bitrate": bitrate,
+        "bit_depth": depth,
     }
 
 
@@ -1295,8 +1303,10 @@ def encode_with_quality(
     hdr = _is_hdr_file(input_file)
     # the effective decision inputs: for HDR the engine overrides the
     # target/range and switches to the 10-bit encoder (same rule as
-    # plan_quality, so a stored HDR plan is found under its real encoder)
-    effective_encoder = encoder_for(hdr)
+    # plan_quality, so a stored HDR plan is found under its real encoder).
+    # The encoder follows the SOURCE's bit depth now (issue #234): a 10-bit
+    # SDR master keeps its depth; HDR alone no longer decides it.
+    effective_encoder = encoder_for(source_bit_depth(input_file), hdr)
     if hdr:
         target_vmaf = DEFAULT_HDR_TARGET_VMAF
         crf_range = DEFAULT_HDR_CRF_RANGE
@@ -1650,6 +1660,7 @@ def encode_with_quality(
         input_height=snapshot["height"],
         input_codec=snapshot["codec"],
         input_duration=snapshot["duration"],
+        input_bit_depth=snapshot["bit_depth"],
         input_bitrate=snapshot["bitrate"],
         output_bitrate=_output_bitrate(output_file, snapshot["duration"]),
         crf_source=crf_source,

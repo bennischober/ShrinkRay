@@ -8,6 +8,7 @@ codec info).
 
 import json
 import math
+import re
 import subprocess
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -290,6 +291,35 @@ def get_audio_languages(streams: list) -> str:
     return ", ".join(languages)
 
 
+def bit_depth(video: dict) -> int | None:
+    """Returns the video stream's bit depth (8, 10, 12...), None when unknown.
+
+    Reads the ffprobe output the run already fetched: ``bits_per_raw_sample``
+    when the stream carries it, else the ``pix_fmt`` name's trailing depth
+    (``yuv420p10le`` -> 10). The source's bit depth decides the output
+    encoder (issue #234): 10-bit is not an HDR property, and dropping the
+    two extra bits of a 10-bit SDR master is a quality loss the product's
+    own rules forbid.
+
+    Args:
+        video (dict): The video stream data from ffprobe.
+
+    Returns:
+        int | None: The bit depth, or None when neither field is usable.
+    """
+    raw = video.get("bits_per_raw_sample")
+    try:
+        if raw is not None and int(raw) > 0:
+            return int(raw)
+    except (TypeError, ValueError):
+        pass
+    pix_fmt = str(video.get("pix_fmt") or "")
+    match = re.search(r"(\d+)le$|(?<!\d)(\d+)be$", pix_fmt)
+    if match:
+        return int(match.group(1) or match.group(2))
+    return None
+
+
 def is_hdr(video: dict, config: Conf) -> bool:
     """Checks if the video stream is HDR by comparing its color data with the config.
 
@@ -377,6 +407,7 @@ def get_data(path: Path, config: Conf | None = None) -> dict:
 
     audio_languages = get_audio_languages(streams)
     hdr = is_hdr(video, config)
+    depth = bit_depth(video)
 
     return {
         "codec": codec,
@@ -389,4 +420,5 @@ def get_data(path: Path, config: Conf | None = None) -> dict:
         "dimensions": {"width": width, "height": height},
         "audio_languages": audio_languages,
         "hdr": hdr,
+        "bit_depth": depth,
     }
