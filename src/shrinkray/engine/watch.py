@@ -159,7 +159,7 @@ def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list
     # is the same non-movie class: an in-flight or crashed run's encode must
     # not be picked up as a new arrival (issue #237).
     unique = list(dict.fromkeys(movies))
-    return [m for m in unique if _identity(m) not in known and not is_staging_path(m)]
+    return [m for m in unique if _identity(m) not in known and not is_staging_path(m, inbox)]
 
 
 def _identity(path: Path) -> str:

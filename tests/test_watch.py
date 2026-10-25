@@ -30,6 +30,34 @@ def _isolated_lock(stack, tmp) -> None:
 
 
 class TestWatch(unittest.TestCase):
+    def test_a_library_below_a_shrinkray_named_ancestor_is_visible(self):
+        """Issue #286: the staging filter scoped to the walk root - a library
+        that lives below an ancestor named .shrinkray-* (above the root) is
+        a library, not working state. Fails on main's absolute-path check."""
+
+        from shrinkray.engine.scan import find_movies
+        from shrinkray.engine.watch import find_new_movies
+        from shrinkray.replace import is_staging_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            library = base / ".shrinkray-archive" / "library"
+            library.mkdir(parents=True)
+            movie = library / "Movie (2001).mkv"
+            movie.write_bytes(b"x")
+
+            # the predicate with the root: visible
+            self.assertFalse(is_staging_path(movie, library))
+            # both walkers find it
+            self.assertEqual(find_movies(library, [".mkv"]), [movie])
+            self.assertEqual(find_new_movies(library, [".mkv"], set()), [movie])
+            # the actual staging state BELOW the root is still filtered
+            staging = library / ".shrinkray-inplace-123" / "Movie (2001).mkv"
+            staging.parent.mkdir()
+            staging.write_bytes(b"x")
+            self.assertTrue(is_staging_path(staging, library))
+            self.assertEqual(find_movies(library, [".mkv"]), [movie])
+
     def test_one_unreadable_file_does_not_end_the_watch(self):
         """Issue #260: a per-file failure (RuntimeError from the probe) is
         logged with the file's name and the watcher continues - the loop

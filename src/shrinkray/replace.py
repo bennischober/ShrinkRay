@@ -63,7 +63,7 @@ class SwapResult:
     size_after: int
 
 
-def is_staging_path(path: Path) -> bool:
+def is_staging_path(path: Path, root: Path | None = None) -> bool:
     """Decides whether a path lives inside a staging directory or is a
     staging/retained sibling.
 
@@ -76,8 +76,16 @@ def is_staging_path(path: Path) -> bool:
     (`engine.scan.find_movies`, `engine.watch.find_new_movies`), so the two
     scans cannot drift apart again.
 
+    The `.shrinkray-*` prefix check is scoped to the WALK ROOT when one is
+    given (issue #286): only folders BELOW the root mark staging state. A
+    library that lives below a folder named `.shrinkray-archive` (an
+    ancestor above the root) is a library, not working state, and must stay
+    visible; without a root the absolute-path check applies as before.
+
     Args:
         path (Path): The candidate path.
+        root (Path | None): The walk root; staging folders are recognised
+            only BELOW it. None keeps the old absolute-path behaviour.
 
     Returns:
         bool: True when the path is ShrinkRay's own working state, never a
@@ -85,7 +93,15 @@ def is_staging_path(path: Path) -> bool:
     """
     if path.name.endswith((RETAINED_SUFFIX, STAGING_SUFFIX)):
         return True
-    return any(part.startswith(".shrinkray-") for part in path.parts)
+    if root is None:
+        return any(part.startswith(".shrinkray-") for part in path.parts)
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        # not below the root: the root-scoped check cannot apply; the
+        # sibling-suffix check above already ran
+        return False
+    return any(part.startswith(".shrinkray-") for part in relative.parts)
 
 
 def retained_path_for(source: Path) -> Path:
