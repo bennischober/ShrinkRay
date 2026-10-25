@@ -12,6 +12,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **The published container sees the common video containers, not just `.mkv`** (issue #204): the image's baked `config.json` now sets `file.extensions` to `.mkv`, `.mp4`, `.m4v`, `.avi`, `.mov`, `.ts`, `.m2ts`, `.webm` — before, the code default (`.mkv` alone) made a mounted `.mp4` library scan nothing while `scan`/`encode` still exited 0. The README states the narrow code default explicitly.
 
+- **`plan` exits 1 when nothing could be planned** (issue #203): `encode` already failed loudly on an unusable toolchain; `plan` rendered the identical failure as an error row and exited 0. Now an all-error plan is a failed command, a plan with results alongside error rows still succeeds (a partial answer is an answer), and an all-skipped plan stays at 0 (a skip is a decision, not a failure).
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

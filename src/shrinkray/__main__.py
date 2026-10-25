@@ -948,6 +948,7 @@ def plan(
 
         total_input = total_output = 0
         plans: list = []
+        errors = 0
         for movie in movies:
             try:
                 result = plan_quality(
@@ -961,6 +962,7 @@ def plan(
                 )
             except (RuntimeError, FileNotFoundError) as e:
                 table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
+                errors += 1
                 continue
             # quicksave: persist the decision (CRF or skip verdict) so a
             # later encode of this movie skips probing when unchanged
@@ -996,6 +998,15 @@ def plan(
             )
 
         console.print(table)
+        if errors:
+            if plans:
+                console.print(
+                    f"[yellow]{errors} of {len(movies)} movie(s) could not be planned; "
+                    "see the error rows above.[/yellow]"
+                )
+            else:
+                log_error(f"None of the {errors} movie(s) could be planned; see the errors above.")
+                raise typer.Exit(1)
         if total_input > 0 and total_output > 0:
             console.print(
                 f"[green]Plan: {len(plans)} movies, estimated total "

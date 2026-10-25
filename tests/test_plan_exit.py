@@ -1,0 +1,86 @@
+"""plan's exit code mirrors the decisions it could not make (issue #203).
+
+encode exits 1 when the engine cannot run (e.g. no HandBrakeCLI); plan used to
+render the same failure as an error ROW and exit 0 - the error was a table
+cell, not a failure. The contract: fail when NOTHING could be planned, stay at
+0 when at least one movie got a verdict (an error row alongside results is a
+partial answer, a skip is a successful decision).
+"""
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from shrinkray.__main__ import app
+from shrinkray.engine.plan import QualityResult
+
+
+def _plan_result(movie: Path, *, success: bool, skipped: str | None = None) -> QualityResult:
+    return QualityResult(
+        input=movie,
+        output=movie,
+        success=success,
+        skipped_reason=skipped,
+        input_size=movie.stat().st_size,
+        output_size=movie.stat().st_size,
+    )
+
+
+class TestPlanExitCode(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.movie = self.root / "one.mkv"
+        self.movie.write_bytes(b"x" * 8)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _run(self, *argv: str) -> int:
+        from typer.testing import CliRunner
+
+        runner = CliRunner()
+        previous = os.getcwd()
+        os.chdir(self.root)
+        try:
+            return runner.invoke(app, list(argv)).exit_code
+        finally:
+            os.chdir(previous)
+
+    def test_a_plan_where_every_movie_errors_exits_nonzero(self) -> None:
+        """No HandBrakeCLI: no verdict exists, so the command failed."""
+        with patch(
+            "shrinkray.engine.plan.plan_quality",
+            side_effect=RuntimeError("'HandBrakeCLI' not found"),
+        ):
+            code = self._run("plan", str(self.movie))
+        self.assertEqual(code, 1, "every movie failed to plan, yet plan exited 0")
+
+    def test_a_plan_with_results_and_errors_still_exits_zero(self) -> None:
+        """One unreadable file must not sink a library-wide plan."""
+        second = self.root / "two.mkv"
+        second.write_bytes(b"x" * 8)
+
+        def fake_plan(movie, **kwargs):
+            if movie.name == "one.mkv":
+                raise RuntimeError("unreadable")
+            return _plan_result(movie, success=True, skipped="too short")
+
+        with patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan):
+            code = self._run("plan", str(self.root))
+        self.assertEqual(code, 0, "a partial plan is still a plan")
+
+    def test_a_plan_where_every_movie_is_skipped_exits_zero(self) -> None:
+        """A skip is a successful decision, not a failure."""
+        with patch(
+            "shrinkray.engine.plan.plan_quality",
+            side_effect=lambda m, **kwargs: _plan_result(m, success=False, skipped="too short"),
+        ):
+            code = self._run("plan", str(self.movie))
+        self.assertEqual(code, 0, "every movie skipped, yet plan treated it as failure")
+
+
+if __name__ == "__main__":
+    unittest.main()
