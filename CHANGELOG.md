@@ -16,6 +16,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **`plan --no-table` prints the plan without the rich table** (issue #201): `scan` already had the flag for scripted runs; `plan` — the other read-only, scripted command — now accepts the same `--no-table` (no box-drawing characters or ANSI codes in a pipe), while the summary line and the `--db` plan cache keep working unchanged.
 
+- **`scan` fails honestly when every file failed to read** (issue #196): the run guarded its output on the FOUND list, so an all-error scan exited 0 and wrote a fabricated report (`Total;None;0` in the CSV). Now the outputs (table, `movies.txt`, CSV) are written only when at least one file was read, an all-error scan exits 1 with a summary naming the count, a partial scan keeps exit 0 with its per-file errors, and the empty-folder case keeps its warning and exit 0.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

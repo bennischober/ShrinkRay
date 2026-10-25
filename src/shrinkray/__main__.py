@@ -334,7 +334,7 @@ def scan(
         log_error(str(e))
         raise typer.Exit(1) from e
     try:
-        movies_by_category, movies, error_messages = scan_movies(
+        movies_by_category, _movies, error_messages = scan_movies(
             root,
             config,
             workers=workers if workers > 0 else None,
@@ -346,7 +346,7 @@ def scan(
         if connection is not None:
             connection.close()
 
-    if movies:
+    if movies_by_category:
         total_time, total_size = _totals(movies_by_category)
         write_output(movies_by_category, total_time, total_size, config.separator, output_file)
         if not no_table:
@@ -357,6 +357,11 @@ def scan(
             csv_file = output_file.with_suffix(".csv")
             write_csv(config.separator, output_file, csv_file)
             console.print(f"Written '{csv_file}'.")
+    elif error_messages:
+        # every found file failed to read: a fabricated report (Total;None;0)
+        # would be worse than none - the run failed, say so (issue #196)
+        log_error(f"None of the {len(error_messages)} file(s) could be read; see the errors above.")
+        raise typer.Exit(1)
 
     # show errors
     for er in error_messages:
