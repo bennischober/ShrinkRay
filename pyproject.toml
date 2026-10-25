@@ -13,6 +13,7 @@ dependencies = [
     "loguru>=0.7.3",
     "pydantic>=2.14.1",
     "rich>=15.0.0",
+    "textual>=8.2.8",
     "typer>=0.27.3",
     "uvicorn>=0.54.0",
 ]
@@ -155,7 +156,9 @@ name = "Layered architecture (issue #97)"
 type = "layers"
 layers = [
     "shrinkray.__main__",
-    "shrinkray.server",
+    # the two front ends beside each other, never importing one another: the
+    # dashboard's server and the terminal UI (issue #252)
+    "shrinkray.server | shrinkray.tui",
     "shrinkray.service",
     "shrinkray.engine",
     "shrinkray.tools",

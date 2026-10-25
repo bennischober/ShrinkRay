@@ -827,6 +827,39 @@ def plan(
             connection.close()
 
 
+@app.command("setup")
+def setup(
+    config_file: Path | None = typer.Option(
+        None,
+        "--config",
+        help="The config.json to edit (default: $SHRINKRAY_CONFIG, else ./config.json).",
+    ),
+    db_file: Path | None = typer.Option(
+        None,
+        "--db",
+        help="The resident app's database: its folder holds the pause flag "
+        "(default in the container: /data).",
+    ),
+) -> None:
+    """Configures ShrinkRay and pauses or resumes it, in a terminal UI.
+
+    Edits config.json through the same schema the app loads it with, names a
+    change that re-measures the library before saving it, and switches the
+    resident app's pause. The dashboard only observes; this is where the
+    operator steers (issue #252).
+    """
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        log_error(
+            "setup is interactive: run it in a terminal (e.g. docker exec -it <container> sh)."
+        )
+        raise typer.Exit(1)
+    from shrinkray.config import resolve_config_path
+    from shrinkray.engine.pause import state_dir_for_cli
+    from shrinkray.tui import SetupApp
+
+    SetupApp(resolve_config_path(config_file=config_file), state_dir_for_cli(db_file)).run()
+
+
 @app.command("retained")
 def retained(
     action: str = typer.Argument(

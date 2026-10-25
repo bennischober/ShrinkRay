@@ -283,8 +283,8 @@ never into the library.
 
 Opening a shell in the container (Unraid's Console button, or `docker exec -it
 <container> sh`) prints what to type, computed from the container's state (issue #251):
-whether the server runs, how to encode one file, list retained originals, change settings
-and pause, and the dashboard's token. It prints once per console, for interactive shells
+whether the server runs, `shrinkray setup` to configure, pause and resume (issue #252), how
+to encode one file and list retained originals, and the dashboard's token. It prints once per console, for interactive shells
 only, so `docker exec <container> <command>` output stays clean; the shell itself runs as
 `PUID`/`PGID` (see *Running as your user*).
 
@@ -295,8 +295,8 @@ always finishes. Two things pause it (issue #250):
 
 - **You.** `touch /data/paused` (or create `paused` in the appdata folder) pauses the
   watcher and the backlog; removing the file resumes them. It survives restarts on
-  purpose: a reboot never resumes a backlog you stopped. The terminal UI (#252) will
-  be the switch for it.
+  purpose: a reboot never resumes a backlog you stopped. `shrinkray setup` has the
+  switch for it (issue #252).
 - **A manual encode.** `shrinkray encode <path>` from the container console pauses the
   watcher and the backlog until it ends, so the two never compete for the CPU. A crash,
   a closed console or a restart cannot leave it paused: a marker whose process is gone
