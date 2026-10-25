@@ -303,6 +303,75 @@ class TestEncodeJobInPlace(unittest.TestCase):
         self.assertEqual(recorded_roots, [self.root])
         self.assertEqual(result["outcomes"][0]["state"], "skipped")
 
+    def test_the_job_worker_verifies_by_default(self) -> None:
+        """Mode B verifies every encode (issue #235): the job worker is the
+        resident mode's other arm - nobody watches the log in an unattended
+        container, so the full-file VMAF is the only evidence the encode
+        met the target that the operator ever gets. A payload can still opt
+        out with verify=false explicitly.
+        """
+        from unittest.mock import patch
+
+        captured: dict = {}
+
+        def fake_quality(movie, output_file, **kwargs):
+            captured.update(kwargs)
+            # in place, the job swaps after recording: the swap stats the
+            # staged output, so the fake must write it (the happy-path test
+            # does the same)
+            output_file.write_bytes(b"y" * 8)
+            return SimpleNamespace(
+                input_size=16,
+                output_size=8,
+                chosen_crf=20,
+                achieved_vmaf=95.0,
+                error=None,
+                success=True,
+                skipped_reason=None,
+                probes=[],
+                probe_seconds=1.0,
+                encode_seconds=1.0,
+                target_vmaf=96.0,
+                hdr=False,
+                encoder="svt_av1",
+                encoder_preset="3",
+                probe_encoder_preset="5",
+                input_width=None,
+                input_height=None,
+                input_codec=None,
+                input_bit_depth=None,
+                input_duration=None,
+                input_bitrate=None,
+                output_bitrate=None,
+                verified_vmaf=94.5,
+                verified_subsample=None,
+                crf_source="probe",
+                plan_created_at=None,
+            )
+
+        with (
+            patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_quality),
+            patch("shrinkray.service.record_quality_results") as fake_record,
+        ):
+            fake_record.return_value = SimpleNamespace(
+                encoded=True, skipped=False, error=None, encode_id=None
+            )
+            jobs.execute_encode(self._job(), self.connection, threading.Event())
+        self.assertTrue(captured.get("verify"))
+        # an explicit opt-out is honoured
+        captured.clear()
+        with (
+            patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_quality),
+            patch("shrinkray.service.record_quality_results") as fake_record,
+        ):
+            fake_record.return_value = SimpleNamespace(
+                encoded=True, skipped=False, error=None, encode_id=None
+            )
+            payload = {"paths": [str(self.movie)], "quality": True, "verify": False}
+            job = jobs.Job(kind=jobs.JobKind.ENCODE, payload=payload)
+            jobs.execute_encode(job, self.connection, threading.Event())
+        self.assertFalse(captured.get("verify"))
+
     def test_an_output_dir_payload_keeps_the_two_directory_form(self) -> None:
         """Naming an output dir keeps the old behaviour (no swap)."""
         out = Path(self.tmp.name) / "out"
