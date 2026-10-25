@@ -221,8 +221,9 @@ class TestWatcherAppliesSettingsPerFile(unittest.TestCase):
                 return watch_mod.WatchSettings(
                     max_threads=None,
                     min_source_height=next(floors),
+                    min_source_width=1920,
                     min_source_size_gb=0.0,
-                    candidate_codecs=("h264",),
+                    candidate_codecs=engine_plan.SOURCE_CODECS,
                     crop_sample_count=10,
                 )
 
@@ -257,8 +258,9 @@ class TestWatcherAppliesSettingsPerFile(unittest.TestCase):
                 return_value=watch_mod.WatchSettings(
                     max_threads=None,
                     min_source_height=1080,
+                    min_source_width=1920,
                     min_source_size_gb=0.0,
-                    candidate_codecs=("h264",),
+                    candidate_codecs=engine_plan.SOURCE_CODECS,
                     crop_sample_count=10,
                 )
             )

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT
+from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.engine.pipeline import (
     DISK_FREE_FLOOR_BYTES,
@@ -415,6 +415,7 @@ class WatchSettings:
 
     max_threads: int | None
     min_source_height: int
+    min_source_width: int
     min_source_size_gb: float
     candidate_codecs: tuple[str, ...]
     crop_sample_count: int
@@ -433,6 +434,7 @@ def watch(
     stop_event: threading.Event | None = None,
     db_file: Path | None = None,
     min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
+    min_source_width: int = DEFAULT_MIN_SOURCE_WIDTH,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = ("h264",),
     crop_sample_count: int = 10,
@@ -479,6 +481,7 @@ def watch(
     current = WatchSettings(
         max_threads=max_threads,
         min_source_height=min_source_height,
+        min_source_width=min_source_width,
         min_source_size_gb=min_source_size_gb,
         candidate_codecs=candidate_codecs,
         crop_sample_count=crop_sample_count,
@@ -609,6 +612,7 @@ def watch(
                                 # plan staleness: watch always measures fresh
                                 force_reprobe=True,
                                 min_source_height=current.min_source_height,
+                                min_source_width=current.min_source_width,
                                 min_source_size_gb=current.min_source_size_gb,
                                 candidate_codecs=current.candidate_codecs,
                                 crop_sample_count=current.crop_sample_count,

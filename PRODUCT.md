@@ -244,9 +244,11 @@ ShrinkRay answers two questions per file:
 
 Before either question is asked, a file must be worth touching at all:
 
-- **Minimum resolution: 1080p.** Below that, a re-encode saves too little to be
-  worth the work.
-- **Minimum codec: H.264.** Sources in an older codec are not re-encoded.
+- **Minimum resolution: the 1080p class.** A source whose dimensions are both below it
+  (width 1920 / height 1080; either at class size qualifies) saves too little to be worth
+  the work.
+- **Minimum codec: the whitelist.** A source codec outside the candidate list is not
+  re-encoded (h264, hevc, vp9, av1; MPEG-2/VC-1 and older are outside it).
 
 Among eligible files, **the CRF search always runs** — and a re-encode happens only when
 that search shows the file would actually get smaller. That one rule replaces the older
@@ -364,11 +366,13 @@ to its quality** and whether its **frame matches its content**.
   re-encoded, converted or dropped.
 - **Skip guardrails**: already-efficient sources, unreachable targets, too-short
   files, and encodes that would not shrink are skipped and remembered.
-- **Eligibility limits**: files below 1080p or in a codec older than H.264 are
-  never re-encoded. The resolution floor may be raised in configuration, never
-  lowered below 1080p (issue #244; enforced when the config loads, issue #246).
-- **Source-codec gate**: the CRF search runs on every eligible file. H.264 is the
-  floor; MPEG-2/VC-1 and older are never re-encoded. Size alone decides whether a
+- **Eligibility limits**: a source whose dimensions are both below the 1080p class, or
+  whose codec is outside the candidate list, is never re-encoded. The resolution floors
+  and the codec list may be raised/extended in configuration, never lowered/shrunk
+  (issue #244; enforced when the config loads, issue #246; the width arm and VP9 are
+  issue #233).
+- **Source-codec gate**: the CRF search runs on every eligible file. The candidate list
+  is the floor; MPEG-2/VC-1 and older are never re-encoded. Size alone decides whether a
   re-encode happens, for every codec.
 - **Black-bar removal is part of every re-encode**, not an option. Bars are detected for
   any file that will be encoded and removed during that encode, so a re-encoded file is

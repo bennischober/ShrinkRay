@@ -14,6 +14,7 @@ from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import samples as engine_samples
 from shrinkray.engine import search as engine_search
+from shrinkray.engine.plan import SOURCE_CODECS
 from shrinkray.tools import ffprobe as tools_ffprobe
 from shrinkray.tools import handbrake as tools_handbrake
 from shrinkray.tools import vmaf as tools_vmaf
@@ -1209,7 +1210,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=7200.0),
-                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
+                ),
                 patch.object(engine_plan, "source_codec", return_value="h264"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(
@@ -1355,18 +1358,23 @@ class TestSubprocessTimeouts(unittest.TestCase):
             connection.close()
 
     def test_codec_gate_rejects_older_codec(self):
-        """An older codec is never re-encoded, before any probe runs.
+        """A codec outside the whitelist is never re-encoded, before probing.
 
         PRODUCT.md: a source in a codec older than H.264 is not a candidate.
         The gate must decide from the codec alone and reach neither sample
-        extraction nor HandBrake.
+        extraction nor HandBrake, and the message must name the actual rule
+        (the candidate list) - the old text said "below the h264 minimum",
+        which was false for every codec newer than H.264 that the list still
+        excluded (issue #233).
         """
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=1080),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
+                ),
                 patch.object(engine_plan, "source_codec", return_value="mpeg2video"),
                 patch.object(engine_plan, "extract_samples") as fake_extract,
                 patch.object(engine_plan, "find_handbrake") as fake_hb,
@@ -1375,8 +1383,75 @@ class TestSubprocessTimeouts(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.skipped_reason, "source codec not a candidate")
         self.assertIn("mpeg2video", result.error or "")
+        self.assertIn("candidate codec list", result.error or "")
         fake_extract.assert_not_called()
         fake_hb.assert_not_called()
+
+    def test_codec_gate_admits_vp9(self):
+        """VP9 is a candidate codec (issue #233).
+
+        VP9 is newer than H.264 in every sense that matters here; it was
+        excluded only because the gate predates the whitelist decision.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
+                ),
+                patch.object(engine_plan, "source_codec", return_value="vp9"),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+            ):
+                result = engine_plan.plan_quality(src)
+        self.assertTrue(result.success)
+        self.assertIsNone(result.skipped_reason)
+
+    def test_codec_gate_config_extends_the_whitelist(self):
+        """A config codec joins the product whitelist; neither replaces the other.
+
+        The whitelist is a product rule, so config can only extend it - and
+        the operator's list must reach the gate, which is the plan/encode
+        parity this issue's first defect (issue #233).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
+                ),
+                patch.object(engine_plan, "source_codec", return_value="mpeg4"),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+            ):
+                extended = engine_plan.plan_quality(src, candidate_codecs=(*SOURCE_CODECS, "mpeg4"))
+            with (
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
+                ),
+                patch.object(engine_plan, "source_codec", return_value="mpeg4"),
+                patch.object(engine_plan, "extract_samples") as fake_extract,
+            ):
+                rejected = engine_plan.plan_quality(src)
+        self.assertTrue(extended.success)
+        self.assertIsNone(extended.skipped_reason)
+        self.assertEqual(rejected.skipped_reason, "source codec not a candidate")
+        fake_extract.assert_not_called()
 
     def test_codec_gate_admits_h264_on_size_alone(self):
         """An H.264 source is a candidate on size alone (PRODUCT.md)."""
@@ -1385,7 +1460,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=1080),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
+                ),
                 patch.object(engine_plan, "source_codec", return_value="h264"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
@@ -1415,7 +1492,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
+                ),
                 patch.object(engine_plan, "source_codec", return_value="hevc"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_crop, "detect_crop_rect", return_value=None),
@@ -1447,7 +1526,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
+                ),
                 patch.object(engine_plan, "source_codec", return_value="hevc"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "detect_crop_rect", return_value=bars) as fake_crop,
@@ -1480,7 +1561,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
+                ),
                 patch.object(engine_plan, "source_codec", return_value="hevc"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_crop, "detect_crop_rect", return_value=None),
@@ -1506,7 +1589,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)  # a few bytes: far below 5 GB
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
+                ),
                 patch.object(engine_plan, "extract_samples") as fake_extract,
                 patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
@@ -1528,7 +1613,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=2160),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
+                ),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
@@ -1544,32 +1631,147 @@ class TestSubprocessTimeouts(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertIsNone(result.skipped_reason)
 
-    def test_min_source_height_gate_skips_before_probing(self):
-        """A source below the height floor is skipped before any probe runs.
+    def test_resolution_gate_skips_below_the_1080p_class(self):
+        """A source below BOTH class floors is skipped before any probe runs.
 
         The gate exists to avoid spending the size probe and the CRF search on
         a source whose pixel count bounds the saving; it must decide from the
-        height alone and reach neither extraction nor HandBrake.
+        resolution alone and reach neither extraction nor HandBrake.
         """
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=720),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1280, "height": 720}
+                ),
                 patch.object(engine_plan, "extract_samples") as fake_extract,
                 patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
-                result = engine_plan.plan_quality(src, min_source_height=1080)
+                result = engine_plan.plan_quality(src)
         self.assertFalse(result.success)
         self.assertEqual(result.skipped_reason, "resolution too low")
-        self.assertIn("720p", result.error or "")
-        self.assertIn("1080p", result.error or "")
+        self.assertIn("1280x720", result.error or "")
+        self.assertIn("1920x1080", result.error or "")
         fake_extract.assert_not_called()
         fake_hb.assert_not_called()
 
-    def test_min_source_height_gate_defaults_to_the_1080p_floor(self):
-        """A caller that passes no floor gets the product's 1080p floor.
+    def test_resolution_gate_admits_a_scope_film_by_width(self):
+        """A 1920x800 scope film is a 1080p-class master (issue #233).
+
+        A height-only floor skipped exactly the widescreen sources this
+        product exists for: either dimension at class size qualifies.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 800}
+                ),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+            ):
+                planned = engine_plan.plan_quality(src)
+            with (
+                patch.object(
+                    engine_pipeline,
+                    "_source_snapshot",
+                    return_value={
+                        "width": 1920,
+                        "height": 800,
+                        "codec": "h264",
+                        "duration": 600.0,
+                        "bitrate": None,
+                        "bit_depth": None,
+                    },
+                ),
+                patch.object(engine_pipeline, "is_hdr_file", return_value=False),
+                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+                patch.object(engine_pipeline, "check_disk_space", return_value=(True, "")),
+                patch.object(
+                    engine_pipeline,
+                    "_encode_with_command",
+                    side_effect=lambda _in, out, _cmd, **_kw: (
+                        out.write_bytes(b"y" * 4),
+                        engine_pipeline.EncodeResult(
+                            input=_in,
+                            output=out,
+                            success=True,
+                            input_size=_in.stat().st_size,
+                            output_size=out.stat().st_size,
+                        ),
+                    )[1],
+                ),
+                patch.object(
+                    engine_pipeline,
+                    "_probe_movie",
+                    return_value=(20, engine_search.DEFAULT_TARGET_VMAF, [], None),
+                ) as fake_probe,
+            ):
+                encoded = engine_pipeline.encode_with_quality(src, Path(tmp) / "out.mkv")
+        self.assertTrue(planned.success)
+        self.assertIsNone(planned.skipped_reason)
+        self.assertTrue(encoded.success)
+        self.assertIsNone(encoded.skipped_reason)
+        # the encode got past every gate on a 1920x800 source: the class
+        # predicate admitted a scope film end to end
+        fake_probe.assert_called_once()
+
+    def test_resolution_gate_admits_anamorphic_by_height(self):
+        """A 1440x1080 anamorphic source is 1080p class by height."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1440, "height": 1080}
+                ),
+                patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+                patch.object(
+                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
+                ),
+            ):
+                result = engine_plan.plan_quality(src)
+        self.assertTrue(result.success)
+        self.assertIsNone(result.skipped_reason)
+
+    def test_resolution_gate_partial_dimensions_skip_on_the_known_arm(self):
+        """A read width below class with an unreadable height is still a skip.
+
+        "Unknown is not a skip" protects an unreadable probe, not a known
+        small one: when one dimension was read and neither reaches the class
+        floor, the file is below the class and the probe cost buys nothing.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 8)
+            with (
+                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1280, "height": None}
+                ),
+                patch.object(engine_plan, "extract_samples") as fake_extract,
+            ):
+                result = engine_plan.plan_quality(src)
+        self.assertEqual(result.skipped_reason, "resolution too low")
+        self.assertIn("width 1280px", result.error or "")
+        fake_extract.assert_not_called()
+
+    def test_resolution_gate_defaults_to_the_1080p_class(self):
+        """A caller that passes no floor gets the product's 1080p class.
 
         The engine default used to be 0 (gate off), so a caller that forgot
         the argument silently disabled a product rule - which is how the
@@ -1581,7 +1783,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=720),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 1280, "height": 720}
+                ),
                 patch.object(engine_plan, "extract_samples") as fake_extract,
                 patch.object(engine_plan, "find_handbrake") as fake_hb,
             ):
@@ -1601,27 +1805,35 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=1080),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": 3840, "height": 2160}
+                ),
                 patch.object(engine_plan, "extract_samples") as fake_extract,
             ):
-                planned = engine_plan.plan_quality(src, min_source_height=2160)
+                planned = engine_plan.plan_quality(
+                    src, min_source_height=4320, min_source_width=7680
+                )
             with (
-                patch.object(engine_pipeline, "_source_snapshot", return_value={"height": 1080}),
-                patch.object(engine_plan, "is_hdr_file", return_value=False),
+                patch.object(
+                    engine_pipeline,
+                    "_source_snapshot",
+                    return_value={"width": 3840, "height": 2160},
+                ),
+                patch.object(engine_pipeline, "is_hdr_file", return_value=False),
                 patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_pipeline, "_probe_movie") as fake_probe,
             ):
                 encoded = engine_pipeline.encode_with_quality(
-                    src, Path(tmp) / "out.mkv", min_source_height=2160
+                    src, Path(tmp) / "out.mkv", min_source_height=4320, min_source_width=7680
                 )
         self.assertEqual(planned.skipped_reason, "resolution too low")
         self.assertEqual(encoded.skipped_reason, "resolution too low")
-        self.assertIn("2160p", encoded.error or "")
+        self.assertIn("4320", encoded.error or "")
         fake_extract.assert_not_called()
         fake_probe.assert_not_called()
 
-    def test_min_source_height_gate_unknown_height_is_not_skipped(self):
-        """An unreadable height must not silently exclude a file.
+    def test_resolution_gate_unknown_dimensions_are_not_skipped(self):
+        """An unreadable resolution must not silently exclude a file.
 
         A gate that treats "unknown" as "too low" would drop titles the
         operator expected to be considered; the honest answer is to probe.
@@ -1631,7 +1843,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src.write_bytes(b"x" * 8)
             with (
                 patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_plan, "source_height", return_value=None),
+                patch.object(
+                    engine_plan, "_source_dimensions", return_value={"width": None, "height": None}
+                ),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
@@ -1639,11 +1853,8 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
                 ),
-                patch.object(
-                    engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
-                ),
             ):
-                result = engine_plan.plan_quality(src, min_source_height=1080)
+                result = engine_plan.plan_quality(src)
         self.assertTrue(result.success)
         self.assertIsNone(result.skipped_reason)
 

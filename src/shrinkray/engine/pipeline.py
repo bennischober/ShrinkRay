@@ -23,7 +23,7 @@ from pathlib import Path
 
 from rich.progress import Progress
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT
+from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
 from shrinkray.engine.crop import (
     CROP_DETECT_LIMIT as CROP_DETECT_LIMIT,
 )
@@ -58,12 +58,6 @@ from shrinkray.engine.plan import (
     MIN_ENCODE_SECONDS as MIN_ENCODE_SECONDS,
 )
 from shrinkray.engine.plan import (
-    MIN_SOURCE_CODEC as MIN_SOURCE_CODEC,
-)
-from shrinkray.engine.plan import (
-    MODERN_CODECS as MODERN_CODECS,
-)
-from shrinkray.engine.plan import (
     QualityResult as QualityResult,
 )
 from shrinkray.engine.plan import (
@@ -76,6 +70,9 @@ from shrinkray.engine.plan import (
     _plan_probes as _plan_probes,
 )
 from shrinkray.engine.plan import (
+    is_1080p_class as is_1080p_class,
+)
+from shrinkray.engine.plan import (
     is_hdr_file as is_hdr_file,
 )
 from shrinkray.engine.plan import (
@@ -86,9 +83,6 @@ from shrinkray.engine.plan import (
 )
 from shrinkray.engine.plan import (
     source_codec as source_codec,
-)
-from shrinkray.engine.plan import (
-    source_height as source_height,
 )
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_EVERY as DEFAULT_SAMPLE_EVERY,
@@ -1235,6 +1229,7 @@ def encode_with_quality(
     force_reprobe: bool = False,
     use_probe_cache: bool = True,
     min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
+    min_source_width: int = DEFAULT_MIN_SOURCE_WIDTH,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
@@ -1265,8 +1260,11 @@ def encode_with_quality(
             directory for failure evidence (None => cwd metadata.db).
         encoder_threads (int | None): Thread limit for the probe encodes
             AND the final encode (None = no limit).
-        min_source_height (int): Skip sources below this height (the 1080p
-            floor by default; a caller may raise it, never lower it).
+        min_source_height (int): Skip sources whose height AND width are both
+            below the 1080p-class floors (1080/1920 by default; a caller may
+            raise them, never lower them). Either dimension at class size
+            qualifies: a 1920x800 scope film is a 1080p-class master
+            (issue #233).
         min_source_size_gb (float): Skip sources below this size (0 = gate
             off).
         candidate_codecs (tuple[str, ...]): Source codecs that are
@@ -1329,15 +1327,29 @@ def encode_with_quality(
 
     # the resolution gate decides from cached metadata, before the size probe
     # and the CRF search spend minutes on a source whose pixels bound the saving
+    width = (snapshot or {}).get("width")
     height = (snapshot or {}).get("height")
-    if height is not None and height < min_source_height:
+    known_below_class = (width is not None or height is not None) and not is_1080p_class(
+        width, height, min_width=min_source_width, min_height=min_source_height
+    )
+    if known_below_class:
+        # at least one dimension was read and neither reaches the class floor;
+        # an unreadable probe stays eligible (the "unknown is not a skip" rule).
+        # The message names the caller's floors, not the product defaults: an
+        # operator who raised them to 4K must read "4K" in the skip reason.
+        shown = (
+            f"{width}x{height}"
+            if width is not None and height is not None
+            else (f"width {width}px" if width is not None else f"height {height}px")
+        )
         return QualityResult(
             input=input_file,
             output=output_file,
             success=False,
             target_vmaf=target_vmaf,
             error=(
-                f"height {height}p is below the {min_source_height}p minimum "
+                f"resolution {shown} is below the {min_source_width}x"
+                f"{min_source_height} 1080p class minimum "
                 "(a lower-resolution source saves too little to be worth the probe)"
             ),
             skipped_reason="resolution too low",
@@ -1362,18 +1374,19 @@ def encode_with_quality(
         )
 
     # every eligible file is probed; size alone decides the encode. The
-    # codec-age gate below is the only codec rule left.
+    # codec whitelist below is the only codec rule left.
     codec = source_codec(input_file)
 
-    if codec is not None and codec not in candidate_codecs and codec not in MODERN_CODECS:
+    if codec is not None and codec not in candidate_codecs:
         return QualityResult(
             input=input_file,
             output=output_file,
             success=False,
             target_vmaf=target_vmaf,
             error=(
-                f"source codec '{codec}' is below the {MIN_SOURCE_CODEC} minimum "
-                "(an older codec is not re-encoded)"
+                f"source codec '{codec}' is not in the candidate codec list "
+                f"({', '.join(candidate_codecs)}) - a source outside it is "
+                "never re-encoded"
             ),
             skipped_reason="source codec not a candidate",
             hdr=hdr,

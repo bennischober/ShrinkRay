@@ -57,11 +57,11 @@ Every gate is a cheap question asked before the expensive next step.
 
 | # | Gate | Question | If it fails |
 |---|---|---|---|
-| 1 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS`, `engine/plan.py:55`) | skip — not a movie |
-| 2 | Resolution | At least 1080p tall? (`min_source_height`, `engine/plan.py:406`; 1080 may be raised, never lowered — issue #246) | skip — too few pixels to save |
-| 3 | Size | At least the configured size floor? (`min_source_size_gb`, `engine/plan.py:428`) | skip — payoff below the probe cost |
-| 4 | Codec age | H.264 or newer? (`MIN_SOURCE_CODEC`, `engine/plan.py:52`) | skip — an older codec is not re-encoded |
-| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py`, called at `engine/plan.py:490`) | no crop; the encode proceeds uncropped |
+| 1 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS`, `engine/plan.py:59`) | skip — not a movie |
+| 2 | Resolution | At least the 1080p class — width >= 1920 OR height >= 1080? (`is_1080p_class`, `engine/plan.py:244`; the floors may be raised, never lowered — issue #246; the width arm is issue #233) | skip — too few pixels to save |
+| 3 | Size | At least the configured size floor? (`min_source_size_gb`, `engine/plan.py:419`) | skip — payoff below the probe cost |
+| 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` extended by the config's `candidate_codecs`, `engine/plan.py:55`; the list may be extended, never shrunk — issue #233) | skip — a source codec outside the list is not re-encoded |
+| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py`, called at `engine/plan.py:616`) | no crop; the encode proceeds uncropped |
 | 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:592`) | skip — target unreachable |
 | 7 | **Size gate** | Would the result be smaller? (`engine/search.py:675`, and again at the chosen CRF `:721`) | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, **with the crop** | — |
@@ -81,7 +81,7 @@ path through this table.
 | E | HEVC | above floor | none | probed → encoded if smaller |
 | F | AV1 | above floor | any | probed → encoded if smaller *(see the open question)* |
 | G | MPEG-2 / VC-1 | any | any | skipped at gate 4 |
-| H | any | < 1080p | any | skipped at gate 2 |
+| H | any | below the 1080p class (both dimensions) | any | skipped at gate 2 |
 | I | any | < 90 s | any | skipped at gate 1 |
 | J | any | above floor | bars, would grow | skipped at gate 7 — **with the crop applied to the estimate** |
 | K | any | above floor | bars, target unreachable | skipped at gate 6 |

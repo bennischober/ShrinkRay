@@ -545,6 +545,7 @@ def _record_encodes(
                             probe_encoder_preset=probe_encoder_preset,
                             encoder_preset=encoder_preset,
                             min_source_height=config.min_source_height,
+                            min_source_width=config.min_source_width,
                             min_source_size_gb=config.min_source_size_gb,
                             candidate_codecs=tuple(config.candidate_codecs),
                             crop_sample_count=crop_samples,
@@ -733,6 +734,7 @@ def plan(
                     # the same gates encode applies: a plan that ignores them
                     # predicts encodes that encode then skips (issue #246)
                     min_source_height=config.min_source_height,
+                    min_source_width=config.min_source_width,
                     min_source_size_gb=config.min_source_size_gb,
                     candidate_codecs=tuple(config.candidate_codecs),
                     # the sample settings follow the config too (issue #236
