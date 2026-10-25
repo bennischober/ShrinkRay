@@ -65,8 +65,14 @@ class TestStagingPathsAreNeverCandidates(unittest.TestCase):
         The staging directory's name and the swap suffixes are `replace.py`'s
         contract; the filter is defined there and both scan paths import it.
         """
-        self.assertTrue(replace.is_staging_path(self.root / ".shrinkray-x" / "movie.mkv"))
-        self.assertTrue(replace.is_staging_path(self.root / "movie.mkv.shrinkray-original"))
-        self.assertTrue(replace.is_staging_path(self.root / "movie.mkv.shrinkray-staging"))
-        self.assertFalse(replace.is_staging_path(self.root / "movie.mkv"))
-        self.assertFalse(replace.is_staging_path(self.root / ".hidden" / "movie.mkv"))
+        self.assertTrue(
+            replace.is_staging_path(self.root / ".shrinkray-x" / "movie.mkv", self.root)
+        )
+        self.assertTrue(
+            replace.is_staging_path(self.root / "movie.mkv.shrinkray-original", self.root)
+        )
+        self.assertTrue(
+            replace.is_staging_path(self.root / "movie.mkv.shrinkray-staging", self.root)
+        )
+        self.assertFalse(replace.is_staging_path(self.root / "movie.mkv", self.root))
+        self.assertFalse(replace.is_staging_path(self.root / ".hidden" / "movie.mkv", self.root))

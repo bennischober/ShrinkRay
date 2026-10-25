@@ -320,11 +320,10 @@ browser are just two consumers of the same engine and database:
 - the dashboard shows live job status (running/queued with progress and
   elapsed time), the scanned library with decision chips, plan/encode results
   and job history
-- jobs are enqueued from the UI (multi-directory: add several movie folders)
-  or via the API (`POST /api/jobs`)
-- the watch loop can be started/stopped from the UI or
-  `POST /api/watch/start|stop`
-- the configuration (`config.json`) is editable in the UI's settings dialog
+- the dashboard is read-only: it starts, cancels and reconfigures nothing
+  (issue #134). The resident app plans and encodes its backlog and watches
+  for changes on its own; settings and pause/resume live in the terminal
+  (`shrinkray setup`)
 - jobs survive restarts; jobs interrupted by a restart are marked as failed
 
 The server binds to localhost by default. **Authentication is opt-in**, and binding to a

@@ -238,10 +238,12 @@ def find_movies(root: Path, extensions: list[str], exclude: Path | None = None) 
                     continue  # inside the excluded directory
                 except ValueError:
                     pass
-            if is_staging_path(candidate):
+            if is_staging_path(candidate, root):
                 # ShrinkRay's own working state: an in-flight or crashed
                 # in-place run's staging directory and the swap's siblings are
-                # never library movies (issue #237)
+                # never library movies (issue #237). The prefix check is
+                # scoped to the walk root (issue #286): a library below an
+                # ancestor named .shrinkray-* is still a library.
                 continue
             # absolute paths: the db cache is keyed by absolute path, so a
             # relative scan root must not produce relative cache misses
