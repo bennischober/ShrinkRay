@@ -116,6 +116,29 @@ jobs:
           docker logs smoke 2>&1 | tail -20 || true
           exit 1
 
+      - name: Smoke-test the image (runs as PUID/PGID)
+        # issue #248: the server runs as the operator's user, takes over an
+        # empty /data folder and writes its files as that user
+        run: |
+          data=$(mktemp -d)
+          docker run -d --name smoke-user \
+            -e SHRINKRAY_TOKEN=smoke-test-token -e PUID=4242 -e PGID=4243 \
+            -v "$data:/data" \
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' smoke-user 2>/dev/null || echo starting)
+            [ "$status" = "healthy" ] && break
+            sleep 2
+          done
+          # tolerant captures: a dead container must still print its logs below
+          uid=$(docker exec smoke-user awk '/^Uid:/ {print $2}' /proc/1/status || echo none)
+          owner=$(docker exec smoke-user stat -c '%u:%g' /data/config.json || echo none)
+          docker logs smoke-user 2>&1 | tail -5
+          docker rm -f smoke-user
+          [ "$status" = "healthy" ] || { echo "::error::never turned healthy ($status)"; exit 1; }
+          [ "$uid" = "4242" ] || { echo "::error::PID 1 runs as uid $uid, not 4242"; exit 1; }
+          [ "$owner" = "4242:4243" ] || { echo "::error::/data/config.json is owned by $owner"; exit 1; }
+
       - name: Push the image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:

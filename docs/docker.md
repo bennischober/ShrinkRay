@@ -17,7 +17,8 @@ stated with the reason.
 > things below: `/data` becomes the appdata folder holding *all* operator state
 > (config, database, pause flag, generated token), the image takes `shrinkray` as its
 > entrypoint so the console can run any command (issue #242, **done** — see *One-shot
-> runs*), and the fixed-UID decision is reopened for `PUID`/`PGID`.
+> runs*), and the user is chosen at runtime with `PUID`/`PGID` (issue #248, **done** —
+> see *Running as your user*).
 
 ## What shipped
 
@@ -43,8 +44,8 @@ stated with the reason.
   the build fails if `ffmpeg -h filter=libvmaf` fails or either version string
   does not match the pin: an image measuring with a different libvmaf would write
   scores that are not comparable with anyone else's.
-- **Non-root by default** (`--build-arg UID/GID`), so everything written on a bind
-  mount is host-owned.
+- **Every command runs as the operator's user** (issue #248): `PUID`/`PGID`/`UMASK`
+  at runtime, defaulting to 1000/1000/022 — see *Running as your user*.
 - **The baked config carries the common video containers** (issue #204): the
   image's `config.json` sets `file.extensions` to `.mkv`, `.mp4`, `.m4v`, `.avi`,
   `.mov`, `.ts`, `.m2ts`, `.webm` — without it the code default (`.mkv` alone)
@@ -174,14 +175,16 @@ fresh" cost. Details below.
    and a fixed suffix works on any mount with no configuration. The operator
    reads the list with `shrinkray retained list` or the Retained page and deletes
    them in their own file manager.
-2. **PUID/PGID.** A fixed non-root user built with `--build-arg UID/GID`, not
-   entrypoint-driven user fixing. It is one `useradd` in the Dockerfile instead
-   of a runtime step that can fail in ways a stranger has to debug.
-   **Reopened by issue #244:** an Unraid template passes the user to run as at
-   runtime (`PUID`/`PGID`, conventionally 99/100, plus `UMASK`), and a pull-and-run
-   image cannot be rebuilt per host. The trade-off above still stands — a runtime
-   user switch is a step that can fail — so the follow-up must make it fail loudly
-   at start (unwritable `/data` or `/media` is a refusal, never a dead watcher).
+2. **PUID/PGID at runtime** (issue #248, superseding the fixed build-time user).
+   The first decision was a fixed non-root user built with `--build-arg UID/GID`,
+   because a runtime user switch is a step that can fail in ways a stranger has
+   to debug. The Unraid target (#244) reversed it: a template passes the user to
+   run as (`PUID`/`PGID`, conventionally 99/100, plus `UMASK`), and a pull-and-run
+   image cannot be rebuilt per host. The original concern is answered by failing
+   loudly: every way the switch can go wrong (a non-numeric id, `PUID=0`, a
+   `/data` or `/media` the user cannot write) is a refusal at start that names the
+   folder and the uid, never a dead watcher. The defaults stay the build user
+   (1000/1000), so an existing `/data` keeps working after an update.
 3. **Docker is THE deployment channel.** The image is the NAS path; the
    systemd unit (`deploy/shrinkray.service`) was removed with the container
    path established (2026-10-25).
@@ -220,6 +223,38 @@ The image's entrypoint is `shrinkray` and its default command is `serve --db
 image name **replaces that whole command**: to change a server flag, spell out the full
 `serve ...` command, e.g. `docker run ... <image> serve --db /data/metadata.db --host
 0.0.0.0 --root /media --port 9000`.
+
+## Running as your user
+
+Every file ShrinkRay writes on your disks belongs to the user you choose:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PUID` | `1000` | the user id every command runs as (`0` is refused) |
+| `PGID` | `1000` | its group id |
+| `UMASK` | `022` | the permission mask for new files and folders (`002` keeps them group-writable) |
+
+On Unraid that is `PUID=99`, `PGID=100` (`nobody:users`, the owner of the shares).
+
+How it works: the container starts as root only long enough to give its user these
+ids, then runs the server or your command as that user. `docker exec <container>
+shrinkray ...` runs as that user too, and so does an interactive console shell
+(Unraid's Console button): it drops from root on start. For maintenance as root,
+open it with `docker exec -it -e SHRINKRAY_ROOT_SHELL=1 <container> sh`.
+
+What it changes on your folders:
+
+- **A mounted `/media` is never touched.** It must be writable by `PUID`/`PGID` for the server's
+  in-place encodes; otherwise the container refuses to start and says so (or set
+  `SHRINKRAY_WATCH_OUTPUT`, see above). One-shot commands only need what they write.
+- **`/data`, `/output` and the scratch folder are taken over while they are empty** (a
+  `chown` of the folder itself, never recursive). That is how a fresh appdata folder
+  arrives: Docker creates a missing host folder owned by root. A folder that already
+  holds files is never changed: if `PUID`/`PGID` cannot write it, the container refuses
+  to start and names the folder, the uid and the fix (`chown -R <PUID>:<PGID> <host
+  folder>`, or the matching `PUID`/`PGID`).
+- **`docker run --user`** bypasses all of this and runs as the given user directly; the
+  folders must then already be writable for it.
 
 ## What lives in `/data`
 
@@ -265,9 +300,9 @@ stateless CLI as a native install. Things to know:
   `/media/...`.
 - **Mount scratch for anything film-sized.** Probes and verification write to
   `/tmp/shrinkray`; without a volume that lands in the container's writable layer.
-- **The library must be writable by uid 1000** (the image's user) for an in-place
-  encode. Runtime `PUID`/`PGID` is issue #248; running the image under another
-  `--user` is untested, and its built-in scratch folder belongs to uid 1000.
+- **The library must be writable by `PUID`/`PGID`** (default 1000/1000) for an in-place
+  encode; pass `-e PUID=... -e PGID=...` for the user that owns it (see *Running as
+  your user*).
 - **The config is `/data/config.json`**, as for the server: mount the same `/data`
   volume to share the server's settings. Without a `/data` volume the run creates a
   throwaway copy of the image's defaults inside the container (issue #247).

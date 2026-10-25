@@ -7,6 +7,8 @@ without building the image, which is what keeps them from rotting.
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -123,8 +125,23 @@ class TestDockerfile(unittest.TestCase):
     def test_the_build_fails_when_libvmaf_is_missing(self) -> None:
         self.assertIn("filter=libvmaf", self.text)
 
-    def test_the_image_runs_as_non_root(self) -> None:
-        self.assertIn("USER shrinkray", self.text)
+    def test_every_command_runs_as_the_operators_user(self) -> None:
+        """Issue #248: the container starts as root only to apply PUID/PGID.
+        The entrypoint is the wrapper's setup name, and the wrapper is first on
+        PATH, so the server, one-shot runs and `docker exec ... shrinkray` all
+        drop to the operator's user."""
+        runtime = self.text.split("FROM runtime AS dev")[0]
+        self.assertIn('ENTRYPOINT ["shrinkray-entrypoint"]', runtime)
+        self.assertIn("/app/tools/container-shrinkray.sh /usr/local/bin/shrinkray", runtime)
+        self.assertIn("ln -s shrinkray /usr/local/bin/shrinkray-entrypoint", runtime)
+        self.assertIn('PATH="/usr/local/bin:/app/.venv/bin:', runtime)
+        # the defaults stay the build user, so an existing /data keeps working
+        self.assertIn("PUID=${UID}", runtime)
+        self.assertIn("PGID=${GID}", runtime)
+        self.assertIn("UMASK=022", runtime)
+        # an interactive console shell drops from root as well (sh and bash)
+        self.assertIn("ENV=/app/tools/container-console.sh", runtime)
+        self.assertIn(". /app/tools/container-console.sh' >> /etc/bash.bashrc", runtime)
 
     def test_the_entrypoint_passes_a_root(self) -> None:
         """Without --root, every library path is a 403 on Linux."""
@@ -144,7 +161,10 @@ class TestDockerfile(unittest.TestCase):
         commands = [ln for ln in runtime.splitlines() if ln.startswith("CMD ")]
         self.assertEqual(len(entrypoints), 1)
         self.assertEqual(len(commands), 1)
-        self.assertEqual(json.loads(entrypoints[0].removeprefix("ENTRYPOINT ")), ["shrinkray"])
+        # the CLI, through the wrapper that applies PUID/PGID (issue #248)
+        self.assertEqual(
+            json.loads(entrypoints[0].removeprefix("ENTRYPOINT ")), ["shrinkray-entrypoint"]
+        )
         command = json.loads(commands[0].removeprefix("CMD "))
         self.assertEqual(command[0], "serve")
         self.assertIn("--root", command)
@@ -153,6 +173,44 @@ class TestDockerfile(unittest.TestCase):
     def test_the_scratch_dir_is_a_volume(self) -> None:
         """Probe scratch is sized to the film; the container layer is not."""
         self.assertIn("/tmp/shrinkray", self.text)  # noqa: S108 - asserting the Dockerfile text, not opening it
+
+
+class TestContainerUserScripts(unittest.TestCase):
+    """tools/container-shrinkray.sh and tools/container-console.sh (issue #248).
+
+    What they do is verified against a built image by the release smoke test;
+    here: they are valid POSIX sh, and the rules a stranger relies on are
+    written into them."""
+
+    SCRIPT = REPO / "tools" / "container-shrinkray.sh"
+    CONSOLE = REPO / "tools" / "container-console.sh"
+
+    @unittest.skipIf(shutil.which("sh") is None, "needs a POSIX sh")
+    def test_the_scripts_are_valid_posix_sh(self) -> None:
+        for script in (self.SCRIPT, self.CONSOLE):
+            with self.subTest(script=script.name):
+                result = subprocess.run(
+                    ["sh", "-n", str(script)], capture_output=True, text=True, timeout=10
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_library_is_never_chowned(self) -> None:
+        """A mounted /media is the operator's: only /data, the scratch folder
+        and /output are claimed (while empty or the image's), and /media only
+        when nothing is mounted there."""
+        text = self.SCRIPT.read_text(encoding="utf-8")
+        claimed = [
+            line.split()[1] for line in text.splitlines() if line.strip().startswith("claim_dir /")
+        ]
+        self.assertEqual(claimed, ["/data", "/tmp/shrinkray", "/output"])  # noqa: S108 - script text, not a path we open
+        self.assertNotIn("chown -R", text.replace("chown -R $PUID:$PGID <host folder>", ""))
+        self.assertIn("if [ -d /media ] && ! mountpoint -q /media; then", text)
+
+    def test_root_is_refused_and_the_drop_is_unconditional(self) -> None:
+        text = self.SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('[ "$PUID" != 0 ] || fail', text)
+        self.assertIn("exec setpriv --reuid=", text)
+        self.assertIn("exec setpriv --reuid=", self.CONSOLE.read_text(encoding="utf-8"))
 
 
 class TestHealthcheck(unittest.TestCase):

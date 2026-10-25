@@ -14,6 +14,29 @@ from shrinkray.engine import scan
 
 
 class TestMain(unittest.TestCase):
+    def test_the_module_entry_point_prints_help_and_exits_zero(self):
+        """python -m shrinkray works: the guard calls app() (issue #262).
+
+        The console script calls app itself, but the module form imported
+        the commands and stopped - exit 0 with no output, the worst failure
+        mode (a caller believes it encoded). sys.executable, no binaries
+        needed: --help renders without a toolchain.
+        """
+        import subprocess
+        import sys
+
+        repo = Path(__file__).resolve().parent.parent
+        proc = subprocess.run(
+            [sys.executable, "-m", "shrinkray", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=repo,
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        for command in ("encode", "plan", "serve", "retained", "doctor"):
+            self.assertIn(command, proc.stdout)
+
     def test_get_category(self):
         from shrinkray.__main__ import get_category
 
