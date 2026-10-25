@@ -30,6 +30,53 @@ def _isolated_lock(stack, tmp) -> None:
 
 
 class TestWatch(unittest.TestCase):
+    def test_one_unreadable_file_does_not_end_the_watch(self):
+        """Issue #260: a per-file failure (RuntimeError from the probe) is
+        logged with the file's name and the watcher continues - the loop
+        runs unattended for months, so one corrupt file must not end it.
+        The failing file stays in known (no retry rule invented here;
+        #231 owns the failure memory); the NEXT candidate is processed."""
+
+        from shrinkray.engine import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inbox = Path(tmp) / "in"
+            out = Path(tmp) / "out"
+            inbox.mkdir()
+            out.mkdir()
+            broken = inbox / "broken.mkv"
+            broken.write_bytes(b"not a movie")
+            good = inbox / "good.mkv"
+            good.write_bytes(b"movie")
+            old = time.time() - 7200
+            for f in (broken, good):
+                os.utime(f, (old, old))  # stable
+            processed: list = []
+
+            def fake_quality(m, o, **kwargs):
+                processed.append(m.name)
+                if m.name == "broken.mkv":
+                    raise RuntimeError("ffprobe failed for 'broken.mkv'")
+                return engine_plan.QualityResult(
+                    input=m, output=o, success=False, skipped_reason="no size gain"
+                )
+
+            stack = ExitStack()
+            with (
+                mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
+            ):
+                _isolated_lock(stack, tmp)
+                with stack:
+                    watch_mod.watch([inbox], out, once=True)
+            # the candidates' order is the readdir's, not mine: the behavior
+            # under test is BOTH processed (the broken one's failure did not
+            # end the loop), not an order
+            self.assertEqual(
+                sorted(processed),
+                ["broken.mkv", "good.mkv"],
+                "the loop died on the broken file; the good one was never processed",
+            )
+
     def test_unstable_movie_is_retried_next_pass(self):
         """A file that fails the stability check stays eligible: the old code
         marked it `known` BEFORE the stability check, so every normal copy

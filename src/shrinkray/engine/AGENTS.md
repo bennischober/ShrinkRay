@@ -19,6 +19,7 @@ so a change here reaches every entry point. Root AGENTS.md has the product rules
 | Scan -> DB rows | `scan.py` (619 L) | `scan_movies` (`:405`), `process_movie` (`:324`), `resolve_input_paths` (`:118`); pool `min(8, cpu)` (`:506`) |
 | Inbox watchdog | `watch.py` (661 L) | `watch` (`:404`), `_FsWaiter` (`:208`), `decide` (`:150`), `next_poll_interval` (`:45`) |
 | One encoder per output dir | `lock.py` (134 L) | `guard_encodes` (`:120`), 6 h stale window (`:27`); busy raises, never waits |
+| Pause: the operator's, and for a manual encode | `pause.py` | `pause_reason`, `manual_encode` (CLI marker), `wait_while_paused` (jobs), `set_operator_paused` (the TUI's switch); markers carry the process start time, so a reused pid never pauses (issue #250) |
 
 ## HOW THE DECISION FLOWS
 

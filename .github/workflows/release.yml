@@ -133,11 +133,41 @@ jobs:
           # tolerant captures: a dead container must still print its logs below
           uid=$(docker exec smoke-user awk '/^Uid:/ {print $2}' /proc/1/status || echo none)
           owner=$(docker exec smoke-user stat -c '%u:%g' /data/config.json || echo none)
+          # the console banner (issue #251): an interactive shell prints it, a
+          # non-interactive exec keeps its output clean
+          banner=$(printf 'exit\n' | script -qec "docker exec -it smoke-user sh" /dev/null | grep -c "ShrinkRay - the resident encoder is running" || true)
+          plain=$(docker exec smoke-user sh -c 'echo clean' || echo none)
           docker logs smoke-user 2>&1 | tail -5
           docker rm -f smoke-user
           [ "$status" = "healthy" ] || { echo "::error::never turned healthy ($status)"; exit 1; }
           [ "$uid" = "4242" ] || { echo "::error::PID 1 runs as uid $uid, not 4242"; exit 1; }
           [ "$owner" = "4242:4243" ] || { echo "::error::/data/config.json is owned by $owner"; exit 1; }
+          [ "$banner" = "1" ] || { echo "::error::an interactive console printed the banner $banner times"; exit 1; }
+          [ "$plain" = "clean" ] || { echo "::error::a non-interactive exec printed '$plain'"; exit 1; }
+
+      - name: Smoke-test the image (generated token)
+        # issue #249: with no SHRINKRAY_TOKEN the server generates one into
+        # /data/token, the healthcheck uses it and an unauthenticated request
+        # is still refused
+        run: |
+          docker run -d --name smoke-token ${{ env.IMAGE }}:${{ github.ref_name }}
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' smoke-token 2>/dev/null || echo starting)
+            [ "$status" = "healthy" ] && break
+            sleep 2
+          done
+          mode=$(docker exec smoke-token stat -c '%a' /data/token || echo none)
+          anonymous=$(docker exec smoke-token python -c "import urllib.request, urllib.error
+          try:
+              urllib.request.urlopen('http://127.0.0.1:8420/api/status', timeout=3)
+              print('open')
+          except urllib.error.HTTPError as e:
+              print(e.code)" || echo none)
+          docker logs smoke-token 2>&1 | tail -5
+          docker rm -f smoke-token
+          [ "$status" = "healthy" ] || { echo "::error::never turned healthy ($status)"; exit 1; }
+          [ "$mode" = "600" ] || { echo "::error::/data/token has mode $mode"; exit 1; }
+          [ "$anonymous" = "401" ] || { echo "::error::an unauthenticated request got $anonymous"; exit 1; }
 
       - name: Push the image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6

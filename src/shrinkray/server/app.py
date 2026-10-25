@@ -12,6 +12,7 @@ import json
 import os
 import os.path
 import queue
+import secrets
 import sqlite3
 import subprocess
 import sys
@@ -27,9 +28,10 @@ from pydantic import BaseModel, Field
 from shrinkray import __version__, db
 from shrinkray.config import Conf, load_config
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
+from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
-from shrinkray.logger import log, log_error
+from shrinkray.logger import log, log_error, log_warning
 from shrinkray.server.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.server.metrics import CONTENT_TYPE, render_metrics
 from shrinkray.tools.process import apply_config, apply_reloaded_config
@@ -39,6 +41,15 @@ app = FastAPI(title="ShrinkRay", version=__version__)
 # the shared-secret token's environment variable (issue #36). Never read from
 # config.json: that file is tracked, and a token in it would be committed.
 AUTH_TOKEN_ENV = "SHRINKRAY_TOKEN"
+
+# where the server keeps a GENERATED token when $SHRINKRAY_TOKEN is empty (issue
+# #249). Opt-in: the container image sets it to /data/token so a fresh install
+# is never tokenless and never needs the operator to invent a secret; a native
+# `serve` without it never generates a secret on its own.
+TOKEN_FILE_ENV = "SHRINKRAY_TOKEN_FILE"
+
+# the token read from (or generated into) $SHRINKRAY_TOKEN_FILE at boot
+_file_token: str | None = None
 
 # the resident watcher's output directory (issue #193). In place is the
 # default and needs a WRITABLE library mount; a read-only /media (test
@@ -58,10 +69,52 @@ def _configured_token() -> str | None:
     without one, so "off" can never be a remotely reachable state.
 
     Returns:
-        str | None: The token from $SHRINKRAY_TOKEN, or None.
+        str | None: The token from $SHRINKRAY_TOKEN, else the one `run_app`
+            read from $SHRINKRAY_TOKEN_FILE, or None.
     """
     token = os.environ.get(AUTH_TOKEN_ENV, "")
-    return token or None
+    return token or _file_token
+
+
+def ensure_token_file(path: Path) -> str:
+    """Returns the token stored in `path`, generating it first when missing.
+
+    The generated token is 32 random bytes (`secrets.token_urlsafe`), written
+    to a file created exclusively with mode 0600: an existing file is never
+    replaced, and a second process that created it first wins. The token is
+    never logged; the operator reads it from the file (issue #249).
+
+    Args:
+        path (Path): The token file.
+
+    Returns:
+        str: The token.
+
+    Raises:
+        ValueError: When the file exists but holds no token: an empty file must
+            not quietly become "no authentication".
+        OSError: When the file cannot be read or created.
+    """
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        token = path.read_text(encoding="utf-8").strip()
+        if not token:
+            raise ValueError(
+                f"the token file '{path}' is empty: delete it to have a new token "
+                f"generated, or write your token into it"
+            ) from None
+        # Windows reports 0o666 for every file: the bits mean nothing there
+        if os.name != "nt" and path.stat().st_mode & 0o077:
+            log_warning(f"The token file '{path}' is readable by other users; chmod 600 it.")
+        return token
+    token = secrets.token_urlsafe(32)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(token + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    log(f"Generated a dashboard token in '{path}' (it is never logged; read it from the file).")
+    return token
 
 
 def _is_loopback(host: str) -> bool:
@@ -635,6 +688,9 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         # an edited config.json that was NOT applied (issue #247): the app
         # keeps running on the previous settings, and the operator must see why
         "config_error": config_module.config_error,
+        # why no new file starts (the operator's pause or a manual encode,
+        # issue #250), or None while the app works normally
+        "paused": pause_reason(s.db_file.resolve().parent),
         # the reveal capability (issue #239): a container has no desktop and
         # no opener binary, so the button hides instead of promising a
         # folder window that would end in a 500
@@ -1220,13 +1276,18 @@ def run_app(
 
     Raises:
         ValueError: If the app is bound to a non-loopback address with no
-            $SHRINKRAY_TOKEN configured (issue #36). An open dashboard on a
+            token: neither $SHRINKRAY_TOKEN nor $SHRINKRAY_TOKEN_FILE (issue #36,
+            #249; the file is read, or generated when missing). An open dashboard on a
             LAN is reachable by every device on that LAN, so this is a
             startup failure, not a warning.
         ValueError: If the toolchain cannot measure VMAF or cannot encode AV1
             (issue #132). A resident process on such a host would accept jobs
             and fail them one by one; refusing at startup is the honest answer.
     """
+    global _file_token
+    token_file = os.environ.get(TOKEN_FILE_ENV, "")
+    if not os.environ.get(AUTH_TOKEN_ENV) and token_file:
+        _file_token = ensure_token_file(Path(token_file))
     if not _is_loopback(host) and _configured_token() is None:
         raise ValueError(
             f"refusing to bind {host} without authentication: set "
@@ -1321,7 +1382,33 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
     if not roots:
         return
     from shrinkray.config import refresh_config
+    from shrinkray.engine.plan import QualityResult
     from shrinkray.engine.watch import WatchSettings, watch
+    from shrinkray.service import record_quality_results
+
+    def record_watch_outcome(
+        movie: Path, result: QualityResult, final_output: Path | None
+    ) -> int | None:
+        """Persists the watcher's encode outcome (issue #232).
+
+        The engine layer cannot import the service layer (the import-linter
+        contract), so the app passes the write in. The row's output_file is
+        the artifact's real location in place (the source's own path) - the
+        staging path a row used to carry was deleted seconds later, which
+        made `doctor` report every in-place encode as vanished and broke the
+        generation chain. The returned id lets a declined swap correct the
+        row to 'discarded'.
+        """
+        outcome = state.with_lock(
+            lambda connection: record_quality_results(
+                connection,
+                movie,
+                result,
+                refresh_config(),
+                final_output=final_output,
+            )
+        )
+        return outcome.encode_id
 
     def settings_for_next_file() -> WatchSettings:
         # a config saved while the watcher runs applies at its next file
@@ -1347,6 +1434,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 stop_event=state.watch_stop,
                 db_file=state.db_file,
                 settings=settings_for_next_file,
+                record=record_watch_outcome,
             )
         except Exception as e:
             log_error(f"watch loop crashed: {e}")

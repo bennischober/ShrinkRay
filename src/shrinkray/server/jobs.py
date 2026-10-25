@@ -618,6 +618,33 @@ def _db_file_of(connection: sqlite3.Connection) -> Path:
     return Path(row[2]) if row and row[2] else Path("metadata.db")
 
 
+def _hold_while_paused(
+    connection: sqlite3.Connection,
+    cancel: threading.Event,
+    progress: ProgressCallback | None,
+    movie: Path,
+) -> None:
+    """Holds a plan or encode job before its next movie while paused.
+
+    The operator's pause and a manual encode (issue #250) stop the next file,
+    never the running one; the job resumes where it stood.
+
+    Args:
+        connection (sqlite3.Connection): The job's connection (its database
+            folder holds the pause state).
+        cancel (threading.Event): A cancel ends the wait.
+        progress (ProgressCallback | None): Told why the job waits.
+        movie (Path): The movie that waits.
+    """
+    from shrinkray.engine.pause import wait_while_paused
+
+    def report(reason: str) -> None:
+        if progress:
+            progress({"stage": "paused", "detail": reason, "movie": movie.name})
+
+    wait_while_paused(_db_file_of(connection).resolve().parent, cancel, on_pause=report)
+
+
 def execute_scan(
     job: Job,
     connection: sqlite3.Connection,
@@ -731,6 +758,10 @@ def execute_plan(
         if cancel.is_set():
             plans.append({"movie": movie.name, "state": "cancelled"})
             continue
+        _hold_while_paused(connection, cancel, progress, movie)
+        if cancel.is_set():
+            plans.append({"movie": movie.name, "state": "cancelled"})
+            continue
         # a config saved while the job runs applies from the next file on
         # (issue #247)
         config = refresh_config()
@@ -833,6 +864,10 @@ def execute_encode(
             set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
         )
         for index, movie in enumerate(movies):
+            if cancel.is_set():
+                outcomes.append({"movie": movie.name, "state": "cancelled"})
+                continue
+            _hold_while_paused(connection, cancel, progress, movie)
             if cancel.is_set():
                 outcomes.append({"movie": movie.name, "state": "cancelled"})
                 continue

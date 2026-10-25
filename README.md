@@ -163,18 +163,27 @@ uv run shrinkray encode 'D:\Movies' --dry-run
 
 ### Prerequisites
 
-| Tool | Needed for | Install |
-|---|---|---|
-| [uv](https://docs.astral.sh/uv/getting-started/installation/) | Python & dependencies (manages everything else) | `winget install astral-sh.uv` |
-| [FFmpeg](https://www.ffmpeg.org/download.html) | scanning, bar detection, VMAF scoring (GPL build on Windows) | `winget install Gyan.FFmpeg` |
-| [HandBrake CLI](https://handbrake.fr/downloads.php) | re-encoding (optional) | `winget install HandBrake.HandBrake` |
+Two hard requirements decide whether the tool can do anything at all — check them
+with `shrinkray doctor` after installing (it runs the toolchain check without a
+database, so it works on a fresh install):
+
+| Tool | Needed for | Hard requirement | Install |
+|---|---|---|---|
+| [uv](https://docs.astral.sh/uv/getting-started/installation/) | Python & dependencies (manages everything else) | — | `winget install astral-sh.uv` |
+| [FFmpeg](https://www.ffmpeg.org/download.html) | scanning, bar detection, VMAF scoring | **must include `libvmaf`** — Debian/Ubuntu's `apt` build does not, and without it the CRF search cannot measure a single file | Windows: `winget install Gyan.FFmpeg`; Linux: a static GPL build (see below); or the container |
+| [HandBrake CLI](https://handbrake.fr/downloads.php) | every encode and every probe | **>= 1.6** (the `svt_av1` encoder id; Ubuntu 22.04 ships 1.5.x, which cannot) | Windows: `winget install HandBrake.HandBrake`; Linux: compiled from source or the container |
+
+The two routes below bring a correct toolchain themselves: the Windows installer
+(`install.ps1`) and the Docker image. Native Linux is the route that needs care.
 
 ### Linux / NAS
 
-Verified on Ubuntu 20.04 (WSL rehearsal for a mini-PC/NAS target): the full
-gate passes and VMAF measurement works headless. This is the intended
-production shape — a server with the library on a mounted volume, driven by
-the resident app or the CLI.
+The container is the recommended route on a NAS or home server: the image
+pins ffmpeg-with-libvmaf and HandBrakeCLI 1.11 and verifies both by checksum
+([docs/docker.md](docs/docker.md)). On bare metal, the distro packages are
+the trap: `apt install ffmpeg` ships without libvmaf, `apt install
+handbrake-cli` ships 1.5.x on Ubuntu 22.04 — both pass `apt` and both make
+every encode fail.
 
 ```bash
 # 1. uv + the repo (no sudo needed anywhere)
@@ -183,15 +192,22 @@ git clone https://github.com/bennischober/ShrinkRay.git ~/.shrinkray
 cd ~/.shrinkray
 uv sync
 
-# 2. ffmpeg: distro package, or a static build into ~/.local/bin when the
-#    distro is old (a static build also ships libvmaf - verified working)
-sudo apt install ffmpeg        # or: see johnvansickle.com static builds
+# 2. ffmpeg WITH libvmaf: a static GPL build (the distro package cannot
+#    measure VMAF). Verified working:
+curl -L -o /tmp/ffmpeg.tar.xz https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+sudo tar -xf /tmp/ffmpeg.tar.xz -C /opt --strip-components=1
+sudo ln -sf /opt/ffmpeg /usr/local/bin/ffmpeg
+sudo ln -sf /opt/ffprobe /usr/local/bin/ffprobe
 
-# 3. HandBrake CLI >= 1.6 (required for AV1 output: it needs the svt_av1
-#    encoder id, which older builds do not know)
-sudo apt install handbrake-cli
+# 3. HandBrake CLI >= 1.6: no Linux binary is published, build from source
+#    (or use the container, which carries it pinned)
+sudo apt install build-essential cmake libx264-dev libx265-dev libvpx-dev
+#    (full build instructions: github.com/HandBrake/HandBrake/blob/master/linux/BUILD.md)
 
-# 4. try it
+# 4. verify the toolchain — the last install step
+cd ~/.shrinkray && uv run shrinkray doctor
+
+# 5. try it
 uv run shrinkray encode /srv/media/movies --dry-run
 uv run shrinkray serve            # dashboard on http://localhost:8420
 ```
@@ -482,10 +498,11 @@ docker pull ghcr.io/bennischober/shrinkray:latest
 
 docker run -d --name shrinkray-app \
   --publish 8420:8420 \
-  --env SHRINKRAY_TOKEN='a-long-random-secret' \
   --volume /srv/media:/media \
   --volume /srv/shrinkray-data:/data \
   ghcr.io/bennischober/shrinkray:latest
+
+cat /srv/shrinkray-data/token   # the dashboard token, generated on first start
 ```
 
 The same image runs the one-shot CLI with no server, no token and nothing installed
@@ -516,9 +533,10 @@ docker build --target dev     -t shrinkray:dev   .
 
 `dev` runs the seven gate commands inside the image. `runtime` is the deployment
 shape; see [docs/docker.md](docs/docker.md) for the volumes, the `--root`
-requirement on Linux, and the fact that publishing a port **requires**
-`SHRINKRAY_TOKEN` (the app refuses to bind `0.0.0.0` without one, and there is
-no TLS - terminate it at a reverse proxy).
+requirement on Linux, and the fact that publishing a port **requires** a token:
+the image generates one into `/data/token` when `SHRINKRAY_TOKEN` is unset (the
+app refuses to bind `0.0.0.0` without one, and there is no TLS - terminate it at
+a reverse proxy).
 
 ### Web UI (ui/)
 The dashboard is a Svelte 5 + Vite + TypeScript app in `ui/`. Node.js is only
@@ -570,7 +588,8 @@ with separate jobs:
   database, pause state and a token generated on first start, so restarts and image
   updates keep it.
 
-None of the terminal surface is built yet; [docs/tui.md](docs/tui.md) records the
+The pause and the console banner are built (`touch /data/paused`, see
+[docs/docker.md](docs/docker.md#the-console)); `shrinkray setup` is not yet. [docs/tui.md](docs/tui.md) records the
 decision and the open design work.
 
 The target behaviour, per file:

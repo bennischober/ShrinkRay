@@ -83,10 +83,15 @@ stated with the reason.
 
 ## Two things a reader must know
 
-1. **Publishing a port requires a token.** The app refuses to bind a non-loopback
-   address without `SHRINKRAY_TOKEN` (issue #36), so the compose file passes one and
-   the healthcheck sends it. There is still no TLS: terminate it at a reverse proxy,
-   and do not read the token as making a plain-HTTP port safe.
+1. **Publishing a port requires a token, and the image makes one.** The app refuses
+   to bind a non-loopback address without a token (issue #36). Set `SHRINKRAY_TOKEN`
+   to choose it yourself; leave it unset and the server generates one on first start
+   into `/data/token` (`SHRINKRAY_TOKEN_FILE`, issue #249): 32 random bytes, file mode
+   0600, reused on every later start, never logged. Read it from the appdata folder
+   (`cat <data folder>/token`) and paste it into the dashboard once. Delete the file
+   to have a new one generated. The healthcheck reads the same source. There is still
+   no TLS: terminate it at a reverse proxy, and do not read the token as making a
+   plain-HTTP port safe.
 2. **The library is mounted writable because Mode B encodes in place.** The resident
    app's watch mode rewrites files at their own paths: the encode lands in a staging
    folder inside the library, is verified, and is then swapped in with the original
@@ -202,16 +207,17 @@ docker pull ghcr.io/bennischober/shrinkray:latest
 
 docker run -d --name shrinkray \
   -p 8420:8420 \
-  -e SHRINKRAY_TOKEN='a-long-random-secret' \
   -v /srv/media:/media \
   -v /srv/shrinkray-data:/data \
   ghcr.io/bennischober/shrinkray:latest
+
+cat /srv/shrinkray-data/token     # the generated dashboard token
 ```
 
 Or via compose (un-comment the `image:` line, comment the `build:` block):
 
 ```bash
-SHRINKRAY_TOKEN=... MEDIA_DIR=/path/to/library docker compose up -d
+MEDIA_DIR=/path/to/library docker compose up -d   # SHRINKRAY_TOKEN=... to choose the token
 ```
 
 The healthcheck calls `GET /api/status` with the token. `--root /media` is in the
@@ -265,11 +271,38 @@ nothing that comes with the image. One flat folder, one file per kind of state:
 |---|---|
 | `config.json` | the settings (created from the image's defaults on first start, issue #247) |
 | `metadata.db` (+ `-wal`, `-shm`) | the catalog, plans, encodes and retained originals |
+| `token` | the generated dashboard token, mode 0600, when `SHRINKRAY_TOKEN` is unset (issue #249) |
+| `paused` | present while the operator paused the backlog and the watcher (issue #250) |
+| `manual-encodes/` | one marker per running manual `shrinkray encode`; the watcher waits for them (issue #250) |
 | `logs/` | failure bundles, written beside the database |
 
-New state goes into the same folder under a name of its own (the generated dashboard
-token of #249, the pause flag of #250), never into the image and never into the
-library.
+New state goes into the same folder under a name of its own, never into the image and
+never into the library.
+
+## The console
+
+Opening a shell in the container (Unraid's Console button, or `docker exec -it
+<container> sh`) prints what to type, computed from the container's state (issue #251):
+whether the server runs, how to encode one file, list retained originals, change settings
+and pause, and the dashboard's token. It prints once per console, for interactive shells
+only, so `docker exec <container> <command>` output stays clean; the shell itself runs as
+`PUID`/`PGID` (see *Running as your user*).
+
+## Pausing
+
+The resident app starts no new file while it is paused; the file it is working on
+always finishes. Two things pause it (issue #250):
+
+- **You.** `touch /data/paused` (or create `paused` in the appdata folder) pauses the
+  watcher and the backlog; removing the file resumes them. It survives restarts on
+  purpose: a reboot never resumes a backlog you stopped. The terminal UI (#252) will
+  be the switch for it.
+- **A manual encode.** `shrinkray encode <path>` from the container console pauses the
+  watcher and the backlog until it ends, so the two never compete for the CPU. A crash,
+  a closed console or a restart cannot leave it paused: a marker whose process is gone
+  is ignored and removed.
+
+The dashboard shows the pause and its reason; it cannot pause or resume anything.
 
 ## One-shot runs (no server)
 
