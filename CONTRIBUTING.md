@@ -6,8 +6,9 @@ re-acquired, run unattended. That standard, not "it works on my machine",
 is what your contribution is held to. This file covers the human-facing part
 (how to propose a change, what will not be accepted); the machine-facing part
 lives in [AGENTS.md](AGENTS.md), which documents the same gate, conventions
-and issue workflow for coding agents — **the two must not drift**, so when
-you change one, check the other.
+and issue workflow for coding agents, together with the working method and
+the hard invariants every change is held to. **The two must not drift**, so
+when you change one, check the other.
 
 ## Before you start
 
@@ -27,20 +28,13 @@ you change one, check the other.
    git switch -c <type>/<issue>-<slug>   # e.g. fix/38-test-pollutes-tree
    ```
 
-## The gate (all five, before every commit)
+## The gate (before every push)
 
 ```sh
-uv run ruff check src tests
-uv run ruff format --check src tests
-uv run mypy
-uv run mypy --platform linux
-uv run pytest -q
+tools/gate.sh
 ```
 
-CI runs exactly these. The second mypy run matters: the local default uses
-Windows stubs, CI uses Linux stubs — APIs like `os.startfile` type-check on
-one and not the other. If you cannot make the gate pass, stop and report the
-blocker; do not commit around it.
+The gate is one script, and CI, the release job and the dev image run the same one, so this file deliberately does not copy its commands; read the script to see what it checks. It runs mypy for both Linux and Windows, because a bare `mypy` only checks the host's view and misses an API that exists on one platform only. If you changed `ui/`, also run `npm ci && npm run check && npm run test && npm run build` in `ui/`. If you changed dependencies, also run `uv audit --locked`. If you cannot make the gate pass, stop and report the blocker; do not push around it.
 
 ## Test rules
 
@@ -59,12 +53,11 @@ blocker; do not commit around it.
 
 ## Commit and PR conventions
 
-- Conventional Commits (`feat`, `fix`, `docs`, `refactor`, `perf`, `test`,
-  `chore`, `ci`, `build`, `style`), one logical change per commit.
-- The PR body states what changed **and how it was verified** — a PR that
-  cannot state its verification is not ready. Reference the issue
-  (`Closes #N`) so it links and closes on merge.
-- Merge only when CI is green.
+- Conventional Commits (`feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `style`), with the body explaining why.
+- Fill in the pull request template: the problem and its root cause, the change, how it was verified (a PR that cannot state its verification is not ready), the edge cases considered, and what a reviewer should look at. Reference the issue (`Closes #N`) so it links and closes on merge.
+- Every PR that changes code or docs adds a `CHANGELOG.md` entry under `## [Unreleased]`.
+- **Every PR gets a reader who did not write it.** For a human contributor that is the maintainer's review; AGENTS.md describes the independent review agents run. A PR is merged only when every CI check has passed, it has no conflicts, and every review finding has been answered.
+- **Some changes always wait for a maintainer**, whoever wrote them: anything that changes the replace, retain or rename path; the encode decision (eligibility gates, CRF search, VMAF target, encoder choice, crop); server authentication, path containment or routes; a database migration; a new dependency; or CI, the gate, the release workflow, AGENTS.md or this file. These carry the `needs-human-review` label.
 
 ## What a change to the quality decision requires
 
