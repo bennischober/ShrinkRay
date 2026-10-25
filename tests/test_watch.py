@@ -40,7 +40,9 @@ class TestWatch(unittest.TestCase):
         from shrinkray.replace import is_staging_path
 
         with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
+            # resolved: find_movies returns resolved paths, and a temp dir can
+            # sit behind a symlink (/var -> /private/var on macOS)
+            base = Path(tmp).resolve()
             library = base / ".shrinkray-archive" / "library"
             library.mkdir(parents=True)
             movie = library / "Movie (2001).mkv"
