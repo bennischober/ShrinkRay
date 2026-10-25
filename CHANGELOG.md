@@ -32,6 +32,7 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ### Fixed
 
+- **ui/AGENTS.md's gotchas name only things that exist** (issue #294): the "Two dead surfaces" bullet described symbols removed by #239 (\`requestEncodeAll\`, the preflight-only-CLOSE ceremony, the inert Overview CANCEL) — every one verified absent on \`main\` with \`git grep\` before removal; the hardcoded-defaults and shortcut-legend notes stay (both verified true, the legend mismatch marked as real).
 - **A library below a folder named `.shrinkray-*` is visible again** (issue #286): the staging filter checked the ABSOLUTE path, so any ancestor above the library whose name starts with `.shrinkray-` (say `/mnt/.shrinkray-archive/library`) made every movie in it invisible to the scan and the watcher; the predicate now scopes the prefix check to the walk root, and the staging folders themselves (below the root) are still filtered. Both walkers pass their root.
 
 - **SECURITY.md describes the server that exists** (issue #288): the posture section still said "no authentication" and named a `POST /api/duplicates/delete` route from a removed subsystem; it now describes the real model (the token from `$SHRINKRAY_TOKEN`, the loopback default, the public-bind refusal, the container's generated token from #267), the actual route list (twelve GET, one capability-gated POST), the middleware's cannot-add-unauthenticated guarantee, and the terminal as the control surface. The stale `validate_path` module path is corrected.
