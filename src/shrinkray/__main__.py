@@ -21,6 +21,7 @@ from shrinkray.config import (
     DEFAULT_ENCODER_PRESET,
     DEFAULT_PROBE_ENCODER_PRESET,
     load_config,
+    seed_config_from_env,
 )
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pipeline import cap_threads
@@ -70,6 +71,17 @@ __all__ = [
     "get_name",
     "scan_movies",
 ]
+
+
+@app.callback()
+def _before_every_command() -> None:
+    """Creates the container's persistent config before any command reads it.
+
+    Every command runs this first, so the image's first start (the server or a
+    one-shot run) writes $SHRINKRAY_CONFIG from $SHRINKRAY_CONFIG_SEED (issue
+    #247). Without both variables, i.e. outside the container, it does nothing.
+    """
+    seed_config_from_env()
 
 
 @app.command("app", hidden=True)

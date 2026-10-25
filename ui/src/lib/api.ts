@@ -173,6 +173,10 @@ export interface Status {
   /** the resident app's own memory (MiB), self-measured every 5 min —
    * staying lean is a measured fact (4534e07); null when unmeasurable */
   rss_mib?: number | null
+  /** why the config.json on disk is NOT in effect (an edit that failed to
+   * parse or validate; the app keeps its previous settings), null when it is
+   * — issue #247. Clears itself once the file is fixed. */
+  config_error?: string | null
 }
 
 export interface Config {

@@ -117,8 +117,13 @@ RUN uv sync --frozen --no-dev \
 RUN mkdir -p /data /media /output /tmp/shrinkray \
  && chown -R shrinkray:shrinkray /data /output /tmp/shrinkray
 
+# the operator's config lives on the /data volume and survives updates (issue
+# #247): every command reads $SHRINKRAY_CONFIG, and the first one creates it
+# from the baked defaults below ($SHRINKRAY_CONFIG_SEED), never overwriting it
 ENV TMPDIR=/tmp/shrinkray \
-    PATH="/app/.venv/bin:${PATH}"
+    PATH="/app/.venv/bin:${PATH}" \
+    SHRINKRAY_CONFIG=/data/config.json \
+    SHRINKRAY_CONFIG_SEED=/app/config.json
 
 USER shrinkray
 

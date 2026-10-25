@@ -222,9 +222,10 @@ The same image runs the one-shot CLI with no server at all (`docker run --rm ...
 library use one artifact.
 
 > **Implementation status.** Not built. The image runs both modes (`shrinkray` is the
-entrypoint and `serve ...` the default command, issue #242), but as a fixed UID and with its
-config baked into the image (issue #236). The template, the banner, `PUID`/`PGID`, the generated token and the Community
-Applications listing are follow-up issues of #244.
+entrypoint and `serve ...` the default command, issue #242) and keeps its config on `/data`,
+created from the image's defaults on first start and applied at the next file when it
+changes (issue #247), but runs as a fixed UID. The template, the banner, `PUID`/`PGID`, the
+generated token and the Community Applications listing are follow-up issues of #244.
 
 ## Product Purpose
 

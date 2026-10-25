@@ -1,6 +1,9 @@
 # this module loads the config.json file and provides the settings to the other modules => provides default values
 import json
 import os
+import shutil
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +16,7 @@ from pydantic import (
 )
 from pydantic.types import StrictBool
 
-from shrinkray.logger import log, log_warning
+from shrinkray.logger import log, log_error, log_warning
 
 # fallback values if the config file is missing or a value is not set
 DEFAULT_EXTENSIONS = [".mkv"]
@@ -367,7 +370,23 @@ _config: Conf | None = None
 # and the dashboard's "which file is in effect" display)
 config_file_used: Path | None = None
 
+# what refresh_config() last judged (issue #247): the file's (mtime_ns, size),
+# or None when it did not exist. A changed signature means "read it again".
+_config_signature: tuple[int, int] | None = None
+
+# why the file on disk is NOT the config in effect (an edit that failed to
+# parse or validate), or None when it is. The dashboard's status shows it.
+config_error: str | None = None
+
+# the watcher thread and the job worker both refresh between files
+_refresh_lock = threading.Lock()
+
 CONFIG_ENV_VAR = "SHRINKRAY_CONFIG"
+
+# the defaults to create $SHRINKRAY_CONFIG from when it does not exist yet
+# (issue #247): the image points it at its baked config, so the first start
+# writes the operator's own, persistent /data/config.json
+CONFIG_SEED_ENV_VAR = "SHRINKRAY_CONFIG_SEED"
 
 DEFAULT_CONFIG_FILENAME = "config.json"
 
@@ -422,8 +441,128 @@ def reset_config() -> None:
     in-memory singleton (assigning config._config from outside the module
     reached into private state; issue #58).
     """
-    global _config
+    global _config, _config_signature, config_error
     _config = None
+    _config_signature = None
+    config_error = None
+
+
+def _file_signature(path: Path) -> tuple[int, int] | None:
+    """Returns a file's (mtime_ns, size), or None when it does not exist."""
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def refresh_config() -> Conf:
+    """Returns the config, re-read first when its file changed on disk.
+
+    A long-running process applies a saved change at its next file (issue
+    #247): the watcher and the job worker call this between files, so a
+    running encode finishes with the settings it started with. Re-reading
+    costs one stat when nothing changed.
+
+    An edit that does not parse or validate never replaces a working config:
+    the previous settings stay in effect, the reason is logged once and kept
+    in `config_error` for the dashboard, and the next change is judged again.
+    A deleted file is the same kind of error, never a silent fall-back to the
+    code defaults.
+
+    Returns:
+        Conf: The config in effect.
+    """
+    global _config, _config_signature, config_error
+    with _refresh_lock:
+        if _config is None or config_file_used is None:
+            return load_config()
+        path = config_file_used
+        signature = _file_signature(path)
+        if signature == _config_signature:
+            return _config
+        # this version of the file is judged now, good or bad: a bad one is
+        # reported once, not on every file boundary
+        _config_signature = signature
+        try:
+            if signature is None:
+                raise FileNotFoundError("the file no longer exists")
+            data = json.loads(path.read_text(encoding="utf-8"))
+            fresh = Conf(data)
+        except (OSError, ValueError) as e:
+            # ValueError covers json's decode error and pydantic's
+            # ValidationError (a ValueError subclass)
+            config_error = f"'{path}' was not applied, the previous settings stay in effect: {e}"
+            log_error(config_error)
+            return _config
+        _config = fresh
+        config_error = None
+        log(f"Config reloaded from {path}")
+        return _config
+
+
+def seed_config_file(target: Path, seed: Path) -> bool:
+    """Creates `target` as a copy of `seed` unless it already exists.
+
+    Never overwrites: an existing file is the operator's. The copy is
+    written to a temp file beside the target and hard-linked into place,
+    which fails if the target appeared meanwhile, so a crash or a second
+    process can never leave a half-written or replaced config. The copy
+    takes the seed's permission bits, not the temp file's private 0600, so
+    the operator can edit it from wherever they reach the folder.
+
+    Args:
+        target (Path): The config file to create.
+        seed (Path): The defaults to copy.
+
+    Returns:
+        bool: True when the file was created, False when it already existed.
+
+    Raises:
+        OSError: When the seed cannot be read or the target not written.
+    """
+    if target.exists():
+        return False
+    content = seed.read_bytes()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(dir=target.parent, prefix=".config-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as temp:
+            temp.write(content)
+            temp.flush()
+            os.fsync(temp.fileno())
+        shutil.copymode(seed, temp_name)
+        try:
+            os.link(temp_name, target)
+        except FileExistsError:
+            return False
+    finally:
+        os.unlink(temp_name)
+    return True
+
+
+def seed_config_from_env() -> None:
+    """Creates $SHRINKRAY_CONFIG from $SHRINKRAY_CONFIG_SEED when it is missing.
+
+    The container sets both (issue #247), so the first command it runs
+    writes the operator's persistent `/data/config.json` from the image's
+    defaults. Natively neither is set and this does nothing. A failure is
+    reported, not raised: the command still runs, on the code defaults.
+    """
+    target = os.environ.get(CONFIG_ENV_VAR)
+    seed = os.environ.get(CONFIG_SEED_ENV_VAR)
+    if not target or not seed:
+        return
+    try:
+        created = seed_config_file(Path(target), Path(seed))
+    except OSError as e:
+        log_error(
+            f"Could not create '{target}' from '{seed}': {e}. Settings fall back to the "
+            "code defaults and will not persist until the folder is writable."
+        )
+        return
+    if created:
+        log(f"Created '{target}' from the defaults in '{seed}'; edit it to change settings.")
 
 
 def load_config(
@@ -445,13 +584,14 @@ def load_config(
     Returns:
         Conf: The config settings.
     """
-    global _config, config_file_used
+    global _config, config_file_used, _config_signature
     if _config is not None:
         return _config
 
     path = resolve_config_path(config_file=config_file, root=root)
 
     data: dict[str, Any] = {}
+    signature = _file_signature(path)
     if path.is_file():
         with open(path, encoding="utf-8") as config:
             data = json.load(config)
@@ -461,4 +601,5 @@ def load_config(
     config_file_used = path
 
     _config = Conf(data)
+    _config_signature = signature
     return _config

@@ -271,6 +271,20 @@ def apply_config(config: Conf) -> None:
     configure_stall(config.handbrake_stall_minutes)
 
 
+def apply_reloaded_config(config: Conf) -> None:
+    """Applies the part of the process policy that may change while running.
+
+    The resident app re-reads its config between files (issue #247). The
+    stall watchdog follows that reload. Process priority does not:
+    nice_self() can only lower it, so re-applying it on every reload would
+    keep lowering it, and `idle_priority` takes effect at the next start.
+
+    Args:
+        config: The config now in effect (reads handbrake_stall_minutes).
+    """
+    configure_stall(config.handbrake_stall_minutes)
+
+
 def cpu_count() -> int:
     """Returns the CPUs this process may actually use (at least 1).
 

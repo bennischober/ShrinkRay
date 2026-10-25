@@ -32,7 +32,7 @@ from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
 from shrinkray.server.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.server.metrics import CONTENT_TYPE, render_metrics
-from shrinkray.tools.process import apply_config
+from shrinkray.tools.process import apply_config, apply_reloaded_config
 
 app = FastAPI(title="ShrinkRay", version=__version__)
 
@@ -603,6 +603,7 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     running = s.with_lock(
         lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
     )
+    from shrinkray import config as config_module
     from shrinkray.tools.process import rss_mib
 
     rss = rss_mib()
@@ -611,6 +612,9 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
         "database": str(s.db_file),
         "rss_mib": round(rss, 1) if rss is not None else None,
+        # an edited config.json that was NOT applied (issue #247): the app
+        # keeps running on the previous settings, and the operator must see why
+        "config_error": config_module.config_error,
     }
 
 
@@ -1292,7 +1296,21 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
         return
     if not roots:
         return
-    from shrinkray.engine.watch import watch
+    from shrinkray.config import refresh_config
+    from shrinkray.engine.watch import WatchSettings, watch
+
+    def settings_for_next_file() -> WatchSettings:
+        # a config saved while the watcher runs applies at its next file
+        # (issue #247); an invalid edit keeps the previous settings
+        config = refresh_config()
+        apply_reloaded_config(config)
+        return WatchSettings(
+            max_threads=cap_threads(config.handbrake_max_threads),
+            min_source_height=config.min_source_height,
+            min_source_size_gb=config.min_source_size_gb,
+            candidate_codecs=tuple(config.candidate_codecs),
+            crop_sample_count=config.crop_sample_count,
+        )
 
     def run_watch() -> None:
         try:
@@ -1301,13 +1319,9 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 output_dir,
                 once=False,
                 poll_interval=60.0,
-                max_threads=cap_threads(load_config().handbrake_max_threads),
                 stop_event=state.watch_stop,
                 db_file=state.db_file,
-                min_source_height=load_config().min_source_height,
-                min_source_size_gb=load_config().min_source_size_gb,
-                candidate_codecs=tuple(load_config().candidate_codecs),
-                crop_sample_count=load_config().crop_sample_count,
+                settings=settings_for_next_file,
             )
         except Exception as e:
             log_error(f"watch loop crashed: {e}")

@@ -50,18 +50,26 @@ stated with the reason.
   `.mov`, `.ts`, `.m2ts`, `.webm` — without it the code default (`.mkv` alone)
   made a mounted `.mp4` library scan nothing, and the container logged a warning
   and exited 0. The README documents the narrow code default.
-- **Volumes:** `/media` (library, writable — Mode B encodes in place), `/data` (the database AND, when mounted, `config.json` — see the config path below), `/output` (encoded files for
+- **Volumes:** `/media` (library, writable — Mode B encodes in place), `/data` (every piece of operator state — see *What lives in `/data`* below), `/output` (encoded files for
   the non-replace flow), and `/tmp/shrinkray` (probe scratch, which is sized to the
   film rather than to the container layer).
-- **One config path** (issue #236, part 3): the compose file points `SHRINKRAY_CONFIG`
-  at `/data/config.json`, and the entrypoint passes NO `--config` — so a config file
-  the operator mounts at `/data/config.json` is authoritative, and when nothing is
-  mounted there the app logs the miss and runs on the code defaults (the HDR signature
-  and the eligibility floors are code defaults since issue #236 part 1). The image's
-  baked `/app/config.json` (auto_backlog on, the common extensions) is only the bare
-  `docker run` fallback: with no `SHRINKRAY_CONFIG` set, the working-directory lookup
-  (`/app`) finds it. Before this fix the entrypoint's `--config` overrode the env var,
-  so a mounted config was silently dead.
+- **One config path, on the volume** (issues #236, #247): the image sets
+  `SHRINKRAY_CONFIG=/data/config.json` and the server's command passes NO `--config`,
+  so `/data/config.json` is the config for the server and for every one-shot command.
+  The first command that finds it missing creates it from the image's baked defaults
+  (`SHRINKRAY_CONFIG_SEED=/app/config.json`: auto_backlog on, the common extensions),
+  written atomically and **never over an existing file** — so the operator's edits
+  survive restarts and image updates, and a new image's defaults never replace them.
+  If `/data` is not writable, the seeding failure is logged and the command runs on the
+  code defaults. Before #236 the entrypoint's `--config` overrode the env var, so a
+  mounted config was silently dead.
+- **A saved config applies at the next file** (issue #247): the resident app re-reads
+  `/data/config.json` between files — the watcher before each candidate, a plan or
+  encode job before each movie — so a running encode finishes with the settings it
+  started with and no restart is needed. An edit that does not parse or validate is
+  **not applied**: the previous settings stay in effect, the error is logged once, and
+  the dashboard shows it until the file is fixed. `resources.idle_priority` is the one
+  setting that needs a restart (lowering a process's priority cannot be undone).
 - **Healthcheck** on `GET /api/status`, which is the app's own summary; no new
   endpoint was needed. It lives in `tools/healthcheck.py` and checks only a server:
   a one-shot CLI container reports healthy rather than turning `unhealthy` for the
@@ -213,6 +221,21 @@ image name **replaces that whole command**: to change a server flag, spell out t
 `serve ...` command, e.g. `docker run ... <image> serve --db /data/metadata.db --host
 0.0.0.0 --root /media --port 9000`.
 
+## What lives in `/data`
+
+`/data` is the appdata folder: everything the operator chose or the app learned, and
+nothing that comes with the image. One flat folder, one file per kind of state:
+
+| File | What |
+|---|---|
+| `config.json` | the settings (created from the image's defaults on first start, issue #247) |
+| `metadata.db` (+ `-wal`, `-shm`) | the catalog, plans, encodes and retained originals |
+| `logs/` | failure bundles, written beside the database |
+
+New state goes into the same folder under a name of its own (the generated dashboard
+token of #249, the pause flag of #250), never into the image and never into the
+library.
+
 ## One-shot runs (no server)
 
 The image runs either mode. With no arguments it starts the resident server; with
@@ -245,10 +268,9 @@ stateless CLI as a native install. Things to know:
 - **The library must be writable by uid 1000** (the image's user) for an in-place
   encode. Runtime `PUID`/`PGID` is issue #248; running the image under another
   `--user` is untested, and its built-in scratch folder belongs to uid 1000.
-- **The config is the image's** (`/app/config.json`, found from the working directory:
-  the common video extensions; `auto_backlog` is irrelevant to a one-shot run). To use
-  your own, mount it and set `-e SHRINKRAY_CONFIG=/data/config.json` (the same
-  resolution the server uses, issue #236) or pass `--config`.
+- **The config is `/data/config.json`**, as for the server: mount the same `/data`
+  volume to share the server's settings. Without a `/data` volume the run creates a
+  throwaway copy of the image's defaults inside the container (issue #247).
 - **A stateless run records nothing**, so `shrinkray retained list` has no database
   to read: the original sits beside the encoded file as `<name>.shrinkray-original`.
   To list what the *resident* app retained, run `retained list --db /data/metadata.db`

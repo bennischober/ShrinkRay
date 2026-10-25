@@ -14,6 +14,8 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT
@@ -402,6 +404,22 @@ def release_lock(lock_file: Path) -> None:
 WATCH_LOCK_FILE = Path(tempfile.gettempdir()) / "shrinkray_watch.lock"
 
 
+@dataclass(frozen=True)
+class WatchSettings:
+    """The settings the watcher applies to one file (issue #247).
+
+    A resident watcher runs for months; the operator changes settings while it
+    runs. The watcher asks for these before every file, so a saved change
+    applies at the next file and a running encode keeps what it started with.
+    """
+
+    max_threads: int | None
+    min_source_height: int
+    min_source_size_gb: float
+    candidate_codecs: tuple[str, ...]
+    crop_sample_count: int
+
+
 def watch(
     roots: list[Path],
     output_dir: Path | None = None,
@@ -419,6 +437,7 @@ def watch(
     candidate_codecs: tuple[str, ...] = ("h264",),
     crop_sample_count: int = 10,
     progress: ProgressCallback | None = None,
+    settings: Callable[[], WatchSettings] | None = None,
 ) -> None:
     """Watches the inbox and encodes newly arrived movies.
 
@@ -451,7 +470,19 @@ def watch(
             engine's event dicts ({'stage': 'encode', 'percent': ..., 'movie':
             ...} and {'stage': 'probe', 'detail': ...}); the CLI's watch display
             renders these. None (default): the events are dropped.
+        settings (Callable[[], WatchSettings] | None): Asked at the start of
+            every pass and before every file for the settings to apply, so a
+            changed config takes effect at the next file and an idle watcher
+            still notices it (the resident app passes one, issue #247). None:
+            the fixed arguments above apply to every file.
     """
+    current = WatchSettings(
+        max_threads=max_threads,
+        min_source_height=min_source_height,
+        min_source_size_gb=min_source_size_gb,
+        candidate_codecs=candidate_codecs,
+        crop_sample_count=crop_sample_count,
+    )
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     known: set[str] = set()
     lock_file = WATCH_LOCK_FILE
@@ -513,6 +544,11 @@ def watch(
                 if stop_event is not None and stop_event.is_set():
                     log("Watch stopped (stop event set).")
                     return
+                # every pass asks too, not only every file: an idle watcher
+                # still notices a broken config edit within one poll interval
+                # and reports it (issue #247)
+                if settings is not None:
+                    current = settings()
                 # pass-level disk guard: a full output drive would burn a full
                 # CRF probe per candidate per pass (probe, watchdog cancel,
                 # retry next pass, repeat). Skipping the pass BEFORE anything
@@ -544,6 +580,8 @@ def watch(
                         log(f"'{movie.name}' is not stable yet (still copying?) => later.")
                         continue
                     known.add(_identity(movie))
+                    if settings is not None:
+                        current = settings()
                     decision = decide(movie, target_vmaf, encoder)
                     if decision != "encode":
                         log(f"Skipping '{movie.name}': {decision}.")
@@ -565,15 +603,15 @@ def watch(
                                 encoder=encoder,
                                 probe_encoder_preset=probe_encoder_preset,
                                 encoder_preset=encoder_preset,
-                                encoder_threads=cap_threads(max_threads),
+                                encoder_threads=cap_threads(current.max_threads),
                                 db_file=db_file,
                                 # inbox automation must not silently depend on
                                 # plan staleness: watch always measures fresh
                                 force_reprobe=True,
-                                min_source_height=min_source_height,
-                                min_source_size_gb=min_source_size_gb,
-                                candidate_codecs=candidate_codecs,
-                                crop_sample_count=crop_sample_count,
+                                min_source_height=current.min_source_height,
+                                min_source_size_gb=current.min_source_size_gb,
+                                candidate_codecs=current.candidate_codecs,
+                                crop_sample_count=current.crop_sample_count,
                                 progress=progress,
                             )
                     except EncodeBusyError as e:
