@@ -20,6 +20,7 @@ from pathlib import Path
 
 from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
+from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import (
     DISK_FREE_FLOOR_BYTES,
     cap_threads,
@@ -487,6 +488,10 @@ def watch(
         crop_sample_count=crop_sample_count,
     )
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
+    # the pause state lives beside the database (issue #250): no database,
+    # no resident app to pause
+    state_dir = db_file.resolve().parent if db_file is not None else None
+    paused_reason: str | None = None
     known: set[str] = set()
     lock_file = WATCH_LOCK_FILE
     sleep_interval = poll_interval
@@ -552,6 +557,21 @@ def watch(
                 # and reports it (issue #247)
                 if settings is not None:
                     current = settings()
+                # paused (by the operator, or for a manual encode, issue #250):
+                # nothing enters `known`, so every file stays eligible, and the
+                # base interval (not the idle backoff) notices a resume promptly
+                reason = pause_reason(state_dir)
+                if reason is not None:
+                    if reason != paused_reason:
+                        log(f"Watcher paused: {reason}. Files stay eligible.")
+                    paused_reason = reason
+                    if once:
+                        return
+                    _wait_or_stop(poll_interval, stop_event, waiter=waiter)
+                    continue
+                if paused_reason is not None:
+                    log("Watcher resumed.")
+                    paused_reason = None
                 # pass-level disk guard: a full output drive would burn a full
                 # CRF probe per candidate per pass (probe, watchdog cancel,
                 # retry next pass, repeat). Skipping the pass BEFORE anything
@@ -582,6 +602,10 @@ def watch(
                         # at it again, starving every normal copy arrival)
                         log(f"'{movie.name}' is not stable yet (still copying?) => later.")
                         continue
+                    # a manual encode or a pause can begin mid-pass: hold this
+                    # file and the rest back; the next pass reports the pause
+                    if pause_reason(state_dir) is not None:
+                        break
                     known.add(_identity(movie))
                     if settings is not None:
                         current = settings()
