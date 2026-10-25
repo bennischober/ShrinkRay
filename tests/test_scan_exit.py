@@ -35,12 +35,15 @@ class TestScanFailureExit(unittest.TestCase):
         previous = os.getcwd()
         os.chdir(self.root)
         # loguru bound the real stderr at import time; route the sink into
-        # the runner's capture so log_error's summary is assertable
+        # the runner's capture so log_error's summary is assertable. The
+        # scan preflight (#194) must see ffprobe too (CI has none): these
+        # tests exercise the all-fail reporting, not the preflight.
         from shrinkray.logger import logger
 
         sink_id = logger.add(lambda message: runner.output.write(str(message)), level="INFO")
         try:
-            result = runner.invoke(app, list(argv))
+            with patch("shrinkray.service.shutil.which", return_value="ffprobe"):
+                result = runner.invoke(app, list(argv))
             return result.exit_code, result.output
         finally:
             logger.remove(sink_id)
@@ -93,7 +96,10 @@ class TestScanFailureExit(unittest.TestCase):
         self.assertTrue((self.root / "movies.csv").exists())
 
     def test_a_scan_of_an_empty_folder_keeps_its_warning_and_exit_zero(self) -> None:
-        with patch("shrinkray.__main__.scan_movies", return_value=_scan_result([], [])):
+        with (
+            patch("shrinkray.service.shutil.which", return_value="ffprobe"),
+            patch("shrinkray.__main__.scan_movies", return_value=_scan_result([], [])),
+        ):
             code, _output = self._run("scan", str(self.root), "--csv")
         self.assertEqual(code, 0, "an empty folder is not a failure")
         self.assertFalse((self.root / "movies.txt").exists())

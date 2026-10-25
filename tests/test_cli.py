@@ -214,7 +214,7 @@ class TestDoctorCli(unittest.TestCase):
                 db.MovieRecord(path=movie, mtime=100.0, size=1, name="movie", category="C"),
             )
             runner = CliRunner()
-            with patch("shrinkray.service.toolchain_problems", return_value=[]):
+            with patch("shrinkray.service.all_problems", return_value=[]):
                 result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertIn("healthy", result.output)
@@ -236,7 +236,7 @@ class TestDoctorCli(unittest.TestCase):
                 ),
             )
             runner = CliRunner()
-            with patch("shrinkray.service.toolchain_problems", return_value=[]):
+            with patch("shrinkray.service.all_problems", return_value=[]):
                 result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
             self.assertEqual(result.exit_code, 1, result.output)
             self.assertIn("dead path", result.output)
@@ -414,10 +414,33 @@ class TestStatelessModeA(unittest.TestCase):
         runner = CliRunner()
         previous = os.getcwd()
         os.chdir(self.root)
-        try:
-            return runner.invoke(app, list(argv)).exit_code
-        finally:
-            os.chdir(previous)
+        # the scan/plan preflight (#194) demands ffprobe, which CI does not
+        # have: these tests exercise the database behavior, not the preflight.
+        # process_movie returns a full row (scan's grouping reads category)
+        record = {
+            "category": "C",
+            "name": "one.mkv",
+            "duration": "00:00:01",
+            "size": 8,
+            "codec": "h264",
+            "bitrate": None,
+            "aspect_ratio": None,
+            "dimensions": {"width": 1920, "height": 1080},
+            "compression_rate": 2.5,
+            "fps": None,
+            "crop": False,
+            "hdr": False,
+            "other_codecs": "",
+            "audio_languages": "",
+        }
+        with (
+            patch("shrinkray.service.shutil.which", return_value="ffprobe"),
+            patch("shrinkray.engine.scan.process_movie", return_value=(record, None)),
+        ):
+            try:
+                return runner.invoke(app, list(argv)).exit_code
+            finally:
+                os.chdir(previous)
 
     def test_a_stateless_scan_creates_no_database(self) -> None:
         """The criterion: encoding one file leaves no metadata.db behind."""
@@ -443,15 +466,26 @@ class TestStatelessModeA(unittest.TestCase):
         self.assertTrue(db_file.exists(), "an explicit --db was not created")
 
     def test_a_stateless_plan_creates_no_database(self) -> None:
-        with patch("shrinkray.engine.plan.plan_quality", return_value=_skipped_plan(self.movie)):
+        with (
+            patch("shrinkray.engine.plan.plan_quality", return_value=_skipped_plan(self.movie)),
+            patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+            patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
+            patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+        ):
             self._run("plan", str(self.movie))
         self.assertFalse((self.root / "metadata.db").exists())
 
     def test_a_stateless_plan_passes_no_db_file_to_the_engine(self) -> None:
         """No database means no plan cache: the engine gets db_file=None."""
-        with patch(
-            "shrinkray.engine.plan.plan_quality", return_value=_skipped_plan(self.movie)
-        ) as fake:
+        with (
+            patch(
+                "shrinkray.engine.plan.plan_quality", return_value=_skipped_plan(self.movie)
+            ) as fake,
+            patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+            patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
+            patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+            patch("shrinkray.service.shutil.which", return_value="ffprobe"),
+        ):
             self._run("plan", str(self.movie))
         self.assertIsNone(fake.call_args.kwargs["db_file"])
 
@@ -515,7 +549,14 @@ class TestEncodeInPlace(unittest.TestCase):
         previous = os.getcwd()
         os.chdir(self.root)
         try:
-            with patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode):
+            with (
+                patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode),
+                patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+                patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
+                patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+                # CI has no ffprobe; the encode preflight (#194) must pass
+                patch("shrinkray.service.shutil.which", return_value="ffprobe"),
+            ):
                 return runner.invoke(app, list(argv))
         finally:
             os.chdir(previous)
@@ -572,7 +613,7 @@ class TestToolchainPreflight(unittest.TestCase):
         from shrinkray import service
 
         with patch("shrinkray.tools.handbrake.find_handbrake", return_value=None):
-            problems = service.toolchain_problems()
+            problems = service.all_problems()
         handbrake = [p for p in problems if "HandBrakeCLI" in p]
         self.assertEqual(len(handbrake), 1, problems)
         self.assertIn("1.6", handbrake[0], "the minimum version must be named")
@@ -585,7 +626,7 @@ class TestToolchainPreflight(unittest.TestCase):
             patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=False),
             patch("shrinkray.tools.handbrake.handbrake_version", return_value="1.4.2"),
         ):
-            problems = service.toolchain_problems()
+            problems = service.all_problems()
         handbrake = [p for p in problems if "svt_av1" in p]
         self.assertEqual(len(handbrake), 1, problems)
         self.assertIn("1.4.2", handbrake[0], "the actual version must be named")
@@ -602,20 +643,31 @@ class TestToolchainPreflight(unittest.TestCase):
                 side_effect=RuntimeError("ffmpeg has no libvmaf filter!"),
             ),
         ):
-            problems = service.toolchain_problems()
+            problems = service.all_problems()
         vmaf = [p for p in problems if "VMAF" in p]
         self.assertEqual(len(vmaf), 1, problems)
         self.assertIn("no libvmaf filter", vmaf[0])
+
+    def test_a_missing_ffprobe_is_reported(self) -> None:
+        """Issue #194: ffprobe was never checked - scan failed per file."""
+        from shrinkray import service
+
+        with patch("shrinkray.service.shutil.which", return_value=None):
+            problems = service.all_problems()
+        ffprobe = [p for p in problems if "ffprobe" in p]
+        self.assertEqual(len(ffprobe), 1, problems)
+        self.assertIn("install ffmpeg", ffprobe[0])
 
     def test_a_complete_toolchain_reports_nothing(self) -> None:
         from shrinkray import service
 
         with (
+            patch("shrinkray.service.shutil.which", return_value="ffprobe"),
             patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
             patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
             patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
         ):
-            self.assertEqual(service.toolchain_problems(), [])
+            self.assertEqual(service.all_problems(), [])
 
     def test_the_app_refuses_to_start_on_a_broken_toolchain(self) -> None:
         from shrinkray.server import app as app_module
@@ -641,14 +693,15 @@ class TestToolchainPreflight(unittest.TestCase):
         from shrinkray import service
 
         with (
+            patch("shrinkray.service.shutil.which", return_value=None),
             patch("shrinkray.tools.handbrake.find_handbrake", return_value=None),
             patch(
                 "shrinkray.tools.vmaf.detect_vmaf_style",
                 side_effect=RuntimeError("ffmpeg has no libvmaf filter!"),
             ),
         ):
-            problems = service.toolchain_problems()
-        self.assertEqual(len(problems), 2, problems)
+            problems = service.all_problems()
+        self.assertEqual(len(problems), 3, problems)
 
 
 class TestStartupBacklog(unittest.TestCase):

@@ -7,6 +7,7 @@ presentation logic — the CLI prints, this module decides and records.
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -522,31 +523,42 @@ def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[Doct
     return findings
 
 
-def toolchain_problems() -> list[str]:
+def toolchain_problems() -> dict[str, list[str]]:
     """Returns the missing toolchain capabilities, empty when all are present.
 
     The quality mode is the whole product, so a host that cannot measure VMAF or
     cannot encode AV1 cannot do the one thing this tool does. Checking here turns a
     confusing mid-run failure into a clear refusal before any work starts.
 
+    The entries are grouped by prerequisite so a caller can gate on what IT needs:
+    `scan` reads media with ffprobe only (HandBrake is not a scan prerequisite),
+    `plan`/`encode` need everything. Callers that want the flat list take
+    `all_problems()`.
+
     Returns:
-        list[str]: One message per missing capability, each naming the version
-            that provides it.
+        dict[str, list[str]]: Missing capabilities keyed by prerequisite
+            ('ffprobe', 'handbrake', 'vmaf'); a key with an empty list means
+            that prerequisite is satisfied.
     """
     from shrinkray.tools import handbrake as handbrake_module
     from shrinkray.tools.vmaf import detect_vmaf_style
 
-    problems: list[str] = []
+    problems: dict[str, list[str]] = {"ffprobe": [], "handbrake": [], "vmaf": []}
+    if shutil.which("ffprobe") is None:
+        problems["ffprobe"].append(
+            "'ffprobe' not found on PATH: install ffmpeg (ffprobe ships with it)"
+        )
+
     binary = handbrake_module.find_handbrake()
     minimum = handbrake_module.MIN_HANDBRAKE_VERSION
     if binary is None:
-        problems.append(
+        problems["handbrake"].append(
             f"'{handbrake_module.HANDBRAKE_BINARY}' not found: install HandBrake "
             f">= {minimum} (AV1 output needs svt_av1)"
         )
     elif not handbrake_module.supports_svt_av1(binary):
         version = handbrake_module.handbrake_version(binary) or "unknown version"
-        problems.append(
+        problems["handbrake"].append(
             f"HandBrakeCLI ({version}) does not know the 'svt_av1' encoder: "
             f"install >= {minimum} (AV1 output needs svt_av1)"
         )
@@ -554,5 +566,15 @@ def toolchain_problems() -> list[str]:
     try:
         detect_vmaf_style()
     except RuntimeError as e:
-        problems.append(f"VMAF cannot be measured: {e}")
+        problems["vmaf"].append(f"VMAF cannot be measured: {e}")
     return problems
+
+
+def all_problems() -> list[str]:
+    """Flattens `toolchain_problems()` into one message list (doctor's view).
+
+    Returns:
+        list[str]: Every missing capability's message, in prerequisite order.
+    """
+    grouped = toolchain_problems()
+    return grouped["ffprobe"] + grouped["handbrake"] + grouped["vmaf"]
