@@ -181,10 +181,12 @@ Rules the TUI must keep:
 a glob, creates no database unless `--db` is passed, and encodes in place when no output
 directory is given (the original is renamed aside and kept). Mode B scans, plans and encodes
 the backlog on start and watches the tree for new and changed files. **The terminal surface
-is not built** (issue #244 records the direction; the build is split into follow-up issues):
-there is no `shrinkray setup`, no console banner, no pause, and a manual encode does not
-pause the watcher yet. Today the configuration is `config.json`, edited by hand, followed by
-a restart.
+is partly built** (issue #244 records the direction; the build is split into follow-up
+issues). Built: the pause itself (issue #250: a `paused` file in `/data` holds the backlog and
+the watcher, and a manual encode pauses the watcher while it runs), and a saved
+`config.json` applies at the next file (issue #247). Not built: `shrinkray setup` (#252) and
+the console banner (#251); until then the operator pauses with `touch /data/paused`, resumes
+by removing it, and edits `config.json` by hand.
 
 ## Deployment target: an Unraid Community App (issue #244)
 
@@ -226,9 +228,9 @@ library use one artifact.
 entrypoint and `serve ...` the default command, issue #242), keeps its config on `/data`,
 created from the image's defaults on first start and applied at the next file when it
 changes (issue #247), runs every command as `PUID`/`PGID` (issue #248) and generates its
-dashboard token when none is set (issue #249). Not built yet: the console banner (#251), the
-terminal UI (#252), pause/resume (#250), and the template and Community Applications
-listing (#253).
+dashboard token when none is set (issue #249), and honours the pause (issue #250). Not
+built yet: the console banner (#251), the terminal UI (#252), and the template and Community
+Applications listing (#253).
 
 ## Product Purpose
 

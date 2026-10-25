@@ -272,10 +272,28 @@ nothing that comes with the image. One flat folder, one file per kind of state:
 | `config.json` | the settings (created from the image's defaults on first start, issue #247) |
 | `metadata.db` (+ `-wal`, `-shm`) | the catalog, plans, encodes and retained originals |
 | `token` | the generated dashboard token, mode 0600, when `SHRINKRAY_TOKEN` is unset (issue #249) |
+| `paused` | present while the operator paused the backlog and the watcher (issue #250) |
+| `manual-encodes/` | one marker per running manual `shrinkray encode`; the watcher waits for them (issue #250) |
 | `logs/` | failure bundles, written beside the database |
 
-New state goes into the same folder under a name of its own (the pause flag of #250),
-never into the image and never into the library.
+New state goes into the same folder under a name of its own, never into the image and
+never into the library.
+
+## Pausing
+
+The resident app starts no new file while it is paused; the file it is working on
+always finishes. Two things pause it (issue #250):
+
+- **You.** `touch /data/paused` (or create `paused` in the appdata folder) pauses the
+  watcher and the backlog; removing the file resumes them. It survives restarts on
+  purpose: a reboot never resumes a backlog you stopped. The terminal UI (#252) will
+  be the switch for it.
+- **A manual encode.** `shrinkray encode <path>` from the container console pauses the
+  watcher and the backlog until it ends, so the two never compete for the CPU. A crash,
+  a closed console or a restart cannot leave it paused: a marker whose process is gone
+  is ignored and removed.
+
+The dashboard shows the pause and its reason; it cannot pause or resume anything.
 
 ## One-shot runs (no server)
 

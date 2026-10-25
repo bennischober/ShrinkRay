@@ -1414,6 +1414,63 @@ class TestSubprocessTimeouts(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertIsNone(result.skipped_reason)
 
+    def test_the_default_config_never_empties_the_whitelist(self):
+        """Every entry point passes the config's candidate_codecs to the gate,
+        and the config holds only the operator's EXTRA codecs (empty by
+        default). The gate must still accept every whitelisted codec, in plan
+        and encode alike: #265 let the empty default replace the whitelist,
+        and every source was skipped (issue #271)."""
+        from shrinkray.config import Conf
+
+        for extras in (tuple(Conf({}).candidate_codecs), ("mpeg4",)):
+            for codec in SOURCE_CODECS:
+                with self.subTest(extras=extras, codec=codec), tempfile.TemporaryDirectory() as tmp:
+                    src = Path(tmp) / "movie.mkv"
+                    src.write_bytes(b"x" * 8)
+                    with (
+                        patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                        patch.object(
+                            engine_plan,
+                            "_source_dimensions",
+                            return_value={"width": 1920, "height": 1080},
+                        ),
+                        patch.object(engine_plan, "source_codec", return_value=codec),
+                        patch.object(engine_plan, "find_handbrake", return_value="hb"),
+                        patch.object(
+                            engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
+                        ),
+                        patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
+                        patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+                        patch.object(
+                            engine_search,
+                            "probe_crf",
+                            return_value=engine_search.DEFAULT_TARGET_VMAF,
+                        ),
+                    ):
+                        planned = engine_plan.plan_quality(src, candidate_codecs=extras)
+                    # encode: the disk preflight right after the codec gate
+                    # answers instead, so reaching it proves the gate passed
+                    with (
+                        patch.object(
+                            engine_pipeline,
+                            "_source_snapshot",
+                            return_value={"width": 1920, "height": 1080},
+                        ),
+                        patch.object(engine_plan, "is_hdr_file", return_value=False),
+                        patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+                        patch.object(engine_pipeline, "source_codec", return_value=codec),
+                        patch.object(
+                            engine_pipeline,
+                            "check_disk_space",
+                            return_value=(False, "past the codec gate"),
+                        ),
+                    ):
+                        encoded = engine_pipeline.encode_with_quality(
+                            src, Path(tmp) / "out.mkv", candidate_codecs=extras
+                        )
+                self.assertNotEqual(planned.skipped_reason, "source codec not a candidate")
+                self.assertEqual(encoded.error, "past the codec gate")
+
     def test_codec_gate_config_extends_the_whitelist(self):
         """A config codec joins the product whitelist; neither replaces the other.
 

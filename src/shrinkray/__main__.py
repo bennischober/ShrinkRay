@@ -6,6 +6,7 @@ options and the console presentation.
 """
 
 import contextlib
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -530,8 +531,22 @@ def _record_encodes(
             # the whole quality run holds the encode slot once (probes and
             # final encodes all write into output_dir)
             from shrinkray.engine.lock import guard_encodes
+            from shrinkray.engine.pause import manual_encode, state_dir_for_cli
 
-            with guard_encodes(output_dir, holder="encode-cli"):
+            if sys.stdin.isatty() and sys.stdout.isatty():
+                # the single-file case runs in a console (issue #250): say
+                # what closing it does before hours of work start
+                console.print(
+                    "[yellow]Keep this terminal open: closing it cancels the encode. "
+                    "The source file stays untouched until the finished result is "
+                    "swapped in.[/yellow]"
+                )
+            # a resident watcher on the same data folder yields while this
+            # runs (issue #250); the marker goes away when the run ends
+            with (
+                manual_encode(state_dir_for_cli(db_file)),
+                guard_encodes(output_dir, holder="encode-cli"),
+            ):
                 # live progress for the whole quality run: a 4-hour encode
                 # must not look like a hang. The engine streams
                 # {'stage': 'encode', 'percent': ...} during the final
