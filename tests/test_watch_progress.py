@@ -48,6 +48,7 @@ class TestWatchProgressForwarding(unittest.TestCase):
             with (
                 mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
                 mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
+                mock.patch("shrinkray.engine.watch.WATCH_LOCK_FILE", Path(tmp) / "watch.lock"),
             ):
                 watch_mod.watch([inbox], out, once=True, progress=callback)
             self.assertEqual(events, [{"stage": "encode", "percent": 55.0, "movie": "movie.mkv"}])
@@ -82,6 +83,7 @@ class TestWatchProgressForwarding(unittest.TestCase):
             with (
                 mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
                 mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
+                mock.patch("shrinkray.engine.watch.WATCH_LOCK_FILE", Path(tmp) / "watch.lock"),
             ):
                 watch_mod.watch([inbox], out, once=True)
             self.assertTrue(called["progress_is_none"])
