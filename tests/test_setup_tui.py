@@ -69,6 +69,31 @@ class TestSetupApp(unittest.TestCase):
 
         run(app, steps)
 
+    def test_the_language_filters_are_editable(self) -> None:
+        """Issue #337: the TUI is the operator's only control surface, but the
+        language filters (which decide which audio/subtitle tracks survive an
+        encode — issues #330/#297) had no editor. They render and save like
+        the other list fields; empty means keep every track.
+        """
+        app = SetupApp(self.config, None)
+
+        async def steps(pilot: Pilot[None]) -> None:
+            # the defaults render (the config's lists, comma-separated)
+            self.assertEqual(
+                app.query_one("#f-handbrake-audio_languages", Input).value, "deu, eng, und, jpn"
+            )
+            # edit + save
+            self._set(app, "f-handbrake-audio_languages", "deu, eng")
+            self._set(app, "f-handbrake-subtitle_languages", "")
+            await pilot.press("ctrl+s")
+
+        run(app, steps)
+        saved = self._saved()
+        self.assertEqual(saved["handbrake"]["audio_languages"], ["deu", "eng"])
+        # empty list = keep every track (the documented opt-out), and the
+        # key IS written ("empty" must not mean "leave the old filter")
+        self.assertEqual(saved["handbrake"]["subtitle_languages"], [])
+
     def test_a_saved_change_keeps_every_other_key(self) -> None:
         app = SetupApp(self.config, None)
 
