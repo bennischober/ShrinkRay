@@ -54,8 +54,8 @@ parse for, or depend on any of these tools (see the scope boundary in AGENTS.md)
   non-loopback bind; on a trusted LAN the practical deployment is token-or-nothing
   at the operator's discretion. The container generates a token on first start when
   none is set and stores it in `/data/token` (issue #249), so a non-loopback bind is
-  never tokenless and never needs the operator to invent a secret; showing it in the
-  console banner is #251. Reverse-proxy termination is documented
+  never tokenless and never needs the operator to invent a secret; the console banner
+  shows it (issue #251). Reverse-proxy termination is documented
   (docs/docker.md); there is no TLS in the app.
 - **Later:** proper per-user authentication — the shape (session login,
   proxy-forwarded identity, OIDC) is a future decision, deliberately not made here.
@@ -184,9 +184,9 @@ the backlog on start and watches the tree for new and changed files. **The termi
 is partly built** (issue #244 records the direction; the build is split into follow-up
 issues). Built: the pause itself (issue #250: a `paused` file in `/data` holds the backlog and
 the watcher, and a manual encode pauses the watcher while it runs), and a saved
-`config.json` applies at the next file (issue #247). Not built: `shrinkray setup` (#252) and
-the console banner (#251); until then the operator pauses with `touch /data/paused`, resumes
-by removing it, and edits `config.json` by hand.
+`config.json` applies at the next file (issue #247), and the console banner (issue #251).
+Not built: `shrinkray setup` (#252); until then the operator pauses with `touch
+/data/paused`, resumes by removing it, and edits `config.json` by hand - the banner says so.
 
 ## Deployment target: an Unraid Community App (issue #244)
 
@@ -198,15 +198,20 @@ follow the steps" pattern of Unraid apps:
 - **WebUI button → the dashboard.** Read-only: what is running, planned, remaining,
   reclaimed and retained.
 - **Console button → a shell in the container that prints what to type.** The banner is
-  the operator's manual:
+  the operator's manual. Every line is computed from the container's state and names only
+  commands that exist (issue #251); today it reads:
 
   ```text
-  ShrinkRay — the resident encoder is running.
-    Configure, pause or resume:   shrinkray setup
-    Encode one file now:          shrinkray encode /media/<path>
-    List or recover originals:    shrinkray retained
-    Dashboard:                    http://<server>:8420   (token: ...)
+  ShrinkRay - the resident encoder is running.
+    Encode one file now:      shrinkray encode /media/<path>
+    List retained originals:  shrinkray retained list --db /data/metadata.db
+    Change settings:          edit /data/config.json (applied at the next file)
+    Pause the backlog:        touch /data/paused
+    Dashboard:                the WebUI button (port 8420), token: <the generated token>
+    Everything else:          shrinkray --help
   ```
+
+  Once `shrinkray setup` exists (#252), its line replaces the settings and pause lines.
 
 - **`/data` is the appdata folder** (e.g. `/mnt/user/appdata/shrinkray`): config, database,
   pause state and the generated token live there, so everything survives a restart and an
@@ -228,9 +233,9 @@ library use one artifact.
 entrypoint and `serve ...` the default command, issue #242), keeps its config on `/data`,
 created from the image's defaults on first start and applied at the next file when it
 changes (issue #247), runs every command as `PUID`/`PGID` (issue #248) and generates its
-dashboard token when none is set (issue #249), and honours the pause (issue #250). Not
-built yet: the console banner (#251), the terminal UI (#252), and the template and Community
-Applications listing (#253).
+dashboard token when none is set (issue #249), honours the pause (issue #250), and prints the
+console banner (issue #251). Not built yet: the terminal UI (#252), and the template and
+Community Applications listing (#253).
 
 ## Product Purpose
 

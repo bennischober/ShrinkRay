@@ -37,9 +37,11 @@ window.
   single-file path. By path for now; a file picker inside the TUI may come later. It
   warns at start that closing the terminal cancels the encode, and the resident
   watcher pauses while it runs.
-- **The console banner** — printed when a shell opens in the container: what to type
-  to configure, to encode one file, to recover originals, and where the dashboard is
-  (with the generated token).
+- **The console banner** (built, issue #251) — printed once when an interactive shell
+  opens in the container (`tools/console_banner.py`, run by the shell hook): what to type
+  to encode one file, to list originals, to change settings or pause, and where the
+  dashboard is with the token. Computed from the container's state; it names only
+  commands that exist, which a test enforces.
 
 ## Constraints the build must keep
 
@@ -64,7 +66,6 @@ window.
 ## Open design work (follow-up issues)
 
 - The TUI library and the screen layout.
-- The banner mechanism in the image (a shell rc file printed on interactive start).
 
 ## What this supersedes
 
