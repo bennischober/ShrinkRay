@@ -63,6 +63,31 @@ class SwapResult:
     size_after: int
 
 
+def is_staging_path(path: Path) -> bool:
+    """Decides whether a path lives inside a staging directory or is a
+    staging/retained sibling.
+
+    The in-place working directory is created INSIDE the library (the swap's
+    renames must stay same-filesystem), and the encode it holds is named like
+    the movie it will become - so a scan or a watcher pass that does not skip
+    it treats an in-flight or crashed run's output as a library movie
+    (issue #237). The two suffixes cover the swap's own siblings; the prefix
+    covers the working directory. One predicate, shared by both walkers
+    (`engine.scan.find_movies`, `engine.watch.find_new_movies`), so the two
+    scans cannot drift apart again.
+
+    Args:
+        path (Path): The candidate path.
+
+    Returns:
+        bool: True when the path is ShrinkRay's own working state, never a
+            library movie.
+    """
+    if path.name.endswith((RETAINED_SUFFIX, STAGING_SUFFIX)):
+        return True
+    return any(part.startswith(".shrinkray-") for part in path.parts)
+
+
 def retained_path_for(source: Path) -> Path:
     """Returns the name a source's original is retained under.
 

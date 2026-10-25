@@ -30,6 +30,7 @@ from shrinkray import db
 from shrinkray.db import MovieRecord
 from shrinkray.engine.crop import get_crop_summary, has_black_bars
 from shrinkray.logger import log, log_warning
+from shrinkray.replace import is_staging_path
 from shrinkray.tools import process as resources
 from shrinkray.tools.ffprobe import get_data
 
@@ -237,6 +238,11 @@ def find_movies(root: Path, extensions: list[str], exclude: Path | None = None) 
                     continue  # inside the excluded directory
                 except ValueError:
                     pass
+            if is_staging_path(candidate):
+                # ShrinkRay's own working state: an in-flight or crashed
+                # in-place run's staging directory and the swap's siblings are
+                # never library movies (issue #237)
+                continue
             # absolute paths: the db cache is keyed by absolute path, so a
             # relative scan root must not produce relative cache misses
             movies.append(candidate.resolve())
