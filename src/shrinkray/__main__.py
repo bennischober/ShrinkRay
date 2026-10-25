@@ -543,7 +543,6 @@ def _record_encodes(
             # a fresh per-run path nothing else ever locks, so a slot on it
             # excluded no one, and two encoders of one file raced on the
             # deterministic swap staging name.
-            from shrinkray.engine.lock import guard_encodes
             from shrinkray.engine.pause import manual_encode, state_dir_for_cli
 
             if sys.stdin.isatty() and sys.stdout.isatty():
