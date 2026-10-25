@@ -89,8 +89,20 @@ class TestHdrFixture(unittest.TestCase):
     def test_encoder_for_hdr_picks_the_10bit_av1_encoder(self):
         """The HDR path picks svt_av1_10bit; SDR picks the default (issue #21:
         AV1-only output, one encoder decision per source)."""
-        self.assertEqual(encoder_for(True), "svt_av1_10bit")
-        self.assertEqual(encoder_for(False), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(10, True), "svt_av1_10bit")
+        self.assertEqual(encoder_for(None, True), "svt_av1_10bit")
+        self.assertEqual(encoder_for(8, False), DEFAULT_ENCODER)
+
+    def test_encoder_for_follows_the_source_bit_depth(self):
+        """Issue #234: the SOURCE's bit depth decides, not an HDR guess. A
+        10-bit SDR master keeps its depth; an 8-bit source stays 8-bit even
+        when HDR flags would suggest more; an unknown depth falls back to
+        the HDR answer instead of silently truncating an unreadable depth."""
+        self.assertEqual(encoder_for(10, False), "svt_av1_10bit")
+        self.assertEqual(encoder_for(12, False), "svt_av1_10bit")
+        self.assertEqual(encoder_for(8, False), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(None, False), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(8, True), "svt_av1_10bit")
 
     @skipUnless(shutil.which("ffprobe"), "ffprobe not on PATH")
     def test_fixture_still_probes_as_recorded(self):

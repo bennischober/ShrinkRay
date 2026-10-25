@@ -33,19 +33,25 @@ HDR_VMAF_OFFSET = 0.5
 DEFAULT_HDR_TARGET_VMAF = DEFAULT_TARGET_VMAF - HDR_VMAF_OFFSET
 
 
-def encoder_for(hdr: bool) -> str:
+def encoder_for(bit_depth: int | None, hdr: bool) -> str:
     """Returns the only output encoder this product emits.
 
-    PRODUCT.md makes AV1 the single output codec, encoded on the CPU: SDR
-    encodes with ``svt_av1`` and HDR encodes with ``svt_av1_10bit``. H.264
-    and H.265 are not demoted to fallbacks - they are gone. Keeping the
-    choice in one function is what stops the six HDR ternaries that used to
-    be written out per call site from drifting apart again.
+    PRODUCT.md makes AV1 the single output codec, encoded on the CPU. The
+    choice follows the SOURCE's bit depth (issue #234): any 10-bit source
+    stays 10-bit (``svt_av1_10bit``), an 8-bit source keeps ``svt_av1`` —
+    10-bit is not an HDR property, and dropping the two extra bits of a
+    10-bit SDR master is a quality loss the product's own rules forbid. HDR
+    stays an override in the sense that an HDR source is always 10-bit; an
+    unknown depth falls back to the HDR answer (8-bit would silently
+    truncate a depth the probe failed to read).
 
     Args:
+        bit_depth (int | None): The source's bit depth (None: unknown).
         hdr (bool): True when the source is HDR.
 
     Returns:
         str: The HandBrake encoder name.
     """
+    if bit_depth is not None:
+        return HDR_ENCODER if (bit_depth > 8 or hdr) else DEFAULT_ENCODER
     return HDR_ENCODER if hdr else DEFAULT_ENCODER

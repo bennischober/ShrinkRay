@@ -55,10 +55,11 @@ class TestEncode(unittest.TestCase):
         PRODUCT.md makes AV1 the single output codec (issue #21): SDR uses
         svt_av1 and HDR svt_av1_10bit. The six HDR ternaries that used to
         be written per call site had already drifted once (#26), so the choice
-        lives in one function and every caller reads it from there.
+        lives in one function and every caller reads it from there. Since
+        issue #234 the source's bit depth joins the decision.
         """
-        self.assertEqual(engine_encoders.encoder_for(False), "svt_av1")
-        self.assertEqual(engine_encoders.encoder_for(True), "svt_av1_10bit")
+        self.assertEqual(engine_encoders.encoder_for(8, False), "svt_av1")
+        self.assertEqual(engine_encoders.encoder_for(10, True), "svt_av1_10bit")
 
     def test_no_handbrake_command_emits_h264_or_h265(self):
         """No code path emits H.264 or H.265 any more (issue #21).
@@ -73,7 +74,7 @@ class TestEncode(unittest.TestCase):
             Path("in.mkv"),
             Path("out.mkv"),
             "Fast 1080p30",
-            engine_encoders.encoder_for(False),
+            engine_encoders.encoder_for(8, False),
         )
         for command in (
             fixed,
@@ -82,7 +83,7 @@ class TestEncode(unittest.TestCase):
                 Path("in.mkv"),
                 Path("out.mkv"),
                 30,
-                engine_encoders.encoder_for(False),
+                engine_encoders.encoder_for(8, False),
                 "3",
             ),
             tools_handbrake.build_encode_command(
@@ -90,7 +91,7 @@ class TestEncode(unittest.TestCase):
                 Path("in.mkv"),
                 Path("out.mkv"),
                 30,
-                engine_encoders.encoder_for(True),
+                engine_encoders.encoder_for(10, True),
                 "3",
             ),
         ):

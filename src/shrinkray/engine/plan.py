@@ -220,6 +220,29 @@ def is_hdr_file(movie: Path) -> bool:
     return bool(data.get("hdr"))
 
 
+def source_bit_depth(movie: Path) -> int | None:
+    """Reads the source's bit depth for the encoder choice (issue #234).
+
+    Reuses the scan's probe (get_data computes bit_depth from
+    bits_per_raw_sample / pix_fmt) so both paths always agree. None when
+    the depth cannot be determined — the encoder choice then falls back to
+    the HDR answer instead of silently truncating an unreadable depth.
+
+    Args:
+        movie (Path): The movie file.
+
+    Returns:
+        int | None: The video stream's bit depth, or None.
+    """
+    from shrinkray.config import load_config
+
+    try:
+        data = get_data(movie, load_config())
+    except (RuntimeError, OSError, ValueError):
+        return None
+    return data.get("bit_depth")
+
+
 @dataclass
 class QualityResult:
     """Result of a quality-optimized encode.
@@ -239,6 +262,7 @@ class QualityResult:
         input_size (int): Size of the input file in bytes.
         output_size (int): Size of the output file in bytes.
         error (str | None): The error message if the encode failed.
+        input_bit_depth (int | None): The source's bit depth (issue #234).
     """
 
     input: Path
@@ -266,6 +290,7 @@ class QualityResult:
     input_duration: float | None = None
     input_bitrate: float | None = None
     output_bitrate: float | None = None
+    input_bit_depth: int | None = None
     # the probing pipeline's effective decision inputs (fingerprint of a
     # stored plan): HDR overrides target/range before probing, so these
     # carry the OVERRIDDEN values
@@ -378,7 +403,9 @@ def plan_quality(
     # the effective decision inputs: for HDR the engine overrides the
     # target/range and switches to the 10-bit encoder — every downstream
     # call and the result's fingerprint fields carry these OVERRIDDEN values
-    effective_encoder = encoder_for(hdr)
+    # The encoder follows the SOURCE's bit depth now (issue #234): a 10-bit
+    # SDR master keeps its depth; HDR alone no longer decides it.
+    effective_encoder = encoder_for(source_bit_depth(input_file), hdr)
     if hdr:
         # the tone-mapped measurement scale sits slightly lower; use the
         # calibrated target and the deeper CRF range for 4K headroom
