@@ -122,10 +122,13 @@ ENV TMPDIR=/tmp/shrinkray \
 
 USER shrinkray
 
-# the container's config: auto_backlog is the fire-and-forget contract (issue #126)
-# - a fresh container scans, plans and encodes the library with no client. The key
-# is off by default outside the image, so a local dev run never starts encoding.
-RUN printf '{\n  "app": { "auto_backlog": true },\n  "file": { "extensions": [".mkv", ".mp4", ".m4v", ".avi", ".mov", ".ts", ".m2ts", ".webm"] }\n}\n' > /app/config.json
+# the container's config: a tracked file, COPYed (not printf-baked — the
+# JSON in shell escapes was unreadable and untestable, and #206's test had to
+# parse it back out of this Dockerfile). auto_backlog is the fire-and-forget
+# contract (issue #126) - a fresh container scans, plans and encodes the
+# library with no client. The key is off by default outside the image, so a
+# local dev run never starts encoding.
+COPY container-config.json /app/config.json
 
 # --root is not optional on Linux: the default allowlist is the current
 # directory when no drive root exists, so without it every library path is a 403.
@@ -164,4 +167,4 @@ ENV RUFF_CACHE_DIR=/tmp/ruff-cache \
     PYTEST_ADDOPTS="-p no:cacheprovider"
 
 ENTRYPOINT []
-CMD ["sh", "-c", "/app/.venv/bin/ruff check src tests && /app/.venv/bin/ruff format --check src tests && /app/.venv/bin/mypy --platform linux && /app/.venv/bin/pytest -q && /app/.venv/bin/lint-imports"]
+CMD ["/app/tools/gate.sh"]

@@ -35,30 +35,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
 
-      - name: Run ruff (lint + format check)
-        run: |
-          uv run ruff check src tests
-          uv run ruff format --check src tests
-
-      # mypy's --platform defaults to sys.platform, so a bare `mypy` only checks
-      # the host's own view. CI runs on ubuntu, which means a POSIX-only import
-      # (pwd, fcntl) would pass here and break a Windows contributor, and the
-      # Windows-only os.startfile path would never be checked against the linux
-      # deployment target. Check both directions explicitly.
-      - name: Run mypy (linux platform)
-        run: uv run mypy --platform linux
-
-      - name: Run mypy (win32 platform)
-        run: uv run mypy --platform win32
-
-      - name: Run tests with coverage
-        run: uv run pytest -q
-
-      # the layers contract (tools -> engine -> server -> cli) is machine-checked,
-      # not aspirational: a module in the wrong layer breaks this step, not a
-      # review comment
-      - name: Run import-linter
-        run: uv run lint-imports
+      # the gate is ONE script (tools/gate.sh), shared with release.yml and
+      # the dev image's CMD: the contract lives in one place, not four copies
+      - name: Run the gate (ruff, mypy both platforms, pytest, import-linter)
+        run: tools/gate.sh
 
       - name: Audit dependencies
         run: uv audit --locked
