@@ -86,7 +86,12 @@ class TestToolchainPreflight(unittest.TestCase):
             "other_codecs": "",
             "audio_languages": "",
         }
-        with patch("shrinkray.engine.scan.process_movie", return_value=(record, None)):
+        with (
+            # the ffprobe check must PASS here (the point: HandBrake missing
+            # does not matter), so mock which to a present ffprobe
+            patch("shrinkray.service.shutil.which", return_value="ffprobe"),
+            patch("shrinkray.engine.scan.process_movie", return_value=(record, None)),
+        ):
             code, _output = self._run("scan", str(self.movie))
         self.assertEqual(code, 0, "scan refused for a missing encode tool")
 
