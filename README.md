@@ -291,6 +291,22 @@ predicted savings land far above the real ones — measured on an HDR 4K title:
 `plan` command, the dashboard's plan display) carries this note; plan an HDR
 title expecting the real number to be much smaller than the prediction.
 
+### `setup` — configure, pause and resume
+
+```bash
+uv run shrinkray setup            # in the container: docker exec -it <container> shrinkray setup
+```
+
+A terminal UI for everything you may change (issue #252): the required VMAF, the encode
+presets, thread cap and stall watchdog, the eligibility gates, the file extensions and the
+backlog-on-start switch; and, where the resident app keeps its data (the container's
+`/data`, or `--db`), a pause/resume switch. Values go through the same schema as a config
+file loaded from disk, so a value the app would refuse is shown and never written (the 1080p
+floor, for example, can be raised but not lowered). A change to a setting that is part of
+every stored plan (the VMAF, the probe preset, the probe density) says that it re-measures
+the library before you save it. The resident app applies a save at its next file. The
+dashboard cannot do any of this: it only observes.
+
 ### `serve` — the resident application
 
 ```bash
@@ -422,6 +438,9 @@ Example [config.json](config.json):
         "probe_encoder_preset": "5", // quality mode: the PROBES' speed preset
         "encoder_preset": "3",         // quality mode: the FINAL encode's preset
         "max_threads": 0                  // per-encode thread cap (0 = all cores)
+    },
+    "quality": {
+        "target_vmaf": 96             // the required VMAF (--target-vmaf overrides it)
     },
     "resources": {
         "idle_priority": true       // encodes run below normal priority
