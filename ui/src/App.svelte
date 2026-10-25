@@ -137,25 +137,32 @@
     }
   }
 
-  // ── job parameters (persisted defaults; bars never persist) ──
-  let scanPaths = $state<string[]>(
-    JSON.parse(localStorage.getItem('ms.paths') ?? '["D:\\\\Movies"]')
-  )
-  let outputDir = $state(localStorage.getItem('ms.out') ?? 'D:\\Encoded')
-  let targetVmaf = $state(Number(localStorage.getItem('ms.vmaf') ?? 96))
-  let workers = $state<number | null>(
-    localStorage.getItem('ms.workers') ? Number(localStorage.getItem('ms.workers')) : null
-  )
-  // per-run arming of the irreversible bar crop — never persisted, so a
-  // fresh session always starts unarmed
+  // ── job parameters (read-only facts, issue #331) ──
+  // These are the RESIDENT APP's settings, not UI preferences: the VMAF
+  // floor lives in config.json (quality.target_vmaf), the scan sources in
+  // the running scan job's payload. The localStorage drafts (ms.paths,
+  // ms.out, ms.vmaf, ms.workers) wrote values the app never used — a
+  // control surface that controls nothing (issue #331; fixed mode's
+  // workers were deleted with it, #329).
+  let configVmaf = $state<number | null>(null)
+  let targetVmaf = $derived(configVmaf ?? 96)
+  let scanPaths = $state<string[]>([])
+  let outputDir = $state('')
 
-  function persist() {
-    localStorage.setItem('ms.paths', JSON.stringify(scanPaths))
-    localStorage.setItem('ms.out', outputDir)
-    localStorage.setItem('ms.vmaf', String(targetVmaf))
-    if (workers != null) localStorage.setItem('ms.workers', String(workers))
-    else localStorage.removeItem('ms.workers')
-  }
+  $effect(() => {
+    api
+      .config()
+      .then((c) => (configVmaf = c?.quality?.target_vmaf ?? null))
+      .catch(() => {}) // the config strip (config_error on /api/status) reports why it is stale
+  })
+
+  // the scan sources: the latest scan/plan/encode job's payload paths (the
+  // real roots the app works from), not a localStorage draft
+  const latestScanJob = $derived(history.find((j) => j.kind === 'scan' && j.state === 'done'))
+  $effect(() => {
+    const paths = latestScanJob ? jobPaths(latestScanJob) : []
+    if (paths.length > 0) scanPaths = paths
+  })
 
   // movies inside any scan path (case-insensitive prefix) — used for the
   // bars blast-radius when the targets are the whole library
@@ -509,16 +516,7 @@
         <RetainedPage files={retainedFiles} onrecover={() => void loadRetained()} />
       </div>
       <div class="pages" class:hidden={page !== 'config'}>
-        <ConfigPage
-          {scanPaths}
-          {outputDir}
-          {targetVmaf}
-          {workers}
-          onpathsChange={(p) => { scanPaths = p; persist() }}
-          onoutputChange={(o) => { outputDir = o; persist() }}
-          onvmafChange={(v) => { targetVmaf = v; persist() }}
-          onworkersChange={(w) => { workers = w; persist() }}
-        />
+        <ConfigPage {scanPaths} {outputDir} {targetVmaf} />
       </div>
     {/if}
   </main>

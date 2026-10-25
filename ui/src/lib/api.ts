@@ -187,12 +187,33 @@ export interface Status {
 
 export interface Config {
   codec?: { hdr?: { color_space?: string[]; color_transfer?: string[] } }
-  file?: { extensions?: string[]; output?: { seperator?: string } }
+  /** file.output.separator is the canonical key ('seperator' was a deprecated
+   * alias the server normalizes away — the dump never carries the typo) */
+  file?: { extensions?: string[]; output?: { separator?: string } }
   ffmpeg?: { black_bars?: { MIN_WIDTH?: number; MIN_HEIGHT?: number }; crop_sample_count?: number }
-  handbrake?: { preset?: string; encoder?: string; encoder_preset?: string; max_threads?: number }
+  handbrake?: {
+    preset?: string
+    encoder?: string
+    probe_encoder_preset?: string
+    encoder_preset?: string
+    max_threads?: number
+    stall_minutes?: number
+    audio_languages?: string[]
+    subtitle_languages?: string[]
+  }
   resources?: { idle_priority?: boolean }
-  quality?: { sample_every?: number; sample_count?: number; sample_seconds?: number }
-  eligibility?: { min_source_height?: number; min_source_size_gb?: number; candidate_codecs?: string[] }
+  quality?: {
+    target_vmaf?: number
+    sample_every?: number
+    sample_count?: number
+    sample_seconds?: number
+  }
+  eligibility?: {
+    min_source_height?: number
+    min_source_width?: number
+    min_source_size_gb?: number
+    candidate_codecs?: string[]
+  }
   language?: string
 }
 
