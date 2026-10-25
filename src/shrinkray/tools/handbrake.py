@@ -95,6 +95,8 @@ def build_encode_command(
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
     encoder_threads: int | None = None,
+    audio_languages: list[str] | None = None,
+    subtitle_languages: list[str] | None = None,
 ) -> list[str]:
     """Builds the HandBrakeCLI command for a quality-driven encode.
 
@@ -112,6 +114,10 @@ def build_encode_command(
             baked-in black bars. None keeps the source resolution.
         encoder_threads (int | None): Thread limit for the encoder
             (None = no limit). Keeps cores free for other work.
+        audio_languages (list | None): ISO 639-2 codes to keep; None/empty
+            keeps every language (the default). The flag pair travels
+            together: --audio-lang-list alone sets selection to first.
+        subtitle_languages (list | None): Same, for subtitle tracks.
 
     Returns:
         list[str]: The command as argument list.
@@ -146,13 +152,37 @@ def build_encode_command(
         # the output resolution of the library
         command += ["--crop", "0:0:0:0"]
     command += [
+        # the container is PINNED: a .mp4 source must not produce an MP4,
+        # whose muxer silently drops PGS/DVB subtitles (issue #240)
+        "-f",
+        "av_mkv",
         # keep all audio and subtitle tracks, copy audio => no quality loss
         "--all-audio",
         "--all-subtitles",
         "--aencoder",
         "copy",
+        # the passthru mask: every codec HandBrake 1.6-1.11 can pass through
+        # untouched; a track outside it falls to the LOSSLESS fallback
+        # (flac24 preserves the samples; aac would re-encode a track we
+        # claim to copy; copy:pcm is deliberately absent - it exists only
+        # in 1.11+ and an unknown name fails the whole job)
+        "--audio-copy-mask",
+        "copy:aac,copy:ac3,copy:dts,copy:dtshd,copy:eac3,copy:flac,copy:alac,"
+        "copy:mp2,copy:mp3,copy:opus,copy:truehd,copy:vorbis",
+        "--audio-fallback",
+        "flac24",
+        # chapters survive the encode
+        "--markers",
         "--optimize",  # web optimized => mp4/mkv file can start streaming
     ]
+    # language filters (issue #240): the reference preset's lists, now
+    # config keys. The flags MUST travel together with --all-audio /
+    # --all-subtitles: --audio-lang-list alone sets the selection
+    # behaviour to 'first', which would drop every track after the first.
+    if audio_languages:
+        command += ["--audio-lang-list", ",".join(audio_languages)]
+    if subtitle_languages:
+        command += ["--subtitle-lang-list", ",".join(subtitle_languages)]
     return command
 
 

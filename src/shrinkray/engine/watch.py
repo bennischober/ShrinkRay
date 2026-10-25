@@ -418,6 +418,8 @@ class WatchSettings:
     min_source_size_gb: float
     candidate_codecs: tuple[str, ...]
     crop_sample_count: int
+    audio_languages: list[str] | None = None
+    subtitle_languages: list[str] | None = None
 
 
 def watch(
@@ -437,6 +439,8 @@ def watch(
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = ("h264",),
     crop_sample_count: int = 10,
+    audio_languages: list[str] | None = None,
+    subtitle_languages: list[str] | None = None,
     progress: ProgressCallback | None = None,
     settings: Callable[[], WatchSettings] | None = None,
     record: Callable[[Path, QualityResult, Path | None], int | None] | None = None,
@@ -487,6 +491,10 @@ def watch(
             resident app passes one closure, a stateless run passes None and
             records nothing, exactly as db_file=None does.
     """
+
+    from shrinkray.config import Conf
+
+    _conf = Conf({})
     current = WatchSettings(
         max_threads=max_threads,
         target_vmaf=target_vmaf,
@@ -495,6 +503,12 @@ def watch(
         min_source_size_gb=min_source_size_gb,
         candidate_codecs=candidate_codecs,
         crop_sample_count=crop_sample_count,
+        audio_languages=audio_languages
+        if audio_languages is not None
+        else _conf.handbrake_audio_languages,
+        subtitle_languages=subtitle_languages
+        if subtitle_languages is not None
+        else _conf.handbrake_subtitle_languages,
     )
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     # the pause state lives beside the database (issue #250): no database,
@@ -656,6 +670,14 @@ def watch(
                                 min_source_size_gb=current.min_source_size_gb,
                                 candidate_codecs=current.candidate_codecs,
                                 crop_sample_count=current.crop_sample_count,
+                                # a struct without the filters (tests, older callers) falls back to
+                                # the config's values - the narrowing is the default, not the exception
+                                audio_languages=current.audio_languages
+                                if current.audio_languages is not None
+                                else Conf({}).handbrake_audio_languages,
+                                subtitle_languages=current.subtitle_languages
+                                if current.subtitle_languages is not None
+                                else Conf({}).handbrake_subtitle_languages,
                                 progress=progress,
                             )
                     except EncodeBusyError as e:

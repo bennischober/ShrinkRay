@@ -117,6 +117,13 @@ class HandbrakeSection(BaseModel):
     encoder_preset: str = DEFAULT_ENCODER_PRESET
     max_threads: int = Field(DEFAULT_MAX_THREADS, ge=0)
     stall_minutes: float = Field(DEFAULT_STALL_MINUTES, ge=0)
+    # the track filters (issue #240, the reference preset's lists): ISO
+    # 639-2 codes. EMPTY = no filter = every track in every language (the
+    # old behaviour); the lists narrow it deliberately. They are FILTERS,
+    # not defaults: --audio-lang-list without --all-audio would set the
+    # selection to first, so the builder passes the pair together.
+    audio_languages: list[str] = ["deu", "eng", "und", "jpn"]
+    subtitle_languages: list[str] = ["eng", "deu", "und"]
 
     @field_validator("encoder")
     @classmethod
@@ -373,6 +380,8 @@ class Conf:
         self.handbrake_probe_encoder_preset: str = model.handbrake.probe_encoder_preset
         self.handbrake_encoder_preset: str = model.handbrake.encoder_preset
         self.handbrake_max_threads: int = model.handbrake.max_threads
+        self.handbrake_audio_languages: list[str] = model.handbrake.audio_languages
+        self.handbrake_subtitle_languages: list[str] = model.handbrake.subtitle_languages
         # stall watchdog: minutes without child output before a hung
         # HandBrake/ffmpeg is terminated (0 = disabled; default 10)
         self.handbrake_stall_minutes: float = model.handbrake.stall_minutes

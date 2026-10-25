@@ -1423,6 +1423,8 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
             min_source_size_gb=config.min_source_size_gb,
             candidate_codecs=tuple(config.candidate_codecs),
             crop_sample_count=config.crop_sample_count,
+            audio_languages=list(config.handbrake_audio_languages),
+            subtitle_languages=list(config.handbrake_subtitle_languages),
         )
 
     def run_watch() -> None:

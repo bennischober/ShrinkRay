@@ -542,6 +542,8 @@ def _record_encodes(
                             sample_every=sample_every,
                             sample_count=sample_count,
                             sample_seconds=sample_seconds,
+                            audio_languages=config.handbrake_audio_languages,
+                            subtitle_languages=config.handbrake_subtitle_languages,
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(

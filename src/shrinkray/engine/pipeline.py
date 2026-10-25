@@ -307,6 +307,66 @@ class EncodeResult:
         return round((1 - self.output_size / self.input_size) * 100, 2)
 
 
+def tracks_survived(input_file: Path, output_file: Path) -> tuple[bool, str]:
+    """Checks that the encoded output kept every audio and subtitle track.
+
+    "Audio and subtitles are copied 1:1" is a claim this function makes
+    testable (issue #240): HandBrake drops tracks silently when the muxer
+    cannot carry them (PGS/DVB subtitles on MP4) or a filter removes them.
+    A mismatch is a FAILURE of the 1:1 promise, reported per track kind.
+
+    Args:
+        input_file (Path): The source file.
+        output_file (Path): The encoded file.
+
+    Returns:
+        tuple: (True, "") when every track survived or nothing could be
+            verified; (False, detail) naming the missing tracks.
+    """
+    try:
+        counts_in = _stream_counts(input_file)
+        counts_out = _stream_counts(output_file)
+    except (OSError, ValueError):
+        # cannot verify (ffprobe missing/broken) => do not report failure
+        return True, ""
+    missing: list[str] = []
+    for kind in ("audio", "subtitle"):
+        a, b = counts_in.get(kind, 0), counts_out.get(kind, 0)
+        if b < a:
+            missing.append(f"{a - b} {kind} track(s)")
+    if missing:
+        return False, "output lost " + " and ".join(missing)
+    return True, ""
+
+
+def _stream_counts(file: Path) -> dict[str, int]:
+    """Counts the audio/subtitle streams via ffprobe (one subprocess)."""
+    import json as _json
+
+    proc = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            str(file),
+        ],
+        capture_output=True,
+        timeout=FFPROBE_TIMEOUT,
+    )
+    if proc.returncode != 0:
+        raise OSError(f"ffprobe failed for '{file}'")
+    streams = _json.loads(proc.stdout.decode()).get("streams", [])
+    counts: dict[str, int] = {}
+    for s in streams:
+        kind = s.get("codec_type")
+        if kind in ("audio", "subtitle"):
+            counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
 def durations_match(input_file: Path, output_file: Path) -> bool:
     """Checks that the encoded output has (almost) the input duration.
 
@@ -1236,6 +1296,8 @@ def encode_with_quality(
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
+    audio_languages: list[str] | None = None,
+    subtitle_languages: list[str] | None = None,
 ) -> QualityResult:
     """Re-encodes a movie with the largest CRF that meets the VMAF target.
 
@@ -1553,6 +1615,9 @@ def encode_with_quality(
         encoder_preset,
         crop=crop,
         encoder_threads=encoder_threads,
+        # the track filters come from the caller's config (issue #240)
+        audio_languages=audio_languages,
+        subtitle_languages=subtitle_languages,
     )
     # always stream the final encode: the streamed loop is the disk watchdog
     # (free-space floor => cancel instead of filling the drive). Callers
@@ -1616,6 +1681,14 @@ def encode_with_quality(
     # success path: skip the verification below (already done)
     verified_vmaf: float | None = None
     verified_subsample: int | None = None
+    # the 1:1 promise's check (issue #240): every audio and subtitle track
+    # the source had must survive the encode. A lost track is reported in
+    # the result's error (and the record) — the artifact is NOT deleted:
+    # the picture is fine, but the operator must see the muxer's silent
+    # drop instead of discovering it at playback time.
+    tracks_ok, tracks_detail = tracks_survived(input_file, output_file)
+    if not tracks_ok:
+        log_error(f"'{input_file.name}': {tracks_detail} (issue #240's 1:1 check).")
     if verify:
         # full-file verification: the ground-truth companion to the
         # sample-based probes. Sub-sample very large files (n_subsample
@@ -1683,4 +1756,7 @@ def encode_with_quality(
         output_bitrate=_output_bitrate(output_file, snapshot["duration"]),
         crf_source=crf_source,
         plan_created_at=plan_created_at,
+        # the 1:1 check's finding rides on the result (issue #240): success
+        # stays true (the picture is fine), but the record and the UI see it
+        error=None if tracks_ok else tracks_detail,
     )

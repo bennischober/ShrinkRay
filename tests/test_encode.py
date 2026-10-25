@@ -22,6 +22,104 @@ from shrinkray.tools import vmaf as tools_vmaf
 
 
 class TestEncode(unittest.TestCase):
+    def test_tracks_survived_reports_a_lost_track(self):
+        """Issue #240's verification: an output with fewer audio/subtitle
+        streams than the source is reported, not silently accepted."""
+        from shrinkray.engine.pipeline import tracks_survived
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mkv"
+            out = Path(tmp) / "out.mkv"
+            src.write_bytes(b"x")
+            out.write_bytes(b"x")
+
+            def fake_counts(file: Path):
+                if file == src:
+                    return {"audio": 2, "subtitle": 1}
+                return {"audio": 1, "subtitle": 0}
+
+            with mock.patch("shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts):
+                ok, detail = tracks_survived(src, out)
+        self.assertFalse(ok)
+        self.assertIn("1 audio track(s)", detail)
+        self.assertIn("1 subtitle track(s)", detail)
+
+    def test_tracks_survived_passes_when_everything_survived(self):
+        from shrinkray.engine.pipeline import tracks_survived
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mkv"
+            out = Path(tmp) / "out.mkv"
+            src.write_bytes(b"x")
+            out.write_bytes(b"x")
+
+            def fake_counts(file: Path):
+                return {"audio": 2, "subtitle": 1}
+
+            with mock.patch("shrinkray.engine.pipeline._stream_counts", side_effect=fake_counts):
+                ok, detail = tracks_survived(src, out)
+        self.assertTrue(ok)
+        self.assertEqual(detail, "")
+
+    def test_the_encode_command_carries_the_240_contract(self):
+        """Issue #240: the container is pinned to MKV, the copy mask covers
+        the passthru vocabulary, the fallback is lossless, chapters survive,
+        and the language filters ride WITH the all-track flags."""
+        from shrinkray.tools.handbrake import build_encode_command
+
+        command = build_encode_command(
+            "hb",
+            Path("in.mkv"),
+            Path("out.mkv"),
+            20,
+            "svt_av1",
+            "3",
+            audio_languages=["deu", "eng", "und", "jpn"],
+            subtitle_languages=["eng", "deu", "und"],
+        )
+        joined = command
+        # the muxer is pinned: a non-MKV source cannot silently drop
+        # PGS/DVB subtitles into an MP4
+        self.assertIn("-f", joined)
+        self.assertEqual(joined[joined.index("-f") + 1], "av_mkv")
+        # the passthru mask: the 12 names that exist in 1.6-1.11
+        mask = joined[joined.index("--audio-copy-mask") + 1]
+        for name in (
+            "aac",
+            "ac3",
+            "dts",
+            "dtshd",
+            "eac3",
+            "flac",
+            "alac",
+            "mp2",
+            "mp3",
+            "opus",
+            "truehd",
+            "vorbis",
+        ):
+            self.assertIn(f"copy:{name}", mask)
+        self.assertNotIn("copy:pcm", mask, "copy:pcm fails the job on 1.6-1.9")
+        # the fallback is lossless
+        self.assertEqual(joined[joined.index("--audio-fallback") + 1], "flac24")
+        # chapters survive
+        self.assertIn("--markers", joined)
+        # the filter flags travel WITH the all-track flags (the list alone
+        # sets selection to first and would drop every track after it)
+        self.assertLess(joined.index("--all-audio"), joined.index("--audio-lang-list"))
+        self.assertLess(joined.index("--all-subtitles"), joined.index("--subtitle-lang-list"))
+        self.assertEqual(joined[joined.index("--audio-lang-list") + 1], "deu,eng,und,jpn")
+        self.assertEqual(joined[joined.index("--subtitle-lang-list") + 1], "eng,deu,und")
+
+    def test_the_language_filters_default_to_every_language(self):
+        """None/empty lists = no filter flags at all: every track, every
+        language (the old behaviour, and the documented opt-out)."""
+        from shrinkray.tools.handbrake import build_encode_command
+
+        command = build_encode_command("hb", Path("in.mkv"), Path("out.mkv"), 20, "svt_av1", "3")
+        self.assertNotIn("--audio-lang-list", command)
+        self.assertNotIn("--subtitle-lang-list", command)
+
     def test_build_command(self):
         command = tools_handbrake.build_command(
             "C:/HandBrake/HandBrakeCLI.exe",

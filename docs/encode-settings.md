@@ -59,9 +59,9 @@ No `--preset` is passed, so every encode runs on HandBrakeCLI's built-in
 | `AudioTrackSelectionBehavior` | `all` | `--all-audio` | already matches |
 | `AudioCopyMask` | 10 codecs incl. `mp2`, `opus` | `CLI Default`'s 8 (no `mp2`, no `opus`) | **gap** — those two are transcoded to AAC |
 | `AudioEncoderFallback` | `none` | `CLI Default`'s `aac` | **gap** — a track with no passthru is lossily re-encoded; `none` would drop it instead |
-| `AudioLanguageList` | `deu, eng, und, jpn` | no list (all languages) | **open** — see "Open decisions" |
+| `AudioLanguageList` | `deu, eng, und, jpn` | `handbrake.audio_languages` (the reference lists) | landed — issue #240: config keys with the reference lists as defaults, empty = no filter |
 | `SubtitleTrackSelectionBehavior` | `all` | `--all-subtitles` | already matches |
-| `SubtitleLanguageList` | `eng, deu, und` | no list (all languages) | **open** — see "Open decisions" |
+| `SubtitleLanguageList` | `eng, deu, und` | `handbrake.subtitle_languages` | landed — issue #240 |
 | `SubtitleBurnBehavior` | `foreign` | not passed (`CLI Default`'s `none`) | **never** — burning changes pixels and breaks the VMAF comparison |
 | `SubtitleAddForeignAudioSearch` | `true` | not passed | **never** — it derives an extra forced-subtitle output track on top of the source's tracks, and with burning enabled it also changes pixels; we keep every source subtitle track, so there is nothing for the search to find |
 | `PictureDeinterlaceFilter` | `decomb` | not passed (`CLI Default`'s `off`) | **never** — it interpolates picture content on combed frames, and the VMAF comparison measures the output against the *unfiltered* source, so every probe would score against a reference the encoder was told to diverge from |
