@@ -283,6 +283,7 @@ class _FsWaiter:
             self._wd_paths[wd] = Path(dirpath)
 
     def _drain(self) -> None:
+        import ctypes
         import select
 
         assert self._libc is not None and self._fd is not None and self._wake is not None
@@ -296,6 +297,7 @@ class _FsWaiter:
                 continue
             n = libc.read(fd, buf, len(buf))
             if n <= 0:
+                # EINTR or the fd closed by stop(): both mean "no events"
                 continue
             offset = 0
             while offset + 16 <= n:
