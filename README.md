@@ -366,7 +366,9 @@ video containers for exactly that reason. **One location, one
 order** (issue #58) — the dashboard and the engine read the same file:
 
 1. `--config PATH` (every command; an explicit file wins over everything),
-2. `$SHRINKRAY_CONFIG` (the container/NAS mount point),
+2. `$SHRINKRAY_CONFIG` (the container/NAS mount point; the image sets it to
+   `/data/config.json` and creates that file from its baked defaults,
+   `$SHRINKRAY_CONFIG_SEED`, when it is missing — never over an existing one),
 3. next to the database file (`--db`'s directory — the directory the
    operator already chose for user data; the app writes there too),
 4. `./config.json` (the working directory; with the default `--db` that is
@@ -374,7 +376,10 @@ order** (issue #58) — the dashboard and the engine read the same file:
 
 The resolved path is logged at startup (`Using config ...`). There is no
 package-relative lookup: in an installed wheel that directory is not a
-user-writable location.
+user-writable location. The resident app (`serve`) re-reads the file between
+files, so a saved change applies at the next file without a restart; an edit
+that fails validation is not applied, is logged, and is shown on the dashboard
+while the previous settings stay in effect (issue #247).
 
 **Every value is validated** against a schema (issue #61): an unknown key, a
 string where a boolean belongs, an out-of-range number — each is an **error

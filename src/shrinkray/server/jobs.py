@@ -24,7 +24,7 @@ from pathlib import Path
 from shrinkray.config import Conf
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
-from shrinkray.tools.process import Cancelled, apply_config
+from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
 
 # how many terminated (done/failed/cancelled) job rows the history keeps.
 # Terminated rows are the job trail (outcomes, errors, retry affordances);
@@ -717,7 +717,7 @@ def execute_plan(
     Returns:
         dict: The per-movie plan summary.
     """
-    from shrinkray.config import load_config
+    from shrinkray.config import load_config, refresh_config
     from shrinkray.engine.plan import plan_quality
 
     payload = job.payload
@@ -731,6 +731,10 @@ def execute_plan(
         if cancel.is_set():
             plans.append({"movie": movie.name, "state": "cancelled"})
             continue
+        # a config saved while the job runs applies from the next file on
+        # (issue #247)
+        config = refresh_config()
+        apply_reloaded_config(config)
         if progress:
             progress(
                 {
@@ -801,7 +805,7 @@ def execute_encode(
     Returns:
         dict: The per-movie outcome summary.
     """
-    from shrinkray.config import load_config
+    from shrinkray.config import load_config, refresh_config
     from shrinkray.engine.lock import EncodeBusyError
     from shrinkray.engine.pipeline import encode_movies, encode_with_quality
     from shrinkray.service import (
@@ -831,6 +835,10 @@ def execute_encode(
             if cancel.is_set():
                 outcomes.append({"movie": movie.name, "state": "cancelled"})
                 continue
+            # a config saved while the job runs applies from the next file on
+            # (issue #247); the running encode keeps the settings it started with
+            config = refresh_config()
+            apply_reloaded_config(config)
             if str(movie) in encoded_paths:
                 outcomes.append({"movie": movie.name, "state": "already_encoded"})
                 continue

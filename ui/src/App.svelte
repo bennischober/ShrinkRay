@@ -490,6 +490,10 @@
         </form>
       </div>
     {/if}
+    {#if status?.config_error}
+      <!-- not dismissible: it clears once the file is fixed (issue #247) -->
+      <div class="api-error mono" role="alert">{status.config_error}</div>
+    {/if}
     {#if error}
       <div class="api-error mono" role="alert">
         {error}
