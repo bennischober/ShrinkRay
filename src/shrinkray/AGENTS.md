@@ -10,7 +10,8 @@ file is the module map plus the rules that bind the whole package. `engine/`,
 
 | Question | Module | Notes |
 |---|---|---|
-| CLI commands, tables, progress | `__main__.py` (936 L) | typer: `encode`, `plan`, `serve` (+ hidden `app`), `retained`, `doctor`; no business logic. `setup` (the TUI, issue #244) is decided, not built |
+| CLI commands, tables, progress | `__main__.py` (936 L) | typer: `encode`, `plan`, `serve` (+ hidden `app`), `setup`, `retained`, `doctor`; no business logic |
+| The terminal UI (`shrinkray setup`) | `tui.py` | Textual: edits config.json through `Conf` (invalid values are never written), warns on fingerprint settings, switches the pause; a front end beside `server`, never importing it (#252) |
 | Config schema, defaults, flat facade | `config.py` (442 L) | pydantic sections + `Conf`; loading has no side effects |
 | sqlite schema, migrations, queries | `db.py` (1318 L) | `SCHEMA_VERSION = 16` (`db.py:10`), `MIGRATIONS`, `prune_missing` |
 | Swap-in-place, retained originals | `replace.py` (263 L) | `stage`/`swap`/`recover`; `RETAINED_SUFFIX` (`replace.py:37`) |
@@ -26,8 +27,8 @@ measurement, never edited.
 
 ## LAYER RULES (`pyproject.toml:150`, enforced by `uv run lint-imports`)
 
-Layers, highest to lowest: `__main__ > server > service > engine > tools > db >
-config > logger`. A second, forbidden-imports contract keeps `db`/`config`/`logger`/
+Layers, highest to lowest: `__main__ > (server | tui) > service > engine > tools >
+db > config > logger`; `server` and `tui` are independent siblings (#252). A second, forbidden-imports contract keeps `db`/`config`/`logger`/
 `telemetry` from importing anything above them. Exactly one exemption exists:
 `shrinkray.db -> shrinkray.engine.crop`, a `TYPE_CHECKING`-only annotation for the
 crop summary (`db.py:12`) — annotation-only, never a runtime import. A module in the
@@ -38,8 +39,10 @@ wrong layer is a red gate, not a review comment.
 - The engine decides. Anything that measures, predicts or skips lives under
   `engine/`; `__main__.py` and `server/jobs.py` both drive `plan_quality` /
   `encode_with_quality` and differ only in how they render progress.
-- Constants are single-home and derived: the VMAF default and the CRF range live in
-  `engine/search.py`, the HDR floor is computed from them in `engine/encoders.py:33`.
+- Constants are single-home and derived: the VMAF default lives in `config.py` (so the
+  `quality.target_vmaf` key can default to it; `engine/search.py` re-exports it, #252) and
+  the CRF range in `engine/search.py`; the HDR floor is computed from them in
+  `engine/encoders.py:33`.
   Never restate a literal in a CLI option default or an API model.
 - `Conf` is flat (`config.handbrake_encoder_preset`); there is no nested access
   path outside the pydantic model. `tools/process.apply_config(conf)` is the one

@@ -283,14 +283,15 @@ class TestConsoleBanner(unittest.TestCase):
         text = self._server()
         self.assertIn("the resident encoder is running", text)
         self.assertIn("token: generated-token", text)
-        self.assertIn(f"touch {self.data / 'paused'}", text)
+        self.assertIn("shrinkray setup", text)
+        self.assertNotIn("Paused now", text)
 
     def test_a_missing_token_is_said_not_hidden(self) -> None:
         self.assertIn("open to the network", self._server())
 
     def test_a_paused_server_says_how_to_resume(self) -> None:
         (self.data / "paused").touch()
-        self.assertIn(f"Resume with:      rm {self.data / 'paused'}", self._server())
+        self.assertIn(f"resume in shrinkray setup (or rm {self.data / 'paused'})", self._server())
 
     def test_a_manual_encode_is_shown_as_the_reason_to_wait(self) -> None:
         from shrinkray.engine.pause import manual_encode
@@ -304,7 +305,7 @@ class TestConsoleBanner(unittest.TestCase):
         )
         self.assertIn("not the resident server", text)
         self.assertNotIn("Dashboard", text)
-        self.assertNotIn("Pause", text)
+        self.assertNotIn("Paused now", text)
 
     def test_every_named_command_exists(self) -> None:
         """A banner line naming a command the CLI lacks sends the operator

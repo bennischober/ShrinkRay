@@ -184,9 +184,9 @@ the backlog on start and watches the tree for new and changed files. **The termi
 is partly built** (issue #244 records the direction; the build is split into follow-up
 issues). Built: the pause itself (issue #250: a `paused` file in `/data` holds the backlog and
 the watcher, and a manual encode pauses the watcher while it runs), and a saved
-`config.json` applies at the next file (issue #247), and the console banner (issue #251).
-Not built: `shrinkray setup` (#252); until then the operator pauses with `touch
-/data/paused`, resumes by removing it, and edits `config.json` by hand - the banner says so.
+`config.json` applies at the next file (issue #247), the console banner (issue #251), and
+`shrinkray setup` (issue #252, a Textual UI over config.json and the pause flag). The required
+VMAF became a setting for it (`quality.target_vmaf`).
 
 ## Deployment target: an Unraid Community App (issue #244)
 
@@ -203,15 +203,13 @@ follow the steps" pattern of Unraid apps:
 
   ```text
   ShrinkRay - the resident encoder is running.
+    Configure, pause, resume: shrinkray setup
     Encode one file now:      shrinkray encode /media/<path>
     List retained originals:  shrinkray retained list --db /data/metadata.db
-    Change settings:          edit /data/config.json (applied at the next file)
-    Pause the backlog:        touch /data/paused
     Dashboard:                the WebUI button (port 8420), token: <the generated token>
     Everything else:          shrinkray --help
   ```
 
-  Once `shrinkray setup` exists (#252), its line replaces the settings and pause lines.
 
 - **`/data` is the appdata folder** (e.g. `/mnt/user/appdata/shrinkray`): config, database,
   pause state and the generated token live there, so everything survives a restart and an
@@ -234,8 +232,8 @@ entrypoint and `serve ...` the default command, issue #242), keeps its config on
 created from the image's defaults on first start and applied at the next file when it
 changes (issue #247), runs every command as `PUID`/`PGID` (issue #248) and generates its
 dashboard token when none is set (issue #249), honours the pause (issue #250), and prints the
-console banner (issue #251). Not built yet: the terminal UI (#252), and the template and
-Community Applications listing (#253).
+console banner (issue #251), with the terminal UI behind it (issue #252). Not built yet: the
+template and the Community Applications listing (#253).
 
 ## Product Purpose
 
@@ -286,9 +284,11 @@ untouched. A bar
 removal goes through the same search. There is no fixed-preset or "just crop it"
 encode — an encode whose quality is not measured would miss the point of the tool.
 
-The CRF search always runs against the required quality floor — **VMAF 96**, which is
-`DEFAULT_TARGET_VMAF` in `engine/search.py`. Every `--target-vmaf` option, the API request
-model and the job payload derive from that one constant, so there is no second place to drift.
+The CRF search always runs against the required quality floor — **VMAF 96** by default, which
+is `DEFAULT_TARGET_VMAF` in `config.py` (re-exported by `engine/search.py`). The operator may
+set another floor as `quality.target_vmaf` (issue #252, the terminal UI's quality setting);
+every `--target-vmaf` option, the job payload and the watcher default to that setting, and an
+explicit flag wins. There is still one constant, so there is no second place to drift.
 The target participates in the stored plan fingerprint: raising it from the 95.0 the code shipped
 before deliberately invalidated every cached plan, so a library planned under the old default re-probes
 once.

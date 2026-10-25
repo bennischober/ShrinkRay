@@ -168,12 +168,13 @@ def encode(
             "is also accepted but ignored; both flags change nothing."
         ),
     ),
-    target_vmaf: float = typer.Option(
-        DEFAULT_TARGET_VMAF,
+    target_vmaf: float | None = typer.Option(
+        None,
         "--target-vmaf",
         min=1.0,
         max=100.0,
-        help="VMAF quality floor for --quality mode.",
+        help="The required VMAF. Default: the quality.target_vmaf config value "
+        f"({DEFAULT_TARGET_VMAF:g} unless changed).",
     ),
     crop_samples: int = typer.Option(
         10,
@@ -273,6 +274,8 @@ def encode(
     """Re-encodes the found movies with HandBrake to reduce their file size."""
 
     config = load_config(config_file=config_file)
+    # the flag wins; without it the config's required VMAF applies (issue #252)
+    target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
     apply_config(config)
     # encode probes and re-encodes: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems
@@ -613,12 +616,13 @@ def plan(
         "(the fixed-preset plan was removed with issue #202); both flags "
         "change nothing.",
     ),
-    target_vmaf: float = typer.Option(
-        DEFAULT_TARGET_VMAF,
+    target_vmaf: float | None = typer.Option(
+        None,
         "--target-vmaf",
         min=1.0,
         max=100.0,
-        help="VMAF quality floor for the quality plan.",
+        help="The required VMAF. Default: the quality.target_vmaf config value "
+        f"({DEFAULT_TARGET_VMAF:g} unless changed).",
     ),
     crop_samples: int = typer.Option(
         10,
@@ -691,6 +695,8 @@ def plan(
     from shrinkray.engine.plan import plan_quality
 
     config = load_config(config_file=config_file)
+    # the flag wins; without it the config's required VMAF applies (issue #252)
+    target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
     apply_config(config)
     # plan probes every movie's CRF: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems
@@ -809,6 +815,39 @@ def plan(
     finally:
         if connection is not None:
             connection.close()
+
+
+@app.command("setup")
+def setup(
+    config_file: Path | None = typer.Option(
+        None,
+        "--config",
+        help="The config.json to edit (default: $SHRINKRAY_CONFIG, else ./config.json).",
+    ),
+    db_file: Path | None = typer.Option(
+        None,
+        "--db",
+        help="The resident app's database: its folder holds the pause flag "
+        "(default in the container: /data).",
+    ),
+) -> None:
+    """Configures ShrinkRay and pauses or resumes it, in a terminal UI.
+
+    Edits config.json through the same schema the app loads it with, names a
+    change that re-measures the library before saving it, and switches the
+    resident app's pause. The dashboard only observes; this is where the
+    operator steers (issue #252).
+    """
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        log_error(
+            "setup is interactive: run it in a terminal (e.g. docker exec -it <container> sh)."
+        )
+        raise typer.Exit(1)
+    from shrinkray.config import resolve_config_path
+    from shrinkray.engine.pause import state_dir_for_cli
+    from shrinkray.tui import SetupApp
+
+    SetupApp(resolve_config_path(config_file=config_file), state_dir_for_cli(db_file)).run()
 
 
 @app.command("retained")

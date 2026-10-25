@@ -220,6 +220,7 @@ class TestWatcherAppliesSettingsPerFile(unittest.TestCase):
             def provider() -> watch_mod.WatchSettings:
                 return watch_mod.WatchSettings(
                     max_threads=None,
+                    target_vmaf=94.0,
                     min_source_height=next(floors),
                     min_source_width=1920,
                     min_source_size_gb=0.0,
@@ -227,8 +228,11 @@ class TestWatcherAppliesSettingsPerFile(unittest.TestCase):
                     crop_sample_count=10,
                 )
 
+            targets: set[float] = set()
+
             def fake_quality(movie, output, **kwargs):
                 seen[movie.name] = kwargs["min_source_height"]
+                targets.add(kwargs["target_vmaf"])
                 return engine_plan.QualityResult(
                     input=movie, output=output, success=False, skipped_reason="no size gain"
                 )
@@ -245,6 +249,7 @@ class TestWatcherAppliesSettingsPerFile(unittest.TestCase):
                 watch_mod.watch([inbox], out, once=True, settings=provider)
 
         self.assertEqual(sorted(seen.values()), [1080, 2160])
+        self.assertEqual(targets, {94.0}, "the configured VMAF must reach the engine")
 
     def test_an_idle_pass_still_asks_for_settings(self) -> None:
         """With no new file, a broken config edit must still be noticed (and
@@ -257,6 +262,7 @@ class TestWatcherAppliesSettingsPerFile(unittest.TestCase):
             provider = mock.Mock(
                 return_value=watch_mod.WatchSettings(
                     max_threads=None,
+                    target_vmaf=96.0,
                     min_source_height=1080,
                     min_source_width=1920,
                     min_source_size_gb=0.0,

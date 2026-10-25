@@ -1,6 +1,7 @@
-# Terminal surface: the TUI is the control surface (decided, not built)
+# Terminal surface: the TUI is the control surface
 
-Status: **decided 2026-10-25 (issue #244), nothing implemented.** This replaces the
+Status: **decided 2026-10-25 (issue #244), built**: the pause (#250), the console banner
+(#251) and `shrinkray setup` on Textual (#252, `src/shrinkray/tui.py`). This replaces the
 2026-10-23 note that scoped a TUI down to a live watch display (see *What this
 supersedes* below). PRODUCT.md's "The terminal is where the operator configures and
 controls" and "Deployment target" sections are the contract; this file records the
@@ -63,9 +64,17 @@ window.
   terminal in the flat `unittest` suite (Textual's `run_test` pilot is the known
   recipe), and adding it as a dependency needs the RULES.md §7 justification.
 
-## Open design work (follow-up issues)
+## Built as
 
-- The TUI library and the screen layout.
+- **Library: Textual** (maintainer's decision on #252): full-screen forms fit
+  "configure everything" better than a linear wizard, it comes from the authors of
+  `rich`, and `App.run_test` drives screens headless in the flat `unittest` suite.
+  Rejected: `rich.prompt` only (a linear wizard) and `questionary` (two dependencies,
+  clumsier headless tests).
+- **One screen, grouped:** Quality (required VMAF, final and probe presets, probe
+  density), Resources (thread cap, stall watchdog, idle priority), Eligibility (height,
+  width, size floors, extra codecs), Library (extensions, backlog on start), the pause
+  switch at the top when a data folder is known. Keys it does not show stay untouched.
 
 ## What this supersedes
 
