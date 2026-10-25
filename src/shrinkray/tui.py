@@ -100,6 +100,22 @@ def fields_for(defaults: Conf) -> list[Field]:
         ),
         Field(
             "Quality",
+            "handbrake.audio_languages",
+            "Audio languages kept",
+            "list",
+            list(defaults.handbrake_audio_languages),
+            "empty = keep every track; ISO 639-2 codes (issue #330/#297)",
+        ),
+        Field(
+            "Quality",
+            "handbrake.subtitle_languages",
+            "Subtitle languages kept",
+            "list",
+            list(defaults.handbrake_subtitle_languages),
+            "empty = keep every track; ISO 639-2 codes",
+        ),
+        Field(
+            "Quality",
             "quality.sample_every",
             "Probe window every (s)",
             "float",
