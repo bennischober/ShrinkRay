@@ -635,14 +635,14 @@ class TestWatchLibraryTree(unittest.TestCase):
             seen.append(Path(m))
             return engine_plan.QualityResult(input=m, output=o, success=True)
 
-        def fake_sleep(interval, stop_event):
+        def fake_sleep(interval, stop_event, **kwargs):
             # the first pass encoded the movie: stop before the second pass
             if stop_event is not None:
                 stop_event.set()
 
         with (
             mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
-            mock.patch("shrinkray.engine.watch._sleep_or_stop", side_effect=fake_sleep),
+            mock.patch("shrinkray.engine.watch._wait_or_stop", side_effect=fake_sleep),
             mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             mock.patch("shrinkray.engine.watch.probe_duration_seconds", return_value=600.0),
             mock.patch("shrinkray.engine.watch.find_handbrake", return_value="hb"),
