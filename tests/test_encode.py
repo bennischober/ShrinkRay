@@ -834,8 +834,8 @@ class TestEncodeLock(unittest.TestCase):
 
         with guard_encodes(self.out, holder="test") as lock:
             self.assertTrue(lock.is_file())
-            # pid-stamped (plus the start time where /proc exists)
-            self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
+            # pid-stamped
+            self.assertEqual(int(lock.read_text()), os.getpid())
         self.assertFalse(lock.exists())
 
     def test_second_claimant_is_rejected(self):
@@ -855,45 +855,8 @@ class TestEncodeLock(unittest.TestCase):
         acquired = acquire_encode_slot(self.out, holder="test")
         self.assertEqual(acquired, lock)
         # the stolen lock is re-stamped with OUR pid
-        self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
+        self.assertEqual(int(lock.read_text()), os.getpid())
         lock.unlink()
-
-    def test_a_reused_pid_does_not_hold_the_lock(self):
-        """A leftover lock naming a live pid that now belongs to another
-        process is stolen: in the container the server is pid 1 on every
-        start, and a lock a killed run left in a movie folder named it."""
-        from shrinkray.engine.lock import _lock_path, acquire_encode_slot
-
-        self.out.mkdir(parents=True, exist_ok=True)
-        lock = _lock_path(self.out)
-        lock.write_text(f"{os.getpid()} 100")  # our pid, an earlier start
-        with mock.patch("shrinkray.engine.lock.process_start_ticks", return_value=200):
-            acquired = acquire_encode_slot(self.out, holder="test")
-        self.assertEqual(acquired, lock)
-        self.assertEqual(lock.read_text(), f"{os.getpid()} 200")
-        lock.unlink()
-
-    def test_the_same_process_still_holds_the_lock(self):
-        """A live pid with the recorded start time is the holder: busy."""
-        from shrinkray.engine.lock import EncodeBusyError, _lock_path, acquire_encode_slot
-
-        self.out.mkdir(parents=True, exist_ok=True)
-        _lock_path(self.out).write_text(f"{os.getpid()} 100")
-        with (
-            mock.patch("shrinkray.engine.lock.process_start_ticks", return_value=100),
-            self.assertRaises(EncodeBusyError),
-        ):
-            acquire_encode_slot(self.out, holder="test")
-
-    def test_a_pid_only_lock_of_a_live_process_is_honoured(self):
-        """A lock written before the start time was recorded (or without
-        /proc) falls back to the pid check: a live pid holds it."""
-        from shrinkray.engine.lock import EncodeBusyError, _lock_path, acquire_encode_slot
-
-        self.out.mkdir(parents=True, exist_ok=True)
-        _lock_path(self.out).write_text(str(os.getpid()))
-        with self.assertRaises(EncodeBusyError):
-            acquire_encode_slot(self.out, holder="test")
 
     def test_garbage_lock_content_is_stolen(self):
         from shrinkray.engine.lock import _lock_path, acquire_encode_slot

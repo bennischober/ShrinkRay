@@ -24,12 +24,6 @@ file raced on the deterministic swap staging name (`replace.staging_path_for`).
 
 A caller that is unsure must pass the directory its writes ultimately land
 in; the lock file lives inside it and is removed on release.
-
-The lock records the holder's pid and, where /proc exists, its start time. A
-lock a killed process left behind can sit in a library folder that the next
-run locks again, and in the container the server is pid 1 on every start: a
-live pid alone would make the leftover look held until the stale window ran
-out, naming the new process as the busy holder.
 """
 
 import contextlib
@@ -39,7 +33,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from shrinkray.logger import log_warning
-from shrinkray.tools.process import process_exists, process_start_ticks
+from shrinkray.tools.process import process_exists
 
 _LOCK_STALE_SECONDS = 21600.0  # 6 h: long encodes are normal, crashes are not
 
@@ -70,27 +64,6 @@ def _pid_alive(pid: int) -> bool:
     return process_exists(pid)
 
 
-def _holder_alive(raw: str) -> bool:
-    """Tells whether the process a lock file names still holds it.
-
-    Args:
-        raw (str): The lock file's content: "<pid>" or "<pid> <start ticks>".
-
-    Returns:
-        bool: True when that pid is alive and, if the lock recorded a start
-            time, it is still the same process (not a reused pid).
-    """
-    parts = raw.split()
-    if not parts or not parts[0].isdigit():
-        return False
-    pid = int(parts[0])
-    if not _pid_alive(pid):
-        return False
-    if len(parts) > 1 and parts[1].isdigit():
-        return process_start_ticks(pid) == int(parts[1])
-    return True  # a pid-only lock (an older version, or no /proc)
-
-
 def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
     """Acquires the encode slot for an output directory (blocking-free).
 
@@ -119,20 +92,19 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
         try:
             age = time.time() - lock.stat().st_mtime
             raw = lock.read_text(encoding="ascii").strip()
+            pid = int(raw) if raw.isdigit() else 0
         except (OSError, ValueError):
-            age, raw = _LOCK_STALE_SECONDS + 1, ""  # unreadable => treat stale
-        pid = raw.split()[0] if raw else "?"
-        if _holder_alive(raw) and age < _LOCK_STALE_SECONDS:
+            age, pid = _LOCK_STALE_SECONDS + 1, 0  # unreadable => treat stale
+        if pid and _pid_alive(pid) and age < _LOCK_STALE_SECONDS:
             raise EncodeBusyError(
                 f"another encoder is already using '{output_dir}' "
                 f"(pid {pid}, started {age / 60:.0f} min ago)"
             ) from None
-        log_warning(f"Stale encode lock in '{output_dir}' (pid {pid}) - stealing it.")
+        log_warning(f"Stale encode lock in '{output_dir}' (pid {pid or '?'}) - stealing it.")
         _release_path(lock)
         return acquire_encode_slot(output_dir, holder)
-    ticks = process_start_ticks(os.getpid())
     with os.fdopen(fd, "w", encoding="ascii") as handle:
-        handle.write(str(os.getpid()) if ticks is None else f"{os.getpid()} {ticks}")
+        handle.write(str(os.getpid()))
     return lock
 
 
