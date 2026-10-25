@@ -190,6 +190,9 @@ def _watcher(tmp: Path, fake_quality):
         )
         stack.enter_context(mock.patch.object(watch_mod, "decide", return_value="encode"))
         stack.enter_context(mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0))
+        # the pass guard's free-space reading: a CI disk dip must not eat a
+        # pass (the #303 CI face of the #291 family)
+        stack.enter_context(mock.patch.object(watch_mod, "disk_free_bytes", return_value=1 << 40))
         yield
 
 
