@@ -572,7 +572,8 @@ with separate jobs:
   database, pause state and a token generated on first start, so restarts and image
   updates keep it.
 
-None of the terminal surface is built yet; [docs/tui.md](docs/tui.md) records the
+The pause is built (`touch /data/paused`, see [docs/docker.md](docs/docker.md#pausing));
+`shrinkray setup` and the banner are not yet. [docs/tui.md](docs/tui.md) records the
 decision and the open design work.
 
 The target behaviour, per file:

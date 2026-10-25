@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from shrinkray import __version__, db
 from shrinkray.config import Conf, load_config
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
+from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error, log_warning
@@ -687,6 +688,9 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         # an edited config.json that was NOT applied (issue #247): the app
         # keeps running on the previous settings, and the operator must see why
         "config_error": config_module.config_error,
+        # why no new file starts (the operator's pause or a manual encode,
+        # issue #250), or None while the app works normally
+        "paused": pause_reason(s.db_file.resolve().parent),
         # the reveal capability (issue #239): a container has no desktop and
         # no opener binary, so the button hides instead of promising a
         # folder window that would end in a 500
