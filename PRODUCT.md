@@ -405,7 +405,10 @@ to its quality** and whether its **frame matches its content**.
   plain HTTP, so on an untrusted network put a TLS-terminating reverse proxy in
   front. See the auth roadmap for what is deliberately still out of scope
   (per-user sessions).
-- HDR10 is supported; Dolby Vision dual-layer is not yet.
+- HDR10 is processed, not supported (issue #358): HDR sources are neither
+  blocked nor validated. Quality is measured on a tone-mapped SDR copy (VMAF has
+  no HDR model), HDR10 metadata survival is not verified per file, and Dolby
+  Vision is not handled (#104).
 - VMAF scores are only comparable within one libvmaf version.
 
 ## Brand Commitments
@@ -416,9 +419,14 @@ decoration per user preference).
 
 ## Evidence on Hand
 
-- Measured results on real content (x265 output; AV1 output is not measured yet):
-  Django Unchained 5.55→1.98 GB (64.3%) at VMAF 95.25; Bloodshot 0.42→0.07 GB
-  (82.7%); a parallel run of 3 movies in 34.3 min.
+- The product's own end-to-end behaviour is exercised live: a 2026-10-25 assessment
+  built the container from main, ran doctor, plan (a real 31 GB 1080p source passed
+  every eligibility gate and got a measured verdict), the auth boundary (401/200,
+  control routes absent), the terminal UI and the encode chain inside Docker, with
+  transcripts retained by the operator. Known open defect at that date: the VMAF
+  comparison under-scores AV1 output (issues #306-#317, milestone "VMAF measurement
+  matches ab-av1") — until it lands, plan's skip verdicts on AV1 candidates are not
+  trustworthy, and that is stated here rather than hidden.
 - An already-efficient HEVC source is correctly *skipped* rather than re-encoded.
 - Working dashboard (Svelte 5, dark/light) and a per-concern test suite as
   implementation evidence.
