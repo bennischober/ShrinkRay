@@ -20,7 +20,7 @@ Flat by design: `tests/fixtures/` is the only subdirectory, and no `tests/engine
 | `test_auth`, `test_metrics` | `server.app` token gate, Prometheus render |
 | `test_replace`, `test_plans`, `test_misc`, `test_timestamps`, `test_telemetry_leak` | swap-in-place retention; plans table (`db` + `service`); scan-time conversions (`engine/scan.py`), `config` schema and encoder presets, subprocess timeouts; console log format; the `logs/` leak when `encode_with_quality(verify=True)` has no `db_file` |
 | `test_config_reload` | the config on `/data` (issue #247): `config.seed_config_file`/`seed_config_from_env` and the CLI callback, `refresh_config` (reload, invalid edit kept out, error once), the watcher's `WatchSettings` provider, per-movie refresh in `server.jobs`, `config_error` on `/api/status` |
-| `test_container`, `test_container_config`, `test_release_notes` | repo artifacts, not the package: cgroup CPU plan, `container-config.json` + `Dockerfile` + `.dockerignore`, `tools/release_notes.py` (via `sys.path.insert`) |
+| `test_container`, `test_container_config`, `test_release_notes` | repo artifacts, not the package: cgroup CPU plan, `container-config.json` + `Dockerfile` + `.dockerignore`, `tools/healthcheck.py`, `tools/container-shrinkray.sh` + `tools/container-console.sh` (syntax and rules; behaviour is the release smoke test's), `tools/release_notes.py` (via `sys.path.insert`) |
 
 ## CONVENTIONS
 

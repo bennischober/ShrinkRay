@@ -94,8 +94,10 @@ RUN apt-get update \
       libvorbis0a libvorbisenc2 libvpx7 libx264-164 libx265-199 zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
-# non-root by default: everything the app writes on a bind mount must be
-# host-owned, and a root-owned output file is a support ticket on the NAS
+# the image's user. Everything the app writes on a bind mount must be the
+# operator's, and a root-owned output file is a support ticket on the NAS: at
+# start the entrypoint gives this user the operator's PUID/PGID (issue #248);
+# UID/GID only set its defaults
 ARG UID=1000
 ARG GID=1000
 RUN groupadd -g "${GID}" shrinkray \
@@ -120,12 +122,23 @@ RUN mkdir -p /data /media /output /tmp/shrinkray \
 # the operator's config lives on the /data volume and survives updates (issue
 # #247): every command reads $SHRINKRAY_CONFIG, and the first one creates it
 # from the baked defaults below ($SHRINKRAY_CONFIG_SEED), never overwriting it
+# /usr/local/bin comes first so `shrinkray` is the wrapper that runs the CLI as
+# the operator's user, not the virtualenv's script (issue #248); ENV makes every
+# interactive sh drop from root to that user too (bash reads bash.bashrc)
 ENV TMPDIR=/tmp/shrinkray \
-    PATH="/app/.venv/bin:${PATH}" \
+    PATH="/usr/local/bin:/app/.venv/bin:${PATH}" \
     SHRINKRAY_CONFIG=/data/config.json \
-    SHRINKRAY_CONFIG_SEED=/app/config.json
+    SHRINKRAY_CONFIG_SEED=/app/config.json \
+    PUID=${UID} \
+    PGID=${GID} \
+    UMASK=022 \
+    ENV=/app/tools/container-console.sh
 
-USER shrinkray
+# the container starts as root only so the entrypoint can apply PUID/PGID; every
+# command then runs as the operator's user, and a console shell drops to it too
+RUN install -m 0755 /app/tools/container-shrinkray.sh /usr/local/bin/shrinkray \
+ && ln -s shrinkray /usr/local/bin/shrinkray-entrypoint \
+ && echo '. /app/tools/container-console.sh' >> /etc/bash.bashrc
 
 # the container's config: a tracked file, COPYed (not printf-baked — the
 # JSON in shell escapes was unreadable and untestable, and #206's test had to
@@ -135,9 +148,10 @@ USER shrinkray
 # local dev run never starts encoding.
 COPY container-config.json /app/config.json
 
-# `shrinkray` is the entrypoint so the image runs either mode (issue #242): no
+# the CLI is the entrypoint so the image runs either mode (issue #242): no
 # arguments start the resident server below, any arguments are one CLI command,
 # e.g. `docker run --rm -v lib:/media <image> encode /media/film.mkv`.
+# `shrinkray-entrypoint` is the same wrapper, plus the PUID/PGID setup (#248).
 # --root is not optional on Linux: the default allowlist is the current
 # directory when no drive root exists, so without it every library path is a 403.
 # serve is the resident mode's name (issue #202); `app` stays a hidden alias.
@@ -145,7 +159,7 @@ COPY container-config.json /app/config.json
 # /data/config.json, the operator's mount) with the baked /app/config.json as
 # the fallback when nothing is set or mounted — issue #236 part 3: an explicit
 # --config here would override the operator's mount, so the command passes none.
-ENTRYPOINT ["shrinkray"]
+ENTRYPOINT ["shrinkray-entrypoint"]
 CMD ["serve", "--db", "/data/metadata.db", "--host", "0.0.0.0", "--root", "/media"]
 
 EXPOSE 8420

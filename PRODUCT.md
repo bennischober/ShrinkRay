@@ -213,7 +213,8 @@ follow the steps" pattern of Unraid apps:
   place; the watched folder is exactly this mount.
 - **Files are written as the operator's user.** Unraid templates pass the user and group to
   run as (`PUID`/`PGID`, with `UMASK`); a file written to the share as any other owner is a
-  support ticket. This reopens the fixed-UID decision in `docs/docker.md` for this target.
+  support ticket. Every command, a `docker exec` and an interactive console shell run as
+  that user, never as root (issue #248).
 - **The token is generated when absent** (see *Auth roadmap*); a template field may set it
   instead.
 
@@ -224,8 +225,9 @@ library use one artifact.
 > **Implementation status.** Not built. The image runs both modes (`shrinkray` is the
 entrypoint and `serve ...` the default command, issue #242) and keeps its config on `/data`,
 created from the image's defaults on first start and applied at the next file when it
-changes (issue #247), but runs as a fixed UID. The template, the banner, `PUID`/`PGID`, the
-generated token and the Community Applications listing are follow-up issues of #244.
+changes (issue #247), and runs every command as `PUID`/`PGID` (issue #248). The template, the
+banner, the generated token and the Community Applications listing are follow-up issues of
+#244.
 
 ## Product Purpose
 
