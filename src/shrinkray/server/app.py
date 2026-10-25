@@ -1220,9 +1220,9 @@ def run_app(
             "A published port with no auth is reachable by every device "
             "on the network (issue #36)."
         )
-    from shrinkray.service import toolchain_problems
+    from shrinkray.service import all_problems
 
-    problems = toolchain_problems()
+    problems = all_problems()
     if problems:
         raise ValueError(
             "refusing to start on an unusable toolchain:\n  "

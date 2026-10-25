@@ -26,6 +26,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **A one-file command touches exactly that file** (issue #197): all three commands (`scan`, `plan`, `encode`) resolved a named file to its PARENT folder and rescanned it, so on a flat library `encode a.mkv` batch-encoded everything beside it. `resolve_input_paths`' explicit file list now flows through `scan_movies`' new `files` parameter instead of being discarded; a folder still scans the folder, a glob still scans its matches, and the server's `resolve_movies` behavior (which already did this right) is now the CLI's too.
 
+- **The commands preflight their toolchain** (issue #194): `toolchain_problems()` never checked ffprobe, and only `doctor`/`run_app` called it — a host without ffprobe passed the doctor clean and then failed every file in `scan`/`plan`/`encode`, one error line at a time (scan exited 0). The check now includes ffprobe, the entries are grouped by prerequisite so each command gates on what IT needs (`scan`: ffprobe only; `plan`/`encode`: everything), and the refusal happens before any work, mirroring doctor's wording.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

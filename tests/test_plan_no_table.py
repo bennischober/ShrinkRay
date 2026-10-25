@@ -6,11 +6,24 @@ parsed command, so it gets the same one.
 import os
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from shrinkray.__main__ import app
 from shrinkray.engine.plan import QualityResult
+
+
+@contextmanager
+def _toolchain_present():
+    """The plan preflight (#194) checks the toolchain before any work; these
+    tests mock the engine itself, so the check must see a working one."""
+    with (
+        patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+        patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
+        patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+    ):
+        yield
 
 
 def _encode_plan(movie: Path) -> QualityResult:
@@ -48,8 +61,9 @@ class TestPlanNoTable(unittest.TestCase):
             os.chdir(previous)
 
     def test_plan_no_table_prints_no_table_but_the_summary(self) -> None:
-        with patch(
-            "shrinkray.engine.plan.plan_quality", side_effect=lambda m, **k: _encode_plan(m)
+        with (
+            _toolchain_present(),
+            patch("shrinkray.engine.plan.plan_quality", side_effect=lambda m, **k: _encode_plan(m)),
         ):
             output = self._run("plan", str(self.movie), "--no-table")
         self.assertNotIn("┃", output, "--no-table still rendered the rich table")
@@ -57,8 +71,9 @@ class TestPlanNoTable(unittest.TestCase):
         self.assertIn("estimated total", output, "the summary line vanished with the table")
 
     def test_plan_without_the_flag_prints_the_table(self) -> None:
-        with patch(
-            "shrinkray.engine.plan.plan_quality", side_effect=lambda m, **k: _encode_plan(m)
+        with (
+            _toolchain_present(),
+            patch("shrinkray.engine.plan.plan_quality", side_effect=lambda m, **k: _encode_plan(m)),
         ):
             output = self._run("plan", str(self.movie))
         self.assertIn("Encode plan", output, "the default lost its table")
@@ -87,6 +102,7 @@ class TestPlanNoTable(unittest.TestCase):
             return {}, [self.movie], []
 
         with (
+            _toolchain_present(),
             patch("shrinkray.engine.plan.plan_quality", side_effect=lambda m, **k: _encode_plan(m)),
             patch("shrinkray.__main__.scan_movies", side_effect=fake_scan),
         ):

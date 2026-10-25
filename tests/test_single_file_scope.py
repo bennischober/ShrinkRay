@@ -7,10 +7,23 @@ resolve_input_paths' file list through scan_movies' new `files` parameter.
 import os
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from shrinkray.__main__ import app
+
+
+@contextmanager
+def _toolchain_present():
+    """The plan/encode preflight (#194) checks the toolchain before any work;
+    these tests mock the engine itself, so the check must see a working one."""
+    with (
+        patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+        patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
+        patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+    ):
+        yield
 
 
 class TestSingleFileScope(unittest.TestCase):
@@ -64,6 +77,7 @@ class TestSingleFileScope(unittest.TestCase):
             )
 
         with (
+            _toolchain_present(),
             patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan) as plan,
         ):
             self._run("plan", "a.mkv")
@@ -76,7 +90,7 @@ class TestSingleFileScope(unittest.TestCase):
         # 3/3), and the untouched files keep their mtimes.
         mtimes_before = {name: (self.root / name).stat().st_mtime_ns for name in self.names}
         with (
-            patch("shrinkray.tools.handbrake.find_handbrake", return_value=None),
+            _toolchain_present(),
             patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
         ):
             output = self._run("encode", "a.mkv")
@@ -87,7 +101,7 @@ class TestSingleFileScope(unittest.TestCase):
 
     def test_encode_on_a_folder_scans_the_folder(self) -> None:
         with (
-            patch("shrinkray.tools.handbrake.find_handbrake", return_value=None),
+            _toolchain_present(),
             patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
         ):
             output = self._run("encode", str(self.root))

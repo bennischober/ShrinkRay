@@ -10,11 +10,24 @@ partial answer, a skip is a successful decision).
 import os
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from shrinkray.__main__ import app
 from shrinkray.engine.plan import QualityResult
+
+
+@contextmanager
+def _toolchain_present():
+    """The plan preflight (#194) checks the toolchain before any work; these
+    tests mock the engine itself, so the check must see a working one."""
+    with (
+        patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+        patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
+        patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+    ):
+        yield
 
 
 def _plan_result(movie: Path, *, success: bool, skipped: str | None = None) -> QualityResult:
@@ -51,9 +64,12 @@ class TestPlanExitCode(unittest.TestCase):
 
     def test_a_plan_where_every_movie_errors_exits_nonzero(self) -> None:
         """No HandBrakeCLI: no verdict exists, so the command failed."""
-        with patch(
-            "shrinkray.engine.plan.plan_quality",
-            side_effect=RuntimeError("'HandBrakeCLI' not found"),
+        with (
+            _toolchain_present(),
+            patch(
+                "shrinkray.engine.plan.plan_quality",
+                side_effect=RuntimeError("'HandBrakeCLI' not found"),
+            ),
         ):
             code = self._run("plan", str(self.movie))
         self.assertEqual(code, 1, "every movie failed to plan, yet plan exited 0")
@@ -68,15 +84,21 @@ class TestPlanExitCode(unittest.TestCase):
                 raise RuntimeError("unreadable")
             return _plan_result(movie, success=True, skipped="too short")
 
-        with patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan):
+        with (
+            _toolchain_present(),
+            patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
+        ):
             code = self._run("plan", str(self.root))
         self.assertEqual(code, 0, "a partial plan is still a plan")
 
     def test_a_plan_where_every_movie_is_skipped_exits_zero(self) -> None:
         """A skip is a successful decision, not a failure."""
-        with patch(
-            "shrinkray.engine.plan.plan_quality",
-            side_effect=lambda m, **kwargs: _plan_result(m, success=False, skipped="too short"),
+        with (
+            _toolchain_present(),
+            patch(
+                "shrinkray.engine.plan.plan_quality",
+                side_effect=lambda m, **kwargs: _plan_result(m, success=False, skipped="too short"),
+            ),
         ):
             code = self._run("plan", str(self.movie))
         self.assertEqual(code, 0, "every movie skipped, yet plan treated it as failure")

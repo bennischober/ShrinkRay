@@ -327,6 +327,15 @@ def scan(
     """Scans the movie folder and writes the metadata to a text file."""
     config = load_config(config_file=config_file)
     apply_config(config)
+    # scan reads media with ffprobe only: refuse when IT is missing, but do
+    # not demand the encode toolchain for a cataloging run (issue #194)
+    from shrinkray.service import toolchain_problems
+
+    ffprobe_problems = toolchain_problems()["ffprobe"]
+    if ffprobe_problems:
+        for problem in ffprobe_problems:
+            log_error(problem)
+        raise typer.Exit(1)
     connection = db.connect(db_file) if db_file is not None else None
     try:
         root, files = resolve_input_paths(path, config.extensions)
@@ -512,6 +521,14 @@ def encode(
 
     config = load_config(config_file=config_file)
     apply_config(config)
+    # encode probes and re-encodes: it needs the whole toolchain (issue #194)
+    from shrinkray.service import all_problems
+
+    encode_problems = all_problems()
+    if encode_problems:
+        for problem in encode_problems:
+            log_error(problem)
+        raise typer.Exit(1)
     connection = db.connect(db_file) if db_file is not None else None
     try:
         # the output directory must never be a scan target (previous outputs
@@ -934,6 +951,14 @@ def plan(
 
     config = load_config(config_file=config_file)
     apply_config(config)
+    # plan probes every movie's CRF: it needs the whole toolchain (issue #194)
+    from shrinkray.service import all_problems
+
+    plan_problems = all_problems()
+    if plan_problems:
+        for problem in plan_problems:
+            log_error(problem)
+        raise typer.Exit(1)
     connection = db.connect(db_file) if db_file is not None else None
     try:
         try:
@@ -1202,8 +1227,8 @@ def doctor(
         log_error(f"Database '{db_file}' not found! Run a scan first.")
         raise typer.Exit(1)
 
+    from shrinkray.service import all_problems
     from shrinkray.service import doctor as run_doctor
-    from shrinkray.service import toolchain_problems
 
     connection = db.connect(db_file)
     try:
@@ -1213,7 +1238,7 @@ def doctor(
 
     # the toolchain is checked FIRST: "library is healthy" on a host that
     # cannot measure a single file is the honest-failure rule broken
-    problems = toolchain_problems()
+    problems = all_problems()
     for problem in problems:
         log_error(problem)
 
