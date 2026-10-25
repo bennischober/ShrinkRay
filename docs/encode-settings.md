@@ -47,7 +47,7 @@ No `--preset` is passed, so every encode runs on HandBrakeCLI's built-in
 
 | Reference key | Value | Today | Verdict |
 |---|---|---|---|
-| `VideoEncoder` | `svt_av1_10bit` | `--encoder` from config, 10-bit only for HDR | **we differ** — HDR decides the depth (`engine/encoders.py`) |
+| `VideoEncoder` | `svt_av1_10bit` | `--encoder` from config, 10-bit for any source deeper than 8 bits | **we differ** — the SOURCE's bit depth decides; HDR forces 10-bit (`engine/encoders.py`, #234) |
 | `VideoQualityType` / `VideoQualitySlider` | `2` / `28.0` | `--quality <measured CRF>` | **we differ** — the CRF is measured per file, never a constant |
 | `VideoPreset` | `5` | probe `5`, final `3` | **we differ** — probe and output are separate settings (#22) |
 | `VideoTune` | `ssim` | no `--encoder-tune` (SVT tune 0) | **open** — see "Open decisions" |

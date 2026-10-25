@@ -141,7 +141,13 @@ def build_vmaf_command(
         vmaf += f":n_subsample={int(subsample)}"
 
     # the tone-map chain: linear light -> bt709 primaries -> hable tonemap
-    # -> back to video levels (validated on real HDR10 content)
+    # -> back to video levels. libvmaf's models are SDR-trained, so HDR is
+    # flattened into a comparable space before scoring; the chain is an
+    # approximation, not a validated reference - #340 measured its footprint
+    # at ~2.9 VMAF on one real HDR10 pair (ShrinkRay scores lower than
+    # ab-av1's PQ-direct path, which errs safe: quality is overshot, never
+    # undershot). #358 tracks the end-to-end HDR verification that would
+    # retire that caveat.
     tonemap = (
         "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
         "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,"
