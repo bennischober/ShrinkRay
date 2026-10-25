@@ -629,6 +629,16 @@ def watch(
                         log_error(f"Encoding '{movie.name}' cancelled: {e} => retry next pass.")
                         known.discard(_identity(movie))
                         continue
+                    except RuntimeError as e:
+                        # a per-file failure (unreadable, unprobeable, encode
+                        # error): logged with the file's name, and the WATCHER
+                        # CONTINUES - one corrupt file must not end the loop
+                        # that runs unattended for months (issue #260). The
+                        # file is already in `known` (marked above), so it is
+                        # not retried until it changes; whether it should be
+                        # retried at all is #231's failure-memory decision.
+                        log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
+                        continue
                     if result.skipped_reason:
                         log(f"Skipping '{movie.name}': {result.skipped_reason}.")
                     elif result.success:
