@@ -94,8 +94,8 @@ fresh" cost. Details below.
 - **Subprocess model is container-native.** The binaries just get baked
   into the image; the Python code only orchestrates.
 - **Deployment simplicity is real.** `docker run -v /media:/media` plus
-  one env/config volume is a lower barrier than the systemd + uv path
-  (deploy/shrinkray.service) for a friend's NAS.
+  one env/config volume is a lower barrier than any bare-metal path for a
+  friend's NAS.
 - **Reproducibility.** The exact toolchain (ffmpeg + libvmaf version,
   HandBrake version) is pinned per image instead of varying per host -
   VMAF scores are only comparable within one toolchain (README), so a
@@ -149,8 +149,9 @@ fresh" cost. Details below.
 2. **PUID/PGID.** A fixed non-root user built with `--build-arg UID/GID`, not
    entrypoint-driven user fixing. It is one `useradd` in the Dockerfile instead
    of a runtime step that can fail in ways a stranger has to debug.
-3. **Docker is an official deployment channel alongside systemd + uv.** Yes -
-   `deploy/shrinkray.service` stays for bare metal; the image is the NAS path.
+3. **Docker is THE deployment channel.** The image is the NAS path; the
+   systemd unit (`deploy/shrinkray.service`) was removed with the container
+   path established (2026-10-25).
 4. **Registry.** ghcr.io (issue #165): the release workflow builds, smoke-tests
    and pushes on `v*` tags; no extra secret is needed (`GITHUB_TOKEN` +
    `packages: write`). Docker Hub can be added as a second push target later
@@ -223,7 +224,6 @@ risk. Still: one watcher per library.
 
 ## Related
 
-- deploy/shrinkray.service - the existing systemd path (works today)
 - The changelog's decisions (CHANGELOG.md) - the no-PyInstaller decision
   this extends
 - GitHub issue #35 (swap-in-place with a retained original) - decides where

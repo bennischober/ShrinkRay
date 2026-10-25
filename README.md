@@ -194,11 +194,12 @@ uv run shrinkray encode /srv/media/movies --dry-run
 uv run shrinkray serve            # dashboard on http://localhost:8420
 ```
 
-For a headless box that should run the app at boot there is a systemd unit
-in [`deploy/shrinkray.service`](deploy/shrinkray.service) (with install
-notes in its header). The app is a polite guest on such a machine: encodes
-and probes run below normal priority and each encode can be thread-capped
-(`handbrake.max_threads`) so other services keep their cores.
+For a headless box that should run the app at boot, the supported path is
+the container (see [docs/docker.md](docs/docker.md)): `docker run -d --restart unless-stopped`
+with the library mounted and the dashboard port published. The app is a polite
+guest on such a machine either way: encodes and probes run below normal
+priority and each encode can be thread-capped (`handbrake.max_threads`) so
+other services keep their cores.
 
 ## How it works
 
