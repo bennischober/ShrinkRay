@@ -225,15 +225,21 @@ more specific.
 2. **Never commit secrets.** The litellm API key lives in
    `.opencode/orthos-key` (gitignored). Do not copy keys into code, tests,
    logs or commit messages. Do not use PII in commit messages.
-3. **Run the full gate before every commit.** All seven must pass:
+3. **Run the full gate before every commit.** All seven must pass. The gate
+   is ONE script, `tools/gate.sh` — it is the same contract ci.yml,
+   release.yml and the dev image's CMD run, so there is exactly one place
+   where the commands live. Locally, run the script; the commands behind it
+   are listed for reference:
 
    ```sh
-   uv run ruff check src tests
-   uv run ruff format --check src tests
-   uv run mypy --platform linux
-   uv run mypy --platform win32
-   uv run pytest -q
-   uv run lint-imports
+   tools/gate.sh
+   # which runs, in order:
+   #   uv run ruff check src tests
+   #   uv run ruff format --check src tests
+   #   uv run mypy --platform linux
+   #   uv run mypy --platform win32
+   #   uv run pytest -q
+   #   uv run lint-imports
    ```
 
    Both mypy runs are explicit so the gate is identical on every host. Running

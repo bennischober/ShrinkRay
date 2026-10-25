@@ -5,6 +5,9 @@
 /config.json.bak
 /*.json
 !config.json
+# the container's baked config (the Dockerfile COPYes it, see issue #204's
+# extensions list and the 2026-10-25 hygiene rework)
+!container-config.json
 
 # sqlite database
 *.db
