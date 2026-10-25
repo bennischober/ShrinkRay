@@ -23,6 +23,7 @@
     movie,
     targetVmaf,
     allJobs,
+    revealAvailable = false,
     onclose,
     onjobs,
     backTo = 'library',
@@ -32,6 +33,8 @@
     /** The snapshot's job list — filtering it locally beats refetching
      * /api/jobs per detail-open (zero extra round-trips). */
     allJobs: Job[]
+    /** the server reports whether this host can open a file manager (issue #239) */
+    revealAvailable?: boolean
     onclose: () => void
     /** Navigate to the jobs page (the trail's "all jobs" link). */
     onjobs: () => void
@@ -310,10 +313,12 @@
       </div>
     </div>
     <div class="hero-actions">
-      {#if revealError}<span class="mono bad reveal-err">{revealError}</span>{/if}
-      <button class="act quiet" onclick={revealInExplorer} disabled={revealBusy} title="Open the containing folder in the file manager">
-        {revealBusy ? 'OPENING…' : 'FOLDER'}
-      </button>
+      {#if revealAvailable}
+        {#if revealError}<span class="mono bad reveal-err">{revealError}</span>{/if}
+        <button class="act quiet" onclick={revealInExplorer} disabled={revealBusy} title="Open the containing folder in the file manager">
+          {revealBusy ? 'OPENING…' : 'FOLDER'}
+        </button>
+      {/if}
     </div>
   </section>
 

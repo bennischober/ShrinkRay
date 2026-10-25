@@ -270,81 +270,12 @@
 
   // pending: global click-guard + per-kind queue guard (no job spam: a kind
   // already queued/running disables its enqueue buttons)
-  let pendingKind = $state<'scan' | 'plan' | 'encode' | 'cancel' | null>(null)
   const kindQueued = $derived(
     (kind: 'scan' | 'plan' | 'encode') =>
       history.some((j) => j.kind === kind && (j.state === 'queued' || j.state === 'running'))
   )
 
-  // ── the encode-all preflight: the loudest verb gets a briefing ──
-  // One click on ENCODE ALL would queue the whole library (354 titles,
-  // 3.6 TB, days of work). The one-line strip states scope + measured
-  // throughput before the verb fires; the safe exit returns focus.
-  let pendingEncodeAll = $state(false)
-  let encodeAllEl: HTMLDivElement | null = $state(null)
-  let encodeAllTrigger: HTMLElement | null = null
-  $effect(() => {
-    if (pendingEncodeAll) encodeAllEl?.focus()
-  })
-  const encodeAllTitles = $derived(movies.length)
-  const encodeAllSizeGb = $derived(movies.reduce((sum, m) => sum + (m.size ?? 0), 0) / 1024 ** 3)
-  /** Measured throughput from schema-v5 data (bytes per encode-second,
-   * averaged over real runs) — 'measured, not guessed' applied to the
-   * estimate itself. The label carries its sample size: extrapolating
-   * two episodes to 3.6 TB without saying so would be the false
-   * precision the console refuses elsewhere. null when unmeasured. */
-  const encodeAllEstLabel = $derived.by(() => {
-    const done = movies.filter((m) => m.encode?.encode_seconds != null && m.encode.encode_seconds > 0)
-    if (done.length === 0) return null
-    const outBytes = done.reduce((sum, m) => sum + (m.encode?.output_size ?? 0), 0)
-    const outSeconds = done.reduce((sum, m) => sum + (m.encode?.encode_seconds ?? 0), 0)
-    if (outBytes <= 0 || outSeconds <= 0) return null
-    const seconds = (encodeAllSizeGb * 1024 ** 3 * (outSeconds / outBytes))
-    const h = Math.round(seconds / 3600)
-    const span = h >= 48 ? `~${(h / 24).toFixed(0)} days` : h >= 1 ? `~${h} h` : '~under an hour'
-    // n=1 is the weakest possible basis: with a single sample the projection
-    // inherits one title's every quirk (a 43 MB episode vs a 40 GB remux),
-    // so it must not wear the confident "measured throughput" voice —
-    // same number, but the sentence says what it is
-    if (done.length === 1) {
-      const basisGb = done[0].size ?? done[0].encode?.output_size ?? 0
-      // the missing wall-time figure gets its explanation — silence next
-      // to a multi-TB scope read as an oversight, not an honesty rule
-      return basisGb > 0
-        ? `rough extrapolation from a single ${fmtGb(basisGb)} title — real runs will differ; basis too thin to project wall time`
-        : 'rough extrapolation from a single title — real runs will differ; basis too thin to project wall time'
-    }
-    return `${span} at measured throughput (basis: ${done.length} titles)`
-  })
-  function requestEncodeAll() {
-    encodeAllTrigger = document.activeElement as HTMLElement | null
-    pendingEncodeAll = true
-  }
-  function closeEncodeAll() {
-    pendingEncodeAll = false
-    encodeAllTrigger?.focus()
-    encodeAllTrigger = null
-  }
-  function encodeAllKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      closeEncodeAll()
-      return
-    }
-    if (e.key === 'Tab' && encodeAllEl) {
-      const focusables = encodeAllEl.querySelectorAll<HTMLElement>('button:not(:disabled)')
-      if (focusables.length < 2) return
-      const first = focusables[0]
-      const last = focusables[focusables.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-  }
+
 
   // ── the encode-all confirmation: the single gate for a whole-library run ──
   // Only ENCODE ALL asks, because it is the one action that can touch every
@@ -512,6 +443,7 @@
         movie={detailMovie}
         {targetVmaf}
         allJobs={history}
+        revealAvailable={status?.reveal_available ?? false}
         onclose={closeDetail}
         onjobs={() => goto('jobs')}
         backTo={detailFrom}
@@ -535,7 +467,6 @@
           ondismiss={dismissFailed}
           ongoto={goto}
           onopenmovie={(m) => openDetail(m, 'overview')}
-          cancelling={pendingKind === 'cancel'}
         />
       </div>
       <div class="pages" class:hidden={page !== 'library'}>
@@ -583,24 +514,6 @@
     {/if}
   </main>
 </div>
-
-<!-- ══ encode-all preflight: scope + measured estimate before the loudest verb ══ -->
-{#if pendingEncodeAll}
-  <!-- amber ceremony, not the red one: encoding is reversible (sources
-       untouched) — red is the destruction hue and must stay frightening
-       for the bars crop and the recycle bin (round-6 P1) -->
-  <div class="bars-confirm encode-preflight" role="alertdialog" aria-label="Confirm whole-library encode" tabindex="-1" bind:this={encodeAllEl} onkeydown={encodeAllKeydown}>
-    <div class="bars-text">
-      <strong>ENCODE THE ENTIRE LIBRARY?</strong>
-      {encodeAllTitles} titles · {encodeAllSizeGb.toFixed(1)} GB source
-      {#if encodeAllEstLabel}· {encodeAllEstLabel}{/if}
-      — sources are never touched; results land in {outputDir || 'the output folder'}.
-    </div>
-    <div class="bars-buttons">
-      <button class="mono deny" onclick={closeEncodeAll}>CLOSE</button>
-    </div>
-  </div>
-{/if}
 
 <style>
   /* skip link: invisible until keyboard-focused, then a console-styled
@@ -773,44 +686,12 @@
   }
 
   /* ══ confirmation strip ══ */
-  .bars-confirm {
-    position: fixed;
-    left: 190px;
-    right: 0;
-    bottom: 0;
-    z-index: 60;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-    border-top: 1px solid var(--red);
-    background: repeating-linear-gradient(45deg, rgba(242, 114, 101, 0.08) 0 4px, transparent 4px 8px), var(--panel);
-    padding: 12px 26px;
-  }
-  .bars-text { font-size: var(--fs-data); }
-  .bars-buttons { display: flex; gap: 8px; }
-  .bars-buttons button {
-    background: transparent;
-    border: 1px solid var(--seam);
-    color: var(--ink);
-    padding: 5px 14px;
-    cursor: pointer;
-    border-radius: var(--radius);
-    font-size: var(--fs-legend);
-    letter-spacing: var(--track-legend);
-  }
-  .bars-buttons .deny:hover { border-color: var(--ink-dim); }
 
   /* the preflight variant: an amber ceremony for a REVERSIBLE verb.
      Encoding never touches a source, so it must not rent red's alarm —
      that would teach the eye to ignore the real red ceremonies
      (bars crop, recycle bin). Amber = work in progress; the confirm
      button keeps its primary teal fill. */
-  .bars-confirm.encode-preflight {
-    border-top-color: var(--amber);
-    background: repeating-linear-gradient(45deg, rgba(224, 164, 94, 0.08) 0 4px, transparent 4px 8px), var(--panel);
-  }
 
   @media (max-width: 900px) {
     .console { flex-direction: column; }
@@ -829,6 +710,5 @@
     .rail-item.active { box-shadow: inset 0 -2px 0 var(--teal); }
     .rail-foot { margin-top: 0; flex-direction: row; }
     .main { padding: 14px; }
-    .bars-confirm { left: 0; }
   }
 </style>
