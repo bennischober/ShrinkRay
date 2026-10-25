@@ -14,7 +14,11 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shrinkray.engine.crop import DEFAULT_CROP_SAMPLE_COUNT, detect_crop_rect
+from shrinkray.engine.crop import (
+    DEFAULT_CROP_SAMPLE_COUNT,
+    detect_crop_rect,
+    detect_crop_summary_cached,
+)
 from shrinkray.engine.encoders import (
     DEFAULT_ENCODER,
     DEFAULT_HDR_TARGET_VMAF,
@@ -475,7 +479,15 @@ def plan_quality(
         # is the only moment the picture can be corrected for free, and keeping
         # bars in a smaller file is strictly worse than the source
         # (docs/encode-decision.md). No bars is a normal outcome, not a skip.
-        crop = detect_crop_rect(input_file, workdir, count=crop_sample_count)
+        # The timeline detector is the one bar measurement (issue #181): it is
+        # cached per file version in the db, so the keyframe-only pass runs
+        # once per file. Without a database (stateless runs) the sampled
+        # fallback keeps bar detection working.
+        summary = detect_crop_summary_cached(input_file, db_file)
+        if summary is None or summary.bars is None:
+            crop = detect_crop_rect(input_file, workdir, count=crop_sample_count)
+        else:
+            crop = summary.bars
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
         # extract the windows once and hand the same list to the search and
         # the reported size factor: each extraction decodes and writes every

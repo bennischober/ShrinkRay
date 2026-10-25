@@ -164,6 +164,11 @@ layers = [
     "shrinkray.config",
     "shrinkray.logger",
 ]
+# db.py annotates the timeline crop summary (issue #181) with the engine's
+# type under TYPE_CHECKING: an annotation-only edge, no runtime dependency.
+ignore_imports = [
+    "shrinkray.db -> shrinkray.engine.crop",
+]
 
 [[tool.importlinter.contracts]]
 name = "Foundation imports nothing internal (issue #97)"
@@ -185,4 +190,9 @@ forbidden_modules = [
     "shrinkray.watch",
     "shrinkray.scanner",
     "shrinkray.helpers",
+]
+# db.py annotates the timeline crop summary (issue #181) with the engine's
+# type under TYPE_CHECKING: an annotation-only edge, no runtime dependency.
+ignore_imports = [
+    "shrinkray.db -> shrinkray.engine.crop",
 ]

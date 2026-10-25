@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from shrinkray import db
 from shrinkray.db import MovieRecord
-from shrinkray.engine.crop import has_black_bars
+from shrinkray.engine.crop import get_crop_summary, has_black_bars
 from shrinkray.helpers import (
     SIZE_UNIT,
     convert_unit,
@@ -32,6 +32,7 @@ from shrinkray.tools.ffprobe import get_data
 
 if TYPE_CHECKING:
     from shrinkray.config import Conf
+    from shrinkray.engine.crop import CropSummary
 
 UNCATEGORIZED = "Uncategorized"
 
@@ -321,7 +322,11 @@ def record_from_cache(row: sqlite3.Row) -> dict:
 
 
 def process_movie(
-    filename: Path, root: Path, config: Conf, compute_hash: bool = False
+    filename: Path,
+    root: Path,
+    config: Conf,
+    compute_hash: bool = False,
+    db_file: Path | None = None,
 ) -> tuple[dict | None, str | None]:
     """Collects the metadata of a single movie file.
 
@@ -330,6 +335,9 @@ def process_movie(
         root (Path): The scan root directory (for the category).
         config (Conf): The config settings.
         compute_hash (bool): Compute a fast content hash of the file.
+        db_file (Path | None): The database file, read to project an existing
+            timeline crop summary into the flag (issue #181). The expensive
+            timeline pass is never run here.
 
     Returns:
         tuple: The movie data dictionary (or None on error) and an error
@@ -354,13 +362,34 @@ def process_movie(
     elif ret["duration"] is not None:
         compression_rate = round(size / (timestr_to_int(ret["duration"]) / 3600), 2)
 
-    # check for cropping
-    ret["crop"] = has_black_bars(
-        filename,
-        ret["dimensions"],
-        min_width=config.black_bar_min_width,
-        min_height=config.black_bar_min_height,
-    )
+    # check for cropping: the 1/0 flag stays a CHEAP separate measurement
+    # (a 10-frame probe, never the keyframe timeline pass — scan of a whole
+    # library must stay fast). When the timeline detector has already cached
+    # a summary for this exact file version, its bars are the better source
+    # and the flag is their projection (issue #181); the report explains any
+    # disagreement with the plan's crop.
+    ret["crop"] = None
+    summary: CropSummary | None = None
+    if db_file is not None:
+        try:
+            connection = db.connect(db_file)
+            try:
+                summary = get_crop_summary(connection, filename)
+            finally:
+                connection.close()
+        except (OSError, RuntimeError, sqlite3.Error):
+            summary = None
+    else:
+        summary = None
+    if summary is not None:
+        ret["crop"] = summary.flag
+    if ret["crop"] is None:
+        ret["crop"] = has_black_bars(
+            filename,
+            ret["dimensions"],
+            min_width=config.black_bar_min_width,
+            min_height=config.black_bar_min_height,
+        )
 
     # add additional data to dictionary
     ret["name"] = name
@@ -383,6 +412,7 @@ def scan_movies(
     exclude: Path | None = None,
     on_movie: Callable[[int, dict | None, str | None], None] | None = None,
     files: list[Path] | None = None,
+    db_file: Path | None = None,
 ) -> tuple[dict, list[Path], list[str]]:
     """Scans the root directory for movies and collects their metadata.
 
@@ -410,6 +440,9 @@ def scan_movies(
             file or a glob's matches, resolved by resolve_input_paths);
             when given, the root is NOT walked (issue #197: a one-file
             command must touch exactly that file, not its folder).
+        db_file (Path | None): The database file, read per movie to project
+            an existing timeline crop summary into the flag (issue #181);
+            never used to run the expensive pass from scan.
 
     Returns:
         tuple: Movies by category, all found movies and error messages.
@@ -459,7 +492,11 @@ def scan_movies(
                 if results[index] is not None:
                     continue
                 results[index], error_messages[index] = process_movie(
-                    filename, root, config, compute_hash=compute_hash
+                    filename,
+                    root,
+                    config,
+                    compute_hash=compute_hash,
+                    db_file=db_file,
                 )
                 if on_movie is not None:
                     on_movie(index, results[index], error_messages[index])
@@ -470,7 +507,12 @@ def scan_movies(
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {
                     executor.submit(
-                        process_movie, filename, root, config, compute_hash=compute_hash
+                        process_movie,
+                        filename,
+                        root,
+                        config,
+                        compute_hash=compute_hash,
+                        db_file=db_file,
                     ): index
                     for index, filename in enumerate(movies)
                     if results[index] is None

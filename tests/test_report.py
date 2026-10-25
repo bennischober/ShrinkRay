@@ -1,5 +1,6 @@
 """HTML report tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -267,3 +268,21 @@ class TestBarMeasurementReconciliation(unittest.TestCase):
         from shrinkray.report import _bars_note
 
         self.assertEqual(_bars_note(None, None), "")
+
+    def test_a_cached_timeline_summary_replaces_the_prefilter_wording(self) -> None:
+        """Issue #181: the sustained-ratio table explains a flag-without-crop."""
+        from shrinkray.report import _bars_note
+
+        ratios = json.dumps([[[1920, 800, 0, 140], 0.6], [[1920, 1080, 0, 0], 0.4]])
+        note = _bars_note(1, None, ratios)
+        self.assertIn("variable picture size", note)
+        self.assertIn("1920x800 (60% of the time)", note)
+        self.assertIn("1920x1080 (40% of the time)", note)
+
+    def test_a_garbled_ratio_table_falls_back_to_the_prefilter_wording(self) -> None:
+        from shrinkray.report import _bars_note
+
+        note = _bars_note(1, None, "not json")
+        self.assertIn("pre-filter", note)
+        # a table with no entries also falls back
+        self.assertIn("pre-filter", _bars_note(1, None, "[]"))

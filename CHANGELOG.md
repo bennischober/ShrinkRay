@@ -6,6 +6,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ### Added
 
+- **One timeline-based crop detector replaces the two bar measurements** (issue #181): `plan`/`encode` now measure bars with a single keyframe-only cropdetect pass over the whole runtime (`-skip_frame nokey`, the #131 spike's measured ~3 min/hour of runtime), filtered to segments sustained for at least 30 s (counted in seconds, never readings, with a 3-reading floor) and cropped only where every sustained segment agrees — the safe union, so a dark-scene flash or an isolated logo can never shrink the picture. The result is cached per file version in a new `crops` database table (schema v16, keyed by size + mtime), `scan`'s 1/0 flag becomes the cached summary's projection when one exists (the cheap probe stays for never-planned files and scan never runs the expensive pass), and the report's bar note shows the sustained picture-size breakdown (e.g. "1920x800 (60% of the time)") instead of the generic pre-filter wording. Stateless runs (no `--db`) keep the previous sampled-window detector as fallback.
+
 - **`watch` wakes on filesystem events instead of only polling** (issue #176): between passes the loop sleeps on an inotify waiter (Linux) that fires on file creation, close and moves anywhere under a watched root, so a movie that lands in the inbox starts encoding within seconds instead of after the backoff window. The adaptive poll stays the fallback and the reconciler — a wake never bypasses the stability check — and platforms without a supported event API (and every setup error) degrade to exactly today's polling behavior.
 
 ### Fixed

@@ -35,6 +35,9 @@ from shrinkray.engine.crop import (
 from shrinkray.engine.crop import (
     detect_crop_rect as detect_crop_rect,
 )
+from shrinkray.engine.crop import (
+    detect_crop_summary_cached as detect_crop_summary_cached,
+)
 from shrinkray.engine.encoders import (
     DEFAULT_ENCODER as DEFAULT_ENCODER,
 )
@@ -1139,8 +1142,14 @@ def _probe_movie(
     try:
         # bar detection is part of every re-encode, never a flag: the encoder
         # is already re-encoding every frame, so the crop is free here and a
-        # file with no bars simply proceeds uncropped
-        crop = detect_crop_rect(input_file, workdir, count=crop_sample_count)
+        # file with no bars simply proceeds uncropped. The timeline detector
+        # is the one bar measurement (issue #181), cached per file version;
+        # the sampled detector is the fallback for stateless runs.
+        summary = detect_crop_summary_cached(input_file, db_file)
+        if summary is None or summary.bars is None:
+            crop = detect_crop_rect(input_file, workdir, count=crop_sample_count)
+        else:
+            crop = summary.bars
         if crop is not None:
             log(
                 f"Removing stable black bars of '{input_file.name}': "

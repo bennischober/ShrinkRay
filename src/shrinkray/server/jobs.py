@@ -558,6 +558,7 @@ def resolve_movies(
     config: Conf,
     connection: sqlite3.Connection | None = None,
     exclude: Path | None = None,
+    db_file: Path | None = None,
 ) -> list[Path]:
     """Resolves the payload's movies: scan directories, pass files through.
 
@@ -572,6 +573,9 @@ def resolve_movies(
         connection (sqlite3.Connection | None): Database connection for the
             scan cache.
         exclude (Path | None): Directory to exclude from the scan.
+        db_file (Path | None): The database file, read per movie to project
+            an existing timeline crop summary into the scan's flag (issue
+            #181); None derives it from the connection.
 
     Returns:
         list[Path]: The movie files.
@@ -584,7 +588,18 @@ def resolve_movies(
             # single movie file (per-movie action) => pass through directly
             movies.append(path)
         else:
-            _, part_movies, _ = scan_movies(path, config, connection=connection, exclude=exclude)
+            # the crop-cache projection needs the db FILE: the connection may
+            # be None here (a stateless scan), and _db_file_of needs one
+            derived = db_file if db_file is not None else None
+            if derived is None and connection is not None:
+                derived = _db_file_of(connection)
+            _, part_movies, _ = scan_movies(
+                path,
+                config,
+                connection=connection,
+                exclude=exclude,
+                db_file=derived,
+            )
             movies.extend(part_movies)
     return movies
 
@@ -653,7 +668,7 @@ def execute_scan(
             # single movie file (per-movie action)
             from shrinkray.engine.scan import process_movie
 
-            data, error = process_movie(path, path.parent, config)
+            data, error = process_movie(path, path.parent, config, db_file=_db_file_of(connection))
             if data is not None:
                 movies.append(data)
                 by_category.setdefault(data["category"], []).append(data)
@@ -671,6 +686,7 @@ def execute_scan(
                 compute_hash=payload.get("hash", False),
                 exclude=Path(payload["exclude"]) if payload.get("exclude") else None,
                 on_movie=on_movie,
+                db_file=_db_file_of(connection),
             )
             movies.extend(part_movies)
             errors.extend(part_errors)
@@ -707,7 +723,7 @@ def execute_plan(
     payload = job.payload
     config = load_config()
     apply_config(config)
-    movies = resolve_movies(payload, config, connection=connection)
+    movies = resolve_movies(payload, config, connection=connection, db_file=_db_file_of(connection))
 
     plans: list[dict] = []
     total = len(movies)
@@ -801,7 +817,9 @@ def execute_encode(
     # resolve_movies (not a bare scan_movies): a payload path may be a
     # single movie FILE (per-movie action from the UI) — scanning it as a
     # directory finds nothing and the job reported done with 0 outcomes
-    movies = resolve_movies(payload, config, connection=connection, exclude=output_dir)
+    movies = resolve_movies(
+        payload, config, connection=connection, exclude=output_dir, db_file=_db_file_of(connection)
+    )
 
     outcomes: list[dict] = []
     total = len(movies)
