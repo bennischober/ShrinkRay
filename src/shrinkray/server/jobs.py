@@ -918,7 +918,7 @@ def _encode_quality_or_fixed(
         dict: The per-movie outcome summary.
     """
     from shrinkray.config import refresh_config
-    from shrinkray.engine.lock import EncodeBusyError
+    from shrinkray.engine.lock import EncodeBusyError, guard_encodes
     from shrinkray.engine.pipeline import encode_movies, encode_with_quality
     from shrinkray.service import (
         finished_movies,
