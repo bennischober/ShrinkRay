@@ -44,7 +44,6 @@ class EncodeOutcome:
     skipped: bool = False
     error: str | None = None
     encode_id: int | None = None
-    error: str | None = None
 
 
 def ensure_file_row(connection: sqlite3.Connection, movie: Path) -> int:

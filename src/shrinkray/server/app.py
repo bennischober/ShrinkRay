@@ -1399,7 +1399,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
         generation chain. The returned id lets a declined swap correct the
         row to 'discarded'.
         """
-        return state.with_lock(
+        outcome = state.with_lock(
             lambda connection: record_quality_results(
                 connection,
                 movie,
@@ -1408,6 +1408,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 final_output=final_output,
             )
         )
+        return outcome.encode_id
 
     def settings_for_next_file() -> WatchSettings:
         # a config saved while the watcher runs applies at its next file
