@@ -1013,34 +1013,30 @@ def _encode_quality_or_fixed(
                 swap = swap_encode_into_place(
                     connection, movie, output_dir / movie.name, outcome.encode_id
                 )
-                if swap.replaced:
-                    entry_state = "encoded"
-                else:
-                    # the swap was declined: the encode is discarded with its
-                    # staging directory, and the outcome says so honestly
-                    entry_state = "skipped"
-                    outcome = None
+                declined = not swap.replaced
             else:
-                entry_state = None
+                declined = False
             entry = {
                 "movie": movie.name,
                 "state": (
-                    "encoded"
-                    if outcome is not None and outcome.encoded
+                    "skipped"
+                    if declined
+                    else "encoded"
+                    if outcome.encoded
                     else "skipped"
-                    if outcome is not None and outcome.skipped
+                    if outcome.skipped
                     else "failed"
                 ),
                 "input_size": result.input_size,
-                "output_size": result.output_size,
+                "output_size": None if declined else result.output_size,
                 "crf": result.chosen_crf,
                 "vmaf": result.achieved_vmaf,
-                "error": result.error,
+                "error": (
+                    f"the swap was declined: {swap.reason} (the encode is discarded)"
+                    if declined
+                    else result.error
+                ),
             }
-            if entry_state == "skipped":
-                entry["state"] = "skipped"
-                entry["error"] = f"the swap was declined: {swap.reason} (the encode is discarded)"
-                entry["output_size"] = None
             outcomes.append(entry)
             if progress:
                 progress(

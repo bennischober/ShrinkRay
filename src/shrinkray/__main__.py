@@ -356,6 +356,8 @@ def _swap_into_place(
     if not outcome.replaced:
         return
     retained = outcome.retained_path
+    if retained is None:  # unreachable when replaced, for mypy
+        return
     gb = (outcome.size_after or 0) / (1024**3)
     if connection is not None:
         console.print(
