@@ -15,6 +15,7 @@ import contextlib
 import json
 import queue
 import sqlite3
+import tempfile
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -837,19 +838,95 @@ def execute_encode(
     Returns:
         dict: The per-movie outcome summary.
     """
-    from shrinkray.config import load_config, refresh_config
+    from shrinkray.config import load_config
+
+    payload = job.payload
+    config = load_config()
+    apply_config(config)
+    # an omitted output_dir is the IN-PLACE form (issue #192): the backlog's
+    # payload carries no output directory, and the job crashed on the
+    # unconditional index on every container boot. In place the encode lands
+    # in a working directory INSIDE the scanned root - the same filesystem, so
+    # the swap's two renames stay atomic - and a verified output takes the
+    # source's own path, the original renamed aside and kept.
+    raw_output_dir = payload.get("output_dir")
+    output_dir = Path(raw_output_dir) if raw_output_dir else None
+    if output_dir is None:
+        first = payload_paths(payload)
+        if not first:
+            return {
+                "outcomes": [{"movie": "*", "state": "skipped", "error": "no paths in payload"}],
+                "cancelled": False,
+            }
+        root = first[0].parent
+    else:
+        root = None
+    staging: contextlib.AbstractContextManager[str] = (
+        contextlib.nullcontext(str(output_dir))
+        if output_dir is not None
+        else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=root)
+    )
+    with staging as staging_str:
+        write_dir = Path(staging_str)
+        outcomes = _encode_quality_or_fixed(
+            job,
+            connection,
+            cancel,
+            progress,
+            config,
+            payload,
+            movies=resolve_movies(
+                payload,
+                config,
+                connection=connection,
+                exclude=output_dir,
+                db_file=_db_file_of(connection),
+            ),
+            output_dir=write_dir,
+            in_place=output_dir is None,
+        )
+    return outcomes
+
+
+def _encode_quality_or_fixed(
+    job: Job,
+    connection: sqlite3.Connection,
+    cancel: threading.Event,
+    progress: ProgressCallback | None,
+    config: "Conf",
+    payload: dict,
+    movies: list[Path],
+    output_dir: Path,
+    in_place: bool,
+) -> dict:
+    """Runs one encode job's body (quality or fixed branch) against write_dir.
+
+    Args:
+        job (Job): The job being executed.
+        connection: The worker's database connection.
+        cancel: Cooperative cancellation signal.
+        progress: Callback progress(dict) for live updates.
+        config: The config to encode with (refreshed per file inside).
+        payload (dict): The job's payload.
+        movies (list[Path]): The movies to encode.
+        output_dir (Path): Where encoded files are written (a per-run staging
+            directory when the job encodes in place).
+        in_place (bool): True when the payload named no output directory: a
+            verified output is swapped into the source's path (issue #192).
+
+    Returns:
+        dict: The per-movie outcome summary.
+    """
+    from shrinkray.config import refresh_config
     from shrinkray.engine.lock import EncodeBusyError
     from shrinkray.engine.pipeline import encode_movies, encode_with_quality
     from shrinkray.service import (
         finished_movies,
         record_fixed_results,
         record_quality_results,
+        swap_encode_into_place,
     )
 
-    payload = job.payload
-    config = load_config()
-    apply_config(config)
-    output_dir = Path(payload["output_dir"])
     # resolve_movies (not a bare scan_movies): a payload path may be a
     # single movie FILE (per-movie action from the UI) — scanning it as a
     # directory finds nothing and the job reported done with 0 outcomes
@@ -912,11 +989,38 @@ def execute_encode(
             except EncodeBusyError as e:
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
                 continue
-            outcome = record_quality_results(connection, movie, result, config)
+            outcome = record_quality_results(
+                connection,
+                movie,
+                result,
+                config,
+                # in place the artifact's real location is the source's own
+                # path once the swap succeeds (issue #232); the row records it
+                # up front and a DECLINED swap clears it, because the encode is
+                # then discarded with its staging directory
+                final_output=movie if in_place else None,
+            )
+            if in_place and outcome.encoded:
+                swap = swap_encode_into_place(
+                    connection, movie, output_dir / movie.name, outcome.encode_id
+                )
+                if swap.replaced:
+                    entry_state = "encoded"
+                else:
+                    # the swap was declined: the encode is discarded with its
+                    # staging directory, and the outcome says so honestly
+                    entry_state = "skipped"
+                    outcome = None
+            else:
+                entry_state = None
             entry = {
                 "movie": movie.name,
                 "state": (
-                    "encoded" if outcome.encoded else "skipped" if outcome.skipped else "failed"
+                    "encoded"
+                    if outcome is not None and outcome.encoded
+                    else "skipped"
+                    if outcome is not None and outcome.skipped
+                    else "failed"
                 ),
                 "input_size": result.input_size,
                 "output_size": result.output_size,
@@ -924,6 +1028,10 @@ def execute_encode(
                 "vmaf": result.achieved_vmaf,
                 "error": result.error,
             }
+            if entry_state == "skipped":
+                entry["state"] = "skipped"
+                entry["error"] = f"the swap was declined: {swap.reason} (the encode is discarded)"
+                entry["output_size"] = None
             outcomes.append(entry)
             if progress:
                 progress(

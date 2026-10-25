@@ -328,114 +328,42 @@ def encode(
             connection.close()
 
 
-def _latest_encode_id(connection: "sqlite3.Connection", source: Path) -> int | None:
-    """Returns the encode id that most recently superseded a source.
-
-    The ledger row points at the encode it replaced, so the operator can trace
-    a retained original back to the decision that produced its replacement.
-
-    Args:
-        connection: The database connection, or None for a stateless
-            run (nothing is persisted, no plan cache is consulted).
-        source: The library file.
-
-    Returns:
-        int | None: The newest encode's id, or None when the file has no row.
-    """
-    row = connection.execute("SELECT id FROM files WHERE path = ?", (str(source),)).fetchone()
-    if row is None:
-        return None
-    latest = db.get_latest_encode(connection, int(row["id"]))
-    return int(latest["id"]) if latest is not None else None
-
-
-def _encode_discarded(connection: "sqlite3.Connection | None", encode_id: int | None) -> None:
-    """Records that a written encode's artifact was discarded (issue #232).
-
-    A declined swap leaves the encode in its staging directory, which the run
-    deletes on exit. The row written a moment earlier points at that staging
-    path; it must record the discard instead, or `doctor` reports a vanished
-    output for a swap that was REFUSED - the healthy case.
-
-    Args:
-        connection: The database connection, or None for a stateless run.
-        encode_id: The encode row to correct (None: nothing to correct).
-    """
-    if connection is None or encode_id is None:
-        return
-    db.set_encode_output(connection, encode_id, None)
-
-
 def _swap_into_place(
     connection: "sqlite3.Connection | None",
     source: Path,
     output: Path,
     encode_id: int | None = None,
 ) -> None:
-    """Swaps a verified encode into the source's path, retaining the original.
+    """Swaps a verified encode into the source's path, reporting it to the console.
 
-    The swap gate is the check the encode already passed: the output exists,
-    is non-empty and matches the source's duration. `--verify`'s full-file VMAF
-    is recorded but is deliberately NOT a gate (a failed measurement is
-    reported as unmeasured; it never invalidates an encode), so a gate that
-    depends on it would silently skip every swap on a host without libvmaf.
-
-    Size IS a gate, and it is re-checked here even though the engine already
-    refused a grown encode: this is the last code before a file enters the
-    library, and a bug upstream must not be able to make the library bigger.
-
-    A swap failure never loses the source: `replace.swap` renames the
-    original back when the second rename fails, and recovery handles a crash.
+    Thin CLI wrapper over `service.swap_encode_into_place` (issue #192): the
+    in-place contract is one code path for the CLI and the job worker; this
+    adds only the console sentence. The swap gates and the ledger write live
+    there.
 
     Args:
         connection: The database connection, or None for a stateless run (the
             swap still happens, but no ledger row is written).
         source: The library file the output replaces.
         output: The verified encoded file.
-        encode_id: The encode row the run just wrote (None: stateless). A
-            DECLINED swap clears the row's output_file (issue #232): the
-            encode is discarded with its staging directory, so the row must
-            not point at a path that is about to vanish - that lie is what
-            made `doctor` report every in-place encode as vanished.
+        encode_id: The encode row the run just wrote (None: stateless).
     """
-    from shrinkray import replace as replace_module
+    from shrinkray import service
 
-    size_before = source.stat().st_size
-    size_after = output.stat().st_size
-    if size_after >= size_before:
-        log_error(
-            f"Not replacing '{source.name}': the output is not smaller "
-            f"({size_before} -> {size_after} bytes)"
-        )
-        _encode_discarded(connection, encode_id)
+    outcome = service.swap_encode_into_place(connection, source, output, encode_id)
+    if not outcome.replaced:
         return
-    try:
-        staged = replace_module.stage(output, source)
-        retained = replace_module.swap(source, staged)
-    except replace_module.SwapError as error:
-        log_error(f"Not replacing '{source.name}': {error}")
-        _encode_discarded(connection, encode_id)
-        return
-    if connection is not None:
-        db.add_retained(
-            connection,
-            source,
-            retained,
-            _latest_encode_id(connection, source),
-            size_before,
-            size_after,
-        )
-    output.unlink(missing_ok=True)
+    retained = outcome.retained_path
     if connection is not None:
         console.print(
             f"[green]Replaced '{source.name}': the original is retained at "
-            f"'{retained.name}' ({size_before / (1024**3):.2f} GB); delete it "
+            f"'{retained.name}' ({output.stat().st_size / (1024**3):.2f} GB); delete it "
             f"when you are satisfied (see `shrinkray retained list`).[/green]"
         )
     else:
         console.print(
             f"[green]Replaced '{source.name}': the original is retained at "
-            f"'{retained.name}' ({size_before / (1024**3):.2f} GB); delete it "
+            f"'{retained.name}' ({output.stat().st_size / (1024**3):.2f} GB); delete it "
             f"when you are satisfied. This run used no database, so the swap is "
             f"not in `retained list`.[/green]"
         )
