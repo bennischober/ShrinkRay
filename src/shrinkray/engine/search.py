@@ -206,6 +206,18 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
       convex/step-like curve would make regula falsi crawl, so the search
       falls back to the midpoint when interpolation would not.
 
+    The range's lowest CRF is probed only when the search actually heads
+    there (issue #313): probing it upfront spent the search's most expensive
+    round on nearly every file for an answer the search could get for free
+    when it reached the bound. "Target unreachable" is therefore detected
+    when the bracket collapses onto lo — the caller's SkipEncode evidence
+    (the lo probe's score) is produced at that point, exactly as before.
+
+    An early stop accepts a passing CRF whose score sits within a growing
+    tolerance above the target (ab-av1's shape: +0.1 per round): the trade
+    is a slightly lower CRF (a slightly bigger file) for one to two saved
+    rounds, measured on real titles in #313's PR.
+
     Args:
         score (callable): Measurement score(crf) => float, the probe's VMAF
             at that CRF. Must be monotonic: high at low CRF, low at high
@@ -217,17 +229,26 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
 
     Returns:
         int: The largest passing CRF in [lo, hi), or lo if even lo fails
-            (the caller should use it anyway as the best available quality).
+            (the caller should use it anyway as the best available quality;
+            in that case lo HAS been probed, so the caller's achieved lookup
+            finds it).
     """
-    vmaf_lo = score(lo)
-    if vmaf_lo < target_vmaf:
-        return lo
-
+    vmaf_lo: float | None = None  # measured at the current passing bound
     vmaf_hi: float | None = None  # measured at the current failing bound
-    while hi - lo > 1:
-        if vmaf_hi is None:
-            # first round: no failing measurement yet — bisect (ab-av1's
-            # first guess is the midpoint for the same reason)
+    rounds = 0
+    while True:
+        if hi - lo <= 1:
+            # the bracket collapsed: lo is the answer, but it may never have
+            # been probed (the search reached it from above without needing
+            # its score). Probe it once - the "target unreachable" evidence
+            # and the caller's achieved lookup both come from this probe.
+            if vmaf_lo is None:
+                vmaf_lo = score(lo)
+            return lo
+        if vmaf_lo is None or vmaf_hi is None:
+            # a bracket end is still unmeasured - bisect (the first rounds
+            # have too little information to interpolate; ab-av1's first
+            # guess is the midpoint for the same reason)
             guess = (lo + hi) // 2
         else:
             # linear interpolation between the passing (vmaf_lo at lo) and
@@ -249,11 +270,17 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
             if max(guess - lo, hi - guess) > (hi - lo + 1) // 2:
                 guess = (lo + hi) // 2
         value = score(guess)
+        rounds += 1
         if value >= target_vmaf:
             lo, vmaf_lo = guess, value
+            # the early stop (issue #313): a passing score within the round's
+            # tolerance above the target ends the search - each further round
+            # buys at most one CRF step of quality. ab-av1 grows the tolerance
+            # per round (+0.1, +0.2, ...); we grow it the same way.
+            if value - target_vmaf <= 0.1 * rounds:
+                return lo
         else:
             hi, vmaf_hi = guess, value
-    return lo
 
 
 def probe_crf(

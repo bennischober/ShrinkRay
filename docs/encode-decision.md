@@ -102,6 +102,24 @@ would only shrink *after* cropping gets a false "won't shrink".
   unmeasured, never silently encoded and never silently dropped.
 - **Never leaves bars in a re-encoded file.** There is no flag to keep them.
 
+
+## The search's shape: probe count and the early stop
+
+The CRF search brackets and interpolates in VMAF space (issue #23) and spends one round per probed CRF
+— each round encodes and scores every sample window, so rounds are the dominant cost of `plan` and of
+every encode. Two deliberate shapes keep that cost down (issue **#313**):
+
+- **The range's lowest CRF is probed only when the search heads there.** The old shape probed CRF 14
+upfront to detect "target unreachable" on every file; the search now detects it when the bracket
+collapses onto the low end (everything above failed) and probes it once at that point - the same
+SkipEncode evidence, produced only when needed. The saved round is the search's most expensive one
+(CRF 14 is the slowest and largest probe).
+- **An early stop accepts a passing CRF whose score sits within a growing tolerance above the target**
+(+0.1 per round, ab-av1's shape): each further round can buy at most one CRF step of quality, so when
+the score is already close, the search stops. The trade is a slightly lower CRF (a slightly bigger
+file) for one to two saved rounds - measured on real titles in #313's PR. The stop never accepts a
+MISSING target: the tolerance is measured above the target on a passing probe.
+
 ## The prior art this matches
 
 `Find_CRF_for_folder_V4.ps1` walks the directory, filters by size (`-MinFileSizeGB`) and height

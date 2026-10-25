@@ -194,6 +194,62 @@ class TestQuality(unittest.TestCase):
                     f"than bisect ({probes_plain})",
                 )
 
+    def test_bisect_crf_does_not_probe_the_low_end_upfront(self):
+        """Issue #313: the range's lowest CRF is probed only when the
+        search actually heads there - the unconditional CRF-14 round spent
+        the search's most expensive probe on nearly every file."""
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return 99.0 - (c - 14) * 0.5
+
+        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        self.assertEqual(chosen, 22)
+        self.assertNotIn(14, calls, "the low end was probed without the search heading there")
+
+    def test_bisect_crf_probes_lo_when_the_search_reaches_it(self):
+        """The unreachable case: everything fails, so the bracket collapses
+        onto lo - the lo probe happens then (the SkipEncode evidence), and
+        the answer is identical to the old upfront-probe shape."""
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return 80.0
+
+        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        self.assertEqual(chosen, 14)
+        self.assertIn(14, calls, "the collapse onto lo must probe lo (the skip evidence)")
+
+    def test_bisect_crf_early_stops_within_the_round_tolerance(self):
+        """Issue #313's early stop: a passing score within the round's
+        growing tolerance (+0.1 per round) ends the search - the trade is a
+        slightly lower CRF for one to two saved rounds."""
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            # a flat curve: every probe passes far above the target, so the
+            # first passing round's tolerance already covers it
+            return 99.0 - (c - 14) * 0.1
+
+        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        self.assertGreater(chosen, 14)
+        self.assertLess(len(calls), 6, "the early stop did not save rounds")
+
+    def test_bisect_crf_early_stop_never_misses_the_target(self):
+        """The early stop never returns a CRF whose score misses the target:
+        the tolerance is measured ABOVE the target on a PASSING probe."""
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return 96.4 if c <= 25 else 60.0
+
+        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        self.assertGreaterEqual(score(chosen), 95.0)
+
     def test_build_vmaf_command(self):
         for style in (tools_vmaf.VMAF_STYLE_LEGACY, tools_vmaf.VMAF_STYLE_MODERN):
             command = tools_vmaf.build_vmaf_command(Path("enc.mkv"), Path("ref.mkv"), style=style)
