@@ -240,12 +240,20 @@ class AppSection(BaseModel):
 
 
 class HdrSection(BaseModel):
-    """codec.hdr: the markers that flag a source as HDR."""
+    """codec.hdr: the markers that flag a source as HDR.
+
+    The defaults ARE the documented HDR signature (issue #236, the
+    maintainer's decision: HDR detection defaults in code): a config that
+    says nothing about HDR still classifies bt2020nc/smpte2084 streams
+    correctly, because the shipped config.json's values — the repo's own
+    working setup — are now the code's defaults. An operator can still
+    narrow or extend the lists; an empty list means "nothing is HDR".
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    color_space: list[str] = []
-    color_transfer: list[str] = []
+    color_space: list[str] = ["bt2020nc"]
+    color_transfer: list[str] = ["smpte2084"]
 
 
 class CodecSection(BaseModel):
