@@ -22,6 +22,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **The container docs no longer promise that a read-only library mount is safe** (issue #198): the paragraph attributed the container's behavior to `--replace`, a Mode A CLI flag the `shrinkray app` entrypoint does not have, while Mode B encodes in place and needs the mount writable — a read-only mount crashes the watch loop on its staging folder. The compose file and both doc examples now mount `/media` writable, and the docs state the real contract (in-place rewrite, original renamed aside as `<name>.shrinkray-original`, never deleted).
 
+- **A filename containing `[` no longer breaks `scan`** (issue #200): any path with a bracket was treated as a glob, so an existing file named `with [BRACKETS] name.mkv` — the target library's common naming — was reported as matching no movie file. The resolver now treats `[` as glob syntax only when the path does not exist AND a `[`-pattern expansion finds files; a real file or folder with brackets scans exactly as named, and a nonexistent bracketed path still errors with "does not exist".
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

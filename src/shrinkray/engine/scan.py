@@ -145,13 +145,26 @@ def resolve_input_paths(
         FileNotFoundError: If the path does not exist, or the glob matches
             no movie file.
     """
-    if not any(char in argument for char in "*?["):
+    if not any(char in argument for char in "*?"):
         path = Path(argument)
         if path.is_file():
             # a single movie is one item: no walk, and no extension check -
             # the operator named the file explicitly
             return path.parent.resolve(), [path.resolve()]
         if not path.is_dir():
+            # a literal path that does not exist, OR a bracketed glob that
+            # happens to contain no * or ? (e.g. 'movies/[2024] film.mkv'):
+            # only treat it as a pattern when it has one to expand, else the
+            # error is the honest one (issue #200: '[' is legal in a name)
+            if "[" not in argument:
+                raise FileNotFoundError(f"'{argument}' does not exist")
+            bracketed = [
+                Path(match).resolve()
+                for match in glob.glob(argument, recursive=True)
+                if Path(match).is_file()
+            ]
+            if bracketed:
+                return Path(argument).parent.resolve(), sorted(dict.fromkeys(bracketed))
             raise FileNotFoundError(f"'{argument}' does not exist")
         return path.resolve(), find_movies(path, extensions, exclude=exclude)
 
