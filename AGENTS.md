@@ -1,151 +1,150 @@
-# AGENTS.md — working rules for AI agents in this repository
+# AGENTS.md — how to work in this repository
 
-Instructions for AI coding agents (OpenCode, Codex, Claude Code, ...) working in this repository. These rules are the distilled, non-negotiable core; the README documents the product, PRODUCT.md the product direction, and `docs/encode-decision.md` the encode contract.
+For AI coding agents (OpenCode, Codex, Claude Code, ...) and the people who review their work. It has four parts: **how to work** (the judgment expected of you), **the hard invariants** (never broken), **the process** (how a change reaches `main`), and **conventions and maps**. Detail lives in the documents this file points to; "Where to read more" says which one wins when two disagree.
 
-**Generated:** 2026-10-25 · **Commit:** 31c5833 · **Branch:** main
+## Why the bar is high
 
-## What this project is
+ShrinkRay is given to the community. Strangers install it on their own servers, point it at video libraries they cannot re-acquire, and leave it running unattended. A defect here can destroy someone else's data, and nobody is watching when it happens. So the standard is not "it works on my machine" but "a stranger can trust it with their library" — and the person who trusts your change will never meet you. Work so that you would be proud to have your name on it in a year.
 
-A Python CLI + resident server app that answers two questions per file: **is this file bigger than its quality requires?** and **does it carry baked-in black bars** (a frame whose aspect ratio differs from its content's)? It catalogs a collection into a sqlite database, predicts savings (`plan`), re-encodes at measured quality (`encode`, a VMAF-driven CRF search) and swaps the verified result into the source's path. The Python code is an orchestrator: all heavy work is delegated to external binaries (`ffprobe`, `ffmpeg`, `HandBrakeCLI`).
+**What it is.** A Python CLI and resident server that answer two questions per file: *is this file bigger than its quality requires?* and *does its frame carry black bars its content does not need?* It catalogs a collection into sqlite, predicts savings (`plan`), re-encodes at measured quality (`encode`, a VMAF-driven CRF search) and swaps the verified result into the source's path. The Python code orchestrates; the heavy work is done by `ffprobe`, `ffmpeg` and `HandBrakeCLI`. The CLI is six commands — `encode`, `plan`, `serve`, `setup` (the terminal UI that configures and controls, #244/#252), `retained`, `doctor` — and no other command is added without a product decision. The target deployment is a container on a server (an Unraid Community App), pointed at a media folder, with a watchdog and a LAN dashboard.
 
-The CLI is six commands — `encode`, `plan`, `serve`, `setup`, `retained`, `doctor` — where `setup` is the terminal UI that configures and controls (issue #244 decided it, #252 built it on Textual). No other command is added without a product decision. Scanning is the resident backlog's first job and an engine call, not a command; there is no `scan`, `report`, `compare` or separate watch command.
+## How to work
 
-It is built to be **given to the community**: it will be installed by strangers on their own servers, pointed at libraries they cannot re-acquire, and run unattended. That is why the engineering standard below is non-negotiable — a defect here can destroy someone else's data, not just annoy its author. The target shape is a container on a server, pointed at a media folder, running unattended with a watchdog and a LAN dashboard; the concrete target is an **Unraid Community App** whose console opens the terminal surface (PRODUCT.md "Deployment target", issue #244). The CLI is a first-class product, not a debugging surface: every capability works without the resident process.
+### 1. Understand before you act
 
-The product rules a change must not contradict (PRODUCT.md has the detail; check the code before assuming one is implemented):
+- **Read the whole issue**: the body, every comment, and the linked issues and PRs. Comments often carry the maintainer's decision that changed the original ask.
+- **Read the code you will change and its surroundings**: the area map (see "Where to read more") and, for anything on the encode path, `docs/encode-decision.md`. Learn how things are done here — conventions, error handling, test style — and follow them even where you would prefer something else. A convention you believe is defective is raised (see "Report honestly"), not changed on the side.
+- **Restate the problem.** When you claim the issue, comment with the problem in your own words and the approach you intend. If you cannot restate it, you do not understand it yet.
+- **Ask or decide.** Ask — comment, add the `needs-decision` label, move on to other work — when the answer changes product behaviour, touches user data or anything destructive or irreversible, or when two reasonable readings of the issue lead to different designs. Implementation details you decide yourself with a sensible default, and say in the PR what you chose and why. An issue labelled `needs-decision` is not implemented until the maintainer has decided on it.
+- **Check the code before trusting a doc, this one included.** Some product rules describe the target, and the code may not be there yet.
 
-- **Two operating modes, one engine.** A stateless one-shot CLI over a file, a folder or a glob; and a resident container that scans a mounted tree, detects bars, runs the CRF search for the whole collection, encodes the backlog and watches for changes. Neither mode may require the other, and the CLI must never require the resident process.
-- **The dashboard is Mode B's status window, not a control surface.** It reports what is running, planned, remaining and reclaimed; it does not start work. A control panel implies a watching operator, which is what the resident mode exists to remove — and a read-only surface is a smaller attack surface. Do not add a route or a button that starts, cancels or reconfigures work without a product decision first.
-- **The terminal is the control surface** (issue #244; built in #252, `src/shrinkray/tui.py`). `shrinkray setup` is a TUI that edits every setting and pauses or resumes the backlog; it reaches the resident process through the state both share in `/data` (the config file, a pause flag), never through a network route — so "control needs a shell" holds by construction. It edits settings, it never loosens a product rule: the resolution floor may be raised, never lowered below 1080p. It works on a native install too, where pause/resume appears only if a resident process runs.
-- **A manual encode pauses the watcher** (built, #250: `engine/pause.py`). `shrinkray encode <path>` from the container console is the single-file use case; it runs in that terminal (the CLI warns that closing it cancels the encode) and the resident watcher and backlog jobs yield until it finishes. The CLI signals this through a marker in the data folder (`manual-encodes/<pid>`, with the process start time so a reused pid never counts), never by calling the server — the CLI must not require the resident process. The operator's pause is a `paused` file in the same folder; a running encode always finishes.
-- **The one-shot mode does not need the database.** A run against a file, folder or glob goes straight to the CRF search and the encode. The database is an optimization for repeated runs, never a prerequisite.
-- **In place, retaining the original.** A verified output takes the source's path; the original is renamed aside and kept. No code path deletes a source file.
-- **The codec whitelist and the 1080p class are the only eligibility gates.** A source codec outside the whitelist (`SOURCE_CODECS`: h264, hevc, vp9, av1) is never re-encoded — MPEG-2/VC-1 and older are outside it, and the list may be extended by config, never shrunk. A source whose dimensions are both below the 1080p class (width 1920 / height 1080; either at class size qualifies) is never re-encoded. AV1 is the output format, and whether an AV1 source is probed at all is an open question recorded in `docs/encode-decision.md`; codec is never a reason to encode.
-- The watchdog scans every new or changed file into the database and re-decides it from the fresh scan.
-- **The CRF search always runs on an eligible file; a re-encode happens only when the file would get smaller.** The search finds a CRF, not an encode — it is allowed, and expected, to end in "do not encode". Size is the only permission. Never add a path that re-encodes to remove bars, and never treat "has bars" as a precondition for probing.
-- **Bar removal is part of every re-encode, not an option.** Any file that is encoded has its bars detected and removed, so a re-encoded file is always clean. Do not add a flag to keep them, do not skip a file for lacking them, and do not add a "crop-only" path. The changing-aspect-ratio case is handled by cropping only the bars every sustained segment agrees on. `docs/encode-decision.md` is the authoritative walk-through of every gate.
-- There is exactly one encode mode: a VMAF-driven CRF search against a required VMAF (96 by default), then one full encode. Never add a fixed-preset or otherwise unmeasured encode path. The output is AV1, encoded on the CPU, from 8-bit or 10-bit sources — no other output codec, no hardware encoder. Only the video stream is re-encoded; audio and subtitle tracks are copied 1:1.
-- **The collection is already organized.** The target library is a large set of already-named files with no duplicates. Never name, vendor, or assume any particular acquisition, naming or media-server product in code, comments or commit messages (PRODUCT.md's "Ecosystem position" section is the single prose exception, issue #166) — ShrinkRay is written for "a large existing video collection" and nothing more specific. Never add a feature whose usefulness depends on knowing what a file is called or which file it is.
+### 2. Find the root cause, not the symptom
 
-## Knowledge base — where the maps live
+- **Reproduce a bug before fixing it**, as a failing test wherever possible. Run it and watch it fail for the reason the issue describes; the PR says that you did.
+- **Ask why it happened**, not only where. A change that makes the error go away without explaining it is a guess.
+- **Look for the same flaw elsewhere** — search for the pattern. Fix the siblings the issue covers; open an issue for each one it does not.
+- **Never make a failure disappear.** No broad `except`, no new `# type: ignore`, `noqa`, `skip`/`xfail`, lowered coverage threshold or loosened assertion unless the PR justifies that specific line. Never change a test to agree with broken behaviour.
 
-Orientation only; the rules below are normative, and each area's map is in its own file. Read the one for the code you touch, not all six.
+### 3. Keep scope disciplined
 
-| Area | Map |
-|------|-----|
-| the package: layers, root modules, package-wide conventions | `src/shrinkray/AGENTS.md` |
-| CRF search, plan gates, encode/verify, bars, watchdog, lock | `src/shrinkray/engine/AGENTS.md` |
-| routes, token auth, path containment, jobs, SSE | `src/shrinkray/server/AGENTS.md` |
-| the subprocess boundary, one module per binary | `src/shrinkray/tools/AGENTS.md` |
-| the flat `unittest` suite, fixtures, patch seams | `tests/AGENTS.md` |
-| the Svelte dashboard and its own toolchain | `ui/AGENTS.md` |
+Do what the issue asks, completely, and nothing more. Problems you notice along the way become new issues, not part of this diff. Do not refactor, rename or delete code outside the task. A small, focused PR is easy to review, easy to revert and easy to trust.
 
-Facts that decide how you work before you open one:
+### 4. Write code for the next person
 
-- **Doc precedence.** `docs/encode-decision.md` (the encode contract: "where the code disagrees with this document, the code is the defect") outranks this file, which outranks `docs/decisions/0001-module-layout.md` (enforced mechanically by `lint-imports`), then PRODUCT.md and RULES.md. `docs/plan-reuse.md` governs the plan cache, `docs/black-bar-spike.md` the crop measurements (its #131 two-measurement decision is superseded by the one timeline detector of #181), `docs/docker.md` the deployment, and `docs/tui.md` the terminal control surface (decided under #244, nothing built).
-- **The gate is one script.** `tools/gate.sh` runs six `uv run` steps. Count the script, never the prose: this file, README, CONTRIBUTING and the script's own header have all been wrong about the number. `.github/workflows/ci.yml` runs `uv lock --check` before it and `uv audit --locked` after; `.github/workflows/release.yml` runs it with `--no-cov`.
-- **`ui/` is a second toolchain with its own gate.** The CI job `ui` runs `npm ci`, `npm run check`, `npm run test`, `npm run build` in `ui/`; a change under `ui/` is unverified until those four pass. The API contract is duplicated by hand — a new FastAPI field that is not added to `ui/src/lib/api.ts` is invisible to the dashboard, so add both in one change.
-- **Tests are flat.** 38 `test_*.py` modules directly in `tests/` (named per concern, not per source file), with `tests/fixtures/` as the only tracked subdirectory; there is no `tests/engine/` mirror.
-- **Moving `validate_path` silently disables CodeQL's sanitiser.** `.github/codeql/custom/ValidatePathSanitizer.qll` recognises it only when the call site's path string is `src/shrinkray/server/app.py`.
-- **The container is the deployment path** (`deploy/` was removed), and its target is an Unraid Community App (PRODUCT.md "Deployment target"): `/data` is the appdata folder holding every piece of operator state, files are written as the operator's `PUID`/`PGID` (built, #248: `tools/container-shrinkray.sh` is both the entrypoint and the `shrinkray` on `PATH`; it never chowns `/media`), and the token is generated into `/data/token` when `$SHRINKRAY_TOKEN` is empty (built, #249: opt-in through `$SHRINKRAY_TOKEN_FILE`, which only the image sets, so a native `serve` never generates a secret). `/media` is mounted writable because Mode B encodes in place; a read-only mount needs `$SHRINKRAY_WATCH_OUTPUT` pointing at a writable volume, or the watch loop dies on its staging folder. A non-loopback bind without a token (`$SHRINKRAY_TOKEN`, or the image's generated `/data/token`) is a startup failure. `.devcontainer/` uses apt `ffmpeg`, which has no libvmaf: lint and test only.
-- **`ui/dist` is build output** served by `server/app.py` (realpath containment); never edit it by hand.
+- **Every element earns its place.** A function, parameter, config option, comment or abstraction exists because correctness, readability, testability, security or operations require it. Only what is needed, never less than required: no speculative feature, unused abstraction or "just in case" parameter — and no missing error handling, validation or edge case the problem actually has. "Proper" means nothing missing and nothing superfluous; it does not mean fewest lines, and it does not mean maximal.
+- **One coherent responsibility** per module, class and function; direct control flow; neither monoliths nor a confetti of tiny functions.
+- **Names state intent; comments explain why** — a constraint, a trade-off, an incident — never what the next line does.
+- **Prefer the boring, proven solution.** The standard library before a dependency; a new dependency needs a stated reason in the PR. When two approaches are both valid, choose the one that better meets these rules, not the shorter one.
+- **Public interfaces are hard to misuse.** A CLI flag, config key or API field is a promise to users; changing one is a compatibility decision, not a cleanup.
 
-## Engineering standard (non-negotiable)
+### 5. "Done" means done
 
-This is not a hobby project. It is built to be **given to the community**, which raises the bar from "works on my machine" to "a stranger can trust it with their library". Read every rule below as a requirement, not an aspiration.
+Nothing is done until all of this holds:
 
-1. **Secure by construction.** Every path from an untrusted input to a file, a subprocess or a socket is validated at the boundary. Argument lists, never shell strings. Paths contained to an allowlist after `realpath`. No secret in a tracked file. A destructive action is opt-in, explicit and recoverable. "It's only on my LAN" is not a security boundary — the target deployment is a NAS reachable by every device on that network.
-2. **Correct under interruption.** This runs unattended for hours against a library that cannot be re-acquired. Every write is atomic or resumable; every crash leaves a recoverable state, never a missing or half-written file. A zero exit code is not success — verify the artifact.
-3. **Honest about failure.** No silent fallback, no swallowed exception, no "it probably worked". If a decision cannot be measured, it is reported as unmeasured and the file is left alone. An error a user cannot see is a bug.
-4. **Tested where it matters.** A behaviour change ships with a test that would fail without it. Tests never pollute the working tree, never depend on the wall clock or timing luck, and never encode a platform assumption that silently inverts on another OS.
-5. **Readable by a stranger.** A module has one coherent responsibility, names state intent, and the control flow is direct. The test is whether someone who has never seen the file can change it safely. Cleverness is a cost, not a credential.
-6. **No unsupported claim in a doc.** Every `file:line`, every performance number, every "supported" in the README is checked against the code or the measurement it describes. A stale doc is a defect with a longer half-life than a stale test.
+- **The checks pass**: `tools/gate.sh`; if `ui/` changed, `npm ci && npm run check && npm run test && npm run build` in `ui/`; if dependencies changed, `uv audit --locked`; if the scan, probe, encode, watch or replace path changed, the smoke tests (`SHRINKRAY_SMOKE=1`, needs ffmpeg with libvmaf and HandBrakeCLI) — or the PR says they were not run and why.
+- **A test fails without the change** and passes with it.
+- **The edge cases are thought through.** For this project at least: an empty folder or no eligible file; unicode, spaces and very long paths; Windows and POSIX paths; a crash or kill mid-write (what is left on disk?); a full disk; a missing or too-old binary; a multi-hour or multi-gigabyte file; two encoders, or the watcher and a manual encode, at once; HDR and 10-bit sources; a file that changes while it is read.
+- **Docs and changelog** that describe the behaviour are updated in the same PR.
+- **Compatibility is handled**: a schema change is a migration, an old config either loads or fails loudly, an API field is added to `ui/src/lib/api.ts` too.
 
-"Proper" here means exactly what RULES.md means: only what is needed, never less than required. It does not mean maximal — it means nothing missing and nothing superfluous.
+### 6. Review your own diff
 
-## Scope boundary (read before adding a feature)
+Before opening the PR, read `git diff origin/main...HEAD` top to bottom as if a stranger wrote it. Ask what it could break, what happens if it is interrupted halfway, and what you assumed without checking. Then it goes to the independent review (see Process) — your own read is necessary, not sufficient.
 
-ShrinkRay changes a file's **bytes**, never its **identity**. Path, filename and the set of files stay as they are.
+### 7. Report honestly
 
-- **In scope:** re-encoding at measured quality, black-bar cropping, deciding *whether* a file is worth touching, and recording that decision.
-- **Out of scope:** naming, renaming, moving, organizing, matching, scraping, deduplicating, acquiring, playing or serving media. That work belongs to the tooling that already assembled the collection.
+- **"Verified" means you ran it and saw the result.** Otherwise write "believed, not verified" and say why. Name what you could not do (no libvmaf, a platform you do not have).
+- **Lay out trade-offs** instead of silently picking one.
+- **Disagree openly.** If a better solution conflicts with the issue as written, neither ignore it nor silently override the issue: state the option, why it is better, and ask. This is for meaningful trade-offs, not style.
+- **Own mistakes.** If you got something wrong, say so plainly in the PR or issue and fix it.
+- **When you stop**, state what is done, what is verified, and what remains.
 
-Do not add a feature whose usefulness depends on knowing what a file is *called* or *which* file it is. "Is this file the size its quality needs?" and "Does its frame carry black bars its content does not need?" are the only questions this tool answers. Never name, vendor, or assume any particular acquisition or naming automation in code, comments, or commit messages, and never couple any code path to one: no import, no path assumption, no filename parsing. The one exception is PRODUCT.md's "Ecosystem position" section (issue #166), which may name the companion ecosystem in prose to describe the product's place among those tools.
+### 8. Write issues someone else can pick up
 
-## Non-negotiable rules
+`gh issue create` bypasses the forms in `.github/ISSUE_TEMPLATE/`, so every issue you open carries them itself: a title that states the defect or need (not the solution); why it matters to a user; exact reproduction steps or the code path; expected versus actual behaviour; the environment where it matters; acceptance criteria that define "fixed"; and your hypothesis about the cause, labelled as a hypothesis. Anything exploitable goes through `SECURITY.md`, never a public issue.
 
-1. **Never delete a source movie file.** The library is sacred (see PRODUCT.md). ShrinkRay has no code path that deletes a source; a replaced original is renamed aside as `<name>.shrinkray-original` and kept until the operator removes it manually. `replace.py` performs the staged swap, `encode --replace` asks for it (implied when no output directory is given), the resident watcher always does it, and `shrinkray retained` lists and recovers. Bar removal is part of every encode, never a flag; do not add one. A destructive action in a feature request is a signal to stop and ask, not to implement.
-2. **Never commit secrets.** Local keys and tool config live under `.opencode/`, which is gitignored. Do not copy keys into code, tests, logs or commit messages. Do not use PII in commit messages.
-3. **Run the full gate before every commit.** `tools/gate.sh` must pass, and it is ONE script — the same contract `.github/workflows/ci.yml`, `.github/workflows/release.yml` and the dev image's `CMD` run, so there is exactly one place where the commands live:
+## Hard invariants
 
-   ```sh
-   tools/gate.sh
-   # uv run: ruff check src tests | ruff format --check src tests
-   #   | mypy --platform linux | mypy --platform win32 | pytest -q | lint-imports
-   ```
+This is the only non-negotiable list. Breaking one is a defect even when every test passes. A request that conflicts with one is a signal to stop and ask, not to implement. PRODUCT.md and `docs/encode-decision.md` hold the detail.
 
-   Both mypy runs are explicit so the gate is identical on every host: `--platform` defaults to `sys.platform`, so a bare `uv run mypy` only ever checks the host's own view and is blind to the other one. A Windows-only API (`os.startfile`) passes on a Windows machine and breaks every Linux/NAS user; a POSIX-only import (`pwd`, `fcntl`) passes on the Linux runner and breaks a Windows contributor. Checking both directions catches both, whichever machine you are on. `lint-imports` enforces the layered layout of `docs/decisions/0001-module-layout.md`; a module in the wrong layer is a red gate, not a review comment. CI runs exactly this script (plus the `ui` job). If you cannot make the gate pass, do not commit; report the blocker instead.
+1. **Never delete a source file.** A verified output takes the source's path; the original is renamed aside as `<name>.shrinkray-original` (`replace.py`) and kept until the operator removes it; `shrinkray retained` lists and recovers. No code path deletes a source.
+2. **Bytes, never identity.** ShrinkRay changes a file's bytes; its path, its name and the set of files stay as they are. The collection is assumed already organized and free of duplicates: naming, moving, organizing, matching, deduplicating, acquiring, playing or serving media are out of scope, and so is any feature whose usefulness depends on what a file is called or which file it is. Never name, vendor or couple to an acquisition, naming or media-server product in code, comments or commit messages — PRODUCT.md's "Ecosystem position" section is the single prose exception (#166).
+3. **Secure by construction.** Every untrusted input reaching a file, a subprocess or a socket is validated at the boundary: argument lists, never shell strings; paths contained to an allowlist after `realpath`. A destructive action — on any file, the database or the data folder — is opt-in, explicit and recoverable. "Only on my LAN" is not a security boundary — the target is a NAS every device on the network can reach. A non-loopback bind without a token is a startup failure.
+4. **Correct under interruption.** Every write is atomic or resumable; a crash leaves a recoverable state, never a missing or half-written file. A zero exit code is not success — verify the artifact.
+5. **Honest about failure.** No silent fallback, no swallowed exception. A decision that cannot be measured is reported as unmeasured and the file is left alone. An error the user cannot see is a bug.
+6. **One encode mode.** A VMAF-driven CRF search against a required VMAF (96 by default), then one full encode, to AV1 on the CPU, from 8- or 10-bit sources. No fixed-preset or otherwise unmeasured path, no other output codec, no hardware encoder. Only the video stream is re-encoded; audio and subtitles are copied.
+7. **Codec age is the only codec gate, the 1080p class the only resolution floor.** The source-codec whitelist (`SOURCE_CODECS`: h264, hevc, vp9, av1) may be extended by config, never shrunk; MPEG-2, VC-1 and older are outside it. A source below the 1080p class (neither width 1920 nor height 1080 reached) is never re-encoded; the floor may be raised, never lowered. Whether an AV1 source is probed at all is still an open question in `docs/encode-decision.md`, which also lists the remaining gates (duration, size floor). Codec is never a reason to encode.
+8. **Size is the only permission.** The CRF search always runs on an eligible file and may end in "do not encode"; a re-encode happens only when the file gets smaller. Bars are removed on every re-encode — never a flag to keep them, never a reason to skip or to encode, never a crop-only path; with a changing aspect ratio, only the bars every sustained segment agrees on are cropped.
+9. **Two modes, one engine.** The one-shot CLI (a file, folder or glob) never requires the resident process or the database. The CLI reaches the resident process only through state they share in the data folder, never through a network route. The resident watcher scans every new or changed file and re-decides it from the fresh scan.
+10. **The dashboard reports; it does not control.** No route or button that starts, cancels or reconfigures work without a product decision. The control surface is the terminal (`shrinkray setup`): it edits settings and never loosens a product rule.
+11. **No secrets, no personal data** in a tracked file, a log, a test or a commit message. Local keys and tool config live under the gitignored `.opencode/`.
+12. **No unsupported claim in a doc.** Every number, "supported" or code reference is checked against the code or the measurement it describes.
 
-## Project conventions
+## Process: from issue to `main`
 
-- **Package manager is uv.** Use `uv add` / `uv remove`, not pip. Never edit `uv.lock` by hand. `requirements.txt` does not exist anymore — do not create one.
-- **Python 3.15** (`.python-version`), minimum supported 3.10 (`pyproject.toml`). **src layout**: code in `src/shrinkray/`, tests in `tests/`; entry point `shrinkray` (typer app) or `python -m shrinkray`.
-- **Formatting is ruff's job, not yours.** After writing or restructuring code, run `uv run ruff format` on the touched files before committing; the CI format check is strict.
-- **Type hints are checked by mypy** with `check_untyped_defs`, `no_implicit_optional`, `disallow_untyped_defs`, `disallow_incomplete_defs`, `warn_return_any`, `no_implicit_reexport` and `strict_equality` — every module under `src/shrinkray/` is fully annotated, so the strict flags apply everywhere, not module by module (issue #40). `[tool.mypy] files = ["src"]`, so the `tests.*` override never runs in the gate: tests are linted by ruff only. New public functions get full type hints and a Google-style docstring.
-- **Tests live in `tests/` as plain `unittest` classes run by pytest** — 38 `test_*.py` modules named per concern, so one module may be pinned by several files. Opt-in smoke tests against the real binaries live in `tests/test_smoke.py`, skipped unless `SHRINKRAY_SMOKE=1` is set AND ffmpeg/HandBrakeCLI are on PATH; they never run in CI or the default gate, so run them explicitly after changes to the probe/encode/watchdog paths. New features need tests; bug fixes need a test that would have caught the bug. Tests must not require ffmpeg/HandBrake binaries or network access — mock the subprocess seam or use a temporary directory. Tests that touch the filesystem or path scopes use **real `tempfile` directories, never fictional paths**: `D:/Movies` is absolute on Windows but relative on Linux/CI, and scope containment and `resolve()` behave differently, which the local gate cannot see.
-- **`test_media/` is for real media, and it is never committed.** The folder is tracked via `test_media/README.md` and every other file in it is ignored. Drop real video files there for manual runs and end-to-end validation and expect tens of GB in the working tree — that is the point, and why the ignore rule exists. Never `git add -f` a file from this folder, never remove the ignore rule, and never point a test or a script at it without a skip guard. **No automated test reads `test_media/` today**: `tests/test_smoke.py` generates its own synthetic clip in a `tempfile` directory. Real media is for a **manual** end-to-end run — `plan`, then `encode`, then `shrinkray retained` to read the result back — which is the only way to catch a defect that only real content shows (grain, letterboxing, HDR, an aspect-ratio change). Never commit the media itself, and never reference these filenames in code, tests or docs: the set of files is the operator's business.
-- **Module layout (decision record `docs/decisions/0001-module-layout.md`, issue #63; landed via #97).** The import stack is `__main__ > (server | tui) > service > engine > tools > db > config > logger` (the two front ends are siblings that never import each other, #252), enforced by the import-linter layers contract — `uv run lint-imports` is red in CI on any upward edge. Standing rules: **no new `helpers`/`utils`/`common` module** (a function lives with its concern or its only caller — the grab bag is dissolved, do not grow it); **one implementation per external fact** (one module owns each binary's invocation and parsing, `engine/encoders.py` alone decides the encoder for HDR/SDR, `engine/crop.py` alone detects bars) — the short-read exceptions are listed under External binaries. The per-module map is in `src/shrinkray/AGENTS.md`.
-- **Commit messages follow Conventional Commits** (`feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `style`) with a scope where it adds context, e.g. `fix(encode): ...`. Body explains the *why* when the *what* is not obvious. One logical change per commit.
-- **Markdown prose is written as single long lines.** In issue bodies, PR bodies, and `CHANGELOG.md`, paragraphs and list items are ONE line each — no hand-wrapped 80-column breaks. Markdown reflows; hard breaks render as chopped lines on the issue/release pages. Structure (headings, blank lines, lists, tables, code fences, link-reference footers) stays as it is. This applies to every text an agent writes for humans to render, including `gh pr create`/`gh issue create`.
-- **Every PR that changes code or docs adds a `CHANGELOG.md` entry in the same PR.** One bullet under `## [Unreleased]` in the matching subsection (`Added` / `Changed` / `Fixed` / `Removed`), phrased as the user-visible change and referencing the issue: `- **Short statement** (issue #N).` A PR without a changelog entry is incomplete the same way a behaviour change without a test is. Internal refactors with no user-visible effect get an entry only when a reader of the release would care (e.g. the module layout). The release workflow turns the `[Unreleased]` section into the GitHub release notes, so the entry IS the release note.
-- **The sqlite database (`metadata.db`) is user data, not source.** Schema changes go through a migration in `db.py` (bump `SCHEMA_VERSION`, currently 16 at `db.py:10`; see the v3 migration for the pattern). Never commit a `.db` file.
+Open issues are the task list: work through them without stopping to ask what comes next. Every change takes this path; a one-line fix is not an exception. `main` is what a stranger clones and must be green at every commit. Never push to `main` directly — the repository protects it against force-pushes and deletion, but this rule, not a setting, is what keeps unreviewed work off it. The only lighter path: when the maintainer is in the session and explicitly asks for one, that instruction wins for that task.
 
-## External binaries
+1. **Resume or claim.** First look for work already in flight: `gh pr list --state open --search "<N>"` and `git branch -a --list "*/<N>-*"`. An open PR or branch for the issue is finished, not restarted — see "When a PR does not go through", and fix in that PR any mistake an earlier commit of it left. Agents may share one GitHub login, so the assignee alone does not say which session owns an issue. It is not yours if its latest claim comment comes from another session with no hand-off after it. If you cannot tell — assigned, no claim or hand-off comment, recent pushes — ask on the issue and take another one. Otherwise claim it with `gh issue edit <N> --add-assignee @me` and post the restating comment (How to work, 1), naming your branch; post it when resuming too. A PR you resume is yours in full — its body, its tests, its mistakes — but its scope is still the issue's. One issue at a time — an issue parked on `needs-decision`, or a PR waiting on `needs-human-review`, no longer counts, so you may take the next one.
+2. **Branch from an up-to-date `main`** (unless resuming): `git switch main && git pull --ff-only && git switch -c <type>/<N>-<slug>` (e.g. `fix/38-test-pollutes-tree`).
+3. **Do the work** to the standard above. The checks from "Done means done" pass **before every push**.
+4. **Open the PR**: `git push -u origin <branch>`, then `gh pr create`, filling in every section of `.github/pull_request_template.md` (problem and root cause, change, verification, edge cases, risk) with `Closes #<N>`. A PR that cannot say how it was verified is not ready.
+5. **Independent review.** Run a reviewer that has not seen your reasoning: a new agent session, or a subagent whose prompt contains only the issue number and the PR number — not your summary, plan or opinion of the change. It reads `gh issue view <N> --comments` and `gh pr diff <PR>` itself and looks for correctness defects and violations of the hard invariants. Post its findings, numbered, as a PR comment headed `Independent review`, then answer every number in a follow-up comment: "fixed in `<sha>`" or "not changed, because ...". A finding dismissed without a reason is not answered.
+6. **Merge — or hand to a human.** Label the PR `needs-human-review` and stop after the review if it changes the behaviour of any of the following — when unsure whether one applies, it applies: the replace, retain or rename path; the encode decision (eligibility gates, CRF search, VMAF target, encoder choice, crop); server authentication, path containment or routes; a database migration; a new dependency; CI, `tools/gate.sh`, the release workflow, `AGENTS.md` or `CONTRIBUTING.md`. Otherwise you may squash-merge your own PR once every CI check has passed (pending is not passed), it has no conflicts, and every review finding is answered.
+7. **Close the loop.** Delete the branch and confirm the issue closed; close it yourself if the reference did not.
 
-`ffprobe`, `ffmpeg` and `HandBrakeCLI` are subprocess dependencies. When a feature needs one of them: always pass argument **lists** to `subprocess` (never shell strings); set a `timeout`; treat a zero exit code as *not sufficient* success and verify the expected artifact exists (see the encode truncation fix for why); and degrade gracefully when the binary is missing (see `find_handbrake()`).
-
-`tools/` is that boundary **by contract, not yet by fact**: `engine/crop.py` (four sites), `engine/samples.py:109` and `engine/pipeline.py:1032` still call `subprocess.run` directly for short ffprobe reads, `engine/pipeline.py:398` runs the unwatched encode when the stall watchdog is disabled (issue #62), and `server/app.py` shells out to `open`/`xdg-open`. New short reads belong in the matching `tools/` module, not in a fourth copy.
-
-## Issue workflow (the default for every change)
-
-Working on an issue always means the same five steps, in this order. There is no "small enough to skip the branch" exception — a one-line fix goes through the same path, because the point is that `main` only ever receives reviewed work. The only way around it is a deliberate direct push, which has its own rules below.
-
-1. **Claim it.** `gh issue edit <N> --add-assignee @me` (see Multi-agent etiquette). An assigned issue is work in progress; an unassigned one is free to take.
-2. **Branch from an up-to-date `main`.** Work on a branch, not on `main`: `git switch main && git pull --ff-only`, then `git switch -c <type>/<issue>-<slug>` (e.g. `fix/38-test-pollutes-tree`). The issue number belongs in the branch name, so `git branch --list` answers "what is in flight" without consulting GitHub.
-3. **Do the work, then pass the gate.** `tools/gate.sh` must pass locally before anything is pushed. Commit in reviewable units, not one dump — see the commit rules above.
-4. **Push the branch and open a pull request**, referencing the issue so it links and closes on merge: `git push -u origin <branch>` then `gh pr create --fill --body "Closes #<N>"`. The PR body says what changed and what was verified, not just what was intended. A PR that cannot state how it was verified is not ready.
-5. **Merge only when CI is green.** Merge to `main`, delete the branch, and let the `Closes #<N>` reference close the issue. If the work is handed off instead, see Multi-agent etiquette — do not open a half-finished PR as a way to park it.
-
-### When a PR does not go through
-
-A red or conflicting PR is not finished work, and it is yours until it merges. Do not close it and open a second one for the same issue, do not ask for a review while CI is red, and do not force-push a branch a reviewer may already have read. Bring `main` into the branch, fix what broke, and push the same PR again:
+**When a PR does not go through.** A red or conflicting PR is yours until it merges. Do not close it and open another, do not force-push a branch a reviewer may have read, and do not ask for review while CI is red. Merge `main` in — merge, do not rebase — fix it, and push the same PR:
 
 ```sh
-gh pr checks <N>                              # what is actually red
-gh pr view <N> --json mergeable,mergeStateStatus
-git switch <branch> && git fetch origin && git merge origin/main   # resolve HERE
-# fix the failure, run tools/gate.sh, commit, git push  -> same PR, in place
+gh pr checks <N>
+git fetch origin && git merge origin/main   # resolve here; say in the PR what you resolved
+tools/gate.sh && git push
 ```
 
-Repeat until every check is green and the PR reports no conflicts, then merge. This is the normal case, not an exception: when several agents work at once, `main` moves while your PR is open, so expect to merge `origin/main` into your branch at least once on any PR that lives longer than a few hours. **Merge, do not rebase**: `git merge origin/main` records what was resolved and keeps the history a reviewer already read, while a rebase rewrites those commits and needs a force-push. If a conflict is genuinely yours to resolve (two agents edited the same hunk), resolve it in the branch and say in the PR body what the resolution was. This is about *updating your branch*, not about how the PR lands — squash-and-merge at the end is fine and is what most merges here use.
+## Conventions
 
-### Pushing directly to `main`
+- **uv** is the package manager: `uv add` / `uv remove`, never pip, never a hand-edited `uv.lock`, no `requirements.txt`. Python per `.python-version`; the minimum supported version is in `pyproject.toml`. Code in `src/shrinkray/`, entry point `shrinkray` or `python -m shrinkray`.
+- **The gate is one script**, `tools/gate.sh`, run by CI, the release job (with `--no-cov`) and the dev image; CI adds only `uv audit --locked` and the `ui/` job around it. It runs mypy for both `linux` and `win32`, because a bare `mypy` checks only the host's view and cannot see a Windows-only API breaking a NAS user, or a POSIX-only import breaking a Windows contributor. `lint-imports` enforces the layering of `docs/decisions/0001-module-layout.md`. If you cannot make the gate pass, do not push around it; report the blocker.
+- **Formatting is ruff's job**: `uv run ruff format` on touched files. **Types**: every module under `src/` is fully annotated under mypy's strict flags; new public functions get full hints and a Google-style docstring.
+- **Module layout**: the import stack is `__main__ > (server | tui) > service > engine > tools > db > config > logger` — the two front ends are siblings that never import each other — and an upward import is a red gate. No new `helpers`/`utils`/`common` module — a function lives with its concern or its only caller. One implementation per external fact: one `tools/` module owns each binary's invocation and parsing, `engine/encoders.py` alone picks the encoder, `engine/crop.py` alone detects bars.
+- **Tests** are plain `unittest` classes in a flat `tests/` (one module per concern; `tests/fixtures/` is the only subfolder), run by pytest. They need no ffmpeg, HandBrake or network — mock the subprocess seam. Filesystem tests use real `tempfile` directories, never fictional paths (`D:/Movies` is absolute on Windows, relative on Linux). They never write into the working tree and never depend on the wall clock or timing luck.
+- **Real media** goes in `test_media/`, which is ignored and never committed (no `git add -f`, no removing the rule, no test reading it without a skip guard, no filename from it in code or docs). It is for manual end-to-end runs — `plan`, `encode`, `shrinkray retained` — the only way to catch what only real content shows: grain, letterboxing, HDR, an aspect-ratio change.
+- **Commits** follow Conventional Commits (`feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `ci`, `build`, `style`) with a scope where it helps; the body explains why.
+- **Markdown prose is one line per paragraph or list item** in issues, PRs and `CHANGELOG.md` — no hand-wrapped 80-column breaks.
+- **Every PR that changes code or docs adds a `CHANGELOG.md` bullet** under `## [Unreleased]` (`Added` / `Changed` / `Fixed` / `Removed`), phrased as the user-visible change: `- **Short statement** (issue #N): ...`. It becomes the release note. A purely internal change gets one only if a release reader would care.
+- **`metadata.db` is user data.** Schema changes go through a migration in `db.py` (bump `SCHEMA_VERSION`; the v3 migration is the pattern). Never commit a `.db` file.
+- **External binaries**: argument lists, a `timeout`, the expected artifact verified after a zero exit, and graceful degradation when the binary is missing (`find_handbrake()`). `tools/` is that boundary by contract but not yet by fact: short ffprobe reads in `engine/crop.py`, `engine/samples.py` and `engine/pipeline.py`, the unwatched encode when the stall watchdog is off (#62), and the dashboard's folder opener in `server/app.py` still call `subprocess` directly. A new read belongs in the matching `tools/` module, not in another copy.
+- **Background work** you start (an encode, a watch loop) never blocks the session and comes with a note on how to stop it.
 
-Direct pushes to `main` are blocked by branch protection (GitHub returns 403), and that is by design: a PR runs CI before anything lands, while a direct push would make `main` red first and debug later. `main` is what a stranger clones; it must be green at every commit. GitHub does not let an author approve their own pull request, and every PR here is opened by the same account that would merge it — so "approved" in practice means "green checks and no conflicts", which is what step 5 gates on.
+## Where to read more
 
-## Multi-agent etiquette
+| Question | Read |
+|---|---|
+| Layers, root modules, package conventions | `src/shrinkray/AGENTS.md` |
+| CRF search, plan gates, encode/verify, bars, watchdog, lock | `src/shrinkray/engine/AGENTS.md` |
+| Routes, token auth, path containment, jobs, SSE | `src/shrinkray/server/AGENTS.md` |
+| The subprocess boundary, one module per binary | `src/shrinkray/tools/AGENTS.md` |
+| The test suite, fixtures, patch seams | `tests/AGENTS.md` |
+| The Svelte dashboard and its toolchain | `ui/AGENTS.md` |
+| Product direction, modes, deployment target | `PRODUCT.md` |
+| Every gate of the encode decision | `docs/encode-decision.md` |
+| The plan cache | `docs/plan-reuse.md` |
+| Crop measurements (its #131 two-measurement decision is superseded by #181's single timeline detector) | `docs/black-bar-spike.md` |
+| The container deployment | `docs/docker.md` |
+| The terminal control surface (`shrinkray setup`) | `docs/tui.md` |
 
-Multiple agents (and humans) work in this repository concurrently.
+**Precedence when documents disagree:** `docs/encode-decision.md` ("where the code disagrees with this document, the code is the defect") > this file > `docs/decisions/0001-module-layout.md` > PRODUCT.md. A disagreement you find is itself an issue to open.
 
-- **Claim an issue before you start working on it.** Assign it to yourself as the first action, before the first edit (`gh issue edit <number> --add-assignee @me`). An assigned issue is work in progress; an unassigned one is free to take. This is the only coordination channel that works across separate checkouts, separate agent sessions and separate humans — a local branch name is invisible to everyone else. Pick an unassigned issue, or one already assigned to you; if it is assigned to somebody else, do not start.
-- **One issue, one agent.** Do not assign yourself a second issue while one is still assigned to you and unfinished — the point of the claim is that it means something.
-- **When you stop, say where it stands.** A merged PR closes its issue through the `Closes #<N>` reference — verify it closed, and close it yourself if it did not. If you hand off mid-way, leave the assignment in place and comment on the issue with what is done and what is left, so the next agent resumes instead of restarting. Unassign only if you are abandoning it.
-- **Do not touch files you did not "own" in the current task** unless you have read them first. Uncommitted changes belong to whoever is working — check `git status` before any `git add -A` or `git stash`, and only stage files from your own task.
-- Prefer short-lived branches over long-lived uncommitted WIP in the shared checkout. `main` should always be green — see the issue workflow for the exact branch/PR sequence. If you must switch branches in the shared checkout, check for uncommitted changes first and stash them with a descriptive message. After pulling, run the gate again before you continue — someone may have merged something that interacts with your change.
+Traps that are not obvious from the code:
 
-## Autonomy
+- **Moving `validate_path` silently disables CodeQL's path sanitiser**: `.github/codeql/custom/ValidatePathSanitizer.qll` recognises it only in `src/shrinkray/server/app.py`.
+- **The dashboard's API contract is duplicated by hand**: a FastAPI field not added to `ui/src/lib/api.ts` is invisible to the dashboard. `ui/dist` is build output — never edit it.
+- **The container needs `/media` writable**, because the resident mode encodes in place; a read-only mount needs `$SHRINKRAY_WATCH_OUTPUT` on a writable volume. `.devcontainer/` ships an ffmpeg without libvmaf: lint and test there, not the smoke tests.
 
-- Work through the issue tracker without stopping to ask what comes next: open issues are the task list, and needs-decision issues stay open until the maintainer decides. Quick doc/format fixes may land directly on `main` when the maintainer says so; everything else goes through the issue workflow above.
-- Prefer sensible defaults over questions; document the choice you made. Ask only for irreversible or destructive actions, missing credentials, or genuinely ambiguous product direction.
-- When you stop, state what is done, what is verified, and what remains — not as a substitute for doing it.
-- Long-running background work (encodes, watch loops) must be started with a clear note on how to stop it, and must never block the session.
+## Working alongside others
+
+Several agents and humans work in this repository at once.
+
+- **The assignment and the claim comment are the lock.** They are the only coordination that works across checkouts and sessions; a local branch is invisible to everyone else. Never start on an issue another person or session holds (Process, step 1).
+- **Hand off explicitly.** If you stop mid-way, keep the assignment and comment what is done and what is left, so the next agent resumes instead of restarting. Unassign only when abandoning.
+- **Uncommitted changes belong to whoever made them.** Check `git status` before `git add -A` or `git stash`, stage only your own files, and do not edit a file you have not read.
+- **`main` moves.** After pulling, run the gate again before you continue; expect to merge `origin/main` into any PR that lives longer than a few hours.
