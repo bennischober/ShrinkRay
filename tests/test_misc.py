@@ -146,6 +146,16 @@ class TestConfigSchema(unittest.TestCase):
                 conf = config_helper.Conf({"eligibility": {"min_source_height": value}})
                 self.assertEqual(conf.min_source_height, value)
 
+    def test_the_language_filter_defaults_are_the_reference_lists(self):
+        """Issue #240: the two keys ship the reference preset's lists;
+        an empty list is the explicit no-filter (the strict 1:1) opt-out."""
+        conf = config_helper.Conf({})
+        self.assertEqual(conf.handbrake_audio_languages, ["deu", "eng", "und", "jpn"])
+        self.assertEqual(conf.handbrake_subtitle_languages, ["eng", "deu", "und"])
+        empty = config_helper.Conf({"handbrake": {"audio_languages": [], "subtitle_languages": []}})
+        self.assertEqual(empty.handbrake_audio_languages, [])
+        self.assertEqual(empty.handbrake_subtitle_languages, [])
+
     def test_the_required_vmaf_is_a_validated_setting(self):
         # issue #252: the terminal UI edits it, so the schema guards it
         from shrinkray.engine.search import DEFAULT_TARGET_VMAF

@@ -36,6 +36,7 @@ from shrinkray.engine.scan import (
 )
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
+from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import (
     Cancelled as _EncodeCancelled,
 )
@@ -304,7 +305,7 @@ def encode(
         work: contextlib.AbstractContextManager[str] = (
             contextlib.nullcontext(str(output_dir))
             if output_dir is not None
-            else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=root)
+            else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=root)
         )
         with work as staging:
             _record_encodes(
@@ -338,6 +339,7 @@ def _swap_into_place(
     source: Path,
     output: Path,
     encode_id: int | None = None,
+    error: str | None = None,
 ) -> None:
     """Swaps a verified encode into the source's path, reporting it to the console.
 
@@ -352,10 +354,12 @@ def _swap_into_place(
         source: The library file the output replaces.
         output: The verified encoded file.
         encode_id: The encode row the run just wrote (None: stateless).
+        error: A verification finding from the encode (a swap on an unverified
+            artifact would make the finding permanent; None: nothing to check).
     """
     from shrinkray import service
 
-    outcome = service.swap_encode_into_place(connection, source, output, encode_id)
+    outcome = service.swap_encode_into_place(connection, source, output, encode_id, error)
     if not outcome.replaced:
         return
     retained = outcome.retained_path
@@ -542,6 +546,8 @@ def _record_encodes(
                             sample_every=sample_every,
                             sample_count=sample_count,
                             sample_seconds=sample_seconds,
+                            audio_languages=config.handbrake_audio_languages,
+                            subtitle_languages=config.handbrake_subtitle_languages,
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(
@@ -581,6 +587,16 @@ def _record_encodes(
                                     movie,
                                     output_dir / movie.name,
                                     outcome.encode_id if outcome else None,
+                                    error=result.error,
+                                )
+                            if result.error is not None:
+                                # a verification finding must not hide behind
+                                # the green line (review finding 1: an error
+                                # the user cannot see is a bug); with replace,
+                                # the swap above declined and kept the original
+                                console.print(
+                                    f"[yellow]Encoded '{movie.name}' with a finding: "
+                                    f"{result.error}[/yellow]"
                                 )
                         elif result.skipped_reason is not None:
                             # guardrail skip => record it so future runs do not re-probe

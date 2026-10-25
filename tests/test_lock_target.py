@@ -33,6 +33,8 @@ def _conf_stub() -> object:
             "min_source_width": 1920,
             "min_source_size_gb": 0.0,
             "candidate_codecs": ("h264", "hevc", "vp9", "av1"),
+            "handbrake_audio_languages": ["deu", "eng", "und", "jpn"],
+            "handbrake_subtitle_languages": ["eng", "deu", "und"],
         },
     )()
 

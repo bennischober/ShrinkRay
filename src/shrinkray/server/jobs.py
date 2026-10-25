@@ -24,6 +24,7 @@ from pathlib import Path
 
 from shrinkray.config import Conf
 from shrinkray.engine.pipeline import cap_threads
+from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
 
 # how many terminated (done/failed/cancelled) job rows the history keeps.
@@ -863,7 +864,7 @@ def execute_encode(
     staging: contextlib.AbstractContextManager[str] = (
         contextlib.nullcontext(str(output_dir))
         if output_dir is not None
-        else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=root)
+        else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=root)
     )
     with staging as staging_str:
         write_dir = Path(staging_str)
@@ -993,6 +994,8 @@ def _encode_quality_or_fixed(
                         min_source_size_gb=config.min_source_size_gb,
                         candidate_codecs=tuple(config.candidate_codecs),
                         crop_sample_count=config.crop_sample_count,
+                        audio_languages=config.handbrake_audio_languages,
+                        subtitle_languages=config.handbrake_subtitle_languages,
                     )
             except EncodeBusyError as e:
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
@@ -1010,7 +1013,13 @@ def _encode_quality_or_fixed(
             )
             if in_place and outcome.encoded:
                 swap = swap_encode_into_place(
-                    connection, movie, output_dir / movie.name, outcome.encode_id
+                    connection,
+                    movie,
+                    output_dir / movie.name,
+                    outcome.encode_id,
+                    # a verification finding (issue #240: a lost track, an
+                    # unverifiable probe) declines the swap
+                    error=result.error,
                 )
                 declined = not swap.replaced
             else:

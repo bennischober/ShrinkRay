@@ -284,6 +284,49 @@ class TestJobs(unittest.TestCase):
         # the job's recorded outcomes carry the movie through (not empty)
         self.assertEqual(result["outcomes"][0]["movie"], "Some Movie_t00.mkv")
 
+    def test_an_in_place_job_never_swaps_an_encode_with_a_track_finding(self):
+        """Review of #287: the job worker called swap_encode_into_place without
+        the encode's verification finding, so a track-losing encode replaced
+        the library file. In place (no output_dir), the REAL swap runs here."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from shrinkray.engine.plan import QualityResult
+
+        library = _Path(self.tmp.name).resolve() / "lib"
+        library.mkdir()
+        movie = library / "Some Movie.mkv"
+        movie.write_bytes(b"ORIGINAL" * 100)
+        job = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.ENCODE, payload={"paths": [str(movie)], "quality": True})
+        )
+
+        def fake_encode_with_quality(movie, output, *args, **kwargs):
+            output.write_bytes(b"NEW")  # smaller: only the finding may decline
+            return QualityResult(
+                input=movie,
+                output=output,
+                success=True,
+                chosen_crf=20,
+                achieved_vmaf=95.0,
+                input_size=800,
+                output_size=3,
+                error="output lost 1 audio track(s)",
+            )
+
+        with (
+            patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode_with_quality),
+            patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: SimpleNamespace(encoded=True, skipped=False, encode_id=None),
+            ),
+        ):
+            result = jobs.execute_encode(job, self.connection, threading.Event())
+        self.assertEqual(movie.read_bytes(), b"ORIGINAL" * 100)
+        self.assertEqual(list(library.glob("*.shrinkray-original")), [])
+        self.assertEqual(result["outcomes"][0]["state"], "skipped")
+
     def test_legacy_job_kind_reads_as_legacy(self):
         """A stored row of a removed kind does not crash the history.
 

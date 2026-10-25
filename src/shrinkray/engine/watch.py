@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
+from shrinkray.config import Conf as Conf
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import (
@@ -32,7 +33,7 @@ from shrinkray.engine.samples import ProgressCallback
 from shrinkray.engine.scan import process_movie
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
-from shrinkray.replace import is_staging_path
+from shrinkray.replace import STAGING_DIR_PREFIX, is_staging_path
 from shrinkray.tools.ffprobe import probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 from shrinkray.tools.process import Cancelled
@@ -159,7 +160,7 @@ def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list
     # is the same non-movie class: an in-flight or crashed run's encode must
     # not be picked up as a new arrival (issue #237).
     unique = list(dict.fromkeys(movies))
-    return [m for m in unique if _identity(m) not in known and not is_staging_path(m)]
+    return [m for m in unique if _identity(m) not in known and not is_staging_path(m, inbox)]
 
 
 def _identity(path: Path) -> str:
@@ -476,6 +477,8 @@ class WatchSettings:
     min_source_size_gb: float
     candidate_codecs: tuple[str, ...]
     crop_sample_count: int
+    audio_languages: list[str] | None = None
+    subtitle_languages: list[str] | None = None
 
 
 def watch(
@@ -495,8 +498,11 @@ def watch(
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = ("h264",),
     crop_sample_count: int = 10,
+    audio_languages: list[str] | None = None,
+    subtitle_languages: list[str] | None = None,
     progress: ProgressCallback | None = None,
     settings: Callable[[], WatchSettings] | None = None,
+    load_config: Callable[[], "Conf"] | None = None,
     record: Callable[[Path, QualityResult, Path | None], int | None] | None = None,
     submit: Callable[[Path], bool] | None = None,
     extensions: list[str] | None = None,
@@ -537,6 +543,12 @@ def watch(
             changed config takes effect at the next file and an idle watcher
             still notices it (the resident app passes one, issue #247). None:
             the fixed arguments above apply to every file.
+        load_config (Callable[[], Conf] | None): The operator's configuration
+            provider, used ONLY to fill the language filters when the caller
+            passed none (review finding 6: the built-in defaults must not be
+            a silent narrowing filter; the resident app passes its loader so
+            a saved change applies at the next file). None (default): the
+            built-in defaults - no filtering, the 1:1 behaviour.
         record (Callable[[Path, QualityResult, Path | None], int | None] | None):
             Persisted one encode's (or skip's) outcome (issue #232): called as
             record(movie, result, final_output) where final_output is the path
@@ -547,6 +559,16 @@ def watch(
             resident app passes one closure, a stateless run passes None and
             records nothing, exactly as db_file=None does.
     """
+
+    # no provider: no language filter, the strict 1:1 behaviour the docstring
+    # promises (review finding 6) - never the built-in narrowing lists
+    if load_config is None:
+        default_audio_languages: list[str] = []
+        default_subtitle_languages: list[str] = []
+    else:
+        _conf = load_config()
+        default_audio_languages = _conf.handbrake_audio_languages
+        default_subtitle_languages = _conf.handbrake_subtitle_languages
     current = WatchSettings(
         max_threads=max_threads,
         target_vmaf=target_vmaf,
@@ -555,6 +577,10 @@ def watch(
         min_source_size_gb=min_source_size_gb,
         candidate_codecs=candidate_codecs,
         crop_sample_count=crop_sample_count,
+        audio_languages=audio_languages if audio_languages is not None else default_audio_languages,
+        subtitle_languages=subtitle_languages
+        if subtitle_languages is not None
+        else default_subtitle_languages,
     )
     extensions = extensions or [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     # the pause state lives beside the database (issue #250): no database,
@@ -615,7 +641,7 @@ def watch(
     staging: contextlib.AbstractContextManager[str] = (
         contextlib.nullcontext(str(output_dir))
         if output_dir is not None
-        else tempfile.TemporaryDirectory(prefix=".shrinkray-", dir=roots[0])
+        else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=roots[0])
     )
     disk_target = output_dir if output_dir is not None else roots[0]
     in_place_mode = output_dir is None
@@ -738,6 +764,15 @@ def watch(
                                 min_source_size_gb=current.min_source_size_gb,
                                 candidate_codecs=current.candidate_codecs,
                                 crop_sample_count=current.crop_sample_count,
+                                # a struct without the filters (tests, older
+                                # callers) falls back to the same defaults as
+                                # the first pass: the provider's, or no filter
+                                audio_languages=current.audio_languages
+                                if current.audio_languages is not None
+                                else default_audio_languages,
+                                subtitle_languages=current.subtitle_languages
+                                if current.subtitle_languages is not None
+                                else default_subtitle_languages,
                                 progress=progress,
                             )
                     except EncodeBusyError as e:
@@ -772,7 +807,14 @@ def watch(
                             else None
                         )
                         if in_place_mode:
-                            _swap(db_file, movie, result.output, encode_id)
+                            if not _swap(
+                                db_file, movie, result.output, encode_id, error=result.error
+                            ):
+                                # declined (a verification finding, a grown
+                                # output or a refused rename): _swap said why,
+                                # and the green "Done" below would read as a
+                                # replacement
+                                continue
                             log(
                                 f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
                                 f"(VMAF {result.achieved_vmaf}), "
@@ -798,7 +840,13 @@ def watch(
         release_lock(lock_file)
 
 
-def _swap(db_file: Path | None, source: Path, output: Path, encode_id: int | None = None) -> None:
+def _swap(
+    db_file: Path | None,
+    source: Path,
+    output: Path,
+    encode_id: int | None = None,
+    error: str | None = None,
+) -> bool:
     """Swaps a verified encode into the source's path, retaining the original.
 
     The watcher's in-place form writes its encode into a staging directory and
@@ -816,9 +864,28 @@ def _swap(db_file: Path | None, source: Path, output: Path, encode_id: int | Non
             encode (issue #232). A DECLINED swap clears the row's output_file:
             the encode is discarded with its staging directory, so the row must
             not point at a path that is about to vanish.
+        error (str | None): The encode's verification finding (issue #240: a
+            lost track, an unverifiable probe). A finding declines the swap
+            before any filesystem work: the source is never touched.
+
+    Returns:
+        bool: True when the source was replaced, False when the swap was
+            declined (the reason is logged).
     """
     from shrinkray import db, replace
 
+    def _discard_row() -> None:
+        if db_file is not None and encode_id is not None:
+            connection = db.connect(db_file)
+            try:
+                db.set_encode_output(connection, encode_id, None)
+            finally:
+                connection.close()
+
+    if error is not None:
+        log_error(f"Not replacing '{source.name}': {error} => the original is kept.")
+        _discard_row()
+        return False
     size_before = source.stat().st_size
     size_after = output.stat().st_size
     if size_after >= size_before:
@@ -826,25 +893,15 @@ def _swap(db_file: Path | None, source: Path, output: Path, encode_id: int | Non
             f"Not replacing '{source.name}': the output is not smaller "
             f"({size_before} -> {size_after} bytes)"
         )
-        if db_file is not None and encode_id is not None:
-            connection = db.connect(db_file)
-            try:
-                db.set_encode_output(connection, encode_id, None)
-            finally:
-                connection.close()
-        return
+        _discard_row()
+        return False
     try:
         staged = replace.stage(output, source)
         retained = replace.swap(source, staged)
-    except replace.SwapError as error:
-        log_error(f"Not replacing '{source.name}': {error}")
-        if db_file is not None and encode_id is not None:
-            connection = db.connect(db_file)
-            try:
-                db.set_encode_output(connection, encode_id, None)
-            finally:
-                connection.close()
-        return
+    except replace.SwapError as swap_error:
+        log_error(f"Not replacing '{source.name}': {swap_error}")
+        _discard_row()
+        return False
     if db_file is not None:
         connection = db.connect(db_file)
         try:
@@ -857,3 +914,4 @@ def _swap(db_file: Path | None, source: Path, output: Path, encode_id: int | Non
         f"'{retained.name}' ({size_before / (1024**3):.2f} GB); delete it when "
         "you are satisfied (see the retained command)."
     )
+    return True

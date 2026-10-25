@@ -1423,6 +1423,8 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
             min_source_size_gb=config.min_source_size_gb,
             candidate_codecs=tuple(config.candidate_codecs),
             crop_sample_count=config.crop_sample_count,
+            audio_languages=list(config.handbrake_audio_languages),
+            subtitle_languages=list(config.handbrake_subtitle_languages),
         )
 
     def submit_watch_candidate(movie: Path) -> bool:
@@ -1452,6 +1454,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 stop_event=state.watch_stop,
                 db_file=state.db_file,
                 settings=settings_for_next_file,
+                load_config=refresh_config,
                 record=record_watch_outcome,
                 submit=submit_watch_candidate,
                 extensions=list(refresh_config().extensions),

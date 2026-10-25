@@ -41,6 +41,11 @@ RETAINED_SUFFIX = ".shrinkray-original"
 # already happened".
 STAGING_SUFFIX = ".shrinkray-staging"
 
+# the name prefix of the in-place working directory created inside the library.
+# One constant for the sites that create it and the predicate that recognises
+# it (issues #237, #286), so the two cannot drift apart.
+STAGING_DIR_PREFIX = ".shrinkray-"
+
 
 class SwapError(RuntimeError):
     """A swap was refused or failed; the source is untouched."""
@@ -63,7 +68,7 @@ class SwapResult:
     size_after: int
 
 
-def is_staging_path(path: Path) -> bool:
+def is_staging_path(path: Path, root: Path) -> bool:
     """Decides whether a path lives inside a staging directory or is a
     staging/retained sibling.
 
@@ -76,8 +81,17 @@ def is_staging_path(path: Path) -> bool:
     (`engine.scan.find_movies`, `engine.watch.find_new_movies`), so the two
     scans cannot drift apart again.
 
+    The `.shrinkray-*` prefix check is scoped to the WALK ROOT (issue #286):
+    only folders BELOW the root mark staging state. A library that lives
+    below a folder named `.shrinkray-archive` (an ancestor above the root) is
+    a library, not working state, and must stay visible. The root is
+    required, so no caller can fall back to the absolute-path check that hid
+    such a library.
+
     Args:
         path (Path): The candidate path.
+        root (Path): The walk root; staging folders are recognised only
+            BELOW it.
 
     Returns:
         bool: True when the path is ShrinkRay's own working state, never a
@@ -85,7 +99,13 @@ def is_staging_path(path: Path) -> bool:
     """
     if path.name.endswith((RETAINED_SUFFIX, STAGING_SUFFIX)):
         return True
-    return any(part.startswith(".shrinkray-") for part in path.parts)
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        # not below the root: the root-scoped check cannot apply; the
+        # sibling-suffix check above already ran
+        return False
+    return any(part.startswith(STAGING_DIR_PREFIX) for part in relative.parts)
 
 
 def retained_path_for(source: Path) -> Path:
