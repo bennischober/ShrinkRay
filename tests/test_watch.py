@@ -68,8 +68,11 @@ class TestWatch(unittest.TestCase):
                 _isolated_lock(stack, tmp)
                 with stack:
                     watch_mod.watch([inbox], out, once=True)
+            # the candidates' order is the readdir's, not mine: the behavior
+            # under test is BOTH processed (the broken one's failure did not
+            # end the loop), not an order
             self.assertEqual(
-                processed,
+                sorted(processed),
                 ["broken.mkv", "good.mkv"],
                 "the loop died on the broken file; the good one was never processed",
             )
