@@ -107,6 +107,20 @@ class TestDockerignore(unittest.TestCase):
         excluded = {p.rstrip("/") for p in patterns if p.endswith("/")}
         self.assertIn(".opencode", excluded)
 
+    def test_the_context_excludes_the_maintainers_personal_files(self) -> None:
+        """Issue #332: ISSUES.md is a local work file (never committed), and the
+        repo root collects scratch JSON (the preset experiment) plus the old
+        scan output. A local 'docker build .' must not bake them into /app
+        where any contributor's personal notes become part of an image layer.
+        The tracked config files must survive: the image seeds from them.
+        """
+        patterns = self._patterns()
+        for expected in ("ISSUES.md", "movies.txt", "/*.json"):
+            self.assertIn(expected, patterns)
+        # the negations keep the tracked configs in the context
+        for kept in ("!config.json", "!container-config.json"):
+            self.assertIn(kept, patterns)
+
 
 class TestDockerfile(unittest.TestCase):
     def setUp(self) -> None:
