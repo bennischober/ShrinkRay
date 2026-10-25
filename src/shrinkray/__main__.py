@@ -6,12 +6,14 @@ options and the console presentation.
 """
 
 import contextlib
+import signal
 import sys
 import tempfile
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from types import FrameType
+from typing import TYPE_CHECKING, Any
 
 import typer
 from rich.console import Console
@@ -119,6 +121,49 @@ def app_command(
     # explicit --root narrows the allowlist down
     roots = [Path(r) for r in root] or None
     run_app(db_file, host=host, port=port, allowed_roots=roots, config_file=config_file)
+
+
+@contextlib.contextmanager
+def _cancel_on_terminal_close() -> Iterator[threading.Event]:
+    """Turns closing the terminal, ctrl+c and `kill <pid>` into a cancel.
+
+    Closing the terminal cancels the encode (PRODUCT.md, issue #326). The
+    engine's children run in their own session, so they never see the
+    terminal's SIGHUP: without a handler the CLI died, its HandBrake child
+    kept encoding orphaned, and the staging directory was never cleaned up.
+    The first signal only sets the yielded event. The engine checks it
+    between steps, terminates its own child tree and raises Cancelled, so
+    the CLI unwinds through its normal cleanup paths. A second signal
+    raises KeyboardInterrupt, so a step that does not check the event (a
+    scan, a crop pass) can still be aborted. The previous handlers come
+    back on every exit path.
+
+    Yields:
+        threading.Event: Set when the first signal arrives.
+    """
+    cancel = threading.Event()
+
+    def _on_signal(signum: int, frame: FrameType | None) -> None:
+        if cancel.is_set():
+            raise KeyboardInterrupt
+        cancel.set()
+
+    if sys.platform == "win32":
+        signals = [signal.SIGINT, signal.SIGTERM]
+    else:
+        signals = [signal.SIGHUP, signal.SIGINT, signal.SIGTERM]
+    previous: dict[signal.Signals, Any] = {}
+    try:
+        for sig in signals:
+            # signal.signal refuses outside the main thread (ValueError): the
+            # command then runs without the handler, as before issue #326
+            with contextlib.suppress(OSError, ValueError):
+                previous[sig] = signal.signal(sig, _on_signal)
+        yield cancel
+    finally:
+        for sig, handler in previous.items():
+            # None: the previous handler was not installed from Python
+            signal.signal(sig, signal.SIG_DFL if handler is None else handler)
 
 
 def _totals(movies_by_category: dict) -> tuple:
@@ -279,35 +324,6 @@ def encode(
     # the flag wins; without it the config's required VMAF applies (issue #252)
     target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
     apply_config(config)
-    # closing the terminal cancels the encode (PRODUCT.md, issue #326):
-    # SIGHUP fires when the session dies; SIGINT/SIGTERM cover ctrl+c and
-    # 'kill <pid>'. The handler only SETS the cancel event - the engine
-    # checks it between steps, terminates its own child tree and returns,
-    # so the CLI unwinds through the normal cleanup paths (the staging
-    # TemporaryDirectory, the encode slot, the manual-encode marker).
-    # No handler is installed when a previous one exists (re-entrancy).
-    import signal as _signal
-
-    cancel = threading.Event()
-    _previous_handlers: dict = {}
-
-    def _cancel_on_signal(signum, frame):
-        cancel.set()
-
-    for sig in (
-        [_signal.SIGINT, _signal.SIGTERM]
-        if sys.platform == "win32"
-        else [_signal.SIGHUP, _signal.SIGINT, _signal.SIGTERM]
-    ):
-        # not the main thread / unsupported on this platform: degrade
-        with contextlib.suppress(OSError, ValueError):
-            _previous_handlers[sig] = _signal.signal(sig, _cancel_on_signal)
-
-    def _restore_signals():
-        for sig, handler in _previous_handlers.items():
-            with contextlib.suppress(OSError, ValueError):
-                _signal.signal(sig, handler)
-
     # encode probes and re-encodes: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems
 
@@ -337,32 +353,31 @@ def encode(
             if output_dir is not None
             else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=root)
         )
-        with work as staging:
-            try:
-                _record_encodes(
-                    connection,
-                    movies,
-                    Path(staging),
-                    config,
-                    dry_run,
-                    overwrite,
-                    quality,
-                    target_vmaf,
-                    verify,
-                    threads,
-                    db_file,
-                    replan,
-                    probe_encoder_preset,
-                    encoder_preset,
-                    crop_samples,
-                    sample_every,
-                    sample_count,
-                    output_dir is None or replace,
-                    library_root=root if output_dir is None else None,
-                    cancel=cancel,
-                )
-            finally:
-                _restore_signals()
+        # the handler is the inner context: it is restored before the
+        # staging directory's cleanup, which then runs on every exit path
+        with work as staging, _cancel_on_terminal_close() as cancel:
+            _record_encodes(
+                connection,
+                movies,
+                Path(staging),
+                config,
+                dry_run,
+                overwrite,
+                quality,
+                target_vmaf,
+                verify,
+                threads,
+                db_file,
+                replan,
+                probe_encoder_preset,
+                encoder_preset,
+                crop_samples,
+                sample_every,
+                sample_count,
+                output_dir is None or replace,
+                library_root=root if output_dir is None else None,
+                cancel=cancel,
+            )
     finally:
         if connection is not None:
             connection.close()
@@ -762,32 +777,10 @@ def plan(
         for problem in plan_problems:
             log_error(problem)
         raise typer.Exit(1)
-    # same terminal-close contract as encode (issue #326): the probing
-    # pipeline is the expensive part, and closing the terminal must cancel
-    # it, not orphan it
-    import signal as _signal
-
-    cancel = threading.Event()
-    _previous_handlers: dict = {}
-
-    def _cancel_on_signal(signum, frame):
-        cancel.set()
-
-    for sig in (
-        [_signal.SIGINT, _signal.SIGTERM]
-        if sys.platform == "win32"
-        else [_signal.SIGHUP, _signal.SIGINT, _signal.SIGTERM]
-    ):
-        # not the main thread / unsupported: degrade
-        with contextlib.suppress(OSError, ValueError):
-            _previous_handlers[sig] = _signal.signal(sig, _cancel_on_signal)
-
-    def _restore_signals():
-        for sig, handler in _previous_handlers.items():
-            with contextlib.suppress(OSError, ValueError):
-                _signal.signal(sig, handler)
-
     connection = db.connect(db_file) if db_file is not None else None
+    # the probes are the expensive part: closing the terminal cancels them
+    # too (issue #326); entered once the input is resolved
+    signals = contextlib.ExitStack()
     try:
         try:
             root, files = resolve_input_paths(path, config.extensions)
@@ -813,6 +806,7 @@ def plan(
         total_input = total_output = 0
         plans: list = []
         errors = 0
+        cancel = signals.enter_context(_cancel_on_terminal_close())
         for movie in movies:
             try:
                 result = plan_quality(
@@ -894,8 +888,13 @@ def plan(
         if any(r.hdr and r.skipped_reason is None for r in plans):
             # the HDR estimate bias (issue #98): say so where the estimate is shown
             console.print(f"[yellow]{HDR_ESTIMATE_NOTE}[/yellow]")
+    except _EncodeCancelled as e:
+        # the plan is cut short: no table and no totals for a partial run,
+        # and a nonzero exit, the same contract as an encode's cancel
+        log_error(str(e))
+        raise typer.Exit(1) from e
     finally:
-        _restore_signals()
+        signals.close()
         if connection is not None:
             connection.close()
 

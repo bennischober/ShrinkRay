@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest import mock
 from unittest.mock import patch
 
+import typer
+
 from shrinkray import config as config_helper
 from shrinkray import db
 from shrinkray.__main__ import app
@@ -396,6 +398,63 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCancelOnTerminalClose(unittest.TestCase):
+    """The signal scope behind issue #326: the first signal cancels, a second
+    aborts, and the previous handlers come back on every exit path."""
+
+    def setUp(self) -> None:
+        import signal
+
+        self.before = signal.getsignal(signal.SIGINT)
+
+    def test_the_first_signal_sets_the_event_and_a_second_aborts(self) -> None:
+        import signal
+
+        from shrinkray.__main__ import _cancel_on_terminal_close
+
+        with _cancel_on_terminal_close() as cancel:
+            handler = signal.getsignal(signal.SIGINT)
+            assert callable(handler)
+            handler(signal.SIGINT, None)
+            self.assertTrue(cancel.is_set())
+            with self.assertRaises(KeyboardInterrupt):
+                handler(signal.SIGINT, None)
+        self.assertIs(signal.getsignal(signal.SIGINT), self.before)
+
+    def test_the_previous_handlers_return_when_the_body_raises(self) -> None:
+        import signal
+
+        from shrinkray.__main__ import _cancel_on_terminal_close
+
+        with self.assertRaises(typer.Exit), _cancel_on_terminal_close():
+            raise typer.Exit(1)
+        self.assertIs(signal.getsignal(signal.SIGINT), self.before)
+
+    def test_a_cancelled_plan_exits_nonzero_without_a_traceback(self) -> None:
+        from typer.testing import CliRunner
+
+        from shrinkray.tools.process import Cancelled
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp).resolve() / "movie.mkv"
+            movie.write_bytes(b"x" * 16)
+            with (
+                patch("shrinkray.service.all_problems", return_value=[]),
+                patch(
+                    "shrinkray.engine.plan.plan_quality", side_effect=Cancelled("cancelled by user")
+                ),
+                patch(
+                    "shrinkray.__main__.scan_movies",
+                    return_value=(None, [movie], None),
+                ),
+                patch("shrinkray.__main__.log_error") as log_error,
+            ):
+                result = CliRunner().invoke(app, ["plan", str(movie)])
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertNotIsInstance(result.exception, Cancelled)
+        log_error.assert_called_once_with("cancelled by user")
 
 
 class TestInputShapes(unittest.TestCase):
