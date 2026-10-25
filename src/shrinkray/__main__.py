@@ -17,6 +17,8 @@ from rich.console import Console
 from rich.progress import Progress
 from rich.table import Table
 
+import threading
+
 from shrinkray import db
 from shrinkray.config import (
     DEFAULT_ENCODER_PRESET,
@@ -278,6 +280,38 @@ def encode(
     # the flag wins; without it the config's required VMAF applies (issue #252)
     target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
     apply_config(config)
+    # closing the terminal cancels the encode (PRODUCT.md, issue #326):
+    # SIGHUP fires when the session dies; SIGINT/SIGTERM cover ctrl+c and
+    # 'kill <pid>'. The handler only SETS the cancel event - the engine
+    # checks it between steps, terminates its own child tree and returns,
+    # so the CLI unwinds through the normal cleanup paths (the staging
+    # TemporaryDirectory, the encode slot, the manual-encode marker).
+    # No handler is installed when a previous one exists (re-entrancy).
+    import signal as _signal
+
+    cancel = threading.Event()
+    _previous_handlers: dict = {}
+
+    def _cancel_on_signal(signum, frame):
+        cancel.set()
+
+    for sig in (
+        [_signal.SIGINT, _signal.SIGTERM]
+        if sys.platform == "win32"
+        else [_signal.SIGHUP, _signal.SIGINT, _signal.SIGTERM]
+    ):
+        try:
+            _previous_handlers[sig] = _signal.signal(sig, _cancel_on_signal)
+        except (OSError, ValueError):
+            pass  # not the main thread / unsupported on this platform: degrade
+
+    def _restore_signals():
+        for sig, handler in _previous_handlers.items():
+            try:
+                _signal.signal(sig, handler)
+            except (OSError, ValueError):
+                pass
+
     # encode probes and re-encodes: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems
 
@@ -308,27 +342,31 @@ def encode(
             else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=root)
         )
         with work as staging:
-            _record_encodes(
-                connection,
-                movies,
-                Path(staging),
-                config,
-                dry_run,
-                overwrite,
-                quality,
-                target_vmaf,
-                verify,
-                threads,
-                db_file,
-                replan,
-                probe_encoder_preset,
-                encoder_preset,
-                crop_samples,
-                sample_every,
-                sample_count,
-                output_dir is None or replace,
-                library_root=root if output_dir is None else None,
-            )
+            try:
+                _record_encodes(
+                    connection,
+                    movies,
+                    Path(staging),
+                    config,
+                    dry_run,
+                    overwrite,
+                    quality,
+                    target_vmaf,
+                    verify,
+                    threads,
+                    db_file,
+                    replan,
+                    probe_encoder_preset,
+                    encoder_preset,
+                    crop_samples,
+                    sample_every,
+                    sample_count,
+                    output_dir is None or replace,
+                    library_root=root if output_dir is None else None,
+                    cancel=cancel,
+                )
+            finally:
+                _restore_signals()
     finally:
         if connection is not None:
             connection.close()
@@ -433,6 +471,7 @@ def _record_encodes(
     sample_count: int | None = None,
     replace: bool = False,
     library_root: Path | None = None,
+    cancel: "threading.Event | None" = None,
 ) -> None:
     """Runs the encoding and records the results in the database.
 
@@ -450,6 +489,10 @@ def _record_encodes(
         replan (bool): Ignore stored plans and re-probe (quality mode).
         probe_encoder_preset (str): The PROBE's speed preset (measurement).
         encoder_preset (str): The FINAL encode's speed preset (output).
+        cancel (threading.Event | None): Set by the terminal-close/interrupt
+            handler (issue #326): the engine checks it between steps and
+            terminates the running child tree, so the CLI unwinds and the
+            TemporaryDirectory cleanup runs.
         library_root (Path | None): The directory the swap renames inside when
             the run replaces sources in place (issue #230): the contended
             resource in that mode is the LIBRARY, not the per-run staging
@@ -546,6 +589,7 @@ def _record_encodes(
                             sample_every=sample_every,
                             sample_count=sample_count,
                             sample_seconds=sample_seconds,
+                            cancel=cancel,
                             audio_languages=config.handbrake_audio_languages,
                             subtitle_languages=config.handbrake_subtitle_languages,
                         )
@@ -722,6 +766,34 @@ def plan(
         for problem in plan_problems:
             log_error(problem)
         raise typer.Exit(1)
+    # same terminal-close contract as encode (issue #326): the probing
+    # pipeline is the expensive part, and closing the terminal must cancel
+    # it, not orphan it
+    import signal as _signal
+
+    cancel = threading.Event()
+    _previous_handlers: dict = {}
+
+    def _cancel_on_signal(signum, frame):
+        cancel.set()
+
+    for sig in (
+        [_signal.SIGINT, _signal.SIGTERM]
+        if sys.platform == "win32"
+        else [_signal.SIGHUP, _signal.SIGINT, _signal.SIGTERM]
+    ):
+        try:
+            _previous_handlers[sig] = _signal.signal(sig, _cancel_on_signal)
+        except (OSError, ValueError):
+            pass  # not the main thread / unsupported: degrade
+
+    def _restore_signals():
+        for sig, handler in _previous_handlers.items():
+            try:
+                _signal.signal(sig, handler)
+            except (OSError, ValueError):
+                pass
+
     connection = db.connect(db_file) if db_file is not None else None
     try:
         try:
@@ -770,6 +842,7 @@ def plan(
                     sample_every=sample_every,
                     sample_count=sample_count,
                     sample_seconds=config.sample_seconds,
+                    cancel=cancel,
                 )
             except (RuntimeError, FileNotFoundError) as e:
                 table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
@@ -829,6 +902,7 @@ def plan(
             # the HDR estimate bias (issue #98): say so where the estimate is shown
             console.print(f"[yellow]{HDR_ESTIMATE_NOTE}[/yellow]")
     finally:
+        _restore_signals()
         if connection is not None:
             connection.close()
 
