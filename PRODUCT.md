@@ -396,9 +396,11 @@ to its quality** and whether its **frame matches its content**.
   unchanged file is never redone.
 - **Audit**: sqlite records every scan, verdict, encode, and replacement, so any
   decision can be explained and any run repeated.
-- **Authentication: none today.** The dashboard has no auth and must not be exposed
-  beyond a trusted network. This is a deliberate development-stage trade-off and a
-  known gap, not a design position — see the roadmap item for auth.
+- **Authentication: a shared-secret token.** The dashboard is gated by
+  `SHRINKRAY_TOKEN` (issue #36): a non-loopback bind without a token is refused at
+  startup, and the container generates a token on first start and stores it in
+  `/data/token` (issue #249). See the auth roadmap for what is deliberately still
+  out of scope (per-user sessions).
 - HDR10 is supported; Dolby Vision dual-layer is not yet.
 - VMAF scores are only comparable within one libvmaf version.
 
@@ -416,8 +418,11 @@ decoration per user preference).
 - An already-efficient HEVC source is correctly *skipped* rather than re-encoded.
 - Working dashboard (Svelte 5, dark/light), an HTML report, and a per-module test
   suite as implementation evidence.
-- Engine modules: `src/shrinkray/{quality,encode,watch,jobs,db,app}.py`
-  (agreed target layout: `tools/`, `engine/`, `server/` subpackages — issue #63).
+- Engine modules: `src/shrinkray/` split into `tools/` (the subprocess boundary:
+  ffprobe, HandBrake, VMAF, the process runner), `engine/` (the decision: scan,
+  crop, samples, search, plan, pipeline, watch, lock, pause) and `server/` (the
+  network surface: app, jobs, metrics) — the #63 decision record's layout, landed
+  by #97, enforced by `lint-imports`.
 
 ## Product Principles
 
