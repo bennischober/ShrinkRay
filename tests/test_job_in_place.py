@@ -198,7 +198,6 @@ class TestEncodeJobInPlace(unittest.TestCase):
             patch("shrinkray.engine.pipeline.encode_with_quality") as fake_encode,
             patch("shrinkray.service.record_quality_results") as fake_record,
         ):
-
             fake_encode.return_value = SimpleNamespace(
                 input_size=16,
                 output_size=8,
