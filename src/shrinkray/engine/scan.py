@@ -13,19 +13,22 @@ import os
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 from shrinkray import db
 from shrinkray.db import MovieRecord
 from shrinkray.engine.crop import get_crop_summary, has_black_bars
-from shrinkray.helpers import (
-    SIZE_UNIT,
-    convert_unit,
-    create_movie_progress,
-    get_other_codecs,
-    timestr_to_int,
-)
 from shrinkray.logger import log, log_warning
 from shrinkray.tools import process as resources
 from shrinkray.tools.ffprobe import get_data
@@ -544,3 +547,73 @@ def scan_movies(
         log_prune_result(prune)
 
     return movies_by_category, movies, error_list
+
+
+class SIZE_UNIT(Enum):
+    BYTES = 1
+    KB = 2
+    MB = 3
+    GB = 4
+
+
+def convert_unit(size_in_bytes: int, unit: SIZE_UNIT) -> float:
+    """Convert the size from bytes to other units like KB, MB or GB"""
+    if unit == SIZE_UNIT.KB:
+        return round(size_in_bytes / 1024, 2)
+    elif unit == SIZE_UNIT.MB:
+        return round(size_in_bytes / (1024 * 1024), 2)
+    elif unit == SIZE_UNIT.GB:
+        return round(size_in_bytes / (1024 * 1024 * 1024), 2)
+    else:
+        return size_in_bytes
+
+
+def timestr_to_int(time: str | None) -> int:
+    """Converts a 'HH:MM:SS' string into seconds.
+
+    Args:
+        time (str): The time as 'HH:MM:SS' string.
+
+    Returns:
+        int: The time in seconds, 0 if the string is invalid.
+    """
+    if not time:
+        return 0
+    parts = time.split(":")
+    if len(parts) < 2:
+        return 0
+
+    try:
+        hours = int(parts[0]) * 3600
+        minutes = int(parts[1]) * 60
+        seconds = int(float(parts[2]))
+        return hours + minutes + seconds
+    except ValueError:
+        return 0
+
+
+def get_other_codecs(other_codecs: list[dict[str, Any]]) -> str:
+    """Converts the other codecs list into a comma separated string of codec names.
+
+    Args:
+        other_codecs (list): List of codec dictionaries.
+
+    Returns:
+        str: Comma separated codec names, e.g. 'aac, subrip'.
+    """
+    return ", ".join(codec["name"] for codec in other_codecs)
+
+
+def create_movie_progress() -> Progress:
+    """Creates the rich progress bar used while scanning movies.
+
+    Returns:
+        Progress: The progress bar.
+    """
+    return Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    )
