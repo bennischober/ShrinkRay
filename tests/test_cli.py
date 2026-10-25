@@ -1,9 +1,12 @@
 """CLI command tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
+import json
 import os
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 from unittest.mock import patch
 
@@ -251,6 +254,143 @@ class TestReadmeInvocations(unittest.TestCase):
                     f"README documents an option the CLI does not define: "
                     f"{flag} (on '{command_name}')",
                 )
+
+
+class TestPresetConfigFallback(unittest.TestCase):
+    """The CLI's preset flags fall back to the config keys (issue #328):
+    the TUI saves handbrake.encoder_preset/probe_encoder_preset, the
+    resident app honours them - the CLI ignored both and encoded Mode A
+    files at a different speed than Mode B with the SAME saved config.
+    An explicit flag still wins."""
+
+    def _config_file(self, root: Path) -> Path:
+        cfg = root / "config.json"
+        cfg.write_text(
+            json.dumps({"handbrake": {"encoder_preset": "7", "probe_encoder_preset": "8"}})
+        )
+        return cfg
+
+    @contextmanager
+    def _toolchain_ok(self):
+        with (
+            patch("shrinkray.service.all_problems", return_value=[]),
+            patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+        ):
+            yield
+
+    def test_encode_without_flags_uses_the_config_presets(self):
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 16)
+            cfg = self._config_file(root)
+            captured: dict = {}
+
+            def fake_quality(movie_in, output_file, **kwargs):
+                captured["encoder_preset"] = kwargs.get("encoder_preset")
+                captured["probe_encoder_preset"] = kwargs.get("probe_encoder_preset")
+                return QualityResult(
+                    input=movie_in,
+                    output=output_file,
+                    success=False,
+                    skipped_reason="resolution too low",
+                    target_vmaf=96.0,
+                )
+
+            with (
+                self._toolchain_ok(),
+                patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_quality),
+                patch("shrinkray.__main__.record_quality_results") as record,
+            ):
+                record.return_value = SimpleNamespace(
+                    encoded=False, skipped=True, error=None, encode_id=None
+                )
+                result = CliRunner().invoke(
+                    app,
+                    ["encode", str(movie), str(root / "out"), "--config", str(cfg)],
+                )
+            self.assertEqual(result.exit_code, 0, result.output)
+            # the CONFIG values reached the engine (not the code constants 5/3)
+            self.assertEqual(captured["encoder_preset"], "7")
+            self.assertEqual(captured["probe_encoder_preset"], "8")
+
+    def test_plan_without_flags_uses_the_config_presets(self):
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 16)
+            cfg = self._config_file(root)
+            captured: dict = {}
+
+            def fake_plan(movie, **kwargs):
+                captured["encoder_preset"] = kwargs.get("encoder_preset")
+                captured["probe_encoder_preset"] = kwargs.get("probe_encoder_preset")
+                from shrinkray.engine.plan import QualityResult
+
+                return QualityResult(
+                    input=movie,
+                    output=movie.with_suffix(".av1.mkv"),
+                    success=True,
+                    chosen_crf=22,
+                    achieved_vmaf=95.0,
+                    input_size=100,
+                    output_size=50,
+                )
+
+            with (
+                self._toolchain_ok(),
+                patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
+            ):
+                result = CliRunner().invoke(app, ["plan", str(movie), "--config", str(cfg)])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(captured["encoder_preset"], "7")
+            self.assertEqual(captured["probe_encoder_preset"], "8")
+
+    def test_an_explicit_flag_still_wins(self):
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 16)
+            cfg = self._config_file(root)
+            captured: dict = {}
+
+            def fake_plan(movie, **kwargs):
+                captured["encoder_preset"] = kwargs.get("encoder_preset")
+                from shrinkray.engine.plan import QualityResult
+
+                return QualityResult(
+                    input=movie,
+                    output=movie.with_suffix(".av1.mkv"),
+                    success=True,
+                    chosen_crf=22,
+                    achieved_vmaf=95.0,
+                    input_size=100,
+                    output_size=50,
+                )
+
+            with (
+                self._toolchain_ok(),
+                patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
+            ):
+                result = CliRunner().invoke(
+                    app,
+                    ["plan", str(movie), "--config", str(cfg), "--encoder-preset", "2"],
+                )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(captured["encoder_preset"], "2")
 
 
 if __name__ == "__main__":
