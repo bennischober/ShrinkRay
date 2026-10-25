@@ -33,11 +33,17 @@ class EncodeOutcome:
         encoded (bool): True if an encode was performed and succeeded.
         skipped (bool): True if a guardrail or the resume check skipped it.
         error (str | None): The failure message for failed encodes.
+        encode_id (int | None): The encode row's id (issue #232) - a swap
+            that is declined must clear that row's output_file, because the
+            encode is discarded with its staging directory; a caller that
+            swaps in place reads it from here instead of re-deriving it.
     """
 
     movie: str
     encoded: bool = False
     skipped: bool = False
+    error: str | None = None
+    encode_id: int | None = None
     error: str | None = None
 
 
@@ -418,7 +424,7 @@ def record_quality_results(
             plan_created_at=result.plan_created_at,
         )
         save_verification(connection, encode_id, result)
-        return EncodeOutcome(movie=str(movie), encoded=True)
+        return EncodeOutcome(movie=str(movie), encoded=True, encode_id=encode_id)
     if result.skipped_reason is not None:
         save_skip(
             connection,

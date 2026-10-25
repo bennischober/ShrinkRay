@@ -600,7 +600,7 @@ def _record_encodes(
                                 f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
                             )
                             if connection is not None:
-                                encode_id = record_quality_results(
+                                outcome = record_quality_results(
                                     connection,
                                     movie,
                                     result,
@@ -613,10 +613,13 @@ def _record_encodes(
                                     final_output=movie if replace else None,
                                 )
                             else:
-                                encode_id = None
+                                outcome = None
                             if replace:
                                 _swap_into_place(
-                                    connection, movie, output_dir / movie.name, encode_id
+                                    connection,
+                                    movie,
+                                    output_dir / movie.name,
+                                    outcome.encode_id if outcome else None,
                                 )
                         elif result.skipped_reason is not None:
                             # guardrail skip => record it so future runs do not re-probe

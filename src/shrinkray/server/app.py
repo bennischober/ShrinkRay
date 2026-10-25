@@ -1378,10 +1378,13 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
     if not roots:
         return
     from shrinkray.config import refresh_config
+    from shrinkray.engine.plan import QualityResult
     from shrinkray.engine.watch import WatchSettings, watch
     from shrinkray.service import record_quality_results
 
-    def record_watch_outcome(movie, result, final_output):
+    def record_watch_outcome(
+        movie: Path, result: QualityResult, final_output: Path | None
+    ) -> int | None:
         """Persists the watcher's encode outcome (issue #232).
 
         The engine layer cannot import the service layer (the import-linter
