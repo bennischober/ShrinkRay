@@ -23,10 +23,16 @@ def _isolated_lock(stack, tmp) -> None:
     reused by another process made watch() refuse to run mid-suite (six
     empty-result failures in one CI run, issue #176's flake follow-up).
     Accepts a Path or a str (test sites pass either).
+
+    Also pins the pass guard's free-space reading: a busy CI runner's disk
+    can dip below the floor mid-suite, and the guard's skip-the-pass
+    behaviour (correct in production) then eats the pass and the test's
+    expectations come back empty (the #303 CI face of the #291 family).
     """
     stack.enter_context(
         mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(tmp) / "shrinkray_watch.lock")
     )
+    stack.enter_context(mock.patch.object(watch_mod, "disk_free_bytes", return_value=1 << 40))
 
 
 class TestWatch(unittest.TestCase):
@@ -729,6 +735,10 @@ class TestWatchLibraryTree(unittest.TestCase):
             mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             mock.patch("shrinkray.engine.watch.probe_duration_seconds", return_value=600.0),
             mock.patch("shrinkray.engine.watch.find_handbrake", return_value="hb"),
+            # a busy CI runner's disk can dip below the pass guard's floor
+            # mid-suite; the tests must not depend on the runner's free
+            # space (the #303 CI face of the #291 family)
+            mock.patch("shrinkray.engine.watch.disk_free_bytes", return_value=1 << 40),
         ):
             _isolated_lock(stack, self.tmp.name)
             with stack:

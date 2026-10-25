@@ -21,7 +21,10 @@ from shrinkray.engine.plan import QualityResult
 
 
 def _isolated_lock(stack: ExitStack, tmp) -> None:
+    # the lock path AND the pass guard's free-space reading (a busy CI
+    # runner's disk dip must not eat a pass - the #303 CI face of #291)
     stack.enter_context(mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(tmp) / "watch.lock"))
+    stack.enter_context(mock.patch.object(watch_mod, "disk_free_bytes", return_value=1 << 40))
 
 
 class TestWatchRecordsItsOutcomes(unittest.TestCase):
