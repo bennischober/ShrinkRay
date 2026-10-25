@@ -1,4 +1,4 @@
-"""Encode mutual exclusion: one encoder at a time per output directory.
+"""Encode mutual exclusion: one encoder at a time per contended directory.
 
 The job queue serializes jobs (one worker thread), but encoders can still
 collide from three independent entry points:
@@ -10,9 +10,20 @@ collide from three independent entry points:
 Two encoders writing the same output filename (the watch loop and a job
 both encoding an inbox title that also lives in the library produce the
 same `output_dir / movie.name`) clobber each other's output — a corrupt
-archive that passes the duration check only by luck. A per-output-dir
-lock file (pid-stamped, stale-detecting) makes the collision impossible
-instead of unlikely.
+archive that passes the duration check only by luck. A lock file inside
+the CONTENDED directory (pid-stamped, stale-detecting) makes the
+collision impossible instead of unlikely.
+
+Which directory is contended depends on the mode (issue #230):
+
+- two-directory mode: the output directory — every writer writes into it.
+- in place: the LIBRARY directory the swaps rename inside — the staging
+directory each process creates for itself is a per-run path nothing else
+ever locks, so a slot keyed on it excluded no one, and two encoders of one
+file raced on the deterministic swap staging name (`replace.staging_path_for`).
+
+A caller that is unsure must pass the directory its writes ultimately land
+in; the lock file lives inside it and is removed on release.
 """
 
 import contextlib
