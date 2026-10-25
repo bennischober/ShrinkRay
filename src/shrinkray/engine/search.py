@@ -244,7 +244,11 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
     CRF moves in whole steps. Each further round buys at most a CRF step, so
     a late round accepts a looser fit; the trade is a slightly lower CRF (a
     slightly bigger file) for fewer rounds. The stop never accepts a probe
-    below the target.
+    below the target, and it fires only once a FAILING bound is measured
+    above the pass (review round 2): a pass with no failing bound above it
+    is the near-target plateau, where stopping would give away up to ten CRF
+    steps and could pick a CRF where the file grows - an encodable file
+    turned into a "would not shrink" skip.
 
     Args:
         score (callable): Measurement score(crf) => float, the probe's VMAF
@@ -273,7 +277,13 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
         tolerance = 0.1 * 2 ** (round_number - 1)
         if value >= target_vmaf:
             passing = (crf, value)
-            if value - target_vmaf < tolerance:
+            # the plateau guard (review round 2): the stop requires a FAILING
+            # bound above the pass. A pass with no failing measurement above
+            # it is the near-target plateau - stopping there would give away
+            # up to ten CRF steps (a 1.8x-larger output on a real-shape
+            # curve) and could pick a CRF where the file GROWS, turning an
+            # encodable file into a "would not shrink" skip.
+            if failing is not None and value - target_vmaf < tolerance:
                 return crf
             if failing is not None:
                 if failing[0] == crf + 1:

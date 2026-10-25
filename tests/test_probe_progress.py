@@ -68,10 +68,11 @@ class TestProbeProgress(unittest.TestCase):
                 sample_seconds=10.0,
                 progress=events.append,
             )
-        # the mocked probe returns exactly the target, so the FIRST passing
-        # round already sits within the early-stop tolerance (issue #313):
-        # the search ends there instead of walking to the range's edge
-        self.assertEqual(chosen, 23)
+        # the mocked probe returns exactly the target on every CRF: the early
+        # stop never fires (review round 2's gate - no failing bound ever
+        # exists on a constant curve), so the search walks to the range's
+        # top and answers there
+        self.assertEqual(chosen, 31)
         details = [e["detail"] for e in events]
         self.assertTrue(any("probe encode" in d for d in details))
         self.assertTrue(all("VMAF" in d for d in details[1::2]))  # result events
