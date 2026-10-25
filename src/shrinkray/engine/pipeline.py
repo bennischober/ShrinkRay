@@ -5,8 +5,8 @@ Moved verbatim from encode.py (issue #97 phase 3): the command runner
 and the result type. The stall watchdog and its configuration stay in
 tools/process.py; the command builders stay in tools/handbrake.py.
 The fixed-preset batch encoders were deleted with the fixed path itself
-(issue #329): the measured quality
-search is the only encode mode (issue #202, invariant 6).
+(issue #329): the measured quality search is the only encode mode (issue
+#202, invariant 6).
 """
 
 from __future__ import annotations
@@ -489,8 +489,8 @@ def _encode_with_command(
     The streamed loop is also the disk watchdog: on every percent line the
     free space on the output drive is checked, and when it drops to the
     floor (DISK_FREE_FLOOR_BYTES) the encode is cancelled before the drive
-    fills - the preflight's prediction can be wrong (size estimate,
-    fixed-mode growth, a co-tenant consuming space concurrently).
+    fills - the preflight's prediction can be wrong (size estimate, a
+    co-tenant consuming space concurrently).
 
     On any cancellation (cancel event or disk watchdog) the partial output
     file is removed: it is truncated debris by definition (A1 semantics),
@@ -643,8 +643,8 @@ def _encode_with_command(
                 """
                 nonlocal cancelled, returncode, cancel_reason, stderr_bytes
                 # disk watchdog: the preflight's prediction can be wrong
-                # (size estimate, fixed-mode growth, another process
-                # consuming the drive). When free space drops to the
+                # (size estimate, another process consuming the
+                # drive). When free space drops to the
                 # floor, cancel the encode rather than fill a shared
                 # disk. One statvfs per percent line is effectively free.
                 free = disk_free_bytes(output_file.parent)
