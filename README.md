@@ -328,7 +328,7 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 | # | Gate | Question | Default | If it fails |
 |---|---|---|---|---|
 | 1 | Duration | At least 90 s? | fixed | skip — not a movie |
-| 2 | Resolution | At least 1080p tall? (`eligibility.min_source_height`) | 1080p | skip — a lower-resolution source saves too little |
+| 2 | Resolution | At least 1080p tall? (`eligibility.min_source_height`) | 1080p (may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
 | 3 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
 | 4 | Codec age | H.264 or newer? | `h264` floor | skip — an older codec is never re-encoded (decision: issue #224) |
 | 5 | Bar detection | Which bars does EVERY sampled frame share? | — | never skips — "no bars" is a normal outcome |
@@ -347,7 +347,7 @@ The two rows people ask about:
   search measures a size probe at the most aggressive CRF and again at the
   chosen CRF, and skips when the encode would grow the file. "Already
   small" is a measurement per file, not a threshold — a well-encoded 4 GB
-  H.264 movie is skipped by evidence even with every floor set to 0.
+  H.264 movie is skipped by evidence even with the size floor at 0.
 
 Bars are deliberately NOT a gate: a file is never encoded *in order to*
 remove bars (issue #128), but any file that gets encoded for size reasons

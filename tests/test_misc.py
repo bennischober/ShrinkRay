@@ -130,6 +130,22 @@ class TestConfigSchema(unittest.TestCase):
             config_helper.Conf({"handbrake": {"max_threads": -4}})
         self.assertIn("max_threads", str(ctx.exception))
 
+    def test_resolution_floor_below_1080_is_rejected(self):
+        # the 1080p floor is a product rule (issue #246): a config may raise
+        # it, never lower it, and 0 no longer switches the gate off
+        for value in (720, 0):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError) as ctx:
+                    config_helper.Conf({"eligibility": {"min_source_height": value}})
+                self.assertIn("min_source_height", str(ctx.exception))
+                self.assertIn("1080p floor", str(ctx.exception))
+
+    def test_resolution_floor_may_be_raised(self):
+        for value in (1080, 2160):
+            with self.subTest(value=value):
+                conf = config_helper.Conf({"eligibility": {"min_source_height": value}})
+                self.assertEqual(conf.min_source_height, value)
+
     def test_empty_extensions_is_rejected(self):
         # decided: REJECT (an empty list would silently scan nothing);
         # documented in the model and the README

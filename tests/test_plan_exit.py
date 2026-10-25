@@ -106,5 +106,51 @@ class TestPlanExitCode(unittest.TestCase):
         self.assertEqual(code, 0, "every movie skipped, yet plan treated it as failure")
 
 
+class TestPlanAppliesTheEligibilityGates(unittest.TestCase):
+    """plan must hand the engine the same gates encode does (issue #246).
+
+    It passed none of them, so the engine ran with its defaults: a 720p
+    source was planned (and its plan recorded) that encode then skipped, and
+    a raised floor or a size floor in config.json never reached plan.
+    """
+
+    def test_plan_forwards_the_configured_gates(self) -> None:
+        from typer.testing import CliRunner
+
+        from shrinkray import config as config_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            movie = root / "one.mkv"
+            movie.write_bytes(b"x" * 8)
+            config_file = root / "config.json"
+            config_file.write_text(
+                '{"eligibility": {"min_source_height": 2160, "min_source_size_gb": 4.0,'
+                ' "candidate_codecs": ["h264", "mpeg4"]}}',
+                encoding="utf-8",
+            )
+            seen: dict = {}
+
+            def fake_plan(m, **kwargs):
+                seen.update(kwargs)
+                return _plan_result(m, success=False, skipped="resolution too low")
+
+            config_module.reset_config()
+            try:
+                with (
+                    _toolchain_present(),
+                    patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
+                ):
+                    result = CliRunner().invoke(
+                        app, ["plan", str(movie), "--config", str(config_file)]
+                    )
+            finally:
+                config_module.reset_config()
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(seen.get("min_source_height"), 2160)
+        self.assertEqual(seen.get("min_source_size_gb"), 4.0)
+        self.assertEqual(seen.get("candidate_codecs"), ("h264", "mpeg4"))
+
+
 if __name__ == "__main__":
     unittest.main()

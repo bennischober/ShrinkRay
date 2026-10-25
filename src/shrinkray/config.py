@@ -67,9 +67,10 @@ ENCODER_PRESET_DEFAULTS: dict[str, tuple[str, str]] = {
 }
 # stall watchdog: minutes of child silence before termination (0 = off)
 DEFAULT_STALL_MINUTES = 10.0
-# eligibility: sources below this height are never re-encoded (0 = gate off).
-# PRODUCT.md makes 1080p the floor: a lower-resolution source has too few
-# pixels to save meaningfully, so the probe cost is spent for nothing
+# eligibility: sources below this height are never re-encoded. PRODUCT.md
+# makes 1080p the floor: a lower-resolution source has too few pixels to save
+# meaningfully, so the probe cost is spent for nothing. The setting may raise
+# the floor (e.g. 2160 = 4K only), never lower it (issue #246)
 DEFAULT_MIN_SOURCE_HEIGHT = 1080
 # cropdetect windows per movie: more samples can only shrink the crop once
 # the bars are the ones common to every sample, which is the safe direction
@@ -205,9 +206,22 @@ class EligibilitySection(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    min_source_height: int = Field(DEFAULT_MIN_SOURCE_HEIGHT, ge=0)
+    min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT
     min_source_size_gb: float = Field(DEFAULT_MIN_SOURCE_SIZE_GB, ge=0)
     candidate_codecs: list[str] = Field(DEFAULT_CANDIDATE_CODECS, min_length=1)
+
+    @field_validator("min_source_height")
+    @classmethod
+    def _floor_is_raise_only(cls, value: int) -> int:
+        """The 1080p floor is a product rule, not a preference (issue #246):
+        a config may raise it, never lower it or switch it off with 0."""
+        if value < DEFAULT_MIN_SOURCE_HEIGHT:
+            raise ValueError(
+                f"{value} is below the {DEFAULT_MIN_SOURCE_HEIGHT}p floor; sources "
+                f"below {DEFAULT_MIN_SOURCE_HEIGHT}p are never re-encoded, so the "
+                f"setting may only raise it (e.g. 2160 for 4K only)"
+            )
+        return value
 
     @field_validator("candidate_codecs", mode="before")
     @classmethod
