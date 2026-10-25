@@ -4,7 +4,7 @@ The app owns long-running work (the job queue and the watch loop); the CLI
 stays fully functional without it. Consumers (web UI, curl, scripts) talk
 to the local HTTP API — same engine, same database, same guardrails.
 
-Run with `shrinkray app`.
+Run with `shrinkray serve` (the resident mode; `app` stays as a hidden alias).
 """
 
 import hmac
@@ -30,7 +30,6 @@ from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error
-from shrinkray.report import generate_report
 from shrinkray.server.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
 from shrinkray.server.metrics import CONTENT_TYPE, render_metrics
 from shrinkray.tools.process import apply_config
@@ -1127,29 +1126,9 @@ def reveal(request: RevealRequest) -> dict:
     return {"revealed": folder}
 
 
-@app.get("/report")
-def report_page() -> Response:
-    """Serves the generated HTML report (regenerating it first).
-
-    The report path is contained to the database folder (an app-controlled
-    location, not user-supplied per request).
-
-    Returns:
-        FileResponse: The report file.
-    """
-    s = get_state()
-    report_dir = os.path.realpath(str(s.db_file.parent))
-    report_path = os.path.join(report_dir, "report.html")
-    try:
-        generate_report(s.db_file, Path(report_path))
-    except Exception as e:
-        log_error(f"report generation failed: {e}")
-        raise HTTPException(status_code=500, detail="report generation failed") from e
-    # CodeQL-recognized containment: realpath must stay inside report_dir
-    normalized = os.path.realpath(report_path)
-    if not (normalized.startswith(report_dir + os.sep)):
-        raise HTTPException(status_code=500, detail="report path invalid")
-    return FileResponse(normalized, media_type="text/html")
+# the /report route was removed with issue #202 (Zef-X: "report is a fossil");
+# `shrinkray report` was removed with it. The provenance surface is the
+# dashboard's per-title chain and `shrinkray retained`.
 
 
 def _default_roots() -> list[Path]:

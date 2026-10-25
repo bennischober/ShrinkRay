@@ -1,15 +1,15 @@
 """Timestamp format tests (issue #167).
 
 Every human-readable timestamp in the product shares one shape:
-`YYYY-MM-DD HH:MM:SS`. The console log is local time, the report is UTC;
-both must carry the date and the seconds so a captured log line answers
-"which day, exactly, did this print" without external context.
+`YYYY-MM-DD HH:MM:SS`. The console log is local time; both must carry the
+date and the seconds so a captured log line answers "which day, exactly, did
+this print" without external context. (The report half was removed with
+issue #202: the report module is gone.)
 """
 
 import re
 import unittest
 
-from shrinkray import report
 from shrinkray.logger import CONSOLE_FORMAT
 
 # the one shape every human-readable timestamp shares
@@ -40,16 +40,6 @@ class TestConsoleFormat(unittest.TestCase):
         match = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", plain)
         self.assertIsNotNone(match, f"no YYYY-MM-DD HH:MM:SS in {plain!r}")
         self.assertTrue(SHAPE.match(match.group(0)))
-
-
-class TestReportFormat(unittest.TestCase):
-    def test_the_report_generated_line_has_seconds(self) -> None:
-        """The report's generated timestamp carries seconds (issue #167)."""
-        # the format string used for the report's "generated" line
-        import inspect
-
-        source = inspect.getsource(report)
-        self.assertIn('"%Y-%m-%d %H:%M:%S UTC"', source)
 
 
 if __name__ == "__main__":

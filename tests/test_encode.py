@@ -830,7 +830,6 @@ class TestEncodeLock(unittest.TestCase):
                         quality=True,
                         target_vmaf=95.0,
                         verify=False,
-                        workers=1,
                         threads=None,
                         db_file=db_file,
                         encoder_preset="6",

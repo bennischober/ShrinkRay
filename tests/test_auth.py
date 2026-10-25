@@ -69,7 +69,6 @@ class TestAuthEnabled(unittest.TestCase):
             ("GET", "/api/snapshot"),
             ("GET", "/api/events"),
             ("GET", "/api/config"),
-            ("GET", "/report"),
         ):
             with self.subTest(path=path):
                 response = self.client.request(method, path)

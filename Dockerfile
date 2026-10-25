@@ -132,7 +132,9 @@ COPY container-config.json /app/config.json
 
 # --root is not optional on Linux: the default allowlist is the current
 # directory when no drive root exists, so without it every library path is a 403.
-ENTRYPOINT ["shrinkray", "app", "--db", "/data/metadata.db", "--host", "0.0.0.0", "--root", "/media", "--config", "/app/config.json"]
+# serve is the resident mode's name (issue #202); `app` stays as a hidden
+# alias so this entrypoint and every existing deployment keep working.
+ENTRYPOINT ["shrinkray", "serve", "--db", "/data/metadata.db", "--host", "0.0.0.0", "--root", "/media", "--config", "/app/config.json"]
 CMD []
 
 EXPOSE 8420
