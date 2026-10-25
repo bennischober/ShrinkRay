@@ -15,7 +15,7 @@ Closes #
 - [ ] `tools/gate.sh` passes
 - [ ] A test fails without this change and passes with it (or: why no test can)
 - [ ] `ui/` checks (`npm ci && npm run check && npm run test && npm run build`), or n/a
-- [ ] Smoke tests (`SHRINKRAY_SMOKE=1`) if the probe, encode, watch or replace path changed, or why not
+- [ ] Smoke tests (`SHRINKRAY_SMOKE=1`) if the scan, probe, encode, watch or replace path changed, or why not
 - [ ] `uv audit --locked` if dependencies changed, or n/a
 - [ ] `CHANGELOG.md` entry, docs updated
 
@@ -29,4 +29,4 @@ Closes #
 
 ## Independent review
 
-<!-- Link the "Independent review" comment; every finding answered in its thread. -->
+<!-- Link the "Independent review" comment and the reply that answers every finding. -->
