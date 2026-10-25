@@ -35,6 +35,36 @@ class TestContainerConfig(unittest.TestCase):
         self.assertIn("COPY container-config.json /app/config.json", content)
         self.assertNotIn("RUN printf", content, "a printf-baked config survived in the Dockerfile")
 
+    def test_the_entrypoint_passes_no_config_flag(self) -> None:
+        """Issue #236 part 3: the entrypoint's explicit --config overrode the
+        operator's SHRINKRAY_CONFIG mount (an explicit file wins the
+        resolution order), so the mounted config was silently dead. The
+        entrypoint passes none; the env var decides."""
+        content = DOCKERFILE.read_text(encoding="utf-8")
+        # since issue #242 the server's argv is ENTRYPOINT + CMD of the runtime
+        # stage; a --config in either one would pin the path again
+        runtime = content.split("FROM runtime AS dev")[0]
+        argv = [ln for ln in runtime.splitlines() if ln.startswith(("ENTRYPOINT", "CMD"))]
+        self.assertEqual(len(argv), 2)
+        for line in argv:
+            self.assertNotIn("--config", line, "the server's command pins a config path again")
+
+    def test_the_two_argument_sets_resolve_differently_and_correctly(self) -> None:
+        """The issue's required test: resolve_config_path under the compose
+        argument set (no --config, SHRINKRAY_CONFIG set) resolves the MOUNT;
+        under the bare docker-run set (no env) it resolves the BAKED file."""
+        import os
+        from unittest.mock import patch
+
+        from shrinkray.config import CONFIG_ENV_VAR, resolve_config_path
+
+        with patch.dict(os.environ, {CONFIG_ENV_VAR: "/data/config.json"}):
+            self.assertEqual(resolve_config_path(config_file=None), Path("/data/config.json"))
+        with patch.dict(os.environ, {}, clear=True):
+            # the bare run: no env, no db_dir -> ./config.json, and the
+            # container's WORKDIR is /app (the baked file's home)
+            self.assertEqual(resolve_config_path(config_file=None), Path("config.json"))
+
 
 if __name__ == "__main__":
     unittest.main()

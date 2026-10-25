@@ -50,10 +50,18 @@ stated with the reason.
   `.mov`, `.ts`, `.m2ts`, `.webm` — without it the code default (`.mkv` alone)
   made a mounted `.mp4` library scan nothing, and the container logged a warning
   and exited 0. The README documents the narrow code default.
-- **Volumes:** `/media` (library, writable — Mode B encodes in place), `/data` (the database AND
-  `config.json` - the app writes config next to the db), `/output` (encoded files for
+- **Volumes:** `/media` (library, writable — Mode B encodes in place), `/data` (the database AND, when mounted, `config.json` — see the config path below), `/output` (encoded files for
   the non-replace flow), and `/tmp/shrinkray` (probe scratch, which is sized to the
   film rather than to the container layer).
+- **One config path** (issue #236, part 3): the compose file points `SHRINKRAY_CONFIG`
+  at `/data/config.json`, and the entrypoint passes NO `--config` — so a config file
+  the operator mounts at `/data/config.json` is authoritative, and when nothing is
+  mounted there the app logs the miss and runs on the code defaults (the HDR signature
+  and the eligibility floors are code defaults since issue #236 part 1). The image's
+  baked `/app/config.json` (auto_backlog on, the common extensions) is only the bare
+  `docker run` fallback: with no `SHRINKRAY_CONFIG` set, the working-directory lookup
+  (`/app`) finds it. Before this fix the entrypoint's `--config` overrode the env var,
+  so a mounted config was silently dead.
 - **Healthcheck** on `GET /api/status`, which is the app's own summary; no new
   endpoint was needed. It lives in `tools/healthcheck.py` and checks only a server:
   a one-shot CLI container reports healthy rather than turning `unhealthy` for the
@@ -200,10 +208,10 @@ default command because the default allowlist on Linux is the working directory,
 without it every library path is a 403.
 
 The image's entrypoint is `shrinkray` and its default command is `serve --db
-/data/metadata.db --host 0.0.0.0 --root /media --config /app/config.json` (issue #242).
-Anything you pass after the image name **replaces that whole command**: to change a
-server flag, spell out the full `serve ...` command, e.g. `docker run ... <image> serve
---db /data/metadata.db --host 0.0.0.0 --root /media --config /app/config.json --port 9000`.
+/data/metadata.db --host 0.0.0.0 --root /media` (issue #242). Anything you pass after the
+image name **replaces that whole command**: to change a server flag, spell out the full
+`serve ...` command, e.g. `docker run ... <image> serve --db /data/metadata.db --host
+0.0.0.0 --root /media --port 9000`.
 
 ## One-shot runs (no server)
 
@@ -237,9 +245,10 @@ stateless CLI as a native install. Things to know:
 - **The library must be writable by uid 1000** (the image's user) for an in-place
   encode. Runtime `PUID`/`PGID` is issue #248; running the image under another
   `--user` is untested, and its built-in scratch folder belongs to uid 1000.
-- **The config is the image's** (`/app/config.json`: the common video extensions,
-  `auto_backlog` is irrelevant to a one-shot run). Pass `--config /data/config.json`
-  with a `/data` volume to use your own.
+- **The config is the image's** (`/app/config.json`, found from the working directory:
+  the common video extensions; `auto_backlog` is irrelevant to a one-shot run). To use
+  your own, mount it and set `-e SHRINKRAY_CONFIG=/data/config.json` (the same
+  resolution the server uses, issue #236) or pass `--config`.
 - **A stateless run records nothing**, so `shrinkray retained list` has no database
   to read: the original sits beside the encoded file as `<name>.shrinkray-original`.
   To list what the *resident* app retained, run `retained list --db /data/metadata.db`

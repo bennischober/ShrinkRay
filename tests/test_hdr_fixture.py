@@ -81,16 +81,40 @@ class TestHdrFixture(unittest.TestCase):
         sdr["color_primaries"] = "bt709"
         self.assertFalse(read_media.is_hdr(sdr, _hdr_conf()))
 
-    def test_is_hdr_respects_empty_marker_config(self):
-        """An unconfigured (empty) marker list flags nothing — HDR detection
-        is config-driven by design."""
-        self.assertFalse(read_media.is_hdr(dict(self.recorded), config_helper.Conf({})))
+    def test_conf_without_hdr_section_uses_the_code_defaults(self):
+        """Issue #236, the maintainer's decision: HDR detection defaults in
+        code. A config that says nothing about HDR still classifies the
+        documented signature (bt2020nc/smpte2084) as HDR — the container
+        must not depend on its baked config.json for detection."""
+        conf = config_helper.Conf({})
+        self.assertEqual(conf.hdr_color_spaces, ["bt2020nc"])
+        self.assertEqual(conf.hdr_color_transfers, ["smpte2084"])
+        self.assertTrue(read_media.is_hdr(dict(self.recorded), conf))
+
+    def test_an_explicitly_empty_marker_list_flags_nothing(self):
+        """The opt-OUT stays possible: a config that EXPLICITLY empties the
+        marker lists flags nothing (an operator narrowing detection is
+        honored — the defaults are overridable, the decision is theirs)."""
+        conf = config_helper.Conf({"codec": {"hdr": {"color_space": [], "color_transfer": []}}})
+        self.assertFalse(read_media.is_hdr(dict(self.recorded), conf))
 
     def test_encoder_for_hdr_picks_the_10bit_av1_encoder(self):
         """The HDR path picks svt_av1_10bit; SDR picks the default (issue #21:
         AV1-only output, one encoder decision per source)."""
-        self.assertEqual(encoder_for(True), "svt_av1_10bit")
-        self.assertEqual(encoder_for(False), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(10, True), "svt_av1_10bit")
+        self.assertEqual(encoder_for(None, True), "svt_av1_10bit")
+        self.assertEqual(encoder_for(8, False), DEFAULT_ENCODER)
+
+    def test_encoder_for_follows_the_source_bit_depth(self):
+        """Issue #234: the SOURCE's bit depth decides, not an HDR guess. A
+        10-bit SDR master keeps its depth; an 8-bit source stays 8-bit even
+        when HDR flags would suggest more; an unknown depth falls back to
+        the HDR answer instead of silently truncating an unreadable depth."""
+        self.assertEqual(encoder_for(10, False), "svt_av1_10bit")
+        self.assertEqual(encoder_for(12, False), "svt_av1_10bit")
+        self.assertEqual(encoder_for(8, False), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(None, False), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(8, True), "svt_av1_10bit")
 
     @skipUnless(shutil.which("ffprobe"), "ffprobe not on PATH")
     def test_fixture_still_probes_as_recorded(self):

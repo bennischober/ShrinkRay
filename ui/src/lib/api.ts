@@ -178,9 +178,11 @@ export interface Status {
 export interface Config {
   codec?: { hdr?: { color_space?: string[]; color_transfer?: string[] } }
   file?: { extensions?: string[]; output?: { seperator?: string } }
-  ffmpeg?: { black_bars?: { MIN_WIDTH?: number; MIN_HEIGHT?: number } }
-  handbrake?: { preset?: string; encoder?: string; max_threads?: number }
+  ffmpeg?: { black_bars?: { MIN_WIDTH?: number; MIN_HEIGHT?: number }; crop_sample_count?: number }
+  handbrake?: { preset?: string; encoder?: string; encoder_preset?: string; max_threads?: number }
   resources?: { idle_priority?: boolean }
+  quality?: { sample_every?: number; sample_count?: number; sample_seconds?: number }
+  eligibility?: { min_source_height?: number; min_source_size_gb?: number; candidate_codecs?: string[] }
   language?: string
 }
 

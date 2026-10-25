@@ -136,8 +136,12 @@ COPY container-config.json /app/config.json
 # --root is not optional on Linux: the default allowlist is the current
 # directory when no drive root exists, so without it every library path is a 403.
 # serve is the resident mode's name (issue #202); `app` stays a hidden alias.
+# The config comes from $SHRINKRAY_CONFIG (compose points it at
+# /data/config.json, the operator's mount) with the baked /app/config.json as
+# the fallback when nothing is set or mounted — issue #236 part 3: an explicit
+# --config here would override the operator's mount, so the command passes none.
 ENTRYPOINT ["shrinkray"]
-CMD ["serve", "--db", "/data/metadata.db", "--host", "0.0.0.0", "--root", "/media", "--config", "/app/config.json"]
+CMD ["serve", "--db", "/data/metadata.db", "--host", "0.0.0.0", "--root", "/media"]
 
 EXPOSE 8420
 

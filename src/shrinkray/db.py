@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 if TYPE_CHECKING:
     # engine is ABOVE db in the layer contract; the summary type arrives as
@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS encodes (
     source_width INTEGER,
     source_height INTEGER,
     source_codec TEXT,
+    source_bit_depth INTEGER,
     source_duration REAL,
     input_bitrate REAL,
     output_bitrate REAL,
@@ -385,6 +386,12 @@ MIGRATIONS = {
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_crops_file ON crops(file_id)",
+    ],
+    17: [
+        # the encoder choice follows the source's bit depth (issue #234):
+        # the record snapshots what the decision was made from. A nullable
+        # ADD COLUMN, no rewrites.
+        "ALTER TABLE encodes ADD COLUMN source_bit_depth INTEGER",
     ],
 }
 
@@ -965,6 +972,7 @@ def add_encode(
     source_width: int | None = None,
     source_height: int | None = None,
     source_codec: str | None = None,
+    source_bit_depth: int | None = None,
     source_duration: float | None = None,
     tool_versions: str | None = None,
     input_bitrate: float | None = None,
@@ -1015,11 +1023,11 @@ def add_encode(
             chosen_crf, achieved_vmaf, encoder_preset, probe_encoder_preset,
             encode_seconds,
             probe_count, probe_seconds, hdr, source_width, source_height,
-            source_codec, source_duration, tool_versions,
+            source_codec, source_bit_depth, source_duration, tool_versions,
             input_bitrate, output_bitrate, source_file, output_file, generation,
             crf_source, plan_created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -1039,6 +1047,7 @@ def add_encode(
             source_width,
             source_height,
             source_codec,
+            source_bit_depth,
             source_duration,
             tool_versions,
             input_bitrate,

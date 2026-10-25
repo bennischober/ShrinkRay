@@ -178,6 +178,7 @@ def save_encode(
     source_width: int | None = None,
     source_height: int | None = None,
     source_codec: str | None = None,
+    source_bit_depth: int | None = None,
     source_duration: float | None = None,
     tool_versions: str | None = None,
     input_bitrate: float | None = None,
@@ -210,6 +211,7 @@ def save_encode(
         source_width (int | None): Source resolution snapshot (benchmark).
         source_height (int | None): Source resolution snapshot (benchmark).
         source_codec (str | None): Source codec snapshot (benchmark).
+        source_bit_depth (int | None): Source bit depth snapshot (issue #234).
         source_duration (float | None): Source duration snapshot (benchmark).
         tool_versions (str | None): Tool version string (benchmark).
         input_bitrate (float | None): Source bitrate in MBit/s (drift data).
@@ -245,6 +247,7 @@ def save_encode(
         source_width=source_width,
         source_height=source_height,
         source_codec=source_codec,
+        source_bit_depth=source_bit_depth,
         source_duration=source_duration,
         tool_versions=tool_versions,
         input_bitrate=input_bitrate,
@@ -384,6 +387,7 @@ def record_quality_results(
             source_width=result.input_width,
             source_height=result.input_height,
             source_codec=result.input_codec,
+            source_bit_depth=result.input_bit_depth,
             source_duration=result.input_duration,
             tool_versions=result.tool_versions,
             input_bitrate=result.input_bitrate,
