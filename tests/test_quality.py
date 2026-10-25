@@ -264,6 +264,34 @@ class TestQuality(unittest.TestCase):
             else:
                 self.assertIn("model_path=vmaf_v0.6.1.json", joined)
 
+    def test_build_vmaf_command_hdr_crop_crops_the_reference(self):
+        """Issue #307: an HDR source with bars crops the reference before
+        the tone-map. The hdr branch used to ignore the crop, so the
+        HandBrake-cropped distorted input met an uncropped reference."""
+        command = tools_vmaf.build_vmaf_command(
+            Path("d.mkv"),
+            Path("r.mkv"),
+            8,
+            style=tools_vmaf.VMAF_STYLE_MODERN,
+            crop=(140, 140, 0, 0),
+            hdr=True,
+        )
+        joined = " ".join(command)
+        # cropped to the distorted geometry first, then tone-mapped
+        self.assertIn("[1:v]crop=iw-0:ih-280:0:140[rc]", joined)
+        self.assertIn("[rc]zscale=t=linear", joined)
+        self.assertIn("[0:v]zscale=t=linear", joined)
+
+    def test_build_vmaf_command_hdr_without_crop_is_unchanged(self):
+        """The plain HDR path (no bars) keeps its tone-map-only graph."""
+        command = tools_vmaf.build_vmaf_command(
+            Path("d.mkv"), Path("r.mkv"), 8, style=tools_vmaf.VMAF_STYLE_MODERN, hdr=True
+        )
+        joined = " ".join(command)
+        self.assertNotIn("crop=", joined)
+        self.assertIn("[0:v]zscale=t=linear", joined)
+        self.assertIn("[1:v]zscale=t=linear", joined)
+
     def test_detect_vmaf_style_without_ffmpeg(self):
         # a missing ffmpeg must raise a clear error (CI has no ffmpeg)
         with self.assertRaises(RuntimeError):
