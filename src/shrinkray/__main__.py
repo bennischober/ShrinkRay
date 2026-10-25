@@ -8,6 +8,7 @@ options and the console presentation.
 import contextlib
 import sys
 import tempfile
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,8 +17,6 @@ import typer
 from rich.console import Console
 from rich.progress import Progress
 from rich.table import Table
-
-import threading
 
 from shrinkray import db
 from shrinkray.config import (
