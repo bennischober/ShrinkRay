@@ -994,6 +994,8 @@ def _encode_quality_or_fixed(
                         min_source_size_gb=config.min_source_size_gb,
                         candidate_codecs=tuple(config.candidate_codecs),
                         crop_sample_count=config.crop_sample_count,
+                        audio_languages=config.handbrake_audio_languages,
+                        subtitle_languages=config.handbrake_subtitle_languages,
                     )
             except EncodeBusyError as e:
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
@@ -1011,7 +1013,13 @@ def _encode_quality_or_fixed(
             )
             if in_place and outcome.encoded:
                 swap = swap_encode_into_place(
-                    connection, movie, output_dir / movie.name, outcome.encode_id
+                    connection,
+                    movie,
+                    output_dir / movie.name,
+                    outcome.encode_id,
+                    # a verification finding (issue #240: a lost track, an
+                    # unverifiable probe) declines the swap
+                    error=result.error,
                 )
                 declined = not swap.replaced
             else:

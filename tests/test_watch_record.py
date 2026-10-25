@@ -60,8 +60,9 @@ class TestWatchRecordsItsOutcomes(unittest.TestCase):
         def fake_encode(movie, output, **kwargs):
             return self._encode_result(output)
 
-        def fake_swap(db_file, source, output, encode_id=None):
+        def fake_swap(db_file, source, output, encode_id=None, error=None):
             recorded.append(("swap", source, output, encode_id))
+            return True
 
         stack = ExitStack()
         with (
@@ -154,3 +155,65 @@ class TestWatchRecordsItsOutcomes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWatcherSwapGate(unittest.TestCase):
+    """Review of #287: the watcher passed the verification finding to `_swap`,
+    which never read it - a track-losing encode replaced the library file and
+    the log then claimed the original was kept. These run the REAL `_swap`."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.inbox = Path(self.tmp.name).resolve() / "inbox"
+        self.inbox.mkdir()
+        self.movie = self.inbox / "one.mkv"
+        self.movie.write_bytes(b"ORIGINAL" * 100)
+        old = time.time() - 3600
+        os.utime(self.movie, (old, old))
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _run(self, error: str | None, seen: list) -> None:
+        def fake_encode(movie, output, **kwargs):
+            seen.append(kwargs)
+            output.write_bytes(b"NEW")  # smaller: only the finding may decline
+            return QualityResult(
+                input=movie,
+                output=output,
+                success=True,
+                chosen_crf=22,
+                achieved_vmaf=95.2,
+                input_size=800,
+                output_size=3,
+                error=error,
+            )
+
+        stack = ExitStack()
+        with (
+            mock.patch.object(watch_mod, "encode_with_quality", side_effect=fake_encode),
+            mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
+        ):
+            _isolated_lock(stack, self.tmp.name)
+            with stack:
+                watch_mod.watch([self.inbox], None, once=True)
+
+    def test_a_track_finding_never_replaces_the_source(self) -> None:
+        self._run("output lost 1 audio track(s)", [])
+        self.assertEqual(self.movie.read_bytes(), b"ORIGINAL" * 100)
+        self.assertEqual(list(self.inbox.glob("*.shrinkray-original")), [])
+
+    def test_without_a_finding_the_source_is_replaced(self) -> None:
+        """The control: the same run with no finding does swap, so the test
+        above fails for the gate and not for the fixture."""
+        self._run(None, [])
+        self.assertEqual(self.movie.read_bytes(), b"NEW")
+        self.assertEqual(len(list(self.inbox.glob("*.shrinkray-original"))), 1)
+
+    def test_no_config_provider_means_no_language_filter(self) -> None:
+        """A watch() without a config provider applies no language filter (the
+        strict 1:1), as its docstring promises - never the built-in lists."""
+        seen: list = []
+        self._run(None, seen)
+        self.assertEqual(seen[0]["audio_languages"], [])
+        self.assertEqual(seen[0]["subtitle_languages"], [])
