@@ -23,7 +23,7 @@ from pathlib import Path
 
 from rich.progress import Progress
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT
+from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
 from shrinkray.engine.crop import (
     CROP_DETECT_LIMIT as CROP_DETECT_LIMIT,
 )
@@ -53,9 +53,6 @@ from shrinkray.engine.encoders import (
 )
 from shrinkray.engine.plan import (
     CANDIDATE_CODECS as CANDIDATE_CODECS,
-)
-from shrinkray.engine.plan import (
-    DEFAULT_MIN_SOURCE_WIDTH as DEFAULT_MIN_SOURCE_WIDTH,
 )
 from shrinkray.engine.plan import (
     MIN_ENCODE_SECONDS as MIN_ENCODE_SECONDS,

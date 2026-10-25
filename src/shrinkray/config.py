@@ -97,7 +97,7 @@ DEFAULT_MIN_SOURCE_SIZE_GB = 0.0
 # (SOURCE_CODECS in engine/plan.py: h264, hevc, vp9, av1). The whitelist is a
 # product rule and cannot be shrunk from config; an entry here makes one more
 # codec a candidate (e.g. "mpeg4" for a library the operator accepts re-encoding)
-DEFAULT_CANDIDATE_CODECS = []
+DEFAULT_CANDIDATE_CODECS: list[str] = []
 
 
 class HandbrakeSection(BaseModel):
