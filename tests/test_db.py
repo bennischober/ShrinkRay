@@ -827,6 +827,14 @@ class TestDb(unittest.TestCase):
             self.assertIn("database", body["status"])
             # self-monitoring: the app reports its own memory
             self.assertIn("rss_mib", body["status"])
+            # issue #323: the snapshot IS the UI's one state channel
+            # (App.svelte reads snap.status alone), so its status must carry
+            # EVERY key /api/status does - the config-error strip (#247),
+            # the pause notice (#250) and the reveal button (#239) were
+            # unreachable when these three were missing
+            status_only = client.get("/api/status").json()
+            for key in status_only:
+                self.assertIn(key, body["status"], f"snapshot.status lost /api/status key {key!r}")
             # the library is fully present on the first call
             self.assertIsInstance(body["library"], list)
             movie = next(m for m in body["library"] if m["name"] == "snap")
