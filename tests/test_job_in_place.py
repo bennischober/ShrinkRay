@@ -304,24 +304,43 @@ class TestEncodeJobInPlace(unittest.TestCase):
         self.assertEqual(result["outcomes"][0]["state"], "skipped")
 
     def test_an_unmeasured_payload_is_rejected_not_silently_fixed(self) -> None:
-        """A payload without quality:true gets a FAILED outcome, never an
-        unmeasured encode (issue #329, invariant 6): the fixed-preset path
-        was deleted, so the branch must not exist to fall into.
+        """A payload without quality:true fails the job, never an unmeasured
+        encode (issue #329, invariant 6): the fixed-preset path was deleted,
+        so the branch must not exist to fall into. It raises, so the worker
+        marks the job FAILED rather than DONE, and it does so before staging
+        or scanning anything inside the media root.
         """
         from unittest.mock import patch
 
         with (
             patch("shrinkray.engine.pipeline.encode_with_quality") as fake_encode,
             patch("shrinkray.service.record_quality_results") as fake_record,
+            patch.object(jobs, "resolve_movies") as fake_resolve,
         ):
             payload = {"paths": [str(self.movie)], "quality": False}
             job = jobs.Job(kind=jobs.JobKind.ENCODE, payload=payload)
-            result = jobs.execute_encode(job, self.connection, threading.Event())
-        self.assertEqual(result["outcomes"][0]["state"], "failed")
-        self.assertIn("quality", result["outcomes"][0]["error"])
-        # the engine was never called: no encode happened
+            with self.assertRaisesRegex(ValueError, "quality"):
+                jobs.execute_encode(job, self.connection, threading.Event())
         fake_encode.assert_not_called()
         fake_record.assert_not_called()
+        fake_resolve.assert_not_called()
+        staged = [
+            p for p in self.movie.parent.iterdir() if p.name.startswith(jobs.STAGING_DIR_PREFIX)
+        ]
+        self.assertEqual(staged, [], "a rejected payload staged inside the media root")
+
+    def test_the_worker_records_an_unmeasured_job_as_failed(self) -> None:
+        """The operator sees the rejection: the job ends FAILED, not DONE."""
+        queue = jobs.JobQueue(self.connection)
+        job = queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.ENCODE, payload={"paths": [str(self.movie)]})
+        )
+        # direct execution: deterministic, no thread wait
+        jobs.JobWorker(self.connection, queue)._execute(job)
+        stored = queue.get(job.id)
+        assert stored is not None
+        self.assertEqual(stored.state, jobs.JobState.FAILED)
+        self.assertIn("quality", stored.error or "")
 
     def test_the_job_worker_verifies_by_default(self) -> None:
         """Mode B verifies every encode (issue #235): the job worker is the

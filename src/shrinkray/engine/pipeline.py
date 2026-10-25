@@ -22,8 +22,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from rich.progress import Progress
-
 from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
 from shrinkray.engine.crop import (
     CROP_DETECT_LIMIT as CROP_DETECT_LIMIT,
@@ -854,19 +852,6 @@ def _encode_with_command(
         input_codec=snapshot["codec"],
         input_duration=snapshot["duration"],
     )
-
-
-def _report_encode(progress: Progress, result: EncodeResult) -> None:
-    """Logs one finished encode to the progress console."""
-    if result.success:
-        saved = result.saved_percent
-        change = f"{saved}% saved" if saved >= 0 else f"{abs(saved)}% larger"
-        progress.console.print(
-            f"Encoded '{result.input.name}': {result.input_size / (1024**3):.2f} GB -> "
-            f"{result.output_size / (1024**3):.2f} GB ({change})"
-        )
-    else:
-        log_error(f"Encoding '{result.input.name}' failed: {result.error}")
 
 
 def _source_snapshot(movie: Path) -> dict:

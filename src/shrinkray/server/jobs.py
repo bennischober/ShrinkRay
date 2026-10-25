@@ -3,8 +3,8 @@
 A job is one unit of work the resident app executes (a scan, a plan, an
 encode run, a watch pass). Jobs are persisted in the database so their
 history and state survive restarts; the worker thread executes one job at
-a time (heavy encodes do not profit from queueing more in parallel — the
-work-queue scheduler inside the quality encode parallelizes within a job).
+a time (heavy encodes do not profit from queueing more in parallel), and an
+encode job works through its files one at a time.
 
 Thread discipline: the worker thread owns the database connection while a
 job runs; the queue itself is protected by a lock and both the API layer
@@ -837,10 +837,21 @@ def execute_encode(
 
     Returns:
         dict: The per-movie outcome summary.
+
+    Raises:
+        ValueError: The payload does not ask for the measured quality path.
     """
     from shrinkray.config import load_config
 
     payload = job.payload
+    # One encode mode (invariant 6, issue #329): there is no unmeasured branch
+    # to fall into. A payload without quality:true fails the job before any
+    # staging or scan, so the worker records it FAILED where the operator sees it.
+    if not payload.get("quality", False):
+        raise ValueError(
+            "encode payload has no quality flag: ShrinkRay encodes only "
+            "through the measured quality path (issue #202/#329)"
+        )
     config = load_config()
     apply_config(config)
     # an omitted output_dir is the IN-PLACE form (issue #192): the backlog's
@@ -876,7 +887,7 @@ def execute_encode(
     )
     with staging as staging_str:
         write_dir = Path(staging_str)
-        outcomes = _encode_quality_or_fixed(
+        outcomes = _encode_measured(
             job,
             connection,
             cancel,
@@ -896,7 +907,7 @@ def execute_encode(
     return outcomes
 
 
-def _encode_quality_or_fixed(
+def _encode_measured(
     job: Job,
     connection: sqlite3.Connection,
     cancel: threading.Event,
@@ -943,146 +954,128 @@ def _encode_quality_or_fixed(
 
     outcomes: list[dict] = []
     total = len(movies)
-    if payload.get("quality", False):
-        encoded_paths: set[str] = (
-            set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
-        )
-        for index, movie in enumerate(movies):
-            if cancel.is_set():
-                outcomes.append({"movie": movie.name, "state": "cancelled"})
-                continue
-            _hold_while_paused(connection, cancel, progress, movie)
-            if cancel.is_set():
-                outcomes.append({"movie": movie.name, "state": "cancelled"})
-                continue
-            # a config saved while the job runs applies from the next file on
-            # (issue #247); the running encode keeps the settings it started with
-            config = refresh_config()
-            apply_reloaded_config(config)
-            if str(movie) in encoded_paths:
-                outcomes.append({"movie": movie.name, "state": "already_encoded"})
-                continue
-            if progress:
-                progress(
-                    {
-                        "stage": "probe",
-                        "detail": f"probing {movie.name}",
-                        "done": index,
-                        "total": total,
-                        "movie": movie.name,
-                    }
-                )
-            try:
-                # hold the encode slot: encode_with_quality does not take it
-                # itself, and this loop previously took NO slot at all - a CLI
-                # encode running beside the app encoded the same file
-                # concurrently (issue #230). Keyed on the output directory: it
-                # is the contended resource of this mode. Per movie, never
-                # nested with the fixed branch's run-level slot.
-                with guard_encodes(output_dir, holder="encode-job"):
-                    result = encode_with_quality(
-                        movie,
-                        output_dir / movie.name,
-                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
-                        encoder=config.handbrake_encoder,
-                        probe_encoder_preset=payload.get(
-                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
-                        ),
-                        encoder_preset=payload.get(
-                            "encoder_preset", config.handbrake_encoder_preset
-                        ),
-                        progress=progress,
-                        cancel=cancel,
-                        db_file=_db_file_of(connection),
-                        encoder_threads=cap_threads(config.handbrake_max_threads),
-                        # the resident mode verifies every encode (issue
-                        # #235): the job worker is Mode B's other arm, same
-                        # reasoning as the watcher - nobody watches the log,
-                        # the verification number is the only evidence the
-                        # encode met the target. A payload can still opt out
-                        # with verify=false explicitly.
-                        verify=payload.get("verify", True),
-                        min_source_height=config.min_source_height,
-                        min_source_width=config.min_source_width,
-                        min_source_size_gb=config.min_source_size_gb,
-                        candidate_codecs=tuple(config.candidate_codecs),
-                        crop_sample_count=config.crop_sample_count,
-                        audio_languages=config.handbrake_audio_languages,
-                        subtitle_languages=config.handbrake_subtitle_languages,
-                    )
-            except EncodeBusyError as e:
-                outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
-                continue
-            outcome = record_quality_results(
-                connection,
-                movie,
-                result,
-                config,
-                # in place the artifact's real location is the source's own
-                # path once the swap succeeds (issue #232); the row records it
-                # up front and a DECLINED swap clears it, because the encode is
-                # then discarded with its staging directory
-                final_output=movie if in_place else None,
+    encoded_paths: set[str] = (
+        set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
+    )
+    for index, movie in enumerate(movies):
+        if cancel.is_set():
+            outcomes.append({"movie": movie.name, "state": "cancelled"})
+            continue
+        _hold_while_paused(connection, cancel, progress, movie)
+        if cancel.is_set():
+            outcomes.append({"movie": movie.name, "state": "cancelled"})
+            continue
+        # a config saved while the job runs applies from the next file on
+        # (issue #247); the running encode keeps the settings it started with
+        config = refresh_config()
+        apply_reloaded_config(config)
+        if str(movie) in encoded_paths:
+            outcomes.append({"movie": movie.name, "state": "already_encoded"})
+            continue
+        if progress:
+            progress(
+                {
+                    "stage": "probe",
+                    "detail": f"probing {movie.name}",
+                    "done": index,
+                    "total": total,
+                    "movie": movie.name,
+                }
             )
-            if in_place and outcome.encoded:
-                swap = swap_encode_into_place(
-                    connection,
+        try:
+            # hold the encode slot: encode_with_quality does not take it
+            # itself, and this loop previously took NO slot at all - a CLI
+            # encode running beside the app encoded the same file
+            # concurrently (issue #230). Keyed on the output directory: it
+            # is the contended resource of this mode. Taken per movie.
+            with guard_encodes(output_dir, holder="encode-job"):
+                result = encode_with_quality(
                     movie,
                     output_dir / movie.name,
-                    outcome.encode_id,
-                    # a verification finding (issue #240: a lost track, an
-                    # unverifiable probe) declines the swap
-                    error=result.error,
+                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                    encoder=config.handbrake_encoder,
+                    probe_encoder_preset=payload.get(
+                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                    ),
+                    encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
+                    progress=progress,
+                    cancel=cancel,
+                    db_file=_db_file_of(connection),
+                    encoder_threads=cap_threads(config.handbrake_max_threads),
+                    # the resident mode verifies every encode (issue
+                    # #235): the job worker is Mode B's other arm, same
+                    # reasoning as the watcher - nobody watches the log,
+                    # the verification number is the only evidence the
+                    # encode met the target. A payload can still opt out
+                    # with verify=false explicitly.
+                    verify=payload.get("verify", True),
+                    min_source_height=config.min_source_height,
+                    min_source_width=config.min_source_width,
+                    min_source_size_gb=config.min_source_size_gb,
+                    candidate_codecs=tuple(config.candidate_codecs),
+                    crop_sample_count=config.crop_sample_count,
+                    audio_languages=config.handbrake_audio_languages,
+                    subtitle_languages=config.handbrake_subtitle_languages,
                 )
-                declined = not swap.replaced
-            else:
-                declined = False
-            entry = {
-                "movie": movie.name,
-                "state": (
-                    "skipped"
-                    if declined
-                    else "encoded"
-                    if outcome.encoded
-                    else "skipped"
-                    if outcome.skipped
-                    else "failed"
-                ),
-                "input_size": result.input_size,
-                "output_size": None if declined else result.output_size,
-                "crf": result.chosen_crf,
-                "vmaf": result.achieved_vmaf,
-                "error": (
-                    f"the swap was declined: {swap.reason} (the encode is discarded)"
-                    if declined
-                    else result.error
-                ),
-            }
-            outcomes.append(entry)
-            if progress:
-                progress(
-                    {
-                        "stage": "encode",
-                        "detail": f"{movie.name}: {entry['state']}",
-                        "done": index + 1,
-                        "total": total,
-                        "movie": movie.name,
-                    }
-                )
-    else:
-        # One encode mode (invariant 6, issue #329): there is no measured-less
-        # branch to fall into. A payload without quality:true is rejected, not
-        # silently "fixed" — every enqueue site must say what it wants.
-        return {
-            "outcomes": [
-                {
-                    "movie": "*",
-                    "state": "failed",
-                    "error": "encode payload has no quality flag: ShrinkRay encodes only through the measured quality path (issue #202/#329)",
-                }
-            ],
-            "cancelled": False,
+        except EncodeBusyError as e:
+            outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
+            continue
+        outcome = record_quality_results(
+            connection,
+            movie,
+            result,
+            config,
+            # in place the artifact's real location is the source's own
+            # path once the swap succeeds (issue #232); the row records it
+            # up front and a DECLINED swap clears it, because the encode is
+            # then discarded with its staging directory
+            final_output=movie if in_place else None,
+        )
+        if in_place and outcome.encoded:
+            swap = swap_encode_into_place(
+                connection,
+                movie,
+                output_dir / movie.name,
+                outcome.encode_id,
+                # a verification finding (issue #240: a lost track, an
+                # unverifiable probe) declines the swap
+                error=result.error,
+            )
+            declined = not swap.replaced
+        else:
+            declined = False
+        entry = {
+            "movie": movie.name,
+            "state": (
+                "skipped"
+                if declined
+                else "encoded"
+                if outcome.encoded
+                else "skipped"
+                if outcome.skipped
+                else "failed"
+            ),
+            "input_size": result.input_size,
+            "output_size": None if declined else result.output_size,
+            "crf": result.chosen_crf,
+            "vmaf": result.achieved_vmaf,
+            "error": (
+                f"the swap was declined: {swap.reason} (the encode is discarded)"
+                if declined
+                else result.error
+            ),
         }
+        outcomes.append(entry)
+        if progress:
+            progress(
+                {
+                    "stage": "encode",
+                    "detail": f"{movie.name}: {entry['state']}",
+                    "done": index + 1,
+                    "total": total,
+                    "movie": movie.name,
+                }
+            )
 
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 

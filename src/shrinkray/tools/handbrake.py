@@ -1,10 +1,10 @@
 """handbrake: the HandBrakeCLI invocation boundary (issue #97 phase 2).
 
 Moved verbatim from encode.py and quality.py: binary discovery
-(find_handbrake with its Windows install locations) and the two command
-builders (fixed-preset and quality/CRF mode). The RUNNER
+(find_handbrake with its Windows install locations) and the command
+builder (quality/CRF mode, the only encode mode). The RUNNER
 (_encode_with_command, progress parsing, disk watchdog) stays engine-side:
-it is pipeline logic that USES these commands.
+it is pipeline logic that USES this command.
 """
 
 from __future__ import annotations
@@ -51,8 +51,7 @@ def build_encode_command(
 ) -> list[str]:
     """Builds the HandBrakeCLI command for a quality-driven encode.
 
-    Unlike the fixed preset in encode.py, the quality is set via --quality
-    (CRF) and the speed via --encoder-preset.
+    The quality is set via --quality (CRF) and the speed via --encoder-preset.
 
     Args:
         binary (str): Path to the HandBrakeCLI binary.

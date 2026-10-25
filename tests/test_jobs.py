@@ -513,7 +513,11 @@ class TestJobs(unittest.TestCase):
         job = self.queue.enqueue(
             jobs.Job(
                 kind=jobs.JobKind.ENCODE,
-                payload={"path": str(root / "nowhere"), "output_dir": str(root / "out")},
+                payload={
+                    "path": str(root / "nowhere"),
+                    "output_dir": str(root / "out"),
+                    "quality": True,
+                },
             )
         )
         worker = jobs.JobWorker(self.connection, self.queue)
@@ -532,7 +536,11 @@ class TestJobs(unittest.TestCase):
         job = self.queue.enqueue(
             jobs.Job(
                 kind=jobs.JobKind.ENCODE,
-                payload={"path": str(root / "movies"), "output_dir": str(root / "out")},
+                payload={
+                    "path": str(root / "movies"),
+                    "output_dir": str(root / "out"),
+                    "quality": True,
+                },
             )
         )
         worker = jobs.JobWorker(self.connection, self.queue)

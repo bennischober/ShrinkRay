@@ -72,7 +72,7 @@ class TestSingleFileScope(unittest.TestCase):
 
     def test_encode_on_one_file_encodes_one_movie(self) -> None:
         # the engine's encode path calls find_handbrake; a None return
-        # makes run_one raise => the command exits 1 naming the missing
+        # makes the encode raise => the command exits 1 naming the missing
         # binary. The touched count is the SCAN's count (1/1 vs the old bug's
         # 3/3), and the untouched files keep their mtimes.
         mtimes_before = {name: (self.root / name).stat().st_mtime_ns for name in self.names}
