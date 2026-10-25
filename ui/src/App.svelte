@@ -481,6 +481,11 @@
           runningMovie={runningProgress?.movie ?? null}
           runningPercent={runningProgress?.percent ?? null}
           plannedPaths={planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)}
+          planSavings={planEntries.flatMap((p) =>
+            p.state === 'encode' && p.saved_percent != null && p.saved_percent > 0
+              ? [[p.movie, p.saved_percent] as const]
+              : [],
+          )}
           onopenmovie={(m) => openDetail(m, 'library')}
           ontoggle={(path, checked) => {
             const next = new Set(selectedPaths)
