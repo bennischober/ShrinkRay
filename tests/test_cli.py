@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -391,6 +392,146 @@ class TestPresetConfigFallback(unittest.TestCase):
                 )
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertEqual(captured["encoder_preset"], "2")
+
+
+class TestTerminalCloseCancelsEncode(unittest.TestCase):
+    """Closing the terminal cancels the encode (issue #326): SIGHUP used to
+    kill the CLI while its detached HandBrake child kept encoding for hours
+    and the staging TemporaryDirectory never ran its cleanup. The CLI now
+    installs a SIGHUP/SIGINT/SIGTERM handler that sets the engine's cancel
+    event; the engine terminates the child tree and unwinds through the
+    normal cleanup."""
+
+    def _stubs(self, root: Path) -> Path:
+        """Stub toolchain: the preflight probes (ffprobe JSON, --version,
+        --encoder-preset-list) answer instantly; the encode's children write
+        their output file immediately and then run long (sleep 60) so the
+        cancel poll has a real child to terminate when SIGHUP arrives.
+        """
+        stubs = root / "stubs"
+        stubs.mkdir()
+        (stubs / "ffprobe").write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            '  *show_entries=format=duration*) echo \'{"format":{"duration":"300.0"}}\';;\n'
+            '  *-show_streams*) echo \'{"streams":[{"index":0,"codec_name":"h264","codec_type":"video","width":1920,"height":1080,"duration":"300.0"},{"index":1,"codec_name":"aac","codec_type":"audio","duration":"300.0"}]}\';;\n'
+            '  *) echo \'{"format":{"duration":"300.0"},"streams":[]}\';;\n'
+            "esac\n"
+        )
+        (stubs / "ffmpeg").write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            "  *filter=libvmaf*) echo '  libvmaf AVOptions:';;\n"
+            "  *) :;;\n"
+            "esac\n"
+            "# any invocation with an output path writes it (sample extraction)\n"
+            'prev=""\n'
+            'for a in "$@"; do\n'
+            '  case "$a" in\n'
+            "    *.mkv|*.ts|*.mp4|*.bin)\n"
+            '      if [ "$prev" != "-i" ]; then printf \'fake media bytes fake media bytes\' > "$a"; fi\n'
+            "      ;;\n"
+            "  esac\n"
+            '  prev="$a"\n'
+            "done\n"
+            "exit 0\n"
+        )
+        (stubs / "HandBrakeCLI").write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            "  *--version*) echo 'HandBrakeCLI 1.11.2'; exit 0;;\n"
+            "  *--encoder-preset-list*) echo 'auto 1 2 3 4 5 6 7 8 9 10'; exit 0;;\n"
+            "esac\n"
+            "# the encode's child: write the output immediately, then run long\n"
+            'prev=""\n'
+            'for a in "$@"; do\n'
+            '  if [ "$prev" = "-o" ] || [ "$prev" = "--output" ]; then\n'
+            "    printf 'fake mkv bytes fake mkv bytes' > \"$a\"\n"
+            "  fi\n"
+            '  prev="$a"\n'
+            "done\n"
+            "echo 'Encoding: task 1 of 1, 1.00 %'\nsleep 60\n"
+        )
+        for stub in stubs.iterdir():
+            stub.chmod(0o755)
+        return stubs
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX signals only")
+    def test_sighup_cancels_the_encode_and_cleans_staging(self):
+        import signal
+        import subprocess
+        import sys
+        import time as time_mod
+
+        repo = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            lib = root / "lib"
+            lib.mkdir()
+            movie = lib / "movie.mkv"
+            movie.write_bytes(b"x" * 64)
+            stubs = self._stubs(root)
+
+            env = dict(os.environ)
+            env["PATH"] = f"{stubs}:{env.get('PATH', '')}"
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "shrinkray",
+                    "encode",
+                    str(movie),
+                    "--db",
+                    str(root / "test.db"),
+                ],
+                cwd=repo,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            try:
+                # wait until the HandBrake stub is actually running (the
+                # encode started), bounded
+                deadline = time_mod.monotonic() + 60
+                hb_pid = None
+                while time_mod.monotonic() < deadline and hb_pid is None:
+                    out = subprocess.run(
+                        ["pgrep", "-f", str(stubs / "HandBrakeCLI")],
+                        capture_output=True,
+                        text=True,
+                    )
+                    pids = [int(p) for p in out.stdout.split()]
+                    hb_pid = pids[0] if pids else None
+                    if hb_pid is None:
+                        time_mod.sleep(0.2)
+                self.assertIsNotNone(hb_pid, "the HandBrake stub never started")
+                # the terminal closes: SIGHUP to the CLI
+                proc.send_signal(signal.SIGHUP)
+                # the CLI must EXIT (not hang), well inside the stub's 60s
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    self.fail("the CLI did not exit after SIGHUP")
+                # the HandBrake child is gone (not orphaned, still encoding)
+                deadline = time_mod.monotonic() + 15
+                while time_mod.monotonic() < deadline:
+                    out = subprocess.run(
+                        ["pgrep", "-f", str(stubs / "HandBrakeCLI")], capture_output=True, text=True
+                    )
+                    if not out.stdout.strip():
+                        break
+                    time_mod.sleep(0.2)
+                self.assertFalse(out.stdout.strip(), "the HandBrake child survived SIGHUP")
+                # the staging dir was cleaned (no .shrinkray-* left in lib)
+                debris = [p.name for p in lib.iterdir() if p.name.startswith(".shrinkray-")]
+                self.assertEqual(debris, [], f"staging debris: {debris}")
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                if proc.stdout:
+                    proc.stdout.close()
 
 
 if __name__ == "__main__":
