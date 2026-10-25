@@ -190,6 +190,119 @@ class TestEncodeJobInPlace(unittest.TestCase):
         self.assertEqual(result["outcomes"][0]["state"], "skipped")
         self.assertIn("declined", result["outcomes"][0]["error"])
 
+    def test_the_staging_root_is_the_scanned_root_not_its_parent(self) -> None:
+        """The boot backlog's payload names a DIRECTORY: staging happens inside it.
+
+        Reproduction of issue #335: execute_encode derived the staging root
+        from `first[0].parent`, which is `/` for the container's canonical
+        `{"paths": ["/media"]}` payload — the staging TemporaryDirectory was
+        created at `/` and the job failed with PermissionError on every boot.
+        The watcher (watch.py) stages inside `roots[0]` itself; the job must
+        agree. A file payload keeps the parent form.
+        """
+        from unittest.mock import patch
+
+        recorded_roots: list[Path] = []
+        real_td = tempfile.TemporaryDirectory
+
+        def spying_td(*args, **kwargs):
+            recorded_roots.append(Path(kwargs["dir"]))
+            return real_td(*args, **kwargs)
+
+        with (
+            patch("shrinkray.engine.pipeline.encode_with_quality") as fake_encode,
+            patch("shrinkray.service.record_quality_results") as fake_record,
+            patch("shrinkray.server.jobs.tempfile.TemporaryDirectory", spying_td),
+        ):
+            fake_encode.return_value = SimpleNamespace(
+                input_size=16,
+                output_size=8,
+                chosen_crf=20,
+                achieved_vmaf=95.0,
+                error=None,
+                success=False,
+                skipped_reason="resolution too low",
+                probes=[],
+                probe_seconds=1.0,
+                encode_seconds=1.0,
+                target_vmaf=96.0,
+                hdr=False,
+                encoder="svt_av1",
+                encoder_preset="3",
+                probe_encoder_preset="5",
+                input_width=None,
+                input_height=None,
+                input_codec=None,
+                input_bit_depth=None,
+                input_duration=None,
+                input_bitrate=None,
+                output_bitrate=None,
+                verified_vmaf=None,
+                verified_subsample=None,
+                crf_source="probe",
+                plan_created_at=None,
+            )
+            fake_record.return_value = SimpleNamespace(
+                encoded=False, skipped=True, error=None, encode_id=None
+            )
+            result = jobs.execute_encode(self._job(), self.connection, threading.Event())
+        # the staging dir was created INSIDE the scanned root, never at `/`
+        self.assertEqual(recorded_roots, [self.root])
+        self.assertEqual(result["outcomes"][0]["state"], "skipped")
+
+    def test_the_staging_root_for_a_file_payload_is_its_parent(self) -> None:
+        """A single-file payload stages beside the file (same filesystem)."""
+        from unittest.mock import patch
+
+        recorded_roots: list[Path] = []
+        real_td = tempfile.TemporaryDirectory
+
+        def spying_td(*args, **kwargs):
+            recorded_roots.append(Path(kwargs["dir"]))
+            return real_td(*args, **kwargs)
+
+        with (
+            patch("shrinkray.engine.pipeline.encode_with_quality") as fake_encode,
+            patch("shrinkray.service.record_quality_results") as fake_record,
+            patch("shrinkray.server.jobs.tempfile.TemporaryDirectory", spying_td),
+        ):
+            fake_encode.return_value = SimpleNamespace(
+                input_size=16,
+                output_size=8,
+                chosen_crf=20,
+                achieved_vmaf=95.0,
+                error=None,
+                success=False,
+                skipped_reason="resolution too low",
+                probes=[],
+                probe_seconds=1.0,
+                encode_seconds=1.0,
+                target_vmaf=96.0,
+                hdr=False,
+                encoder="svt_av1",
+                encoder_preset="3",
+                probe_encoder_preset="5",
+                input_width=None,
+                input_height=None,
+                input_codec=None,
+                input_bit_depth=None,
+                input_duration=None,
+                input_bitrate=None,
+                output_bitrate=None,
+                verified_vmaf=None,
+                verified_subsample=None,
+                crf_source="probe",
+                plan_created_at=None,
+            )
+            fake_record.return_value = SimpleNamespace(
+                encoded=False, skipped=True, error=None, encode_id=None
+            )
+            payload = {"paths": [str(self.movie)], "quality": True}
+            job = jobs.Job(kind=jobs.JobKind.ENCODE, payload=payload)
+            result = jobs.execute_encode(job, self.connection, threading.Event())
+        self.assertEqual(recorded_roots, [self.root])
+        self.assertEqual(result["outcomes"][0]["state"], "skipped")
+
     def test_an_output_dir_payload_keeps_the_two_directory_form(self) -> None:
         """Naming an output dir keeps the old behaviour (no swap)."""
         out = Path(self.tmp.name) / "out"

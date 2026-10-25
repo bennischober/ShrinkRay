@@ -87,9 +87,19 @@ movies that cannot profit (already efficient sources) are skipped — not
 wasted.
 
 > [!NOTE]
-> **HDR10 content is supported** by quality mode (10-bit encoder + tone-mapped
-> VMAF measurement). Dolby Vision dual-layer files are not yet (tracked in
-> [issue #104](https://github.com/bennischober/ShrinkRay/issues/104)).
+> **HDR10 sources are encoded, not guaranteed** (issue
+> [#358](https://github.com/bennischober/ShrinkRay/issues/358)). They are
+> neither blocked nor validated: an HDR source always encodes 10-bit, but VMAF
+> has no HDR model, so its quality is measured on a tone-mapped SDR copy of
+> both files against a separate HDR target. That score is an approximation —
+> on the one real HDR10 pair compared so far it read ~2.9 below the reference
+> tool's, which errs toward larger files, not worse ones
+> ([#340](https://github.com/bennischober/ShrinkRay/issues/340)). Carrying the
+> HDR10 metadata into the output is left to HandBrake's defaults; nothing
+> verifies it survives an encode.
+> Dolby Vision is not handled
+> ([#104](https://github.com/bennischober/ShrinkRay/issues/104)). The original
+> is always kept aside, so check an HDR result before removing it.
 
 ## Quickstart
 

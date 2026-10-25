@@ -15,7 +15,7 @@ ShrinkRay has two interactive surfaces, split by role:
 |---------------|----------------------------------|---------------------------------------------------|
 | Job           | observe the resident mode        | configure and control                             |
 | Reached by    | any browser on the LAN (token)   | a shell on the host or in the container           |
-| Can change    | nothing (read-only, issue #134)  | every setting, pause/resume, run one file         |
+| Can change    | nothing (read-only, issue #134)  | the operator-facing settings, pause/resume, run one file |
 | Unraid button | WebUI                            | Console                                           |
 
 The trigger the old note named for a full TUI has arrived: terminal-first
@@ -28,10 +28,13 @@ window.
 
 ## What the terminal surface is
 
-- **`shrinkray setup`** — a TUI that edits every setting an operator may change:
-  required VMAF, thread caps, eligibility gates (resolution floor upward only, minimum
-  file size), and the rest of `config.json`; plus pause/resume of the backlog where a
-  resident process runs. It names the cost of a change before saving it (a setting in
+- **`shrinkray setup`** — a TUI that edits the operator-facing settings:
+  required VMAF, the two encoder speed presets, the probe density, the track filters,
+  thread caps, the stall watchdog, priority, the eligibility gates (resolution floor
+  upward only, minimum file size), extra codecs and file extensions, and backlog-on-start;
+  plus pause/resume of the backlog where a resident process runs. It edits those keys
+  only — every other value in `config.json` stays a hand edit (the field list is
+  `tui.fields_for`, one source of truth). It names the cost of a change before saving it (a setting in
   the plan fingerprint re-measures the library). A saved change applies at the next
   file. On a native install it edits that install's config.
 - **`shrinkray encode <path>`** — the existing Mode A command, unchanged, as the
