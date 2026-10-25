@@ -597,8 +597,15 @@ def watch(
                     try:
                         # hold the encode slot: encode_with_quality does not
                         # take it itself; a running CLI/job encode makes the
-                        # watcher retry this movie on the next pass
-                        with guard_encodes(target_dir, holder="watch"):
+                        # watcher retry this movie on the next pass. In place
+                        # the slot is keyed on the movie's own directory (the
+                        # swaps rename inside it - issue #230): the staging
+                        # directory is a fresh per-process path nothing else
+                        # ever locks, so a slot on it excluded no one. One
+                        # slot at a time, never nested - the pass walks roots
+                        # sequentially.
+                        lock_target = movie.parent if in_place_mode else target_dir
+                        with guard_encodes(lock_target, holder="watch"):
                             result = encode_with_quality(
                                 movie,
                                 target_dir / movie.name,

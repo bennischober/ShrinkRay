@@ -24,6 +24,7 @@ from shrinkray.config import (
     seed_config_from_env,
 )
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
+from shrinkray.engine.lock import guard_encodes
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.scan import (
     find_movies,
@@ -321,6 +322,7 @@ def encode(
                 sample_every,
                 sample_count,
                 output_dir is None or replace,
+                library_root=root if output_dir is None else None,
             )
     finally:
         if connection is not None:
@@ -462,6 +464,7 @@ def _record_encodes(
     sample_every: float | None = None,
     sample_count: int | None = None,
     replace: bool = False,
+    library_root: Path | None = None,
 ) -> None:
     """Runs the encoding and records the results in the database.
 
@@ -479,6 +482,12 @@ def _record_encodes(
         replan (bool): Ignore stored plans and re-probe (quality mode).
         probe_encoder_preset (str): The PROBE's speed preset (measurement).
         encoder_preset (str): The FINAL encode's speed preset (output).
+        library_root (Path | None): The directory the swap renames inside when
+            the run replaces sources in place (issue #230): the contended
+            resource in that mode is the LIBRARY, not the per-run staging
+            directory, so the encode slot must be keyed on it. None when the
+            run writes into a real output directory (that directory is the
+            contended resource and stays the lock's target).
     """
     # the config values are the defaults: a flag not given falls back to
     # quality.sample_every / quality.sample_count (issue #236 part 2 - the
@@ -499,10 +508,12 @@ def _record_encodes(
     if not dry_run:
         try:
             # the whole quality run holds the encode slot once (probes and
-            # final encodes all write into output_dir)
-            from shrinkray.engine.lock import guard_encodes
-
-            with guard_encodes(output_dir, holder="encode-cli"):
+            # final encodes all write into output_dir). In place the slot is
+            # keyed on the LIBRARY root (issue #230): the staging directory is
+            # a fresh per-run path nothing else ever locks, so a slot on it
+            # excluded no one, and two encoders of one file raced on the
+            # deterministic swap staging name.
+            with guard_encodes(library_root or output_dir, holder="encode-cli"):
                 # live progress for the whole quality run: a 4-hour encode
                 # must not look like a hang. The engine streams
                 # {'stage': 'encode', 'percent': ...} during the final
