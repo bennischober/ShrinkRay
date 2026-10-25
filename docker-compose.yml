@@ -1,9 +1,12 @@
 # ShrinkRay's deployment shape (issue #34): one container on a server,
 # pointed at a media folder, running unattended.
 #
-# The library is mounted read-only. That is the honest default: ShrinkRay
-# changes bytes only with an explicit --replace, so a read-only mount makes the
-# sacred-source rule a property of the deployment, not a promise in a doc.
+# The library is mounted WRITABLE: the resident app's watch mode encodes in
+# place (the encode lands in a staging folder inside the library, is verified,
+# and is then swapped in with the original renamed aside as
+# <name>.shrinkray-original - never deleted). A read-only mount disables the
+# product: the watch loop crashes on its staging folder. --replace is a Mode A
+# CLI flag and has nothing to do with the container (issue #198).
 #
 # Publishing a port means authentication is mandatory: the app refuses to bind
 # 0.0.0.0 without SHRINKRAY_TOKEN (issue #36), so the token below is not
@@ -29,8 +32,8 @@ services:
       # config.json lives beside the database, on the /data volume
       SHRINKRAY_CONFIG: /data/config.json
     volumes:
-      # the library: read-only unless you deliberately use --replace
-      - ${MEDIA_DIR:?set MEDIA_DIR to your library folder}:/media:ro
+      # the library: writable (Mode B encodes in place; see the header)
+      - ${MEDIA_DIR:?set MEDIA_DIR to your library folder}:/media
       # the database AND config.json (the app writes config next to the db)
       - ${DATA_DIR:-./data}:/data
       # encoded outputs for the non-replace flow
