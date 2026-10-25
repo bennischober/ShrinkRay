@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# The repository's gate (AGENTS.md, "Run the full gate before every commit"):
-# the five commands every change must pass, in ONE place. ci.yml, release.yml,
-# the dev image's CMD and this file all run the same script, so the contract
-# cannot drift between them.
+# The repository's gate (AGENTS.md): every check a change must pass that runs
+# offline, in ONE place. ci.yml, release.yml, the dev image's CMD and this file
+# all run the same script, so the contract cannot drift between them. CI adds
+# only what needs the network (`uv audit --locked`) and the separate ui/ job.
 #
 # Usage: tools/gate.sh [--no-cov]
 #   --no-cov   skip coverage failure thresholds (the release job's test run
@@ -16,6 +16,8 @@ if [ "${1:-}" = "--no-cov" ]; then
     extra=(--no-cov)
 fi
 
+echo "==> uv lock --check"
+uv lock --check
 echo "==> ruff check"
 uv run ruff check src tests
 echo "==> ruff format --check"
