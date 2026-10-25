@@ -208,10 +208,11 @@ class TestQuality(unittest.TestCase):
         self.assertEqual(chosen, 22)
         self.assertNotIn(14, calls, "the low end was probed without the search heading there")
 
-    def test_bisect_crf_probes_lo_when_the_search_reaches_it(self):
-        """The unreachable case: everything fails, so the bracket collapses
-        onto lo - the lo probe happens then (the SkipEncode evidence), and
-        the answer is identical to the old upfront-probe shape."""
+    def test_bisect_crf_unreachable_costs_three_rounds(self):
+        """The unreachable case follows ab-av1's round structure: the
+        midpoint, the 20% point of the range, then lo - whose probe is the
+        SkipEncode evidence. The PR's first shape walked down by midpoints
+        and spent five rounds here (review of #339)."""
         calls: list[int] = []
 
         def score(c: int) -> float:
@@ -220,23 +221,50 @@ class TestQuality(unittest.TestCase):
 
         chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
         self.assertEqual(chosen, 14)
-        self.assertIn(14, calls, "the collapse onto lo must probe lo (the skip evidence)")
+        self.assertEqual(calls, [23, 18, 14])
 
-    def test_bisect_crf_early_stops_within_the_round_tolerance(self):
-        """Issue #313's early stop: a passing score within the round's
-        growing tolerance (+0.1 per round) ends the search - the trade is a
-        slightly lower CRF for one to two saved rounds."""
+    def test_bisect_crf_round_two_moves_to_the_eighty_percent_point(self):
+        """A passing midpoint moves round two to the 80% point of the range
+        (ab-av1's cut), not to the range's end."""
         calls: list[int] = []
 
         def score(c: int) -> float:
             calls.append(c)
-            # a flat curve: every probe passes far above the target, so the
-            # first passing round's tolerance already covers it
-            return 99.0 - (c - 14) * 0.1
+            return 99.0
 
         chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
-        self.assertGreater(chosen, 14)
-        self.assertLess(len(calls), 6, "the early stop did not save rounds")
+        # midpoint 23, then round(0.4*23 + 0.6*31) = 28, then the top (31)
+        self.assertEqual(calls, [23, 28, 31])
+        self.assertEqual(chosen, 31)
+
+    def test_bisect_crf_early_stop_tolerance_doubles_per_round(self):
+        """Issue #313's early stop uses ab-av1's tolerance: a passing score
+        less than 0.1 * 2**(round-1) above the target ends the search.
+        Round 1 (tolerance 0.1) must not stop at +0.15; round 2 (0.2) must."""
+        scores = {23: 95.15, 18: 97.0, 28: 80.0}
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return scores.get(c, 95.15 if c < 23 else 80.0)
+
+        # round 1: CRF 23 passes at +0.15, above round 1's 0.1 => continue
+        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 23)
+        self.assertEqual(calls[0], 23)
+        self.assertGreater(len(calls), 1, "round 1 stopped above its 0.1 tolerance")
+
+        calls.clear()
+        scores = {23: 80.0, 18: 95.15}
+        # round 2: CRF 18 passes at +0.15, inside round 2's 0.2 => stop there
+        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 18)
+        self.assertEqual(calls, [23, 18])
+
+        calls.clear()
+        scores = {23: 80.0, 18: 80.0, 14: 95.35, 15: 95.35, 16: 95.35, 17: 95.35}
+        # round 3: CRF 14 passes at +0.35 - inside the doubled 0.4, where a
+        # linear 0.3 would keep searching
+        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 14)
+        self.assertEqual(calls, [23, 18, 14])
 
     def test_bisect_crf_early_stop_never_misses_the_target(self):
         """The early stop never returns a CRF whose score misses the target:

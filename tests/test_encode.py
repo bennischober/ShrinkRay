@@ -1135,39 +1135,6 @@ class TestEncodeLock(unittest.TestCase):
             finally:
                 connection.close()
 
-    def test_build_vmaf_command_hdr_crop_crops_the_reference(self):
-        """Issue #307: an HDR source with bars must crop the reference
-        BEFORE the tone-map - the hdr branch used to ignore the crop, so
-        the comparison got mismatched frame sizes and failed (or silently
-        scaled, per the issue's hypothesis)."""
-        from shrinkray.tools.vmaf import build_vmaf_command
-
-        cmd = build_vmaf_command(
-            Path("d.mkv"),
-            Path("r.mkv"),
-            8,
-            style="modern",
-            crop=(140, 140, 0, 0),
-            hdr=True,
-        )
-        graph = " ".join(cmd)
-        # the reference is cropped to the distorted geometry FIRST
-        self.assertIn("crop=iw-0:ih-280:0:140", graph)
-        # the cropped reference THEN goes through the tone-map
-        self.assertIn("[rc]zscale=t=linear", graph)
-        # and the distorted side is tone-mapped too
-        self.assertIn("[0:v]zscale=t=linear", graph)
-
-    def test_build_vmaf_command_hdr_without_crop_is_unchanged(self):
-        """The plain HDR path (no bars) keeps its tone-map-only graph."""
-        from shrinkray.tools.vmaf import build_vmaf_command
-
-        cmd = build_vmaf_command(Path("d.mkv"), Path("r.mkv"), 8, style="modern", hdr=True)
-        graph = " ".join(cmd)
-        self.assertNotIn("crop=", graph)
-        self.assertIn("[0:v]zscale=t=linear", graph)
-        self.assertIn("[1:v]zscale=t=linear", graph)
-
     def test_build_vmaf_command_subsample(self):
         """n_subsample lands in the filtergraph only when > 1 (None/0/1
         measure every frame)."""

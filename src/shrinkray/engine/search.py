@@ -191,32 +191,60 @@ def sample_count_for(
     return max(1, math.ceil(duration / sample_every))
 
 
+def _round_two_cut(crf: int, end: int) -> int:
+    """Returns ab-av1's round-two guess: 60% of the way from crf to end.
+
+    After the first (midpoint) probe only one side of the bracket is known,
+    so ab-av1's crf_search moves to the 20%/80% point of the range instead
+    of the far end: a search heading for an edge reaches it on round three,
+    one heading for the middle gets both bounds by round two. When crf is
+    adjacent to end there is nothing in between, so the end itself is next.
+    """
+    if abs(end - crf) <= 1:
+        return end
+    return round(0.4 * crf + 0.6 * end)
+
+
+def _interpolate(passing: tuple[int, float], failing: tuple[int, float], target: float) -> int:
+    """Guesses the CRF meeting the target between a passing and a failing probe.
+
+    Linear interpolation in VMAF space (issue #23), with two safeguards that
+    keep the worst case at the plain bisect's: the guess is clamped strictly
+    inside the bracket (interpolation can point outside on near-flat curves),
+    and it must shrink the bracket by at least half - on a convex or
+    step-like curve regula falsi crawls (its guesses hug the passing edge),
+    so the midpoint is used whenever interpolation would shrink it slower.
+    """
+    lo, vmaf_lo = passing
+    hi, vmaf_hi = failing
+    span = vmaf_lo - vmaf_hi
+    # a flat segment (equal scores) gives no direction => midpoint
+    guess = round(lo + (hi - lo) * (vmaf_lo - target) / span) if span > 0 else (lo + hi) // 2
+    guess = max(lo + 1, min(hi - 1, guess))
+    if max(guess - lo, hi - guess) > (hi - lo + 1) // 2:
+        guess = (lo + hi) // 2
+    return guess
+
+
 def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: float) -> int:
     """Finds the largest CRF whose probe still meets the quality target.
 
-    The search is a bracketing interpolation (issue #23, the shape ab-av1's
-    crf_search uses): each round measures a CRF between the current passing
-    and failing brackets, guessed by linear interpolation in VMAF space
-    (a typical VMAF curve reaches the target in fewer probes than a plain
-    midpoint bisect). Two safeguards keep the worst case at the bisect's:
+    The search follows ab-av1's crf_search (issue #313, read at ab-av1
+    ed5f5461f0aa): the first probe is the range's midpoint; while only one
+    side is known, round two moves to the 20%/80% point (_round_two_cut) and
+    later rounds to the range's end; once a passing and a failing probe
+    bracket the target, each round interpolates between them (_interpolate,
+    issue #23). The range's ends are therefore probed only when the search
+    heads there: "target unreachable" costs three rounds (midpoint, 20%
+    point, lo), not a CRF-14 round on every file.
 
-    - the guess is clamped strictly inside the bracket (interpolation can
-      point outside on near-flat curves),
-    - the guess must shrink the bracket by at least half — a strongly
-      convex/step-like curve would make regula falsi crawl, so the search
-      falls back to the midpoint when interpolation would not.
-
-    The range's lowest CRF is probed only when the search actually heads
-    there (issue #313): probing it upfront spent the search's most expensive
-    round on nearly every file for an answer the search could get for free
-    when it reached the bound. "Target unreachable" is therefore detected
-    when the bracket collapses onto lo — the caller's SkipEncode evidence
-    (the lo probe's score) is produced at that point, exactly as before.
-
-    An early stop accepts a passing CRF whose score sits within a growing
-    tolerance above the target (ab-av1's shape: +0.1 per round): the trade
-    is a slightly lower CRF (a slightly bigger file) for one to two saved
-    rounds, measured on real titles in #313's PR.
+    An early stop accepts a passing probe whose score sits less than a
+    tolerance above the target, where the tolerance doubles each round from
+    0.1 (0.1, 0.2, 0.4, 0.8, ...) - ab-av1's formula for an encoder whose
+    CRF moves in whole steps. Each further round buys at most a CRF step, so
+    a late round accepts a looser fit; the trade is a slightly lower CRF (a
+    slightly bigger file) for fewer rounds. The stop never accepts a probe
+    below the target.
 
     Args:
         score (callable): Measurement score(crf) => float, the probe's VMAF
@@ -228,59 +256,43 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
         hi (int): The highest CRF to consider (exclusive, never probed).
 
     Returns:
-        int: The largest passing CRF in [lo, hi), or lo if even lo fails
-            (the caller should use it anyway as the best available quality;
-            in that case lo HAS been probed, so the caller's achieved lookup
-            finds it).
+        int: A passing CRF in [lo, hi) - the largest one unless the early
+            stop accepted a lower one - or lo if even lo fails (the caller
+            should use it anyway as the best available quality). The
+            returned CRF has always been probed, so the caller's achieved
+            lookup finds it.
     """
-    vmaf_lo: float | None = None  # measured at the current passing bound
-    vmaf_hi: float | None = None  # measured at the current failing bound
-    rounds = 0
+    top = hi - 1  # the highest CRF the search may return
+    passing: tuple[int, float] | None = None  # the highest passing probe
+    failing: tuple[int, float] | None = None  # the lowest failing probe
+    crf = (lo + hi) // 2
+    round_number = 0
     while True:
-        if hi - lo <= 1:
-            # the bracket collapsed: lo is the answer, but it may never have
-            # been probed (the search reached it from above without needing
-            # its score). Probe it once - the "target unreachable" evidence
-            # and the caller's achieved lookup both come from this probe.
-            if vmaf_lo is None:
-                vmaf_lo = score(lo)
-            return lo
-        if vmaf_lo is None or vmaf_hi is None:
-            # a bracket end is still unmeasured - bisect (the first rounds
-            # have too little information to interpolate; ab-av1's first
-            # guess is the midpoint for the same reason)
-            guess = (lo + hi) // 2
-        else:
-            # linear interpolation between the passing (vmaf_lo at lo) and
-            # failing (vmaf_hi at hi) ends, in VMAF space; a flat segment
-            # (equal scores) gives no direction => midpoint
-            span = vmaf_lo - vmaf_hi
-            if span > 0:
-                frac = (vmaf_lo - target_vmaf) / span
-                guess = round(lo + (hi - lo) * frac)
-            else:
-                guess = (lo + hi) // 2
-            # safeguard: strictly inside the bracket, and the surviving
-            # side after this probe must be no larger than bisection's
-            # (ceil(w/2)) — on a convex or step-like curve regula falsi
-            # crawls (its guesses hug the passing edge), so fall back to
-            # the midpoint whenever interpolation would shrink the bracket
-            # more slowly than the plain bisect would from here
-            guess = max(lo + 1, min(hi - 1, guess))
-            if max(guess - lo, hi - guess) > (hi - lo + 1) // 2:
-                guess = (lo + hi) // 2
-        value = score(guess)
-        rounds += 1
+        round_number += 1
+        value = score(crf)
+        tolerance = 0.1 * 2 ** (round_number - 1)
         if value >= target_vmaf:
-            lo, vmaf_lo = guess, value
-            # the early stop (issue #313): a passing score within the round's
-            # tolerance above the target ends the search - each further round
-            # buys at most one CRF step of quality. ab-av1 grows the tolerance
-            # per round (+0.1, +0.2, ...); we grow it the same way.
-            if value - target_vmaf <= 0.1 * rounds:
-                return lo
+            passing = (crf, value)
+            if value - target_vmaf < tolerance:
+                return crf
+            if failing is not None:
+                if failing[0] == crf + 1:
+                    return crf
+                crf = _interpolate(passing, failing, target_vmaf)
+            elif crf == top:
+                return crf
+            else:
+                crf = _round_two_cut(crf, top) if round_number == 1 else top
         else:
-            hi, vmaf_hi = guess, value
+            failing = (crf, value)
+            if crf == lo:
+                return lo
+            if passing is not None:
+                if passing[0] == crf - 1:
+                    return passing[0]
+                crf = _interpolate(passing, failing, target_vmaf)
+            else:
+                crf = _round_two_cut(crf, lo) if round_number == 1 else lo
 
 
 def probe_crf(
