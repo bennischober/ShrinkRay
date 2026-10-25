@@ -24,6 +24,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **A filename containing `[` no longer breaks `scan`** (issue #200): any path with a bracket was treated as a glob, so an existing file named `with [BRACKETS] name.mkv` — the target library's common naming — was reported as matching no movie file. The resolver now treats `[` as glob syntax only when the path does not exist AND a `[`-pattern expansion finds files; a real file or folder with brackets scans exactly as named, and a nonexistent bracketed path still errors with "does not exist".
 
+- **A one-file command touches exactly that file** (issue #197): all three commands (`scan`, `plan`, `encode`) resolved a named file to its PARENT folder and rescanned it, so on a flat library `encode a.mkv` batch-encoded everything beside it. `resolve_input_paths`' explicit file list now flows through `scan_movies`' new `files` parameter instead of being discarded; a folder still scans the folder, a glob still scans its matches, and the server's `resolve_movies` behavior (which already did this right) is now the CLI's too.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added
