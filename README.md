@@ -487,7 +487,7 @@ docker pull ghcr.io/bennischober/shrinkray:latest
 docker run -d --name shrinkray-app \
   --publish 8420:8420 \
   --env SHRINKRAY_TOKEN='a-long-random-secret' \
-  --volume /srv/media:/media:ro \
+  --volume /srv/media:/media \
   --volume /srv/shrinkray-data:/data \
   ghcr.io/bennischober/shrinkray:latest
 ```

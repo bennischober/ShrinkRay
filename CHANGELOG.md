@@ -20,6 +20,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **A missing ffprobe/ffmpeg is reported as missing, not as "Permission denied"** (issue #195): on WSL a failed execve of an absent binary surfaces as `PermissionError [Errno 13]`, so the raw-OSError interpolation sent the operator to chmod a file that does not exist. `run_ffprobe` and `detect_vmaf_style` now catch `FileNotFoundError` (names the binary and the install action) and `PermissionError` (names the executable-bit cause) separately; every other failure keeps its old message.
 
+- **The container docs no longer promise that a read-only library mount is safe** (issue #198): the paragraph attributed the container's behavior to `--replace`, a Mode A CLI flag the `shrinkray app` entrypoint does not have, while Mode B encodes in place and needs the mount writable — a read-only mount crashes the watch loop on its staging folder. The compose file and both doc examples now mount `/media` writable, and the docs state the real contract (in-place rewrite, original renamed aside as `<name>.shrinkray-original`, never deleted).
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

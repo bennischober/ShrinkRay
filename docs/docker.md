@@ -41,7 +41,7 @@ stated with the reason.
   `.mov`, `.ts`, `.m2ts`, `.webm` — without it the code default (`.mkv` alone)
   made a mounted `.mp4` library scan nothing, and the container logged a warning
   and exited 0. The README documents the narrow code default.
-- **Volumes:** `/media` (library, read-only by default), `/data` (the database AND
+- **Volumes:** `/media` (library, writable — Mode B encodes in place), `/data` (the database AND
   `config.json` - the app writes config next to the db), `/output` (encoded files for
   the non-replace flow), and `/tmp/shrinkray` (probe scratch, which is sized to the
   film rather than to the container layer).
@@ -58,14 +58,17 @@ stated with the reason.
    address without `SHRINKRAY_TOKEN` (issue #36), so the compose file passes one and
    the healthcheck sends it. There is still no TLS: terminate it at a reverse proxy,
    and do not read the token as making a plain-HTTP port safe.
-2. **The library is mounted read-only by default.** ShrinkRay changes bytes only with
-   an explicit `--replace` (issue #35), so a read-only mount makes the sacred-source
-   rule a property of the deployment rather than a promise in a doc. Swap-in-place needs
-   the mount writable, and a replaced original is then retained as
-   `<name>.shrinkray-original` **inside the library**, not in a separate `./retained`
-   volume - it lives beside the source so the final rename is same-filesystem and
-   therefore atomic. `shrinkray retained list` and the dashboard's Retained page tell
-   the operator what they may delete.
+2. **The library is mounted writable because Mode B encodes in place.** The resident
+   app's watch mode rewrites files at their own paths: the encode lands in a staging
+   folder inside the library, is verified, and is then swapped in with the original
+   renamed aside as `<name>.shrinkray-original` **inside the library** (never deleted -
+   the sacred-source rule holds; the original lives beside the source so the final
+   rename is same-filesystem and therefore atomic). `shrinkray retained list` and the
+   dashboard's Retained page tell the operator what they may delete. A read-only mount
+   disables the product: the watch loop crashes with `[Errno 30] Read-only file system`
+   on its staging folder (issue #193 owns the startup refusal). `--replace` is a Mode A
+   CLI flag and has nothing to do with the container; the compose file mounts `/media`
+   writable (issue #198).
 
 ## The ask
 
@@ -159,7 +162,7 @@ docker pull ghcr.io/bennischober/shrinkray:latest
 docker run -d --name shrinkray \
   -p 8420:8420 \
   -e SHRINKRAY_TOKEN='a-long-random-secret' \
-  -v /srv/media:/media:ro \
+  -v /srv/media:/media \
   -v /srv/shrinkray-data:/data \
   ghcr.io/bennischober/shrinkray:latest
 ```
