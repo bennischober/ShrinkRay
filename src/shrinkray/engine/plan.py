@@ -415,10 +415,10 @@ def plan_quality(
             off). Probe cost is roughly constant per file while the payoff
             scales with size, so the smallest files have the worst
             cost/benefit ratio.
-        candidate_codecs (tuple[str, ...]): Source codecs that are candidates
-            on size alone. A modern codec (HEVC/AV1) is already efficient,
-            so it is a candidate only when it has bars to remove; anything
-            older is never re-encoded.
+        candidate_codecs (tuple[str, ...]): Source codecs accepted beyond the
+            product whitelist SOURCE_CODECS (the config's extras). The gate
+            always applies the whitelist too, so this extends it, never
+            replaces it (issue #271).
         crop_sample_count (int): cropdetect windows per movie. More
             samples can only shrink the crop once the bars are the ones
             common to every sample, the safe direction for an
@@ -531,7 +531,8 @@ def plan_quality(
     # silently drop a file.
     codec = source_codec(input_file)
 
-    if codec is not None and codec not in candidate_codecs:
+    allowed = allowed_codecs(candidate_codecs)
+    if codec is not None and codec not in allowed:
         return QualityResult(
             input=input_file,
             output=input_file,
@@ -539,7 +540,7 @@ def plan_quality(
             target_vmaf=target_vmaf,
             error=(
                 f"source codec '{codec}' is not in the candidate codec list "
-                f"({', '.join(candidate_codecs)}) - a source outside it is "
+                f"({', '.join(allowed)}) - a source outside it is "
                 "never re-encoded"
             ),
             skipped_reason="source codec not a candidate",
@@ -690,3 +691,21 @@ def plan_quality(
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def allowed_codecs(extra: tuple[str, ...]) -> tuple[str, ...]:
+    """Returns the codec whitelist with an operator's extras appended.
+
+    The gate itself applies the product whitelist, so a caller can only ever
+    extend it: passing the config's `candidate_codecs` (the operator's EXTRA
+    codecs, empty by default) once replaced the whole list and made every
+    source ineligible (issue #271).
+
+    Args:
+        extra (tuple[str, ...]): Codecs to accept beyond SOURCE_CODECS (a list
+            that repeats the whitelist is fine).
+
+    Returns:
+        tuple[str, ...]: SOURCE_CODECS followed by the extras not already in it.
+    """
+    return SOURCE_CODECS + tuple(c for c in dict.fromkeys(extra) if c not in SOURCE_CODECS)
