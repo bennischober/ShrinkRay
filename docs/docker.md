@@ -50,10 +50,18 @@ stated with the reason.
   `.mov`, `.ts`, `.m2ts`, `.webm` — without it the code default (`.mkv` alone)
   made a mounted `.mp4` library scan nothing, and the container logged a warning
   and exited 0. The README documents the narrow code default.
-- **Volumes:** `/media` (library, writable — Mode B encodes in place), `/data` (the database AND
-  `config.json` - the app writes config next to the db), `/output` (encoded files for
+- **Volumes:** `/media` (library, writable — Mode B encodes in place), `/data` (the database AND, when mounted, `config.json` — see the config path below), `/output` (encoded files for
   the non-replace flow), and `/tmp/shrinkray` (probe scratch, which is sized to the
   film rather than to the container layer).
+- **One config path** (issue #236, part 3): the compose file points `SHRINKRAY_CONFIG`
+  at `/data/config.json`, and the entrypoint passes NO `--config` — so a config file
+  the operator mounts at `/data/config.json` is authoritative, and when nothing is
+  mounted there the app logs the miss and runs on the code defaults (the HDR signature
+  and the eligibility floors are code defaults since issue #236 part 1). The image's
+  baked `/app/config.json` (auto_backlog on, the common extensions) is only the bare
+  `docker run` fallback: with no `SHRINKRAY_CONFIG` set, the working-directory lookup
+  (`/app`) finds it. Before this fix the entrypoint's `--config` overrode the env var,
+  so a mounted config was silently dead.
 - **Healthcheck** on `GET /api/status`, which is the app's own summary; no new
   endpoint was needed.
 - **CPU quota is honoured.** `os.cpu_count()` reports the machine, not the

@@ -24,7 +24,6 @@ from shrinkray.config import (
 )
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pipeline import cap_threads
-from shrinkray.engine.samples import DEFAULT_SAMPLE_COUNT, DEFAULT_SAMPLE_EVERY
 from shrinkray.engine.scan import (
     find_movies,
     get_category,
@@ -171,20 +170,21 @@ def encode(
             "the crop, the safe direction for an irreversible crop)."
         ),
     ),
-    sample_every: float = typer.Option(
-        600.0,
+    sample_every: float | None = typer.Option(
+        None,
         "--sample-every",
         min=0.0,
         help=(
             "Seconds of runtime per probe window (coverage stays a fixed "
-            "fraction of the file; 0 falls back to --sample-count)."
+            "fraction of the file; 0 falls back to --sample-count). Default: "
+            "the quality.sample_every config value."
         ),
     ),
-    sample_count: int = typer.Option(
-        3,
+    sample_count: int | None = typer.Option(
+        None,
         "--sample-count",
         min=1,
-        help="Probe windows, overriding --sample-every when set explicitly.",
+        help="Probe windows, overriding --sample-every when set explicitly. Default: the quality.sample_count config value.",
     ),
     verify: bool = typer.Option(
         False,
@@ -447,8 +447,8 @@ def _record_encodes(
     probe_encoder_preset: str = DEFAULT_PROBE_ENCODER_PRESET,
     encoder_preset: str = DEFAULT_ENCODER_PRESET,
     crop_samples: int = 10,
-    sample_every: float = DEFAULT_SAMPLE_EVERY,
-    sample_count: int = DEFAULT_SAMPLE_COUNT,
+    sample_every: float | None = None,
+    sample_count: int | None = None,
     replace: bool = False,
 ) -> None:
     """Runs the encoding and records the results in the database.
@@ -468,6 +468,14 @@ def _record_encodes(
         probe_encoder_preset (str): The PROBE's speed preset (measurement).
         encoder_preset (str): The FINAL encode's speed preset (output).
     """
+    # the config values are the defaults: a flag not given falls back to
+    # quality.sample_every / quality.sample_count (issue #236 part 2 - the
+    # keys were echoed but read by nothing)
+    if sample_every is None:
+        sample_every = config.sample_every
+    if sample_count is None:
+        sample_count = config.sample_count
+    sample_seconds = config.sample_seconds
     from shrinkray.engine.pipeline import encode_with_quality
 
     # already encoded AND output still present? (unless --overwrite)
@@ -530,6 +538,7 @@ def _record_encodes(
                             crop_sample_count=crop_samples,
                             sample_every=sample_every,
                             sample_count=sample_count,
+                            sample_seconds=sample_seconds,
                         )
                         if result.success and result.verified_vmaf is not None:
                             console.print(
@@ -599,20 +608,21 @@ def plan(
         min=1,
         help="cropdetect windows per movie (more samples can only shrink the crop).",
     ),
-    sample_every: float = typer.Option(
-        600.0,
+    sample_every: float | None = typer.Option(
+        None,
         "--sample-every",
         min=0.0,
         help=(
             "Seconds of runtime per probe window (coverage stays a fixed "
-            "fraction of the file; 0 falls back to --sample-count)."
+            "fraction of the file; 0 falls back to --sample-count). Default: "
+            "the quality.sample_every config value."
         ),
     ),
-    sample_count: int = typer.Option(
-        3,
+    sample_count: int | None = typer.Option(
+        None,
         "--sample-count",
         min=1,
-        help="Probe windows, overriding --sample-every when set explicitly.",
+        help="Probe windows, overriding --sample-every when set explicitly. Default: the quality.sample_count config value.",
     ),
     threads: int = typer.Option(
         0,
@@ -713,6 +723,12 @@ def plan(
                     min_source_height=config.min_source_height,
                     min_source_size_gb=config.min_source_size_gb,
                     candidate_codecs=tuple(config.candidate_codecs),
+                    # the sample settings follow the config too (issue #236
+                    # part 2): the CLI flags override when given, the keys
+                    # were echoed but never read before
+                    sample_every=sample_every,
+                    sample_count=sample_count,
+                    sample_seconds=config.sample_seconds,
                 )
             except (RuntimeError, FileNotFoundError) as e:
                 table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))

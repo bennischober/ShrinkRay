@@ -34,25 +34,16 @@
     vmafDraft = targetVmaf
   })
   let config = $state<Config | null>(null)
-  // guarded config updaters (closures defeat {#if} narrowing; the guards
-  // keep the null-check discipline the same as save())
-  function updateResources(idle: boolean) {
-    if (!config) return
-    config = { ...config, resources: { ...config.resources, idle_priority: idle } }
-  }
-  function updateMaxThreads(value: number) {
-    if (!config) return
-    config = { ...config, handbrake: { ...config.handbrake, max_threads: value } }
-  }
-  let saveError = $state<string | null>(null)
-  let saved = $state(false)
-  let busy = $state(false)
+  // the config panels are READ-ONLY (issue #236 part 4, PRODUCT.md: the
+  // dashboard is a status window; config.json is a file the operator edits
+  // on disk and restarts) - only the load error is state here
+  let loadError = $state<string | null>(null)
 
   $effect(() => {
     api
       .config()
       .then((c) => (config = c))
-      .catch((e) => (saveError = e instanceof Error ? e.message : String(e)))
+      .catch((e) => (loadError = e instanceof Error ? e.message : String(e)))
   })
 
   $effect(() => {
@@ -89,28 +80,7 @@
   }
 
 
-  function addExtension(event: Event) {
-    if (!config) return
-    const input = event.target as HTMLInputElement
-    const value = input.value.trim().toLowerCase()
-    if (!value) return
-    const ext = value.startsWith('.') ? value : `.${value}`
-    const extensions = config.file?.extensions ?? []
-    if (!extensions.includes(ext)) {
-      config = { ...config, file: { ...config.file, extensions: [...extensions, ext] } }
-    }
-    input.value = ''
-  }
-
   const dedupedExtensions = $derived([...new Set(config?.file?.extensions ?? [])])
-
-  function removeExtension(ext: string) {
-    if (!config) return
-    config = {
-      ...config,
-      file: { ...config.file, extensions: (config.file?.extensions ?? []).filter((e) => e !== ext) },
-    }
-  }
 </script>
 
 <div class="page page-in">
@@ -226,36 +196,23 @@
   <section class="panel">
     <div class="panel-head">
       <span class="legend">RESOURCES — BEHAVIOR ON A SHARED MACHINE</span>
-      <span class="mono dim saved-note">applies on SAVE CONFIG</span>
+      <span class="mono dim">read-only</span>
     </div>
     {#if !config}
       <div class="dim pad">loading…</div>
     {:else}
       <div class="pad groups">
-        <label class="option-row">
-          <input
-            type="checkbox"
-            checked={config.resources?.idle_priority ?? true}
-            onchange={(e) => updateResources(e.currentTarget.checked)}
-          />
+        <div class="option-row">
           <span>
             <strong>IDLE-PRIORITY ENCODES</strong>
             <span class="mono dim block">encodes and quality probes run below normal priority — they yield instantly to everything else on the machine</span>
           </span>
-        </label>
-        <label class="field">
+          <span class="mono">{config.resources?.idle_priority ?? true ? 'on' : 'off'}</span>
+        </div>
+        <div class="field">
           <span class="dim">max threads per encode (0 = all cores)</span>
-          <input
-            class="mono"
-            type="number"
-            min="0"
-            max="64"
-            step="1"
-            value={config.handbrake?.max_threads ?? 0}
-            onchange={(e) => updateMaxThreads(Math.max(0, Math.min(64, Number(e.currentTarget.value) || 0)))}
-            aria-label="Per-encode thread cap (0 = all cores)"
-          />
-        </label>
+          <span class="mono">{config.handbrake?.max_threads ?? 0}</span>
+        </div>
         <p class="mono dim note">e.g. 8 on a 16-core mini PC leaves half the machine for a media server</p>
       </div>
     {/if}
@@ -264,71 +221,64 @@
   <!-- ══ tool settings ══ -->
   <section class="panel">
     <div class="panel-head">
-      <span class="legend">TOOL SETTINGS — CONFIG.JSON NEXT TO THE DATABASE</span>
-      <span class="mono dim">{saved ? 'saved ✓' : 'applies on SAVE CONFIG'}</span>
+      <span class="legend">TOOL SETTINGS — FROM CONFIG.JSON</span>
+      <span class="mono dim">read-only</span>
     </div>
     {#if !config}
-      <div class="dim pad">loading…</div>
+      <div class="dim pad">{loadError ? loadError : 'loading…'}</div>
     {:else}
-      {#if saveError}<div class="error mono">{saveError}</div>{/if}
       <div class="pad groups">
         <div class="group">
           <div class="legend">MOVIE EXTENSIONS</div>
           <div class="ext-list">
             {#each dedupedExtensions as ext (ext)}
-              <span class="ext mono">
-                {ext}
-                <button class="x" onclick={() => removeExtension(ext)} aria-label="Remove {ext}">✕</button>
-              </span>
+              <span class="ext mono">{ext}</span>
             {/each}
-            <input
-              class="mono ext-input"
-              placeholder="add + Enter"
-              onkeydown={(e) => e.key === 'Enter' && addExtension(e)}
-            />
           </div>
         </div>
 
         <div class="group">
-          <div class="legend">HANDBRAKE (FIXED MODE)
-            <HintMark text="These settings apply to fixed-mode runs (the CLI's encode --fixed-preset path). Encodes started in this console always run quality mode: HandBrake probes short samples, searches for the largest CRF that still meets the VMAF target, and measures the result." />
-          </div>
-          <label class="field">
-            <span class="dim">preset</span>
-            <input class="mono" bind:value={config.handbrake!.preset} />
-          </label>
-          <label class="field">
+          <div class="legend">HANDBRAKE</div>
+          <div class="field">
             <span class="dim">encoder</span>
-            <input class="mono" bind:value={config.handbrake!.encoder} />
-          </label>
+            <span class="mono">{config.handbrake?.encoder}</span>
+          </div>
+          <div class="field">
+            <span class="dim">encoder preset</span>
+            <span class="mono">{config.handbrake?.encoder_preset}</span>
+          </div>
         </div>
 
         <div class="group">
-          <div class="legend">BLACK BAR DETECTION</div>
-          <label class="field">
-            <span class="dim">min width (px)</span>
-            <input class="mono" type="number" bind:value={config.ffmpeg!.black_bars!.MIN_WIDTH} />
-          </label>
-          <label class="field">
-            <span class="dim">min height (px)</span>
-            <input class="mono" type="number" bind:value={config.ffmpeg!.black_bars!.MIN_HEIGHT} />
-          </label>
+          <div class="legend">ELIGIBILITY — WHICH SOURCES ARE EVER RE-ENCODED</div>
+          <div class="field">
+            <span class="dim">min resolution</span>
+            <span class="mono">{config.eligibility?.min_source_height ?? 1080}p floor</span>
+          </div>
+          <div class="field">
+            <span class="dim">candidate codecs</span>
+            <span class="mono">{(config.eligibility?.candidate_codecs ?? []).join(', ')}</span>
+          </div>
         </div>
 
         <div class="group">
-          <div class="legend">OUTPUT FILE</div>
-          <label class="field">
-            <span class="dim">csv separator</span>
-            <input class="mono" maxlength="1" bind:value={config.file!.output!.seperator} />
-          </label>
-          <label class="field">
-            <span class="dim">language</span>
-            <input class="mono" bind:value={config.language} />
-          </label>
+          <div class="legend">QUALITY — THE PROBE SETTINGS</div>
+          <div class="field">
+            <span class="dim">sample every (s)</span>
+            <span class="mono">{config.quality?.sample_every}</span>
+          </div>
+          <div class="field">
+            <span class="dim">sample count</span>
+            <span class="mono">{config.quality?.sample_count}</span>
+          </div>
+          <div class="field">
+            <span class="dim">sample seconds</span>
+            <span class="mono">{config.quality?.sample_seconds}</span>
+          </div>
         </div>
       </div>
       <div class="foot">
-        <span class="mono dim">config.json is a file on disk — edit it there and restart</span>
+        <span class="mono dim">config.json is a file on disk — edit it there and restart; the dashboard is read-only by design</span>
       </div>
     {/if}
   </section>
@@ -371,7 +321,6 @@
     align-items: flex-start;
     cursor: pointer;
   }
-  .option-row input { margin-top: 2px; }
   .option-row .block { display: block; margin-top: 2px; font-size: 11px; }
 
   .path-list { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -440,40 +389,16 @@
     align-items: center;
     gap: 6px;
   }
-  .ext-input {
-    background: transparent;
-    border: 1px dashed var(--seam);
-    border-radius: var(--radius);
-    color: var(--ink);
-    padding: 3px 8px;
-    width: 130px;
-  }
   .field { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
   .field:last-child { margin-bottom: 0; }
   /* 150px slot: at 120px "max threads per encode (0 = all cores)" wrapped
      to three cramped lines (round-6) */
   .field span { width: 150px; flex-shrink: 0; }
-  .field input {
-    background: var(--panel-raised);
-    border: 1px solid var(--seam);
-    border-radius: var(--radius);
-    color: var(--ink);
-    padding: 5px 9px;
-    flex: 1;
-  }
   .foot {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 0 14px 14px;
-  }
-  .error {
-    color: var(--red);
-    border: 1px solid var(--red);
-    border-radius: var(--radius);
-    padding: 6px 10px;
-    margin: 10px 14px 0;
-    word-break: break-word;
   }
 
 </style>
