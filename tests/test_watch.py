@@ -391,6 +391,11 @@ class TestWatch(unittest.TestCase):
             # into the watch output dir
             self.assertEqual(captured["output"], out / "movie.mkv")
             self.assertIn("encoder_threads", captured["kwargs"])
+            # the resident mode verifies every encode (issue #235): the
+            # watcher is the component that does the real work unattended,
+            # and the full-file VMAF is the only evidence the operator ever
+            # gets that the encode met the target
+            self.assertTrue(captured["kwargs"].get("verify"))
 
     def test_watch_pass_reports_quality_skip(self):
         """A quality skip (no size gain / unreachable) is surfaced as a
