@@ -21,6 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from shrinkray.config import DEFAULT_TARGET_VMAF as DEFAULT_TARGET_VMAF
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_COUNT,
     DEFAULT_SAMPLE_EVERY,
@@ -42,10 +43,6 @@ FFMPEG_BINARY = "ffmpeg"
 # the sample count, which punishes denser sampling (#14).
 VMAF_STATISTIC = "mean"
 
-# VMAF 96 is the decided product default (Netflix's 'visually transparent'
-# zone; 93 is their common top-tier floor). VMAF falls monotonically with
-# rising CRF, so a higher target means a larger file.
-DEFAULT_TARGET_VMAF = 96.0
 # SVT-AV1 publishes 0-70 at 0.25 granularity (HandBrake's
 # hb_video_quality_get_limits), a wider and finer scale than x265's.
 # These bounds are NOT calibrated for SVT-AV1 yet: they are the

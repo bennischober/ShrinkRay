@@ -152,5 +152,44 @@ class TestPlanAppliesTheEligibilityGates(unittest.TestCase):
         self.assertEqual(seen.get("candidate_codecs"), ("h264", "mpeg4"))
 
 
+class TestPlanUsesTheConfiguredVmaf(unittest.TestCase):
+    """Issue #252: quality.target_vmaf is the default; --target-vmaf wins."""
+
+    def _target_seen(self, *extra: str) -> float:
+        from typer.testing import CliRunner
+
+        from shrinkray import config as config_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "one.mkv"
+            movie.write_bytes(b"x" * 8)
+            config_file = Path(tmp) / "config.json"
+            config_file.write_text('{"quality": {"target_vmaf": 94.0}}', encoding="utf-8")
+            seen: dict = {}
+
+            def fake_plan(m, **kwargs):
+                seen.update(kwargs)
+                return _plan_result(m, success=False, skipped="too short")
+
+            config_module.reset_config()
+            try:
+                with (
+                    _toolchain_present(),
+                    patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
+                ):
+                    CliRunner().invoke(
+                        app, ["plan", str(movie), "--config", str(config_file), *extra]
+                    )
+            finally:
+                config_module.reset_config()
+        return seen["target_vmaf"]
+
+    def test_the_config_value_is_the_default(self) -> None:
+        self.assertEqual(self._target_seen(), 94.0)
+
+    def test_the_flag_wins(self) -> None:
+        self.assertEqual(self._target_seen("--target-vmaf", "97"), 97.0)
+
+
 if __name__ == "__main__":
     unittest.main()

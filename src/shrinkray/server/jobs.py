@@ -23,7 +23,6 @@ from pathlib import Path
 
 from shrinkray.config import Conf
 from shrinkray.engine.pipeline import cap_threads
-from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
 
 # how many terminated (done/failed/cancelled) job rows the history keeps.
@@ -779,7 +778,7 @@ def execute_plan(
         try:
             result = plan_quality(
                 movie,
-                target_vmaf=payload.get("target_vmaf", DEFAULT_TARGET_VMAF),
+                target_vmaf=payload.get("target_vmaf", config.target_vmaf),
                 encoder=config.handbrake_encoder,
                 probe_encoder_preset=payload.get(
                     "probe_encoder_preset", config.handbrake_probe_encoder_preset
@@ -892,7 +891,7 @@ def execute_encode(
                 result = encode_with_quality(
                     movie,
                     output_dir / movie.name,
-                    target_vmaf=payload.get("target_vmaf", DEFAULT_TARGET_VMAF),
+                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
                     encoder=config.handbrake_encoder,
                     probe_encoder_preset=payload.get(
                         "probe_encoder_preset", config.handbrake_probe_encoder_preset

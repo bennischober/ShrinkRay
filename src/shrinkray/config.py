@@ -89,6 +89,12 @@ DEFAULT_CROP_SAMPLE_COUNT = 10
 DEFAULT_SAMPLE_EVERY = 600.0
 DEFAULT_SAMPLE_COUNT = 3
 DEFAULT_SAMPLE_SECONDS = 10.0
+# the required VMAF (quality.target_vmaf). 96 is the decided product default
+# (Netflix's 'visually transparent' zone; 93 is their common top-tier floor).
+# VMAF falls monotonically with rising CRF, so a higher target means a larger
+# file. It lives here, below the engine, so the config can default to it; the
+# engine re-exports it, so there is still one home (issue #252)
+DEFAULT_TARGET_VMAF = 96.0
 # eligibility: sources below this size are never re-encoded (0 = gate off).
 # Probe cost is roughly constant per file while the payoff scales with size,
 # so the smallest files have the worst cost/benefit ratio
@@ -197,6 +203,9 @@ class QualitySection(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # the required VMAF every entry point uses unless a --target-vmaf flag
+    # says otherwise (issue #252); part of the stored plan fingerprint
+    target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
     sample_every: float = Field(DEFAULT_SAMPLE_EVERY, ge=0)
     sample_count: int = Field(DEFAULT_SAMPLE_COUNT, ge=1)
     sample_seconds: float = Field(DEFAULT_SAMPLE_SECONDS, gt=0)
@@ -372,6 +381,7 @@ class Conf:
         self.sample_every: float = model.quality.sample_every
         self.sample_count: int = model.quality.sample_count
         self.sample_seconds: float = model.quality.sample_seconds
+        self.target_vmaf: float = model.quality.target_vmaf
 
         # resources => how politely the engine behaves on a shared machine
         self.idle_priority: bool = model.resources.idle_priority

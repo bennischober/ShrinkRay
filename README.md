@@ -407,6 +407,9 @@ Example [config.json](config.json):
         "encoder_preset": "3",         // quality mode: the FINAL encode's preset
         "max_threads": 0                  // per-encode thread cap (0 = all cores)
     },
+    "quality": {
+        "target_vmaf": 96             // the required VMAF (--target-vmaf overrides it)
+    },
     "resources": {
         "idle_priority": true       // encodes run below normal priority
     },

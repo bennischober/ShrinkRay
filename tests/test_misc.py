@@ -146,6 +146,17 @@ class TestConfigSchema(unittest.TestCase):
                 conf = config_helper.Conf({"eligibility": {"min_source_height": value}})
                 self.assertEqual(conf.min_source_height, value)
 
+    def test_the_required_vmaf_is_a_validated_setting(self):
+        # issue #252: the terminal UI edits it, so the schema guards it
+        from shrinkray.engine.search import DEFAULT_TARGET_VMAF
+
+        self.assertEqual(config_helper.Conf({}).target_vmaf, DEFAULT_TARGET_VMAF)
+        self.assertEqual(config_helper.Conf({"quality": {"target_vmaf": 94.5}}).target_vmaf, 94.5)
+        for bad in (0, 101):
+            with self.subTest(bad=bad), self.assertRaises(Exception) as ctx:
+                config_helper.Conf({"quality": {"target_vmaf": bad}})
+            self.assertIn("target_vmaf", str(ctx.exception))
+
     def test_empty_extensions_is_rejected(self):
         # decided: REJECT (an empty list would silently scan nothing);
         # documented in the model and the README

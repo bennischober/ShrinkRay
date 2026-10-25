@@ -286,9 +286,11 @@ untouched. A bar
 removal goes through the same search. There is no fixed-preset or "just crop it"
 encode — an encode whose quality is not measured would miss the point of the tool.
 
-The CRF search always runs against the required quality floor — **VMAF 96**, which is
-`DEFAULT_TARGET_VMAF` in `engine/search.py`. Every `--target-vmaf` option, the API request
-model and the job payload derive from that one constant, so there is no second place to drift.
+The CRF search always runs against the required quality floor — **VMAF 96** by default, which
+is `DEFAULT_TARGET_VMAF` in `config.py` (re-exported by `engine/search.py`). The operator may
+set another floor as `quality.target_vmaf` (issue #252, the terminal UI's quality setting);
+every `--target-vmaf` option, the job payload and the watcher default to that setting, and an
+explicit flag wins. There is still one constant, so there is no second place to drift.
 The target participates in the stored plan fingerprint: raising it from the 95.0 the code shipped
 before deliberately invalidated every cached plan, so a library planned under the old default re-probes
 once.

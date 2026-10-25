@@ -167,12 +167,13 @@ def encode(
             "is also accepted but ignored; both flags change nothing."
         ),
     ),
-    target_vmaf: float = typer.Option(
-        DEFAULT_TARGET_VMAF,
+    target_vmaf: float | None = typer.Option(
+        None,
         "--target-vmaf",
         min=1.0,
         max=100.0,
-        help="VMAF quality floor for --quality mode.",
+        help="The required VMAF. Default: the quality.target_vmaf config value "
+        f"({DEFAULT_TARGET_VMAF:g} unless changed).",
     ),
     crop_samples: int = typer.Option(
         10,
@@ -272,6 +273,8 @@ def encode(
     """Re-encodes the found movies with HandBrake to reduce their file size."""
 
     config = load_config(config_file=config_file)
+    # the flag wins; without it the config's required VMAF applies (issue #252)
+    target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
     apply_config(config)
     # encode probes and re-encodes: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems
@@ -623,12 +626,13 @@ def plan(
         "(the fixed-preset plan was removed with issue #202); both flags "
         "change nothing.",
     ),
-    target_vmaf: float = typer.Option(
-        DEFAULT_TARGET_VMAF,
+    target_vmaf: float | None = typer.Option(
+        None,
         "--target-vmaf",
         min=1.0,
         max=100.0,
-        help="VMAF quality floor for the quality plan.",
+        help="The required VMAF. Default: the quality.target_vmaf config value "
+        f"({DEFAULT_TARGET_VMAF:g} unless changed).",
     ),
     crop_samples: int = typer.Option(
         10,
@@ -701,6 +705,8 @@ def plan(
     from shrinkray.engine.plan import plan_quality
 
     config = load_config(config_file=config_file)
+    # the flag wins; without it the config's required VMAF applies (issue #252)
+    target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
     apply_config(config)
     # plan probes every movie's CRF: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems

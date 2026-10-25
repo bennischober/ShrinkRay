@@ -415,6 +415,7 @@ class WatchSettings:
     """
 
     max_threads: int | None
+    target_vmaf: float
     min_source_height: int
     min_source_width: int
     min_source_size_gb: float
@@ -481,6 +482,7 @@ def watch(
     """
     current = WatchSettings(
         max_threads=max_threads,
+        target_vmaf=target_vmaf,
         min_source_height=min_source_height,
         min_source_width=min_source_width,
         min_source_size_gb=min_source_size_gb,
@@ -609,7 +611,7 @@ def watch(
                     known.add(_identity(movie))
                     if settings is not None:
                         current = settings()
-                    decision = decide(movie, target_vmaf, encoder)
+                    decision = decide(movie, current.target_vmaf, encoder)
                     if decision != "encode":
                         log(f"Skipping '{movie.name}': {decision}.")
                         continue
@@ -626,7 +628,7 @@ def watch(
                             result = encode_with_quality(
                                 movie,
                                 target_dir / movie.name,
-                                target_vmaf=target_vmaf,
+                                target_vmaf=current.target_vmaf,
                                 encoder=encoder,
                                 probe_encoder_preset=probe_encoder_preset,
                                 encoder_preset=encoder_preset,

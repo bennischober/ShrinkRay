@@ -38,8 +38,10 @@ wrong layer is a red gate, not a review comment.
 - The engine decides. Anything that measures, predicts or skips lives under
   `engine/`; `__main__.py` and `server/jobs.py` both drive `plan_quality` /
   `encode_with_quality` and differ only in how they render progress.
-- Constants are single-home and derived: the VMAF default and the CRF range live in
-  `engine/search.py`, the HDR floor is computed from them in `engine/encoders.py:33`.
+- Constants are single-home and derived: the VMAF default lives in `config.py` (so the
+  `quality.target_vmaf` key can default to it; `engine/search.py` re-exports it, #252) and
+  the CRF range in `engine/search.py`; the HDR floor is computed from them in
+  `engine/encoders.py:33`.
   Never restate a literal in a CLI option default or an API model.
 - `Conf` is flat (`config.handbrake_encoder_preset`); there is no nested access
   path outside the pydantic model. `tools/process.apply_config(conf)` is the one
