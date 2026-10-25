@@ -61,7 +61,7 @@ window.
   codec.
 - **Headless-testable.** Whatever library the TUI uses must be testable without a
   terminal in the flat `unittest` suite (Textual's `run_test` pilot is the known
-  recipe), and adding it as a dependency needs the RULES.md §7 justification.
+  recipe), and adding it as a dependency needs the justification AGENTS.md asks for ("Write code for the next person").
 
 ## Open design work (follow-up issues)
 
