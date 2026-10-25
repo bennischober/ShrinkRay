@@ -249,6 +249,28 @@ class TestHealthcheck(unittest.TestCase):
             self.assertFalse(healthcheck.runs_server(cmdline))
 
 
+class TestInstallPs1(unittest.TestCase):
+    """install.ps1's final quick-start names only commands the CLI has
+    (issue #322): a Windows user's first command after install must not be
+    'No such command'. Same drift-guard shape as the banner test above."""
+
+    def test_every_quick_start_command_exists(self) -> None:
+        import re
+
+        from typer.main import get_command
+
+        from shrinkray.__main__ import app
+
+        text = (REPO / "install.ps1").read_text(encoding="utf-8")
+        # the removed `scan` command and the hidden no-op `--quality` never return
+        self.assertNotIn("shrinkray scan", text)
+        self.assertNotIn("--quality", text)
+        commands = set(get_command(app).commands)  # type: ignore[attr-defined]
+        named = set(re.findall(r"shrinkray ([a-z]+)", text))
+        self.assertTrue(named)
+        self.assertLessEqual(named, commands, f"the installer names {named - commands}")
+
+
 class TestConsoleBanner(unittest.TestCase):
     """tools/console_banner.py (issue #251): the console's printed manual must
     be true for the container it runs in, and name only real commands."""
