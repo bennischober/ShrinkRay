@@ -192,7 +192,7 @@
     </div>
   </section>
 
-  <!-- ══ resource politeness (config.json; SAVE CONFIG model) ══ -->
+  <!-- ══ resource politeness (config.json, read-only) ══ -->
   <section class="panel">
     <div class="panel-head">
       <span class="legend">RESOURCES — BEHAVIOR ON A SHARED MACHINE</span>
