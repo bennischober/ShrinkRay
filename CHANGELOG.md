@@ -32,6 +32,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ### Fixed
 
+- **PRODUCT.md describes the server and the tree that exist** (issue #238): the "Authentication: none today" passage contradicted the file's own auth roadmap (an opt-in token since #36, required for any non-loopback bind; the container generates one since #249) and told an operator the dashboard was always open; the engine-modules evidence line still named the dissolved `quality/encode/watch/jobs/db/app` files from before the #63 layout. Both passages now state the current model. The issue's other five rows (the README's removed POST routes and UI-configure claims, the tui.md note about a removed command, the docker config path) were re-verified against `main` and are already accurate - earlier fixes (#236, #268, #276-era cleanups) landed them.
+
 - **The documented smoke-test command passes when the smoke tests do** (issue #295): `tests/test_smoke.py` told contributors to run `SHRINKRAY_SMOKE=1 uv run pytest tests/test_smoke.py -v`, which inherits the suite-wide coverage floor and always exited 1 (about 11% coverage from one file) even with every smoke test green. The command now carries `--no-cov`, matching CONTRIBUTING.md.
 
 - **ui/AGENTS.md's gotchas name only things that exist** (issue #294): the "Two dead surfaces" bullet described symbols removed by #239 (`requestEncodeAll`, the preflight-only-CLOSE ceremony, the inert Overview CANCEL) — each verified absent from the UI code on `main` before removal (`requestEncodeAll` has no match; only stale comments still mention the preflight); the hardcoded-defaults and shortcut-legend notes stay (both verified true, the legend mismatch marked as real).

@@ -396,9 +396,15 @@ to its quality** and whether its **frame matches its content**.
   unchanged file is never redone.
 - **Audit**: sqlite records every scan, verdict, encode, and replacement, so any
   decision can be explained and any run repeated.
-- **Authentication: none today.** The dashboard has no auth and must not be exposed
-  beyond a trusted network. This is a deliberate development-stage trade-off and a
-  known gap, not a design position — see the roadmap item for auth.
+- **Authentication: an opt-in shared-secret token** (issue #36). With a token
+  configured (`SHRINKRAY_TOKEN`, or the file named by `SHRINKRAY_TOKEN_FILE`) every
+  route requires it; with none, the dashboard is open, which is allowed only on a
+  loopback bind - a non-loopback bind without a token is refused at startup. The
+  container sets `SHRINKRAY_TOKEN_FILE` and generates a token on first start into
+  `/data/token` (issue #249). There is no TLS in the app: the token travels in
+  plain HTTP, so on an untrusted network put a TLS-terminating reverse proxy in
+  front. See the auth roadmap for what is deliberately still out of scope
+  (per-user sessions).
 - HDR10 is supported; Dolby Vision dual-layer is not yet.
 - VMAF scores are only comparable within one libvmaf version.
 
@@ -414,10 +420,15 @@ decoration per user preference).
   Django Unchained 5.55→1.98 GB (64.3%) at VMAF 95.25; Bloodshot 0.42→0.07 GB
   (82.7%); a parallel run of 3 movies in 34.3 min.
 - An already-efficient HEVC source is correctly *skipped* rather than re-encoded.
-- Working dashboard (Svelte 5, dark/light), an HTML report, and a per-module test
-  suite as implementation evidence.
-- Engine modules: `src/shrinkray/{quality,encode,watch,jobs,db,app}.py`
-  (agreed target layout: `tools/`, `engine/`, `server/` subpackages — issue #63).
+- Working dashboard (Svelte 5, dark/light) and a per-concern test suite as
+  implementation evidence.
+- Engine modules: `src/shrinkray/` is layered, among its subsystems `tools/` (the
+  subprocess boundary: ffprobe, HandBrake, VMAF, the process runner), `engine/`
+  (the decision: scan, crop, samples, search, plan, encoders, pipeline, watch,
+  lock, pause) and the two front ends `server/` (the network surface: app, jobs,
+  metrics) and `tui` (the terminal), over root-level `service`, `db`, `config`
+  and `logger` — the #63 decision record's layout, landed by #97, enforced by
+  `lint-imports`.
 
 ## Product Principles
 
