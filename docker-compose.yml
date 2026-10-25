@@ -8,9 +8,9 @@
 # product: the watch loop crashes on its staging folder. --replace is a Mode A
 # CLI flag and has nothing to do with the container (issue #198).
 #
-# Publishing a port means authentication is mandatory: the app refuses to bind
-# 0.0.0.0 without SHRINKRAY_TOKEN (issue #36), so the token below is not
-# optional here - see docs/docker.md.
+# Publishing a port means authentication is mandatory (issue #36): leave
+# SHRINKRAY_TOKEN unset and the app generates one into ${DATA_DIR}/token on
+# first start (issue #249), or set your own - see docs/docker.md.
 
 services:
   shrinkray:
@@ -26,7 +26,8 @@ services:
       - "8420:8420"
     environment:
       # required: the app refuses a non-loopback bind without it
-      SHRINKRAY_TOKEN: ${SHRINKRAY_TOKEN:?set SHRINKRAY_TOKEN to a secret token}
+      # optional: unset => generated into /data/token on first start
+      SHRINKRAY_TOKEN: ${SHRINKRAY_TOKEN:-}
       # a --cpus=4 quota is honoured by the worker plan (issue #34)
       TZ: ${TZ:-UTC}
       # the user every command runs as, and the mask for new files (issue #248):

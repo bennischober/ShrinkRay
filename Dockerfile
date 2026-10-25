@@ -121,7 +121,9 @@ RUN mkdir -p /data /media /output /tmp/shrinkray \
 
 # the operator's config lives on the /data volume and survives updates (issue
 # #247): every command reads $SHRINKRAY_CONFIG, and the first one creates it
-# from the baked defaults below ($SHRINKRAY_CONFIG_SEED), never overwriting it
+# from the baked defaults below ($SHRINKRAY_CONFIG_SEED), never overwriting it.
+# With no $SHRINKRAY_TOKEN the server generates its dashboard token into
+# $SHRINKRAY_TOKEN_FILE on first start and reuses it (issue #249)
 # /usr/local/bin comes first so `shrinkray` is the wrapper that runs the CLI as
 # the operator's user, not the virtualenv's script (issue #248); ENV makes every
 # interactive sh drop from root to that user too (bash reads bash.bashrc)
@@ -129,6 +131,7 @@ ENV TMPDIR=/tmp/shrinkray \
     PATH="/usr/local/bin:/app/.venv/bin:${PATH}" \
     SHRINKRAY_CONFIG=/data/config.json \
     SHRINKRAY_CONFIG_SEED=/app/config.json \
+    SHRINKRAY_TOKEN_FILE=/data/token \
     PUID=${UID} \
     PGID=${GID} \
     UMASK=022 \

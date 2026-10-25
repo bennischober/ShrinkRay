@@ -52,10 +52,10 @@ parse for, or depend on any of these tools (see the scope boundary in AGENTS.md)
 
 - **Now:** a shared-secret token (`SHRINKRAY_TOKEN`, issue #36) gates any
   non-loopback bind; on a trusted LAN the practical deployment is token-or-nothing
-  at the operator's discretion. **Planned (issue #244):** the container generates a
-  token on first start when none is set, stores it in `/data` and shows it in the
-  console banner, so a non-loopback bind is never tokenless and never needs the
-  operator to invent a secret. Reverse-proxy termination is documented
+  at the operator's discretion. The container generates a token on first start when
+  none is set and stores it in `/data/token` (issue #249), so a non-loopback bind is
+  never tokenless and never needs the operator to invent a secret; showing it in the
+  console banner is #251. Reverse-proxy termination is documented
   (docs/docker.md); there is no TLS in the app.
 - **Later:** proper per-user authentication — the shape (session login,
   proxy-forwarded identity, OIDC) is a future decision, deliberately not made here.
@@ -215,19 +215,20 @@ follow the steps" pattern of Unraid apps:
   run as (`PUID`/`PGID`, with `UMASK`); a file written to the share as any other owner is a
   support ticket. Every command, a `docker exec` and an interactive console shell run as
   that user, never as root (issue #248).
-- **The token is generated when absent** (see *Auth roadmap*); a template field may set it
-  instead.
+- **The token is generated when absent** (see *Auth roadmap*, issue #249); a template field
+  may set it instead.
 
 The same image runs the one-shot CLI with no server at all (`docker run --rm ... encode
 /media/<file>`, issue #242), so a desktop user with one video and an Unraid operator with a
 library use one artifact.
 
-> **Implementation status.** Not built. The image runs both modes (`shrinkray` is the
-entrypoint and `serve ...` the default command, issue #242) and keeps its config on `/data`,
+> **Implementation status.** The image side is built: it runs both modes (the CLI is the
+entrypoint and `serve ...` the default command, issue #242), keeps its config on `/data`,
 created from the image's defaults on first start and applied at the next file when it
-changes (issue #247), and runs every command as `PUID`/`PGID` (issue #248). The template, the
-banner, the generated token and the Community Applications listing are follow-up issues of
-#244.
+changes (issue #247), runs every command as `PUID`/`PGID` (issue #248) and generates its
+dashboard token when none is set (issue #249). Not built yet: the console banner (#251), the
+terminal UI (#252), pause/resume (#250), and the template and Community Applications
+listing (#253).
 
 ## Product Purpose
 
