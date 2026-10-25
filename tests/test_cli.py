@@ -389,6 +389,69 @@ class TestInputShapes(unittest.TestCase):
         self.assertEqual(found, [self.one.resolve()])
 
 
+class TestBracketInPath(unittest.TestCase):
+    """Issue #200: an argument is decided by what it is, not what characters it holds.
+
+    The old dispatch treated any argument containing `[` as a glob, so a real file
+    or folder whose name carries a scene-release bracket ([EN+DE], [1080p]) was
+    glob-expanded and reported as matching no movie. The filesystem is checked
+    first; a pattern is only glob-expanded when nothing exists at that path. Real
+    tempfile directories throughout, per the acceptance criteria.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.extensions = [".mkv", ".mp4"]
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_an_existing_file_with_brackets_in_its_name_scans_that_file(self) -> None:
+        """Criterion 1: a bracketed file name is a file, not a glob."""
+        movie = self.root / "Media03 (2011) - WEBDL-1080p h264 TrueHD[EN+DE] [DE+EN].mkv"
+        movie.write_bytes(b"x")
+        root, found = scan.resolve_input_paths(str(movie), self.extensions)
+        self.assertEqual(found, [movie.resolve()])
+        self.assertEqual(root, self.root.resolve())
+
+    def test_an_existing_folder_with_brackets_in_its_name_scans_that_folder(self) -> None:
+        """Criterion 2: a bracketed folder name is a directory, not a glob."""
+        folder = self.root / "Series [x265] [1080p]"
+        folder.mkdir()
+        (folder / "one.mkv").write_bytes(b"x")
+        root, found = scan.resolve_input_paths(str(folder), self.extensions)
+        self.assertEqual(found, [(folder / "one.mkv").resolve()])
+        self.assertEqual(root, folder.resolve())
+
+    def test_a_glob_that_matches_nothing_still_errors(self) -> None:
+        """Criterion 3: the glob no-match error is unchanged."""
+        (self.root / "movies").mkdir()
+        pattern = str(self.root / "movies" / "*.avi")
+        with self.assertRaises(FileNotFoundError) as raised:
+            scan.resolve_input_paths(pattern, self.extensions)
+        self.assertIn("matched no movie file", str(raised.exception))
+
+    def test_a_glob_that_matches_files_still_scans_them(self) -> None:
+        """Criterion 4: a bracketed glob that matches real files still expands."""
+        folder = self.root / "movies"
+        folder.mkdir()
+        (folder / "alpha.mp4").write_bytes(b"a")
+        (folder / "beta.mp4").write_bytes(b"b")
+        (folder / "gamma.mkv").write_bytes(b"c")
+        # a character class in the glob, so `[` here is genuinely a pattern
+        pattern = str(folder / "[ab]*.mp4")
+        root, found = scan.resolve_input_paths(pattern, self.extensions)
+        self.assertEqual(found, [(folder / "alpha.mp4").resolve(), (folder / "beta.mp4").resolve()])
+        self.assertEqual(root, folder.resolve())
+
+    def test_a_nonexistent_path_without_glob_chars_still_errors(self) -> None:
+        """Criterion 5: the missing-path error is unchanged."""
+        with self.assertRaises(FileNotFoundError) as raised:
+            scan.resolve_input_paths(str(self.root / "nope"), self.extensions)
+        self.assertIn("does not exist", str(raised.exception))
+
+
 class TestStatelessModeA(unittest.TestCase):
     """Issue #125: a one-shot run must not create a database it never asked for.
 

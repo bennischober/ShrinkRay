@@ -8,6 +8,10 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **`watch` wakes on filesystem events instead of only polling** (issue #176): between passes the loop sleeps on an inotify waiter (Linux) that fires on file creation, close and moves anywhere under a watched root, so a movie that lands in the inbox starts encoding within seconds instead of after the backoff window. The adaptive poll stays the fallback and the reconciler — a wake never bypasses the stability check — and platforms without a supported event API (and every setup error) degrade to exactly today's polling behavior.
 
+### Fixed
+
+- **A file or folder whose name contains `[` can be scanned again** (issue #200): the input resolver decided file-vs-glob by the characters an argument held, so a real path with a scene-release bracket (`[EN+DE]`, `[1080p]`) was treated as an unexpanded glob and came back as "matched no movie file". The resolver now checks the filesystem first — an argument is a file or a folder when one exists at that path, and only falls back to glob expansion when nothing does. A quoted glob that matches nothing still errors, and a nonexistent path with no glob characters still errors with "does not exist".
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

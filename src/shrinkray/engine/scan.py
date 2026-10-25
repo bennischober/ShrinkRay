@@ -132,6 +132,11 @@ def resolve_input_paths(
     the matching itself. A pattern that matches nothing is an error, not an empty
     run - silently doing nothing is the failure mode this refuses.
 
+    The argument is decided by what it *is*, not by what characters it contains:
+    `*` and `?` cannot appear in a file name on POSIX or Windows, but `[` can
+    (scene-release brackets: `[EN+DE]`, `[1080p]`), so the filesystem is checked
+    first and glob expansion is only the fallback for a path that does not exist.
+
     Args:
         argument (str): The path, directory or glob pattern from the CLI.
         extensions (list[str]): Movie extensions, e.g. ['.mkv', '.mp4'].
@@ -145,15 +150,19 @@ def resolve_input_paths(
         FileNotFoundError: If the path does not exist, or the glob matches
             no movie file.
     """
-    if not any(char in argument for char in "*?["):
-        path = Path(argument)
+    path = Path(argument)
+    if path.exists():
         if path.is_file():
             # a single movie is one item: no walk, and no extension check -
             # the operator named the file explicitly
             return path.parent.resolve(), [path.resolve()]
         if not path.is_dir():
+            # exists but is neither file nor directory (a fifo, a socket):
+            # keep the old refusal for anything a walk could not use
             raise FileNotFoundError(f"'{argument}' does not exist")
         return path.resolve(), find_movies(path, extensions, exclude=exclude)
+    if not any(char in argument for char in "*?["):
+        raise FileNotFoundError(f"'{argument}' does not exist")
 
     # a glob: expand it here, because a quoted pattern arrives unexpanded
     suffixes = {"." + extension.lower().lstrip(".") for extension in extensions}
