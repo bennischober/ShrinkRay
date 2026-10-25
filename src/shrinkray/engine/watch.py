@@ -393,6 +393,14 @@ def release_lock(lock_file: Path) -> None:
         pass
 
 
+# the single-instance lock's path: one watcher per machine. A module-level
+# constant so tests can point it at a per-test temp file - a shared /tmp
+# path plus pid reuse made watch() refuse to run in a test run (issue #176
+# follow-up: six watch tests failed with empty results because a leftover
+# lock's pid happened to be alive again).
+WATCH_LOCK_FILE = Path(tempfile.gettempdir()) / "shrinkray_watch.lock"
+
+
 def watch(
     roots: list[Path],
     output_dir: Path | None = None,
@@ -445,7 +453,7 @@ def watch(
     """
     extensions = [".mkv", ".mp4", ".avi", ".m4v", ".ts"]
     known: set[str] = set()
-    lock_file = Path(tempfile.gettempdir()) / "shrinkray_watch.lock"
+    lock_file = WATCH_LOCK_FILE
     sleep_interval = poll_interval
 
     # misconfiguration guard: when the output lands inside the watched
@@ -473,13 +481,17 @@ def watch(
         log_error("Another watcher seems to be running (lock file exists).")
         return
 
-    waiter = _FsWaiter(roots)
-    waiter.start()
-
     for root in roots:
         root.mkdir(parents=True, exist_ok=True)
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
+
+    # the watches need the roots to EXIST: _add_recursive walks each root, so
+    # a root created here would otherwise be watched never (os.walk of a
+    # missing directory yields nothing, silently - no events, _failed stays
+    # False, the poll still works but the wake never fires)
+    waiter = _FsWaiter(roots)
+    waiter.start()
 
     # in place: the encode still needs a real path to write to, so it lands in
     # a working directory INSIDE the inbox - the same filesystem, so the swap's

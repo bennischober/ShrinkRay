@@ -33,17 +33,24 @@ class TestFsWaiter(unittest.TestCase):
             self.skipTest("no fs events on this platform")
         self.waiter.start()
         self.assertFalse(self.waiter._failed, "waiter setup failed")
-        fired = threading.Event()
+
+        # a still-copying arrival: repeated writes give the drain thread
+        # several chances - one missed inotify delivery (a loaded CI runner
+        # flaked exactly once on a single write) must not fail the test
+        stop_writes = threading.Event()
 
         def late_wake() -> None:
-            time.sleep(0.5)
-            (self.root / "new.mkv").write_bytes(b"x")
+            for i in range(40):
+                if stop_writes.wait(0.25):
+                    return
+                (self.root / f"new{i}.mkv").write_bytes(b"x")
 
-        threading.Thread(target=late_wake, daemon=True).start()
+        writer = threading.Thread(target=late_wake, daemon=True)
+        writer.start()
         started = time.monotonic()
         self.waiter.wait(30.0, None)  # would sleep 30 s without the event
         elapsed = time.monotonic() - started
-        fired.set()
+        stop_writes.set()
         self.assertLess(elapsed, 10.0, f"wait took {elapsed:.1f}s — the event did not wake it")
 
     def test_the_wake_never_bypasses_the_stability_check(self) -> None:
@@ -77,6 +84,7 @@ class TestFsWaiter(unittest.TestCase):
             # NOT stable (fresh mtime): the pass must defer it
             with (
                 mock.patch.object(watch_mod, "_FsWaiter", FakeWaiter),
+                mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(tmp) / "watch.lock"),
                 mock.patch.object(watch_mod, "encode_with_quality") as fake_encode,
             ):
                 watch_mod.watch([inbox], out, once=True)

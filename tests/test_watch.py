@@ -7,12 +7,26 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 from unittest.mock import patch
 
 from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import watch as watch_mod
+
+
+def _isolated_lock(stack, tmp) -> None:
+    """Points the watch loop's single-instance lock at this test's tmp dir.
+
+    The real lock lives in the shared /tmp; a leftover lock whose pid was
+    reused by another process made watch() refuse to run mid-suite (six
+    empty-result failures in one CI run, issue #176's flake follow-up).
+    Accepts a Path or a str (test sites pass either).
+    """
+    stack.enter_context(
+        mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(tmp) / "shrinkray_watch.lock")
+    )
 
 
 class TestWatch(unittest.TestCase):
@@ -39,13 +53,16 @@ class TestWatch(unittest.TestCase):
                     input=m, output=o, success=False, skipped_reason="no size gain"
                 )
 
+            stack = ExitStack()
             with (
                 mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
                 mock.patch("shrinkray.engine.watch.STABLE_MIN_AGE", 3600.0),  # never stable
                 mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
-                watch_mod.watch([inbox], out, once=True)
-                self.assertEqual(seen, [])  # not stable => not encoded yet
+                _isolated_lock(stack, tmp)
+                with stack:
+                    watch_mod.watch([inbox], out, once=True)
+                    self.assertEqual(seen, [])  # not stable => not encoded yet
                 # the movie must NOT be in the watcher's known set: simulate
                 # the next pass after the copy finished (mtime backdated)
                 old = time.time() - 7200
@@ -77,12 +94,15 @@ class TestWatch(unittest.TestCase):
                 captured["known"] = known
                 return real_find(inbox_dir, extensions, known)
 
+            stack = ExitStack()
             with (
                 mock.patch("shrinkray.engine.watch.STABLE_MIN_AGE", 3600.0),
                 mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
                 mock.patch("shrinkray.engine.watch.find_new_movies", side_effect=spy),
             ):
-                watch_mod.watch([inbox], out, once=True)
+                _isolated_lock(stack, tmp)
+                with stack:
+                    watch_mod.watch([inbox], out, once=True)
             self.assertIn("known", captured)
             # the key is "path:mtime:size", so a bare path is never a member;
             # assert on the path PREFIX to prove this movie specifically is absent
@@ -110,11 +130,14 @@ class TestWatch(unittest.TestCase):
                 probed.append(m)
                 return engine_plan.QualityResult(input=m, output=o, success=True)
 
+            stack = ExitStack()
             with (
                 mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
                 mock.patch("shrinkray.engine.watch.disk_free_bytes", return_value=1_000_000),
             ):
-                watch_mod.watch([inbox], out, once=True)
+                _isolated_lock(stack, tmp)
+                with stack:
+                    watch_mod.watch([inbox], out, once=True)
             # nothing was probed, nothing consumed
             self.assertEqual(probed, [])
 
@@ -129,12 +152,13 @@ class TestWatch(unittest.TestCase):
             root = Path(tmp).resolve()
             inbox = root / "in"
             inbox.mkdir()
-            with self.assertRaises(ValueError):
-                watch_mod.watch([inbox], inbox, once=True)
-            with self.assertRaises(ValueError):
-                watch_mod.watch([inbox], inbox / "sub", once=True)
-            with self.assertRaises(ValueError):
-                watch_mod.watch([inbox / "sub"], inbox, once=True)
+            with mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(tmp) / "watch.lock"):
+                with self.assertRaises(ValueError):
+                    watch_mod.watch([inbox], inbox, once=True)
+                with self.assertRaises(ValueError):
+                    watch_mod.watch([inbox], inbox / "sub", once=True)
+                with self.assertRaises(ValueError):
+                    watch_mod.watch([inbox / "sub"], inbox, once=True)
 
     def test_watch_stop_event_ends_loop(self):
         """The app's stop event ends the loop promptly (between passes and
@@ -150,7 +174,8 @@ class TestWatch(unittest.TestCase):
             stop = threading.Event()
             stop.set()
             # must return immediately (checked at the top of the pass)
-            watch_mod.watch([inbox], out, once=False, stop_event=stop)
+            with mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(tmp) / "watch.lock"):
+                watch_mod.watch([inbox], out, once=False, stop_event=stop)
 
     def test_find_new_movies(self):
 
@@ -271,11 +296,14 @@ class TestWatch(unittest.TestCase):
                     output_size=40,
                 )
 
+            stack = ExitStack()
             with (
                 mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
                 mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
-                watch_mod.watch([inbox], out, once=True)
+                _isolated_lock(stack, tmp)
+                with stack:
+                    watch_mod.watch([inbox], out, once=True)
             # quality engine got the movie with the thread cap and wrote
             # into the watch output dir
             self.assertEqual(captured["output"], out / "movie.mkv")
@@ -307,11 +335,14 @@ class TestWatch(unittest.TestCase):
                     skipped_reason="no size gain",
                 )
 
+            stack = ExitStack()
             with (
                 mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
                 mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
-                watch_mod.watch([inbox], out, once=True)
+                _isolated_lock(stack, tmp)
+                with stack:
+                    watch_mod.watch([inbox], out, once=True)
 
     def test_watch_pass_retries_when_busy(self):
         """A busy encode slot (CLI/job running) retries the movie on the
@@ -334,12 +365,15 @@ class TestWatch(unittest.TestCase):
             def busy(movie, output_file, **kwargs):
                 raise EncodeBusyError(f"another encode is running in '{out}'")
 
+            stack = ExitStack()
             with (
                 mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=busy),
                 mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             ):
-                # must not raise: the movie is eligible again next pass
-                watch_mod.watch([inbox], out, once=True)
+                _isolated_lock(stack, tmp)
+                with stack:
+                    # must not raise: the movie is eligible again next pass
+                    watch_mod.watch([inbox], out, once=True)
 
     def test_db_file_reaches_encode_with_quality(self):
         """The db path given to watch() reaches encode_with_quality as
@@ -365,15 +399,18 @@ class TestWatch(unittest.TestCase):
             old = time.time() - 7200
             os.utime(movie, (old, old))
 
+            stack = ExitStack()
             with mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality):
-                watch_mod.watch(
-                    [inbox],
-                    out,
-                    once=True,
-                    db_file=Path(tmp) / "test.db",
-                    probe_encoder_preset="2",
-                    encoder_preset="8",
-                )
+                _isolated_lock(stack, tmp)
+                with stack:
+                    watch_mod.watch(
+                        [inbox],
+                        out,
+                        once=True,
+                        db_file=Path(tmp) / "test.db",
+                        probe_encoder_preset="2",
+                        encoder_preset="8",
+                    )
             self.assertEqual(seen, [Path(tmp) / "test.db"])
 
     def test_presets_reach_encode_with_quality(self):
@@ -397,14 +434,17 @@ class TestWatch(unittest.TestCase):
             old = time.time() - 7200
             os.utime(movie, (old, old))
 
+            stack = ExitStack()
             with mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality):
-                watch_mod.watch(
-                    [inbox],
-                    out,
-                    once=True,
-                    probe_encoder_preset="2",
-                    encoder_preset="8",
-                )
+                _isolated_lock(stack, tmp)
+                with stack:
+                    watch_mod.watch(
+                        [inbox],
+                        out,
+                        once=True,
+                        probe_encoder_preset="2",
+                        encoder_preset="8",
+                    )
             self.assertEqual(seen, [("2", "8")])
 
 
@@ -503,7 +543,10 @@ class TestWatchInPlace(unittest.TestCase):
         """The guard is right for what it protects: keep it for that form."""
         from shrinkray.engine.watch import watch
 
-        with self.assertRaises(ValueError) as raised:
+        with (
+            mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(self.tmp.name) / "watch.lock"),
+            self.assertRaises(ValueError) as raised,
+        ):
             watch([self.inbox], self.inbox, once=True)
         self.assertIn("separate directories", str(raised.exception))
 
@@ -511,7 +554,10 @@ class TestWatchInPlace(unittest.TestCase):
         """In place there is no second tree, so the guard must not fire."""
         from shrinkray.engine.watch import watch
 
-        with patch("shrinkray.engine.watch.encode_with_quality") as fake_encode:
+        with (
+            patch("shrinkray.engine.watch.encode_with_quality") as fake_encode,
+            mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(self.tmp.name) / "watch.lock"),
+        ):
             fake_encode.return_value = type(
                 "R",
                 (),
@@ -592,13 +638,16 @@ class TestWatchLibraryTree(unittest.TestCase):
             seen.append(Path(m))
             return engine_plan.QualityResult(input=m, output=o, success=True)
 
+        stack = ExitStack()
         with (
             mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
             mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
             mock.patch("shrinkray.engine.watch.probe_duration_seconds", return_value=600.0),
             mock.patch("shrinkray.engine.watch.find_handbrake", return_value="hb"),
         ):
-            watch_mod.watch(roots or [self.root], self.out, once=True)
+            _isolated_lock(stack, self.tmp.name)
+            with stack:
+                watch_mod.watch(roots or [self.root], self.out, once=True)
 
     def test_a_new_file_in_a_subdirectory_is_picked_up(self) -> None:
         """The criterion: a new file anywhere under the root is found."""
@@ -640,6 +689,7 @@ class TestWatchLibraryTree(unittest.TestCase):
             if stop_event is not None:
                 stop_event.set()
 
+        stack = ExitStack()
         with (
             mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
             mock.patch("shrinkray.engine.watch._wait_or_stop", side_effect=fake_sleep),
@@ -647,7 +697,9 @@ class TestWatchLibraryTree(unittest.TestCase):
             mock.patch("shrinkray.engine.watch.probe_duration_seconds", return_value=600.0),
             mock.patch("shrinkray.engine.watch.find_handbrake", return_value="hb"),
         ):
-            watch_mod.watch([self.root], self.out, once=False, stop_event=stop)
+            _isolated_lock(stack, self.tmp.name)
+            with stack:
+                watch_mod.watch([self.root], self.out, once=False, stop_event=stop)
         self.assertEqual(seen, [movie], "an unchanged file was re-encoded")
 
     def test_a_still_writing_file_is_not_decided_yet(self) -> None:
