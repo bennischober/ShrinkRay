@@ -483,6 +483,17 @@ docker run -d --name shrinkray-app \
   ghcr.io/bennischober/shrinkray:latest
 ```
 
+The same image runs the one-shot CLI with no server, no token and nothing installed
+on the host: anything after the image name is a `shrinkray` command.
+
+```bash
+docker run --rm -v /srv/media:/media ghcr.io/bennischober/shrinkray:latest \
+  encode /media/Movies/film.mkv
+```
+
+See [docs/docker.md](docs/docker.md#one-shot-runs-no-server) for scratch space,
+permissions and what a stateless run records.
+
 Pin a release with the version tag (`ghcr.io/bennischober/shrinkray:v0.4.0`);
 `docker inspect` on the image shows the version label without starting it.
 The image runs as a non-root user (override with `--build-arg UID/GID` on a

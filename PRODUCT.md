@@ -221,9 +221,9 @@ The same image runs the one-shot CLI with no server at all (`docker run --rm ...
 /media/<file>`, issue #242), so a desktop user with one video and an Unraid operator with a
 library use one artifact.
 
-> **Implementation status.** Not built. The image runs the resident mode only (its
-entrypoint pins `serve`, issue #242), as a fixed UID, with its config baked into the image
-(issue #236). The template, the banner, `PUID`/`PGID`, the generated token and the Community
+> **Implementation status.** Not built. The image runs both modes (`shrinkray` is the
+entrypoint and `serve ...` the default command, issue #242), but as a fixed UID and with its
+config baked into the image (issue #236). The template, the banner, `PUID`/`PGID`, the generated token and the Community
 Applications listing are follow-up issues of #244.
 
 ## Product Purpose
