@@ -995,7 +995,13 @@ def _encode_quality_or_fixed(
                         cancel=cancel,
                         db_file=_db_file_of(connection),
                         encoder_threads=cap_threads(config.handbrake_max_threads),
-                        verify=payload.get("verify", False),
+                        # the resident mode verifies every encode (issue
+                        # #235): the job worker is Mode B's other arm, same
+                        # reasoning as the watcher - nobody watches the log,
+                        # the verification number is the only evidence the
+                        # encode met the target. A payload can still opt out
+                        # with verify=false explicitly.
+                        verify=payload.get("verify", True),
                         min_source_height=config.min_source_height,
                         min_source_width=config.min_source_width,
                         min_source_size_gb=config.min_source_size_gb,
