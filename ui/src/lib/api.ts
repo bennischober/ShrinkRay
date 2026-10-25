@@ -247,8 +247,8 @@ export function isAuthFailure(error: unknown): boolean {
 
 /** Raw error text → operator language. The audit trail keeps the raw
  * exception (diagnosis needs it); the surfaces that INTERRUPT (the red
- * strip, the preflight) translate known cases into what happened and what
- * to do. Unknown text passes through untouched — never invented. */
+ * strip) translate known cases into what happened and what to do.
+ * Unknown text passes through untouched — never invented. */
 const ERROR_TRANSLATIONS: [RegExp, (m: RegExpMatchArray) => string][] = [  [
     /API (\d+): [\s\S]*?"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/,
     (m) => `${m[1]} — ${m[2].replace(/\\(.)/g, '$1')}`,

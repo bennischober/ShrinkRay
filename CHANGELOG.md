@@ -32,6 +32,7 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ### Fixed
 
+- **The last preflight mentions are gone from the UI code** (issue #301): a CSS comment in App.svelte and a phrase in api.ts's error-translation note still described the ceremony removed by #239; both are deleted (the CSS block they sat in carried no rules - verified dead), and \`git grep -i preflight -- ui/src\` is now empty.
 - **The documented smoke-test command passes when the smoke tests do** (issue #295): `tests/test_smoke.py` told contributors to run `SHRINKRAY_SMOKE=1 uv run pytest tests/test_smoke.py -v`, which inherits the suite-wide coverage floor and always exited 1 (about 11% coverage from one file) even with every smoke test green. The command now carries `--no-cov`, matching CONTRIBUTING.md.
 
 - **ui/AGENTS.md's gotchas name only things that exist** (issue #294): the "Two dead surfaces" bullet described symbols removed by #239 (`requestEncodeAll`, the preflight-only-CLOSE ceremony, the inert Overview CANCEL) — each verified absent from the UI code on `main` before removal (`requestEncodeAll` has no match; only stale comments still mention the preflight); the hardcoded-defaults and shortcut-legend notes stay (both verified true, the legend mismatch marked as real).
