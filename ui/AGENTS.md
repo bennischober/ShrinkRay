@@ -71,10 +71,8 @@ ui/
   live methods are `snapshot`, `retained`, `movie`, `config`, `reveal`. Adding a caller is
   fine; changing a shape without the server is not.
 - `App.svelte` hardcodes Windows defaults (`D:\Movies`, `D:\Encoded`) and VMAF 96;
-  `SHORTCUT_LEGEND` says `1–5: pages` while the map binds only 1-4 (Retained has none).
-- Two dead surfaces: `requestEncodeAll` has no caller and the preflight renders only
-  CLOSE, and `App.svelte` passes `cancelling` but never `oncancel`, so the Overview CANCEL
-  button is inert. Do not cite either as a working flow.
+  `SHORTCUT_LEGEND` says `1–5: pages` while the map binds only 1-4 (Retained has none) —
+  a real mismatch, not a stale note (checked 2026-10-25, issue #294).
 - `--poster-ground`/`--poster-line` (`tokens.css`) outlived `PosterCard.svelte`, deleted
   in #180; the root `DESIGN.md` still describes the demoted poster grid. `ui/README.md` is
   project documentation (rewritten 2026-10-24), not the Vite template.
