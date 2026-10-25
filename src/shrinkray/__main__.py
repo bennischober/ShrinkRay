@@ -125,7 +125,7 @@ def app_command(
 
 @contextlib.contextmanager
 def _cancel_on_terminal_close() -> Iterator[threading.Event]:
-    """Turns closing the terminal, ctrl+c and `kill <pid>` into a cancel.
+    """Turns closing the terminal, ctrl+c and SIGTERM into a cancel.
 
     Closing the terminal cancels the encode (PRODUCT.md, issue #326). The
     engine's children run in their own session, so they never see the
@@ -138,7 +138,9 @@ def _cancel_on_terminal_close() -> Iterator[threading.Event]:
     exception raised from the handler would unwind past the child's
     termination, orphaning it. The previous handlers come back on every
     exit path. Callers enter the scope only around the engine work, where
-    a child runs; a scan before it keeps the default signal behaviour.
+    a child runs; a scan before it keeps the default signal behaviour. The
+    crop pass does not check the event yet (#384); ctrl+c and a closed
+    terminal still reach its ffmpeg through the process group.
 
     Yields:
         threading.Event: Set when the first signal arrives.
