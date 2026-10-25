@@ -570,6 +570,11 @@ def find_optimal_crf(
             use_probe_cache=use_probe_cache,
         )
         probes.append(SampleProbe(crf=crf, vmaf=round(vmaf, 2)))
+        # one line per probe in the transcript (issue #325): during the
+        # search the operator saw only 'Probing ...' for minutes with no
+        # sign of convergence - the progress event reaches the CLI's bar
+        # (transient) and the daemon log, but neither is a transcript line
+        log(f"probe CRF {crf}: VMAF {round(vmaf, 2)} (probe {len(probes)})")
         if progress:
             progress(
                 {
