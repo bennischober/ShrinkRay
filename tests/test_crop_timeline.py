@@ -189,17 +189,20 @@ class TestCropCache(unittest.TestCase):
         self.assertIsNone(summary)
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
 
-    def _interrupted_pass(self, run_result: object) -> None:
+    def _interrupted_pass(self, run_result: object) -> str:
         """Drives the real run_crop_timeline with a pass that did not
-        complete, and asserts nothing is measured or cached."""
+        complete, asserts nothing is measured or cached, and returns what
+        was logged."""
         with (
             patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
             patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=300.0),
             patch("shrinkray.engine.crop._run", **run_result),
+            patch("shrinkray.engine.crop.log") as log,
         ):
             summary = detect_crop_summary_cached(self.movie, self.db_file)
         self.assertIsNone(summary)
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
+        return " ".join(str(call.args[0]) for call in log.call_args_list)
 
     def test_an_interrupted_pass_caches_nothing(self) -> None:
         """An ffmpeg that exits early (ctrl+c or a closed terminal reach it
@@ -213,9 +216,17 @@ class TestCropCache(unittest.TestCase):
         ).encode()
         self._interrupted_pass({"return_value": (255, partial)})
 
-    def test_a_timed_out_pass_caches_nothing(self) -> None:
-        # the runner's code for a child it terminated at the ceiling
-        self._interrupted_pass({"return_value": (-2, "timed out after 1800s (terminated)")})
+    def test_a_timed_out_pass_caches_nothing_and_says_why(self) -> None:
+        # the runner's code for a child it terminated at the ceiling; the log
+        # carries its reason, not a bare "-2" that reads like a crash code
+        logged = self._interrupted_pass(
+            {"return_value": (-2, "timed out after 1800s (terminated)")}
+        )
+        self.assertIn("timed out after 1800s", logged)
+
+    def test_an_unstartable_ffmpeg_fails_the_pass_without_raising(self) -> None:
+        logged = self._interrupted_pass({"side_effect": FileNotFoundError(2, "No such file")})
+        self.assertIn("could not start", logged)
 
     def test_a_cancel_ends_the_timeline_pass_and_caches_nothing(self) -> None:
         """Issue #384: a cancel during the pass terminates the child within

@@ -273,30 +273,41 @@ def run_crop_timeline(
     # the pass's duration-derived ceiling (issue #62's protection, kept through
     # the runner: issue #384 adds the cancel event beside it)
     ceiling = max(int((probe_duration_seconds(movie) or 0) * 4) + 600, FFPROBE_TIMEOUT)
-    code, err = _run(
-        [
-            FFMPEG_BINARY,
-            "-hide_banner",
-            "-nostats",
-            "-skip_frame",
-            "nokey",
-            "-i",
-            str(movie),
-            "-map",
-            "0:v:0",
-            "-vf",
-            f"cropdetect=limit={limit}:round=2:reset=1",
-            "-an",
-            "-sn",
-            "-f",
-            "null",
-            "-",
-        ],
-        cancel=cancel,
-        timeout=ceiling,
-    )
+    try:
+        code, err = _run(
+            [
+                FFMPEG_BINARY,
+                "-hide_banner",
+                "-nostats",
+                "-skip_frame",
+                "nokey",
+                "-i",
+                str(movie),
+                "-map",
+                "0:v:0",
+                "-vf",
+                f"cropdetect=limit={limit}:round=2:reset=1",
+                "-an",
+                "-sn",
+                "-f",
+                "null",
+                "-",
+            ],
+            cancel=cancel,
+            timeout=ceiling,
+        )
+    except OSError as e:
+        # ffmpeg missing or not spawnable (EMFILE, ENOMEM): no measurement,
+        # the caller falls back like any failed pass
+        log(f"The crop timeline pass could not start for '{movie.name}': {e}")
+        return [], None
     if code == -1:
         # cancelled (issue #384): a cancel caches nothing
+        return [], None
+    if code == -2:
+        # terminated at the ceiling or by the stall watchdog: the runner's
+        # message says which, a bare "-2" would read like an ffmpeg crash
+        log(f"The crop timeline pass failed for '{movie.name}': {err}")
         return [], None
     if code != 0:
         log(f"The crop timeline pass failed for '{movie.name}': ffmpeg exited {code}")
