@@ -252,7 +252,11 @@ def run_crop_timeline(
 
     Returns:
         tuple: The readings in file order and the (width, height) of the
-            video frame (None when the stream could not be read).
+            video frame. The frame is None when the stream could not be read
+            or the pass did not complete: an ffmpeg that exits early (killed
+            by ctrl+c or a closed terminal, a decode error, the timeout) has
+            measured only part of the runtime, and a crop from part of the
+            runtime can cut into picture a later segment shows.
     """
     from shrinkray.tools.ffprobe import probe_duration_seconds
 
@@ -284,7 +288,10 @@ def run_crop_timeline(
         )
     except (OSError, subprocess.SubprocessError) as e:
         log(f"The crop timeline pass failed for '{movie.name}': {e}")
-        return [], frame
+        return [], None
+    if proc.returncode != 0:
+        log(f"The crop timeline pass failed for '{movie.name}': ffmpeg exited {proc.returncode}")
+        return [], None
     return parse_crop_timeline(proc.stderr.decode(errors="replace")), frame
 
 
