@@ -303,12 +303,12 @@ def run_crop_timeline(
         return [], None
     if code == -1 and cancel is not None and cancel.is_set():
         # cancelled (issue #384): a cancel caches nothing. Without the event a
-        # -1 is a SIGHUP from outside and is logged as a failure below
+        # -1 is a child that died of SIGHUP and is logged as a failure below
         return [], None
     if code == -2 and err.startswith(("timed out after", "stalled:")):
         # terminated at the ceiling or by the stall watchdog: the runner's
-        # message says which. A child killed by SIGINT also returns -2, but
-        # its stderr is ffmpeg's own and is logged as an exit code below
+        # message says which. A child that died of SIGINT also returns -2,
+        # but its stderr is ffmpeg's own and is logged as an exit code below
         log(f"The crop timeline pass failed for '{movie.name}': {err}")
         return [], None
     if code != 0:
@@ -333,21 +333,18 @@ def source_frame(movie: Path) -> tuple[int, int] | None:
             capture_output=True,
             timeout=FFPROBE_TIMEOUT,
         )
-        stream = next(
-            s for s in json.loads(proc.stdout.decode())["streams"] if s.get("codec_type") == "video"
-        )
-        return (int(stream["width"]), int(stream["height"]))
-    except (
-        OSError,
-        subprocess.SubprocessError,
-        StopIteration,
-        KeyError,
-        ValueError,
-        json.JSONDecodeError,
-    ) as e:
+        streams = json.loads(proc.stdout.decode())["streams"]
+    except (OSError, subprocess.SubprocessError, KeyError, ValueError) as e:
         # OSError: ffprobe missing. TimeoutExpired: a stale mount blocking the
-        # read (issue #62). No frame size => no crop, said out loud
-        log(f"ffprobe could not read the frame size of '{movie.name}': {e!r}")
+        # read (issue #62). ValueError covers unparsable output (-v quiet
+        # leaves stdout empty when ffprobe fails). No frame size => no crop
+        log(f"ffprobe could not read the frame size of '{movie.name}': {e}")
+        return None
+    try:
+        stream = next(s for s in streams if s.get("codec_type") == "video")
+        return (int(stream["width"]), int(stream["height"]))
+    except (StopIteration, KeyError, ValueError, TypeError):
+        log(f"'{movie.name}' has no video stream with a frame size: no crop")
         return None
 
 
@@ -614,8 +611,10 @@ def detect_crop_rect(
             # cancelled (issue #384): the sampled pass measures nothing
             return None
         if code < 0:
-            # killed (a signal from outside, or the runner's stall watchdog):
-            # a crop from the windows left would lose this window's veto
+            # the child died of a signal (the runner's stall watchdog, SIGKILL,
+            # a crash): a crop from the windows left would lose its veto. A
+            # SIGHUP/SIGINT/SIGTERM is caught by ffmpeg, which exits 255:
+            # that is a failed window like any positive exit (issue #403)
             log(f"The sampled crop pass failed for '{movie.name}': ffmpeg exited {code}")
             return None
         if code != 0:
