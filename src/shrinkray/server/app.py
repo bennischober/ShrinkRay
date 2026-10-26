@@ -1260,6 +1260,26 @@ def _recover_interrupted_swaps() -> None:
             log(f"swap recovery: '{name}' {outcome}")
 
 
+def _serve_forever(host: str, port: int) -> None:
+    """Runs the ASGI server until it stops (the resident mode's blocking call).
+
+    A module-level seam rather than an inline `uvicorn.Server(...)` so the tests
+    patch a name this module owns instead of one uvicorn re-exports: patching
+    `uvicorn.Server` failed on a fresh CI session with `AttributeError` while the
+    same commit passed locally, because that attribute is a re-export from
+    `uvicorn/__init__` and not always present when the patch runs (issue #373).
+
+    One behaviour delta: a failure to construct the server now runs `run_app`'s
+    shutdown cleanup, where the inline version constructed it outside the try. Cleanup
+    on a failed boot is the better outcome, and it is stated here so the difference
+    is not a surprise.
+    """
+    import uvicorn
+
+    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    uvicorn.Server(config).run()
+
+
 def run_app(
     db_file: Path,
     host: str = "127.0.0.1",
@@ -1355,12 +1375,8 @@ def run_app(
     monitor = threading.Thread(target=monitor_memory, name="memory-monitor", daemon=True)
     monitor.start()
 
-    import uvicorn
-
-    config = uvicorn.Config(app, host=host, port=port, log_level="info")
-    server = uvicorn.Server(config)
     try:
-        server.run()
+        _serve_forever(host, port)
     finally:
         state.shutdown()
         log("app stopped")

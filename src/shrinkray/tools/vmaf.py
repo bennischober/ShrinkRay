@@ -107,8 +107,9 @@ def build_vmaf_command(
 
     With HDR, both inputs are tone-mapped to SDR inside the filtergraph
     before the comparison: the VMAF model is SDR-trained and PQ content
-    would score misleadingly. Both sides get the identical chain, so the
-    relative quality measurement stays honest.
+    would score misleadingly. Both sides get the identical chain; what the
+    number then measures is quality-within-this-chain, not PQ-direct
+    quality - see the tone-map chain's note below.
 
     Args:
         distorted (Path): The encoded file (libvmaf 'main' input).
@@ -141,7 +142,13 @@ def build_vmaf_command(
         vmaf += f":n_subsample={int(subsample)}"
 
     # the tone-map chain: linear light -> bt709 primaries -> hable tonemap
-    # -> back to video levels (validated on real HDR10 content)
+    # -> back to video levels. libvmaf's models are SDR-trained, so HDR is
+    # flattened into a comparable space before scoring; the chain is an
+    # approximation, not a validated reference - #340 measured its footprint
+    # at ~2.9 VMAF on one real HDR10 pair (ShrinkRay scores lower than
+    # ab-av1's PQ-direct path, which errs safe: quality is overshot, never
+    # undershot). No end-to-end HDR verification against reference tooling
+    # exists yet; until one does, treat HDR scores as chain-relative.
     tonemap = (
         "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
         "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,"
