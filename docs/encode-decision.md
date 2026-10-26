@@ -62,8 +62,8 @@ Every gate is a cheap question asked before the expensive next step.
 | 3 | Size | At least the configured size floor? (`min_source_size_gb`, `engine/plan.py:419`) | skip — payoff below the probe cost |
 | 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` extended by the config's `candidate_codecs`, `engine/plan.py:55`; the list may be extended, never shrunk — issue #233) | skip — a source codec outside the list is not re-encoded |
 | 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py`, called at `engine/plan.py:616`) | no crop; the encode proceeds uncropped |
-| 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:592`) | skip — target unreachable |
-| 7 | **Size gate** | Would the result be smaller? (`engine/search.py:675`, and again at the chosen CRF `:721`) | skip — "would not shrink" |
+| 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:651`) | skip — target unreachable |
+| 7 | **Size gate** | Would the result be smaller? (`engine/search.py:722` at the bound CRF, and at the chosen CRF `:764` from every window's cached encoded bytes — `check_chosen_crf_shrinks`) | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, **with the crop** | — |
 
 Note gate 5 cannot fail in the sense of aborting: "no bars found" is a normal outcome and the
