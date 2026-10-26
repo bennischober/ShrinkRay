@@ -632,8 +632,16 @@ def load_config(
         Conf: The config settings.
     """
     global _config, config_file_used, _config_signature
+    # an EXPLICIT config_file is a command-line instruction, not a cache
+    # hint: --config must win over a config another caller loaded first
+    # (issue #328's fallback test caught this - the CLI silently used the
+    # default file whenever anything had already called load_config())
     if _config is not None:
-        return _config
+        if config_file is None:
+            return _config
+        explicit = resolve_config_path(config_file=config_file, root=root)
+        if explicit == config_file_used:
+            return _config
 
     path = resolve_config_path(config_file=config_file, root=root)
 
