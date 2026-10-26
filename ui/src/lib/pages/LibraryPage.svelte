@@ -11,6 +11,7 @@
     runningMovie = null,
     runningPercent = null,
     plannedPaths = [],
+    planSavings = [],
     onopenmovie,
     ontoggle,
     onselectall,
@@ -24,6 +25,7 @@
     runningMovie?: string | null
     runningPercent?: number | null
     plannedPaths?: string[]
+    planSavings?: readonly (readonly [string, number])[]
     onopenmovie: (movie: Movie) => void
     ontoggle: (path: string, checked: boolean) => void
     onselectall: (checked: boolean, paths: string[]) => void
@@ -120,9 +122,21 @@
   const selectedBase = $derived(
     selectedMovies.reduce((sum, m) => sum + (m.encode?.output_size ?? m.size ?? 0), 0)
   )
-  const selectedEstimate = $derived(
-    selectedMovies.filter((m) => !m.encode).reduce((sum, m) => sum + (m.size ?? 0) * 0.45, 0)
-  )
+  // Measured, not guessed (issue #324): the plan's own predictions are the
+  // only source of an estimate. A selection with no plan row, or one whose
+  // prediction did not materialize, shows no number at all - a made-up 45%
+  // would fabricate a promise on the trust surface.
+  const savingsByPath = $derived(new Map(planSavings))
+  const selectedEstimate = $derived.by(() => {
+    let sum = 0
+    for (const m of selectedMovies) {
+      if (m.encode) continue
+      const pct = savingsByPath.get(m.path) ?? savingsByPath.get(m.path.replace(/[\\/]+/g, '/'))
+      if (pct == null) continue
+      sum += ((m.size ?? 0) * pct) / 100
+    }
+    return sum
+  })
 
   function decisionOf(movie: Movie): { label: string; cls: string; bare?: boolean } {
     const preset = movie.encode?.preset
@@ -182,7 +196,7 @@
       </span>
       <span class="leader-note mono">
         {#if selectedEstimate > 0}
-          → EST. −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE
+          → PLAN-PREDICTED −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE
         {:else}
           → no estimate (selection already encoded)
         {/if}
