@@ -231,6 +231,14 @@ class TestCropCache(unittest.TestCase):
         logged = self._interrupted_pass({"return_value": (-1, "")})
         self.assertIn("ffmpeg exited -1", logged)
 
+    def test_an_interrupt_from_outside_is_not_read_as_the_runners_ceiling(self) -> None:
+        # a child killed by SIGINT also returns -2; its stderr is ffmpeg's
+        # readings, which must not be logged as the reason
+        readings = "[Parsed_cropdetect_0 @ 0x1] w:1920 h:800 x:0 y:140 crop=1920:800:0:140\n"
+        logged = self._interrupted_pass({"return_value": (-2, readings * 50)})
+        self.assertIn("ffmpeg exited -2", logged)
+        self.assertNotIn("Parsed_cropdetect", logged)
+
     def test_an_unstartable_ffmpeg_fails_the_pass_without_raising(self) -> None:
         logged = self._interrupted_pass({"side_effect": FileNotFoundError(2, "No such file")})
         self.assertIn("could not start", logged)
@@ -396,6 +404,26 @@ class TestCropCancelReachesBothPasses(unittest.TestCase):
         self.assertIsNone(rect)
         self.assertEqual(len(windows), 1, "the windows after the cancel must not start")
         self.assertLess(elapsed, 1.0, f"the cancel took {elapsed:.1f}s to end the fallback")
+
+    def test_a_window_killed_from_outside_leaves_the_file_uncropped(self) -> None:
+        """A window whose ffmpeg was killed (here SIGHUP, -1, with no cancel
+        set) measured nothing; cropping from the other windows would lose its
+        veto, so the fallback measures no crop and says why."""
+        from shrinkray.engine.crop import detect_crop_rect
+
+        bars = (0, "[Parsed_cropdetect_0 @ 0x1] crop=1920:800:0:140\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x")
+            with (
+                patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=3600.0),
+                patch("shrinkray.engine.crop._run", side_effect=[bars, (-1, ""), bars]),
+                patch("shrinkray.engine.crop.log") as log,
+            ):
+                rect = detect_crop_rect(movie, Path(tmp), count=3)
+        self.assertIsNone(rect)
+        self.assertIn("ffmpeg exited -1", " ".join(str(c.args[0]) for c in log.call_args_list))
 
     def _passes_seen(self, module: str, stack: contextlib.ExitStack) -> dict[str, object]:
         """Patches both crop passes in `module`; the fallback raises

@@ -305,9 +305,10 @@ def run_crop_timeline(
         # cancelled (issue #384): a cancel caches nothing. Without the event a
         # -1 is a SIGHUP from outside and is logged as a failure below
         return [], None
-    if code == -2:
+    if code == -2 and err.startswith(("timed out after", "stalled:")):
         # terminated at the ceiling or by the stall watchdog: the runner's
-        # message says which, a bare "-2" would read like an ffmpeg crash
+        # message says which. A child killed by SIGINT also returns -2, but
+        # its stderr is ffmpeg's own and is logged as an exit code below
         log(f"The crop timeline pass failed for '{movie.name}': {err}")
         return [], None
     if code != 0:
@@ -611,6 +612,11 @@ def detect_crop_rect(
         )
         if code == -1 and cancel is not None and cancel.is_set():
             # cancelled (issue #384): the sampled pass measures nothing
+            return None
+        if code < 0:
+            # killed (a signal from outside, or the runner's stall watchdog):
+            # a crop from the windows left would lose this window's veto
+            log(f"The sampled crop pass failed for '{movie.name}': ffmpeg exited {code}")
             return None
         if code != 0:
             continue
