@@ -725,8 +725,10 @@ class TestEncodeLock(unittest.TestCase):
         with guard_encodes(self.out, holder="test") as lock:
             self.assertTrue(lock.is_file())
             # pid-stamped, and the holder is named for the busy message
-            self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
-            self.assertEqual(lock.read_text().split()[1], "test")
+            fields = lock.read_text().split()
+            self.assertEqual(int(fields[0]), os.getpid())
+            self.assertEqual(fields[1], "test")
+            self.assertEqual(len(fields), 3, "the ownership token is written")
         self.assertFalse(lock.exists())
 
     def test_second_claimant_is_rejected(self):
@@ -883,17 +885,42 @@ class TestEncodeLock(unittest.TestCase):
 
     def test_a_lost_holder_does_not_release_the_new_holders_lock(self):
         """A holder that stalled past the window must not delete the new
-        holder's lock when it finally exits (issue #383)."""
-        from shrinkray.engine.lock import _lock_path, acquire_encode_slot, release_encode_slot
+        holder's lock when it finally exits (issue #383). The pid cannot tell
+        them apart - the server and a one-shot container are both pid 1 - so
+        the token written at acquisition decides."""
+        from shrinkray.engine.lock import _lock_path, release_encode_slot
 
         self.out.mkdir(parents=True, exist_ok=True)
         lock = _lock_path(self.out)
-        lock.write_text("1 encode-job")
+        # a lock another holder wrote (pid 1, like us in the container)
+        lock.write_text("1 encode-job 0123456789ab")
         release_encode_slot(lock)
         self.assertTrue(lock.exists(), "another holder's lock was deleted")
         lock.unlink()
-        self.assertEqual(acquire_encode_slot(self.out, holder="test"), lock)
-        lock.unlink()
+
+    def test_a_holder_whose_lock_was_stolen_does_not_delete_the_new_one(self):
+        """This process acquires, a rival steals the silent lock and writes its
+        own, and then we exit: release must leave the rival's lock alone. The
+        pid is identical in the container, so the token decides (issue #383)."""
+        from shrinkray.engine.lock import _lock_path, acquire_encode_slot, release_encode_slot
+
+        acquired = acquire_encode_slot(self.out, holder="test")
+        self.assertEqual(acquired, _lock_path(self.out))
+        # the rival stole it and wrote its own stamp (pid 1, a different token)
+        acquired.write_text("1 encode-job fedcba987654")
+        release_encode_slot(acquired)
+        self.assertTrue(acquired.exists(), "the rival's lock was deleted")
+        self.assertEqual(acquired.read_text().split()[2], "fedcba987654")
+        acquired.unlink()
+
+    def test_releasing_our_own_lock_removes_it(self):
+        """The positive case of the token check: our own lock is removed."""
+        from shrinkray.engine.lock import acquire_encode_slot, release_encode_slot
+
+        acquired = acquire_encode_slot(self.out, holder="test")
+        self.assertTrue(acquired.exists())
+        release_encode_slot(acquired)
+        self.assertFalse(acquired.exists())
 
     def test_quality_progress_callback_maps_percent(self):
         """The CLI progress callback maps engine percent events onto the

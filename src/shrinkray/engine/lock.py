@@ -38,6 +38,7 @@ import contextlib
 import os
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -84,12 +85,30 @@ def _read_holder(lock: Path) -> tuple[int, str]:
     Returns:
         tuple[int, str]: The holder's pid (0 when unreadable) and its label.
     """
-    try:
-        fields = lock.read_text(encoding="ascii").split()
-    except OSError:
-        return 0, ""
+    fields = _read_fields(lock)
     pid = int(fields[0]) if fields and fields[0].isdigit() else 0
-    return pid, " ".join(fields[1:])
+    return pid, fields[1] if len(fields) > 1 else ""
+
+
+def _read_fields(lock: Path) -> list[str]:
+    """Returns the lock file's whitespace-separated fields ([] when unreadable).
+
+    Args:
+        lock (Path): The lock file.
+
+    Returns:
+        list[str]: The stamp's fields.
+    """
+    try:
+        return lock.read_text(encoding="ascii").split()
+    except OSError:
+        return []
+
+
+# the token this process wrote into each lock it holds, by lock path. The pid
+# cannot answer "is this still my lock?" - the server and a one-shot container
+# are both pid 1 - so release compares the token it wrote (issue #383)
+_OWNED: dict[Path, str] = {}
 
 
 def _silence_seconds(lock: Path) -> float | None:
@@ -180,22 +199,29 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
         _release_path(lock)
         return acquire_encode_slot(output_dir, holder)
     with os.fdopen(fd, "w", encoding="ascii") as handle:
-        handle.write(f"{os.getpid()} {holder}")
+        token = uuid.uuid4().hex[:12]
+        handle.write(f"{os.getpid()} {holder} {token}")
+    _OWNED[lock] = token
     return lock
 
 
 def release_encode_slot(lock: Path) -> None:
     """Releases a held encode slot.
 
-    Only a lock this process wrote is removed: a holder that stalled long
+    Only the lock this process wrote is removed: a holder that stalled long
     enough to lose its slot must not delete the new holder's file on its way
-    out.
+    out, and the pid cannot tell the two apart (the server and a one-shot
+    container are both pid 1), so the token written at acquisition decides
+    (issue #383).
 
     Args:
         lock (Path): The lock file path returned by acquire_encode_slot.
     """
-    pid, _ = _read_holder(lock)
-    if pid and pid != os.getpid():
+    token = _OWNED.pop(lock, None)
+    if token is None:
+        return
+    fields = _read_fields(lock)
+    if len(fields) < 3 or fields[2] != token:
         return
     _release_path(lock)
 
