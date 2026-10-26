@@ -1650,6 +1650,11 @@ def encode_with_quality(
                 # force_reprobe means EVERYTHING is measured fresh: the plan
                 # cache above is bypassed, and so is the probe-encode cache
                 use_probe_cache=not force_reprobe,
+                # the plan measured the crop at this window count and the
+                # fingerprint carries it (issue #327): the encode must
+                # re-detect with the SAME count, or its fallback detector
+                # measures a different crop than the plan predicted
+                crop_sample_count=crop_sample_count,
             )
         except SkipEncode as e:
             return QualityResult(
