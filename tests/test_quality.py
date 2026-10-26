@@ -1672,6 +1672,27 @@ class TestChosenCrfSizeGate(unittest.TestCase):
             "the database did not reach the chosen check",
         )
 
+        # the False half (review round 5, MEDIUM 1): a call site that
+        # hard-codes hdr=True passes the capture above; a False call must
+        # arrive as False
+        captured.clear()
+        with (
+            patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+            patch.object(engine_search, "check_chosen_crf_shrinks", side_effect=fake_check),
+        ):
+            engine_search.find_optimal_crf_and_skip(
+                self.movie,
+                self.workdir,
+                "hb",
+                samples=[(self.sample, 10.0)],
+                hdr=False,
+                db_file=db_file,
+            )
+        self.assertEqual(
+            captured["kwargs"].get("hdr"), False, "the HDR flag did not reach the chosen check"
+        )
+
 
 class TestSubprocessTimeouts(unittest.TestCase):
     """The short-lived ffprobe/ffmpeg calls turn a TimeoutExpired into their
