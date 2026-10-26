@@ -476,19 +476,19 @@ Three keys named "preset" with different meanings — the distinction:
 (it named the removed fixed mode's HandBrake preset *name*). The other two
 are the encoder *speed* presets — the SVT-AV1 ladder. **`probe_encoder_preset` is a measurement
 setting**: the CRF search's throwaway probe encodes run at it (default
-`medium` — cheap, and representative of what the final encode will look
+`5` — cheap, and representative of what the final encode will look
 like). **`encoder_preset` is an output setting**: the final encode — the
-artifact that gets kept — runs at it (default `slow`).
+artifact that gets kept — runs at it (default `3`, slower and better).
 
-**The measured-at-medium / encoded-at-slow trade-off is deliberate** (issue
+**The measured-at-5 / encoded-at-3 trade-off is deliberate** (issue
 #22): the probe predicts the final encode, and preset shifts the CRF→VMAF
 curve, so a probe at a different preset measures a slightly different curve
 than the final encode runs — the chosen CRF can miss the target a little in
 either direction. That is accepted so the search stays cheap; if a drift
 investigation ever shows it matters on real titles, the fallback is to probe
 at the final preset and pay the time. The plan's size estimate comes from a
-probe-preset encode, so it describes a `medium`-preset file, not the
-`slow`-preset file that gets written. Both presets are recorded on every
+probe-preset encode, so it describes a preset-`5` file, not the
+preset-`3` file that gets written. Both presets are recorded on every
 encode row (`encoder_preset`, `probe_encoder_preset`) so the provenance
 page shows which number produced which measurement. A change to the PROBE
 preset invalidates stored plans (they are re-probed); a change to the FINAL

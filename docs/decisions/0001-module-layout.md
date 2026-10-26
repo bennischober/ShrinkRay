@@ -98,7 +98,7 @@ db | config | logger | telemetry   foundation
 | `SampleProbe`, `bisect_crf`, `probe_crf`, `estimate_size_factor`, `find_optimal_crf`, `find_optimal_crf_and_skip` | `engine/search.py` |
 | the six HDR-encoder ternaries, `service.py:117` | `engine/encoders.py` → `encoder_for(hdr)` (#21, #26) |
 | `plan_quality`, `_plan_crop`, `_plan_probes`, `_lookup_plan` | `engine/plan.py` |
-| `QualityResult`, `SkipEncode`, `Cancelled`, `_probe_movie`, `encode_with_quality`, `encode_with_quality`'s batch loop (`_record_encodes` lives in `__main__`), `EncodeResult`, `check_disk_space`, `durations_match` | `engine/pipeline.py` (split once more only if a second reason-to-change shows up) |
+| `QualityResult`, `SkipEncode`, `Cancelled`, `_probe_movie`, `encode_with_quality`, `EncodeResult`, `check_disk_space`, `durations_match` | `engine/pipeline.py` (split once more only if a second reason-to-change shows up) |
 | `encode_lock.py` | `engine/lock.py` |
 | `watch.py` | `engine/watch.py` (used by the CLI and the server) |
 | `_record_encodes` and other logic in `__main__.py` | `service.py`, shared with `server/jobs.py` |
