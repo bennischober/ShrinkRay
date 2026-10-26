@@ -48,8 +48,8 @@ product-rule violation, not a feature.
   on boot and by nothing else (`app.py`, issue #134); `auto_backlog` is a
   scheduler gated on `app.auto_backlog`. A new mutating route is a product
   decision, not an implementation detail.
-- The worker is single-threaded by design (`jobs.py`): parallel work happens inside
-  `encode_movies`, so queueing more jobs would only add latency.
+- The worker is single-threaded by design (`jobs.py`): heavy encodes do not profit from
+  running in parallel, so queueing more jobs would only add latency.
 - Live progress goes through `ProgressBus` only; it is flow, never state, never a row
   (`jobs.py`). Every engine call receives a `ProgressCallback` and the same dict
   shape the console prints.

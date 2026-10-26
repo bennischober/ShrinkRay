@@ -49,7 +49,7 @@
     const p = job.payload as Record<string, unknown>
     const parts: string[] = []
     if (p.quality) parts.push(`quality · VMAF>${p.target_vmaf ?? 95}`)
-    else parts.push('fixed preset')
+    else parts.push('fixed preset (removed mode)')
     if (p.remove_bars) parts.push('bars removed')
     return parts.join(' · ')
   }
