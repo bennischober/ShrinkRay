@@ -834,8 +834,8 @@ class TestEncodeLock(unittest.TestCase):
 
         with guard_encodes(self.out, holder="test") as lock:
             self.assertTrue(lock.is_file())
-            # pid-stamped
-            self.assertEqual(int(lock.read_text()), os.getpid())
+            # pid-stamped (+ the process start time where the platform has one)
+            self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
         self.assertFalse(lock.exists())
 
     def test_second_claimant_is_rejected(self):
@@ -855,7 +855,7 @@ class TestEncodeLock(unittest.TestCase):
         acquired = acquire_encode_slot(self.out, holder="test")
         self.assertEqual(acquired, lock)
         # the stolen lock is re-stamped with OUR pid
-        self.assertEqual(int(lock.read_text()), os.getpid())
+        self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
         lock.unlink()
 
     def test_garbage_lock_content_is_stolen(self):
@@ -866,6 +866,38 @@ class TestEncodeLock(unittest.TestCase):
         lock.write_text("not-a-pid")
         acquired = acquire_encode_slot(self.out)
         self.assertEqual(acquired, lock)
+        lock.unlink()
+
+    def test_a_reused_pid_is_not_adopted_as_live(self):
+        """A lock whose pid is alive but was written by a DIFFERENT process
+        with that pid is stolen (issue #336): the container restarts pids
+        from 1 and the server is pid 1, so after a SIGKILLed run the restarted
+        app must not find its own pid in the dead run's lock and refuse to
+        encode (the old check was kill(pid, 0) alone)."""
+        from shrinkray.engine.lock import _lock_path, acquire_encode_slot
+        from shrinkray.tools.process import process_start_ticks
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        live_start = process_start_ticks(os.getpid())
+        # our own pid (alive) with a start time that CANNOT match: a reused pid
+        lock.write_text(f"{os.getpid()} 1" if live_start != 1 else f"{os.getpid()} 999999999")
+        acquired = acquire_encode_slot(self.out, holder="test")
+        self.assertEqual(acquired, lock)
+        lock.unlink()
+
+    def test_a_matching_start_stamp_is_honoured(self):
+        """The positive case of the start stamp: a lock written by THIS
+        process (pid + start match) is still a busy lock, however old."""
+        from shrinkray.engine.lock import EncodeBusyError, _lock_path, acquire_encode_slot
+        from shrinkray.tools.process import process_start_ticks
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        start = process_start_ticks(os.getpid())
+        lock.write_text(str(os.getpid()) if start is None else f"{os.getpid()} {start}")
+        with self.assertRaises(EncodeBusyError):
+            acquire_encode_slot(self.out, holder="test")
         lock.unlink()
 
     def test_encode_movies_forwards_caller_progress(self):

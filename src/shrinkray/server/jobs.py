@@ -944,6 +944,15 @@ def _encode_quality_or_fixed(
 
     outcomes: list[dict] = []
     total = len(movies)
+    # the in-place lock identity (issue #230): the scanned root the staging
+    # directory sits in - the SAME root the CLI locks in folder form and the
+    # watcher locks per pass, so all three writers contend on one identity
+    staging_root = None
+    if in_place:
+        first = payload_paths(payload)
+        staging_root = (
+            first[0] if (first and first[0].is_dir()) else (first[0].parent if first else None)
+        )
     if payload.get("quality", False):
         encoded_paths: set[str] = (
             set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
@@ -977,10 +986,16 @@ def _encode_quality_or_fixed(
                 # hold the encode slot: encode_with_quality does not take it
                 # itself, and this loop previously took NO slot at all - a CLI
                 # encode running beside the app encoded the same file
-                # concurrently (issue #230). Keyed on the output directory: it
-                # is the contended resource of this mode. Per movie, never
-                # nested with the fixed branch's run-level slot.
-                with guard_encodes(output_dir, holder="encode-job"):
+                # concurrently (issue #230). Keyed on the LIBRARY ROOT in
+                # in-place mode (issue #230's contract: one lock identity per
+                # library root, taken by all three writers - the CLI locks the
+                # root it scanned, the watcher locks its watch root; a
+                # per-movie key let a folder-form CLI run and this job encode
+                # one file concurrently, both staging to the same
+                # deterministic swap path). The staging root is the contended
+                # resource: the swaps rename inside it.
+                lock_target = staging_root if in_place else output_dir
+                with guard_encodes(lock_target, holder="encode-job"):
                     result = encode_with_quality(
                         movie,
                         output_dir / movie.name,
@@ -1011,33 +1026,38 @@ def _encode_quality_or_fixed(
                         audio_languages=config.handbrake_audio_languages,
                         subtitle_languages=config.handbrake_subtitle_languages,
                     )
+                    # the ledger write and the swap stay INSIDE the slot
+                    # (issue #230): stage() copies into the deterministic
+                    # '<source>.shrinkray-staging' and swap() renames it over
+                    # the source - unguarded, a concurrent writer keyed on the
+                    # same root could interleave both writers on one path
+                    outcome = record_quality_results(
+                        connection,
+                        movie,
+                        result,
+                        config,
+                        # in place the artifact's real location is the source's own
+                        # path once the swap succeeds (issue #232); the row records it
+                        # up front and a DECLINED swap clears it, because the encode is
+                        # then discarded with its staging directory
+                        final_output=movie if in_place else None,
+                    )
+                    if in_place and outcome.encoded:
+                        swap = swap_encode_into_place(
+                            connection,
+                            movie,
+                            output_dir / movie.name,
+                            outcome.encode_id,
+                            # a verification finding (issue #240: a lost track, an
+                            # unverifiable probe) declines the swap
+                            error=result.error,
+                        )
+                        declined = not swap.replaced
+                    else:
+                        declined = False
             except EncodeBusyError as e:
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
                 continue
-            outcome = record_quality_results(
-                connection,
-                movie,
-                result,
-                config,
-                # in place the artifact's real location is the source's own
-                # path once the swap succeeds (issue #232); the row records it
-                # up front and a DECLINED swap clears it, because the encode is
-                # then discarded with its staging directory
-                final_output=movie if in_place else None,
-            )
-            if in_place and outcome.encoded:
-                swap = swap_encode_into_place(
-                    connection,
-                    movie,
-                    output_dir / movie.name,
-                    outcome.encode_id,
-                    # a verification finding (issue #240: a lost track, an
-                    # unverifiable probe) declines the swap
-                    error=result.error,
-                )
-                declined = not swap.replaced
-            else:
-                declined = False
             entry = {
                 "movie": movie.name,
                 "state": (
@@ -1073,7 +1093,12 @@ def _encode_quality_or_fixed(
     else:
         if progress:
             progress(
-                {"stage": "encode", "detail": f"encoding {total} movies", "done": 0, "total": total}
+                {
+                    "stage": "encode",
+                    "detail": f"encoding {total} movies",
+                    "done": 0,
+                    "total": total,
+                }
             )
         try:
             results = encode_movies(

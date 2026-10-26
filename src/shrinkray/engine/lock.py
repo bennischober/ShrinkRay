@@ -33,7 +33,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from shrinkray.logger import log_warning
-from shrinkray.tools.process import process_exists
+from shrinkray.tools.process import process_exists, process_start_ticks
 
 _LOCK_STALE_SECONDS = 21600.0  # 6 h: long encodes are normal, crashes are not
 
@@ -88,23 +88,34 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
-        # someone holds it: stale check
+        # someone holds it: stale check. The pid alone is not identity (a
+        # container restarts pids from 1, and the server is pid 1 - a lock
+        # left by a SIGKILLed run reads as live after restart): the holder
+        # stamps its process start time beside the pid, and a recorded start
+        # that does not match the living pid's start means the pid was
+        # REUSED and the lock is stale regardless of age (issue #336).
         try:
             age = time.time() - lock.stat().st_mtime
-            raw = lock.read_text(encoding="ascii").strip()
-            pid = int(raw) if raw.isdigit() else 0
+            raw = lock.read_text(encoding="ascii").strip().split()
+            pid = int(raw[0]) if raw and raw[0].isdigit() else 0
+            recorded_start = int(raw[1]) if len(raw) > 1 and raw[1].isdigit() else None
         except (OSError, ValueError):
-            age, pid = _LOCK_STALE_SECONDS + 1, 0  # unreadable => treat stale
+            age, pid, recorded_start = _LOCK_STALE_SECONDS + 1, 0, None  # unreadable => stale
         if pid and _pid_alive(pid) and age < _LOCK_STALE_SECONDS:
-            raise EncodeBusyError(
-                f"another encoder is already using '{output_dir}' "
-                f"(pid {pid}, started {age / 60:.0f} min ago)"
-            ) from None
+            started = process_start_ticks(pid)
+            if started is None or recorded_start is None or started == recorded_start:
+                raise EncodeBusyError(
+                    f"another encoder is already using '{output_dir}' "
+                    f"(pid {pid}, started {age / 60:.0f} min ago)"
+                ) from None
+            # the pid is alive but is NOT the process that wrote the lock:
+            # a reused pid after a crash/restart - the lock is stale
         log_warning(f"Stale encode lock in '{output_dir}' (pid {pid or '?'}) - stealing it.")
         _release_path(lock)
         return acquire_encode_slot(output_dir, holder)
     with os.fdopen(fd, "w", encoding="ascii") as handle:
-        handle.write(str(os.getpid()))
+        start = process_start_ticks(os.getpid())
+        handle.write(str(os.getpid()) if start is None else f"{os.getpid()} {start}")
     return lock
 
 

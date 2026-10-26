@@ -739,13 +739,15 @@ def watch(
                         # hold the encode slot: encode_with_quality does not
                         # take it itself; a running CLI/job encode makes the
                         # watcher retry this movie on the next pass. In place
-                        # the slot is keyed on the movie's own directory (the
-                        # swaps rename inside it - issue #230): the staging
-                        # directory is a fresh per-process path nothing else
-                        # ever locks, so a slot on it excluded no one. One
-                        # slot at a time, never nested - the pass walks roots
-                        # sequentially.
-                        lock_target = movie.parent if in_place_mode else target_dir
+                        # the slot is keyed on the LIBRARY ROOT (issue #230's
+                        # contract: one lock identity per library root, taken
+                        # by all three writers - the CLI locks the root it
+                        # scanned, the job locks the root it stages in; a
+                        # per-movie key let a folder-form CLI run and a job
+                        # encode one file concurrently, both staging to the
+                        # same deterministic swap path). One slot at a time,
+                        # never nested - the pass walks roots sequentially.
+                        lock_target = roots[0] if in_place_mode else target_dir
                         with guard_encodes(lock_target, holder="watch"):
                             result = encode_with_quality(
                                 movie,

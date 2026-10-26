@@ -419,6 +419,83 @@ class TestEncodeJobInPlace(unittest.TestCase):
         self.assertEqual(self.movie.read_bytes(), b"x" * 16)
         self.assertFalse(replace.retained_path_for(self.movie).exists())
 
+    def test_the_in_place_slot_is_keyed_on_the_library_root(self) -> None:
+        """The job's slot is keyed on the LIBRARY ROOT in place (issue #230's
+        contract, PR #350's review finding 1/6): the same root the CLI locks
+        in folder form and the watcher locks per pass. The old test held the
+        slot on a directory that was simultaneously movie.parent AND the
+        staging directory's parent, so it could not tell the two candidate
+        keys apart - here the movie sits in a NESTED subdirectory, so
+        movie.parent != the staging root's parent, and a folder-form CLI run
+        holding the root slot must make the job skip (EncodeBusyError).
+        """
+        from shrinkray.engine.lock import _lock_path, guard_encodes
+
+        nested = self.root / "Movies"
+        nested.mkdir()
+        movie = nested / "deep.mkv"
+        movie.write_bytes(b"x" * 16)
+        # the backlog's payload names the SCANNED ROOT; resolve_movies finds
+        # the nested movie recursively
+        payload = {"paths": [str(self.root)], "quality": True}
+        job = jobs.Job(kind=jobs.JobKind.ENCODE, payload=payload)
+
+        def fake_quality(movie_in, output_file, **kwargs):
+            output_file.write_bytes(b"y" * 8)
+            return SimpleNamespace(
+                input_size=16,
+                output_size=8,
+                chosen_crf=20,
+                achieved_vmaf=95.0,
+                error=None,
+                success=True,
+                skipped_reason=None,
+                probes=[],
+                probe_seconds=1.0,
+                encode_seconds=1.0,
+                target_vmaf=96.0,
+                hdr=False,
+                encoder="svt_av1",
+                encoder_preset="3",
+                probe_encoder_preset="5",
+                input_width=None,
+                input_height=None,
+                input_codec=None,
+                input_bit_depth=None,
+                input_duration=None,
+                input_bitrate=None,
+                output_bitrate=None,
+                verified_vmaf=None,
+                verified_subsample=None,
+                crf_source="probe",
+                plan_created_at=None,
+            )
+
+        from unittest.mock import patch as _patch
+
+        with (
+            _patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_quality),
+            _patch("shrinkray.service.record_quality_results") as fake_record,
+            _patch("shrinkray.service.swap_encode_into_place") as fake_swap,
+        ):
+            fake_record.return_value = SimpleNamespace(
+                encoded=True, skipped=False, error=None, encode_id=None
+            )
+            fake_swap.return_value = SimpleNamespace(replaced=True, reason=None)
+            # a CLI run (folder form) holds the LIBRARY root's slot: the job
+            # must skip, although the movie's own directory is free
+            with guard_encodes(self.root, holder="encode-cli"):
+                result = jobs.execute_encode(job, self.connection, threading.Event())
+            self.assertEqual(result["outcomes"][0]["state"], "skipped")
+            self.assertIn("another encoder", result["outcomes"][0]["error"])
+            # the converse pins the identity: a slot on the MOVIE's directory
+            # (the #350 key) does NOT stop the job - the contended resource is
+            # the root, and the job's lock lands there, not on movie.parent
+            with guard_encodes(nested, holder="encode-cli-per-movie"):
+                result = jobs.execute_encode(job, self.connection, threading.Event())
+            self.assertEqual(result["outcomes"][0]["state"], "encoded")
+            self.assertFalse(_lock_path(nested).exists())
+
 
 if __name__ == "__main__":
     unittest.main()
