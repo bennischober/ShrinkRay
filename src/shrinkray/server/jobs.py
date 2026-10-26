@@ -584,10 +584,11 @@ def resolve_movies(
     from shrinkray.engine.scan import scan_movies
 
     movies: list[Path] = []
+    seen: set[Path] = set()
     for path in payload_paths(payload):
         if path.is_file():
             # single movie file (per-movie action) => pass through directly
-            movies.append(path)
+            candidates = [path]
         else:
             # the crop-cache projection needs the db FILE: the connection may
             # be None here (a stateless scan), and _db_file_of needs one
@@ -601,7 +602,17 @@ def resolve_movies(
                 exclude=exclude,
                 db_file=derived,
             )
-            movies.extend(part_movies)
+            candidates = part_movies
+        for movie in candidates:
+            # overlapping payload paths (a root and a subfolder of it both
+            # named) scan the same file twice: the second sighting is a
+            # duplicate that would encode twice (the multi-root review case
+            # on PR #389 found b.mkv three times in one payload)
+            key = movie.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            movies.append(movie)
     return movies
 
 
@@ -954,6 +965,25 @@ def _encode_measured(
 
     outcomes: list[dict] = []
     total = len(movies)
+    # the in-place lock identity (issue #230): the scanned root the staging
+    # directory sits in - the SAME root the CLI locks in folder form and the
+    # watcher locks per movie (its movie's own root), so all three writers
+    # contend on one identity. The review on this PR (finding 2): a
+    # multi-path payload's movies under the OTHER paths were guarded by the
+    # first path's lock - the key is the payload path that CONTAINS the
+    # movie, chosen per movie in the loop; resolved here so a symlinked or
+    # relative root cannot split one directory into two lock files
+    # (finding 3). execute_encode early-returns on an empty payload, so
+    # first is never empty here; the raise documents that instead of
+    # inventing a key.
+    payload_roots: list[Path] = []
+    if in_place:
+        first = payload_paths(payload)
+        if not first:
+            raise RuntimeError("no paths in payload")
+        payload_roots = [(p.resolve() if p.is_dir() else p.parent.resolve()) for p in first]
+    else:
+        lock_target = output_dir
     encoded_paths: set[str] = (
         set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
     )
@@ -986,13 +1016,22 @@ def _encode_measured(
             # hold the encode slot: encode_with_quality does not take it
             # itself, and this loop previously took NO slot at all - a CLI
             # encode running beside the app encoded the same file
-            # concurrently (issue #230). Keyed on the contended directory
-            # (issue #336): in place that is the MOVIE's own directory (the
-            # swaps rename inside it — same rule as the watcher, watch.py);
-            # a slot on the per-run staging directory excluded no one,
-            # because every run creates a fresh staging path. Two-directory
-            # mode keys on the output directory it writes into. Per movie.
-            lock_target = movie.parent if in_place else output_dir
+            # concurrently (issue #230). Keyed on the payload root that
+            # CONTAINS this movie, resolved (see the payload_roots note
+            # above) - one lock identity per library root, taken by all
+            # three writers: the CLI locks the root it scanned, the
+            # watcher locks the movie's own root; the staging root is the
+            # contended resource (the swaps rename inside it).
+            if in_place:
+                movie_path = movie.resolve()
+                # the DEEPEST containing root: a payload naming a root and
+                # a subfolder of it must key the subfolder's movie on the
+                # SUBFOLDER (the identity the CLI scanning that subfolder
+                # would lock), never the shallower root
+                containing = [r for r in payload_roots if movie_path.is_relative_to(r)]
+                lock_target = (
+                    max(containing, key=lambda r: len(r.parts)) if containing else movie_path.parent
+                )
             with guard_encodes(lock_target, holder="encode-job"):
                 result = encode_with_quality(
                     movie,
@@ -1022,33 +1061,38 @@ def _encode_measured(
                     audio_languages=config.handbrake_audio_languages,
                     subtitle_languages=config.handbrake_subtitle_languages,
                 )
+                # the ledger write and the swap stay INSIDE the slot
+                # (issue #230): stage() copies into the deterministic
+                # '<source>.shrinkray-staging' and swap() renames it over
+                # the source - unguarded, a concurrent writer keyed on the
+                # same root could interleave both writers on one path
+                outcome = record_quality_results(
+                    connection,
+                    movie,
+                    result,
+                    config,
+                    # in place the artifact's real location is the source's own
+                    # path once the swap succeeds (issue #232); the row records it
+                    # up front and a DECLINED swap clears it, because the encode is
+                    # then discarded with its staging directory
+                    final_output=movie if in_place else None,
+                )
+                if in_place and outcome.encoded:
+                    swap = swap_encode_into_place(
+                        connection,
+                        movie,
+                        output_dir / movie.name,
+                        outcome.encode_id,
+                        # a verification finding (issue #240: a lost track, an
+                        # unverifiable probe) declines the swap
+                        error=result.error,
+                    )
+                    declined = not swap.replaced
+                else:
+                    declined = False
         except EncodeBusyError as e:
             outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
             continue
-        outcome = record_quality_results(
-            connection,
-            movie,
-            result,
-            config,
-            # in place the artifact's real location is the source's own
-            # path once the swap succeeds (issue #232); the row records it
-            # up front and a DECLINED swap clears it, because the encode is
-            # then discarded with its staging directory
-            final_output=movie if in_place else None,
-        )
-        if in_place and outcome.encoded:
-            swap = swap_encode_into_place(
-                connection,
-                movie,
-                output_dir / movie.name,
-                outcome.encode_id,
-                # a verification finding (issue #240: a lost track, an
-                # unverifiable probe) declines the swap
-                error=result.error,
-            )
-            declined = not swap.replaced
-        else:
-            declined = False
         entry = {
             "movie": movie.name,
             "state": (
@@ -1081,7 +1125,6 @@ def _encode_measured(
                     "movie": movie.name,
                 }
             )
-
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 
 

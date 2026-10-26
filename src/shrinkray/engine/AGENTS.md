@@ -17,7 +17,7 @@ answers — is this file bigger than its quality requires, and does it carry bar
 | HDR/SDR encoder choice | `encoders.py` | `encoder_for`, `DEFAULT_ENCODER`/`HDR_ENCODER` |
 | Scan -> DB rows | `scan.py` | `scan_movies`, `process_movie`, `resolve_input_paths`; pool `min(8, cpu)` |
 | Inbox watchdog | `watch.py` | `watch`, `_FsWaiter`, `decide`, `next_poll_interval` |
-| One encoder per output dir | `lock.py` | `guard_encodes`, 6 h stale window; busy raises, never waits |
+| One encoder per output dir | `lock.py` | `guard_encodes`, 60 s heartbeat and a 5 min silence window; busy raises, never waits |
 | Pause: the operator's, and for a manual encode | `pause.py` | `pause_reason`, `manual_encode` (CLI marker), `wait_while_paused` (jobs), `set_operator_paused` (the TUI's switch); markers carry the process start time, so a reused pid never pauses (issue #250) |
 
 ## HOW THE DECISION FLOWS
