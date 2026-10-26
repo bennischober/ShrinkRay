@@ -18,7 +18,7 @@
       hint="ShrinkRay never deletes a source file. When an encode replaces one in place, the original is renamed aside and kept — it is listed here so you can reclaim the space yourself, in your own file manager, once you are satisfied with the result."
     />
     {#if onrecover}
-      <button class="ghost mono" onclick={onrecover}>recover interrupted swap</button>
+      <button class="ghost mono" onclick={onrecover}>refresh</button>
     {/if}
   </header>
 

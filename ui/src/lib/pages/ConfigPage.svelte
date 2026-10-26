@@ -10,33 +10,18 @@
     scanPaths,
     outputDir,
     targetVmaf = 96,
-    workers = null,
-    onpathsChange,
-    onoutputChange,
-    onvmafChange,
-    onworkersChange,
   }: {
     scanPaths: string[]
     outputDir: string
     targetVmaf?: number
-    workers?: number | null
-    onpathsChange: (paths: string[]) => void
-    onoutputChange: (dir: string) => void
-    onvmafChange?: (vmaf: number) => void
-    onworkersChange?: (workers: number | null) => void
   } = $props()
 
-  let newPath = $state('')
-  // local editing copy of the VMAF target (committed on change); the
-  // effect syncs it when the app-level value changes
-  let vmafDraft = $state(96)
-  $effect(() => {
-    vmafDraft = targetVmaf
-  })
-  let config = $state<Config | null>(null)
   // the config panels are READ-ONLY (issue #236 part 4, PRODUCT.md: the
   // dashboard is a status window; config.json is a file the operator edits
-  // on disk and restarts) - only the load error is state here
+  // on disk or via shrinkray setup, never through this page — issue #331:
+  // the editable panels that survived #236 wrote localStorage and changed
+  // nothing the app does) - only the load error is state here
+  let config = $state<Config | null>(null)
   let loadError = $state<string | null>(null)
 
   $effect(() => {
@@ -46,39 +31,9 @@
       .catch((e) => (loadError = e instanceof Error ? e.message : String(e)))
   })
 
-  $effect(() => {
-    vmafDraft = targetVmaf
-  })
-
-  function addPath() {
-    const value = newPath.trim()
-    if (!value) return
-    if (!scanPaths.some((p) => p.toLowerCase() === value.toLowerCase())) {
-      onpathsChange([...scanPaths, value])
-    }
-    newPath = ''
-  }
-
-  function removePath(path: string) {
-    onpathsChange(scanPaths.filter((p) => p !== path))
-  }
-
-  // instant-commit fields acknowledge their own persistence — the tool
-  // settings panel has 'saved ✓'; silence here read as identical silence
-  // with the opposite truth (round-5 P1: the two persistence models were
-  // indistinguishable in the UI)
-  let flashed = $state<Record<string, boolean>>({})
-  function flash(key: string) {
-    flashed = { ...flashed, [key]: true }
-    setTimeout(() => {
-      flashed = { ...flashed, [key]: false }
-    }, 1400)
-  }
-  function commitPaths(next: string[]) {
-    onpathsChange(next)
-    flash('paths')
-  }
-
+  // the REAL VMAF floor (quality.target_vmaf) beats the app-level value:
+  // the app-level one was a localStorage draft that never reached the engine
+  const configTargetVmaf = $derived(config?.quality?.target_vmaf ?? null)
 
   const dedupedExtensions = $derived([...new Set(config?.file?.extensions ?? [])])
 </script>
@@ -89,106 +44,54 @@
     <p class="legend">SOURCES, OUTPUT AND TOOL SETTINGS</p>
   </header>
 
-  <!-- ══ sources ══ -->
+  <!-- ══ sources (read-only, issue #331): the watched roots are the
+       resident app's argv/mount — editing them here wrote localStorage and
+       changed nothing the app does; the terminal and the container's
+       mounts configure this -->
   <section class="panel">
     <div class="panel-head">
       <span class="legend">SCAN SOURCES — WHERE THE LIBRARY LIVES</span>
-      <span class="mono dim saved-note" role="status">{flashed.paths ? 'saved ✓' : 'applies immediately'}</span>
+      <span class="mono dim">read-only</span>
     </div>
     <div class="pad">
       <div class="path-list">
         {#each scanPaths as path (path)}
-          <span class="path-chip mono">
-            {path}
-            <button class="x" onclick={() => commitPaths(scanPaths.filter((p) => p !== path))} aria-label="Remove {path}">✕</button>
-          </span>
+          <span class="path-chip mono">{path}</span>
+        {:else}
+          <span class="mono dim">no scan source recorded yet</span>
         {/each}
-        <input
-          class="mono new-path"
-          bind:value={newPath}
-          placeholder="add folder + Enter"
-          aria-label="Add movie folder"
-          onkeydown={(e) => e.key === 'Enter' && addPath()}
-          onblur={addPath}
-        />
       </div>
-      <p class="mono dim note">sources are never modified in place — encodes go to the output directory</p>
+      <p class="mono dim note">the resident mode encodes IN PLACE: a verified output takes the source's path and the original is kept beside it (renamed .shrinkray-original) — nothing is deleted</p>
     </div>
   </section>
 
-  <!-- ══ output ══ -->
+  <!-- ══ output (read-only, issue #331): the resident mode writes into the
+       library (in place); a separate output dir is a Mode A flag, not a
+       setting this page can change -->
   <section class="panel">
     <div class="panel-head">
       <span class="legend">OUTPUT — WHERE ENCODES ARE WRITTEN</span>
-      <span class="mono dim saved-note" role="status">{flashed.output ? 'saved ✓' : 'applies immediately'}</span>
+      <span class="mono dim">read-only</span>
     </div>
     <div class="pad row">
-      <input
-        class="mono out"
-        bind:value={outputDir}
-        onchange={() => {
-          onoutputChange(outputDir)
-          flash('output')
-        }}
-        placeholder="output folder"
-        aria-label="Output folder path (encode)"
-      />
+      <span class="mono src">{outputDir || 'the library itself (in place)'}</span>
     </div>
   </section>
 
-  <!-- ══ quality target ══ -->
+  <!-- ══ quality target (read-only, issue #331): the VMAF floor is
+       config.json's quality.target_vmaf — shown from the live config, not
+       an editable draft that changed nothing -->
   <section class="panel">
     <div class="panel-head">
       <span class="legend">QUALITY TARGET — THE ENCODER'S FLOOR</span>
-      <span class="mono dim saved-note" role="status">{flashed.vmaf ? 'saved ✓' : 'applies immediately'}</span>
+      <span class="mono dim">read-only</span>
     </div>
     <div class="pad row vmaf-row">
-      <label class="vmaf-label">
+      <div class="vmaf-label">
         <span class="dim">VMAF target</span>
-        <input
-          class="mono vmaf-input"
-          type="number"
-          min="70"
-          max="100"
-          step="0.5"
-          bind:value={vmafDraft}
-          onchange={() => {
-            onvmafChange?.(Math.min(100, Math.max(70, Number(vmafDraft) || 96)))
-            flash('vmaf')
-          }}
-          aria-label="VMAF quality target"
-        />
-      </label>
-      <HintMark text="VMAF is the measured visual similarity to the source (0-100). 96 is the project's decided 'visually transparent' floor: encodes below it are visibly worse. Higher target = larger files. The engine searches the largest CRF that still reaches this target on real samples." />
-    </div>
-  </section>
-
-  <!-- ══ encode parallelism ══ -->
-  <section class="panel">
-    <div class="panel-head">
-      <span class="legend">ENCODE PARALLELISM — FIXED MODE ONLY</span>
-      <span class="mono dim saved-note" role="status">{flashed.workers ? 'saved ✓' : 'applies immediately'}</span>
-    </div>
-    <div class="pad row vmaf-row">
-      <label class="vmaf-label">
-        <span class="dim">workers</span>
-        <input
-          class="mono vmaf-input"
-          type="number"
-          min="1"
-          max="16"
-          step="1"
-          value={workers ?? ''}
-          placeholder="auto"
-          onchange={(e) => {
-            const raw = (e.currentTarget as HTMLInputElement).value
-            onworkersChange?.(raw === '' ? null : Math.min(16, Math.max(1, Number(raw))))
-            flash('workers')
-          }}
-          aria-label="Concurrent encodes (fixed mode)"
-        />
-      </label>
-      <HintMark text="How many movies encode at once in fixed mode (quality mode always encodes one movie at a time — a single x265 encode already uses all cores). Empty = automatic." />
+        <span class="mono vmaf-value">{configTargetVmaf ?? targetVmaf ?? 96}</span>
+      </div>
+      <HintMark text="VMAF is the measured visual similarity to the source (0-100). 96 is the project's decided 'visually transparent' floor: encodes below it are visibly worse. Higher target = larger files. The engine searches the largest CRF that still reaches this target on real samples. Change it in config.json (quality.target_vmaf) or via shrinkray setup." />
     </div>
   </section>
 
@@ -310,7 +213,6 @@
     padding: 9px 14px;
     border-bottom: 1px solid var(--row-line);
   }
-  .saved-note { font-size: 10px; letter-spacing: 0.5px; white-space: nowrap; }
   .pad { padding: 14px; }
   .pad.row { padding: 14px; }
   .groups { display: flex; flex-direction: column; gap: 14px; }
@@ -337,44 +239,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .x {
-    background: transparent;
-    border: none;
-    color: var(--ink-faint);
-    cursor: pointer;
-    font-size: 11px;
-    padding: 0;
-  }
-  .x:hover { color: var(--red); }
-  .new-path {
-    background: transparent;
-    border: 1px dashed var(--seam);
-    border-radius: var(--radius);
-    color: var(--ink);
-    padding: 4px 10px;
-    min-width: 220px;
-  }
   .note { margin-top: 10px; font-size: 11px; }
 
-  .out {
-    width: 100%;
-    background: var(--panel-raised);
-    border: 1px solid var(--seam);
-    border-radius: var(--radius);
-    color: var(--ink);
-    padding: 6px 12px;
-  }
 
   .vmaf-row { display: flex; align-items: center; gap: 10px; }
   .vmaf-label { display: flex; align-items: center; gap: 10px; }
-  .vmaf-input {
-    background: var(--panel-raised);
-    border: 1px solid var(--seam);
-    border-radius: var(--radius);
-    color: var(--ink);
-    width: 80px;
-    padding: 6px 10px;
-  }
 
   .group { padding: 12px 14px; border-top: 1px solid var(--row-line); }
   .group:first-child { border-top: none; padding-top: 4px; }
