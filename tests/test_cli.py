@@ -400,10 +400,6 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
                     proc.stdout.close()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCancelOnTerminalClose(unittest.TestCase):
     """The signal scope behind issue #326: a signal cancels, a repeated one
     changes nothing, and the previous handlers come back on every exit path."""
@@ -460,6 +456,25 @@ class TestCancelOnTerminalClose(unittest.TestCase):
         self.assertEqual(result.exit_code, 1, result.output)
         self.assertNotIsInstance(result.exception, Cancelled)
         log_error.assert_called_once_with("cancelled by user")
+
+    def test_an_ignored_signal_stays_ignored(self) -> None:
+        """`nohup` ignores SIGHUP so a long encode survives logout: the scope
+        must not turn that hangup into a cancel."""
+        import signal
+
+        from shrinkray.__main__ import _cancel_on_terminal_close
+
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            with _cancel_on_terminal_close():
+                self.assertIs(signal.getsignal(signal.SIGINT), signal.SIG_IGN)
+            self.assertIs(signal.getsignal(signal.SIGINT), signal.SIG_IGN)
+        finally:
+            signal.signal(signal.SIGINT, previous)
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 
 class TestInputShapes(unittest.TestCase):

@@ -137,7 +137,8 @@ def _cancel_on_terminal_close() -> Iterator[threading.Event]:
     nothing: closing a terminal under bash delivers SIGHUP twice, and an
     exception raised from the handler would unwind past the child's
     termination, orphaning it. The previous handlers come back on every
-    exit path. Callers enter the scope only around the engine work, where
+    exit path, and a signal already ignored (`nohup`, a shell's `cmd &`)
+    stays ignored. Callers enter the scope only around the engine work, where
     a child runs; a scan before it keeps the default signal behaviour. The
     crop pass does not check the event yet (#384); ctrl+c and a closed
     terminal still reach its ffmpeg through the process group, and the
@@ -158,6 +159,10 @@ def _cancel_on_terminal_close() -> Iterator[threading.Event]:
     previous: dict[signal.Signals, Any] = {}
     try:
         for sig in signals:
+            # an ignored signal stays ignored: `nohup` ignores SIGHUP so the
+            # run survives logout, and a shell ignores SIGINT for `cmd &`
+            if signal.getsignal(sig) is signal.SIG_IGN:
+                continue
             # signal.signal refuses outside the main thread (ValueError): the
             # command then runs without the handler, as before issue #326
             with contextlib.suppress(OSError, ValueError):
