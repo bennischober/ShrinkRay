@@ -1041,7 +1041,16 @@ class TestProbeCache(unittest.TestCase):
                 )
                 db.save_probe_score(connection, key, 95.0, encoded[i])
 
-            with patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")):
+            with (
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+                # a cache miss here must fail as a DIAGNOSTIC (the fallback
+                # was reached), not as FileNotFoundError from a real encode
+                patch.object(
+                    engine_search,
+                    "estimate_size_factor",
+                    side_effect=AssertionError("the fallback ran: the cache was incomplete"),
+                ),
+            ):
                 factor = engine_search.check_chosen_crf_shrinks(
                     samples,
                     workdir,
@@ -1086,7 +1095,14 @@ class TestProbeCache(unittest.TestCase):
                 )
                 db.save_probe_score(connection, key, 95.0, 40)
 
-            with patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")):
+            with (
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+                patch.object(
+                    engine_search,
+                    "estimate_size_factor",
+                    side_effect=AssertionError("the fallback ran: the cache was incomplete"),
+                ),
+            ):
                 factor = engine_search.check_chosen_crf_shrinks(
                     samples,
                     workdir,
@@ -1130,7 +1146,14 @@ class TestProbeCache(unittest.TestCase):
                 )
                 db.save_probe_score(connection, key, 95.0, 400)
 
-            with patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")):
+            with (
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+                patch.object(
+                    engine_search,
+                    "estimate_size_factor",
+                    side_effect=AssertionError("the fallback ran: the cache was incomplete"),
+                ),
+            ):
                 factor = engine_search.check_chosen_crf_shrinks(
                     samples,
                     workdir,
@@ -1233,7 +1256,7 @@ class TestProbeCache(unittest.TestCase):
                 samples.append((s, 10.0 * i))
 
             # every window has a row; window 0's size is NULL (the legacy shape)
-            for i, offset in enumerate(10.0 * i for i in range(3)):
+            for i, offset in enumerate(10.0 * n for n in range(3)):
                 key = engine_search.probe_cache_key(
                     movie,
                     offset,
@@ -1284,27 +1307,22 @@ class TestProbeCache(unittest.TestCase):
                 # the fallback path ran (the old single-window estimate)
                 est.assert_called_once()
                 self.assertEqual(factor, 0.5)
-                # and the log never CLAIMED the all-window estimate: a
-                # partial cache that announces "all N windows reused" is the
-                # reviewer's V2 consequence - a one-window factor presented
-                # as the complete one. Every guard weakening ends either in
-                # a wrong log line (caught here) or a TypeError (caught by
-                # the sum); neither can pass silently.
-                self.assertFalse(
-                    any("all 3 probe windows' encoded bytes reused" in line for line in logged),
-                    f"a partial cache logged the all-window claim: {logged}",
+                # the decision came from the FALLBACK: the function logs
+                # only its completeness claim, so ANY log on the fallback
+                # path is the reviewer's V2 lie (a partial factor announced
+                # as the all-window one) - caught structurally, whatever the
+                # message says. Every guard weakening ends either here, in
+                # the factor mismatch above, or in a TypeError from the sum.
+                self.assertEqual(
+                    len(logged), 0, f"the fallback path logged a completeness claim: {logged}"
                 )
-                # the invariant the reviewer's mutations broke: a read that
-                # returned a None size FORCES the fallback. If any read saw
-                # (score, None), the decision must not have been taken from
-                # the sums - est must have been called. This holds no matter
-                # how the guard is shaped (break/continue/dropped halves):
-                # it pins the CONTRACT, not the implementation.
-                saw_null = any(r is not None and r[1] is None for r in reads)
-                if saw_null:
-                    self.assertEqual(
-                        est.call_count, 1, "a None-size read did not force the fallback"
-                    )
+                # the fixture's NULL entry was actually READ: without this a
+                # key mismatch silently turns the test into the missing-
+                # window case (the reads-spy's one non-tautological job)
+                self.assertTrue(
+                    any(entry is not None and entry[1] is None for _, entry in reads),
+                    f"the seeded NULL entry was never read: {reads}",
+                )
             connection.close()
 
     def test_the_chosen_crf_size_falls_back_on_a_missing_window(self):
@@ -1355,7 +1373,7 @@ class TestProbeCache(unittest.TestCase):
 
             def spy(conn, key):
                 r = real_get(conn, key)
-                reads.append(r)
+                reads.append((key, r))
                 return r
 
             with (
@@ -1377,17 +1395,16 @@ class TestProbeCache(unittest.TestCase):
                 )
                 est.assert_called_once()
                 self.assertEqual(factor, 0.5)
-                # the same log-honesty pin as the NULL-size test: a missing
-                # window must never be announced as "all N windows reused"
-                self.assertFalse(
-                    any("all 3 probe windows' encoded bytes reused" in line for line in logged),
-                    f"a partial cache logged the all-window claim: {logged}",
+                # the same structural log pin: ANY log on the fallback path
+                # is a completeness lie, whatever it says
+                self.assertEqual(
+                    len(logged), 0, f"the fallback path logged a completeness claim: {logged}"
                 )
-                # the same invariant: a missing entry (a None read) forces
-                # the fallback, whatever the guard's shape
-                saw_missing = any(r is None for r in reads)
-                if saw_missing:
-                    self.assertEqual(est.call_count, 1, "a missing read did not force the fallback")
+                # the fixture's MISSING window was actually read (a None
+                # read): the exercise-shape witness, not a tautology
+                self.assertTrue(
+                    any(entry is None for _, entry in reads), f"no missing read seen: {reads}"
+                )
             connection.close()
 
     def test_size_factor_is_cached(self):
@@ -1519,17 +1536,57 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         self.assertTrue(result[3], "the early exit must report a skip")
 
     def test_the_chosen_check_is_a_separate_measurement(self):
-        """The chosen-CRF size probe is not served by the VMAF cache.
+        """The search's own chosen-CRF check encodes one window separately.
 
-        The VMAF cache is keyed kind='vmaf' and the size cache kind='size', so
-        reusing a VMAF probe's bytes as a size measurement would need a shared
-        cache entry - a separate optimization, not this fix. Asserting the two CRFs
-        were both measured keeps that honest.
+        Since #314 the size DECISION at the chosen CRF reads the VMAF probes'
+        recorded byte counts when every window's cache entry carries a size
+        (check_chosen_crf_shrinks). The path this test exercises is the
+        NO-DATABASE one (_run_search passes no db_file): with nothing cached,
+        the decision falls back to a separate single-window encode - two
+        encodes at two CRFs, the bound and the chosen. Asserting both were
+        measured keeps the fallback honest.
         """
         _result, seen = self._run_search({45: 0.5, 22: 1.2})
         self.assertEqual(len(seen), 2, "one bound probe + one chosen-CRF probe")
         self.assertEqual(seen.count(45), 1)
         self.assertEqual(seen.count(22), 1)
+
+    def test_the_plumbing_reaches_the_chosen_check(self):
+        """find_optimal_crf_and_skip forwards hdr and db_file to the chosen-CRF
+        check (review round 4, finding 4): the decision's cache key must carry
+        the HDR flag and the database the caller was given - mutating either
+        at the call site left the whole suite green before this test.
+        """
+        captured: dict = {}
+
+        def fake_check(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return 0.5
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_file = Path(tmp) / "meta.db"
+            with (
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+                patch.object(engine_search, "check_chosen_crf_shrinks", side_effect=fake_check),
+            ):
+                engine_search.find_optimal_crf_and_skip(
+                    self.movie,
+                    self.workdir,
+                    "hb",
+                    samples=[(self.sample, 10.0)],
+                    hdr=True,
+                    db_file=db_file,
+                )
+        self.assertEqual(
+            captured["kwargs"].get("hdr"), True, "the HDR flag did not reach the chosen check"
+        )
+        self.assertEqual(
+            captured["kwargs"].get("db_file"),
+            db_file,
+            "the database did not reach the chosen check",
+        )
 
 
 class TestSubprocessTimeouts(unittest.TestCase):
