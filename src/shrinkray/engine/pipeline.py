@@ -178,6 +178,9 @@ from shrinkray.tools.vmaf import (
 from shrinkray.tools.vmaf import (
     measure_vmaf as measure_vmaf,
 )
+from shrinkray.tools.vmaf import (
+    vmaf_recipe as vmaf_recipe,
+)
 
 # full-file verification sub-samples above this output size (n_subsample=10:
 # every 10th frame measured) - full decode of a 2-hour 4K movie takes hours,
@@ -951,6 +954,9 @@ def _probe_movie(
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
+    source_width: int | None = None,
+    source_height: int | None = None,
+    source_bit_depth: int | None = None,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
@@ -972,6 +978,11 @@ def _probe_movie(
         progress (callable | None): Callback progress(dict) for live step
             updates of the probing pipeline (flow to the UI, never
             persisted).
+        source_width (int | None): The source frame width (the measurement
+            recipe's model and scale choice, issue #308).
+        source_height (int | None): The source frame height, same purpose.
+        source_bit_depth (int | None): The source's bit depth (the recipe's
+            analysis pixel format).
 
     Returns:
         tuple: The chosen CRF, its VMAF, all probes and the crop bars
@@ -1006,6 +1017,16 @@ def _probe_movie(
                 f"Removing stable black bars of '{input_file.name}': "
                 f"top {crop[0]}, bottom {crop[1]}, left {crop[2]}, right {crop[3]}"
             )
+        # the measurement recipe follows the source's dimensions (for the model
+        # and the scale, through the crop), its bit depth (the analysis pixel
+        # format) and the HDR flag (the tone-map) - issue #308
+        recipe = vmaf_recipe(
+            crop=crop,
+            hdr=hdr,
+            width=source_width,
+            height=source_height,
+            bit_depth=source_bit_depth,
+        )
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
         crf, achieved, probes, skip = find_optimal_crf_and_skip(
             input_file,
@@ -1017,6 +1038,7 @@ def _probe_movie(
             sample_seconds=sample_seconds,
             encoder=encoder,
             probe_encoder_preset=probe_encoder_preset,
+            recipe=recipe,
             crop=crop,
             hdr=hdr,
             cancel=cancel,
@@ -1283,6 +1305,12 @@ def encode_with_quality(
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             crop_sample_count=crop_sample_count,
+            vmaf_recipe=vmaf_recipe(
+                hdr=hdr,
+                width=snapshot["width"],
+                height=snapshot["height"],
+                bit_depth=snapshot["bit_depth"],
+            ).fingerprint(),
         )
     crf_source: str | None = None
     plan_created_at: str | None = None
@@ -1361,6 +1389,9 @@ def encode_with_quality(
                 # re-detect with the SAME count, or its fallback detector
                 # measures a different crop than the plan predicted
                 crop_sample_count=crop_sample_count,
+                source_width=(snapshot or {}).get("width"),
+                source_height=(snapshot or {}).get("height"),
+                source_bit_depth=(snapshot or {}).get("bit_depth"),
             )
         except SkipEncode as e:
             return QualityResult(
@@ -1494,6 +1525,16 @@ def encode_with_quality(
         # already saw. A verification failure does NOT invalidate the
         # encode (it measured fine at probe time) - it surfaces in the
         # result and the record, never as a hard error.
+        # the verification re-measures with the SAME recipe the probes used
+        # (issue #308): a full-file score on another model or scale would not
+        # be comparable with the target it is checked against
+        verify_recipe = vmaf_recipe(
+            crop=crop,
+            hdr=hdr,
+            width=(snapshot or {}).get("width"),
+            height=(snapshot or {}).get("height"),
+            bit_depth=(snapshot or {}).get("bit_depth"),
+        )
         output_size = output_file.stat().st_size
         verified_subsample = 10 if output_size > VERIFY_SUBSAMPLE_THRESHOLD_BYTES else None
         try:
@@ -1508,6 +1549,7 @@ def encode_with_quality(
                     cancel=cancel,
                     db_file=db_file,
                     subsample=verified_subsample,
+                    recipe=verify_recipe,
                 )
             finally:
                 shutil.rmtree(verify_workdir, ignore_errors=True)

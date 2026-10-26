@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 if TYPE_CHECKING:
     # engine is ABOVE db in the layer contract; the summary type arrives as
@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS plans (
     sample_seconds REAL NOT NULL,
     crop_sample_count INTEGER NOT NULL DEFAULT 3,
     vmaf_statistic TEXT NOT NULL DEFAULT 'min',
+    vmaf_recipe TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -400,6 +401,15 @@ MIGRATIONS = {
         # produced instead of re-encoding one window. Old rows keep NULL => a
         # size read misses rather than misleads.
         "ALTER TABLE probe_cache ADD COLUMN encoded_size INTEGER",
+    ],
+    19: [
+        # the measurement recipe is part of the plan fingerprint (issue #308):
+        # a plan measured with another model, scale, pixel format or tone-map is a
+        # different measurement, so it must not be reused as if it were this one.
+        # Old rows default to '' - a recipe the current code never produces, so
+        # every pre-#308 plan misses and is re-probed. That is the correct
+        # answer after a measurement change, not a guess.
+        "ALTER TABLE plans ADD COLUMN vmaf_recipe TEXT NOT NULL DEFAULT ''",
     ],
 }
 
@@ -697,6 +707,7 @@ def save_plan(
     sample_seconds: float,
     crop_sample_count: int = 3,
     vmaf_statistic: str = "mean",
+    vmaf_recipe: str = "",
 ) -> int:
     """Stores (upserts) the plan decision for one file — one row per file.
 
@@ -725,6 +736,10 @@ def save_plan(
         sample_seconds (float): Sample length (fingerprint).
         crop_sample_count (int): The crop detector's sample count
             (fingerprint: more samples can only shrink the crop).
+        vmaf_recipe (str): The measurement recipe's crop-independent part
+            (fingerprint, issue #308: a plan measured another way is a
+            different measurement). Empty means a plan stored before the
+            recipe existed.
 
     Returns:
         int: The plan row id.
@@ -736,8 +751,8 @@ def save_plan(
             file_id, chosen_crf, achieved_vmaf, crop, probes, skipped_reason,
             estimated_size, input_mtime, input_size, encoder, encoder_preset,
             target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
-            crop_sample_count, vmaf_statistic
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            crop_sample_count, vmaf_statistic, vmaf_recipe
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -758,6 +773,7 @@ def save_plan(
             sample_seconds,
             crop_sample_count,
             vmaf_statistic,
+            vmaf_recipe,
         ),
     )
     connection.commit()
@@ -829,6 +845,7 @@ def get_valid_plan(
     sample_seconds: float,
     crop_sample_count: int = 3,
     vmaf_statistic: str = "mean",
+    vmaf_recipe: str = "",
 ) -> sqlite3.Row | None:
     """Returns the file's stored plan when the fingerprint matches.
 
@@ -848,6 +865,9 @@ def get_valid_plan(
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
         crop_sample_count (int): The pending encode's crop sample count.
+        vmaf_recipe (str): The pending encode's measurement recipe
+            (crop-independent part, issue #308). An empty string never
+            matches: a plan stored before the recipe existed is re-probed.
 
     Returns:
         sqlite3.Row | None: The valid plan row, or None.
@@ -877,6 +897,7 @@ def get_valid_plan(
         or abs(row["sample_seconds"] - sample_seconds) > 0.01
         or int(row["crop_sample_count"]) != crop_sample_count
         or str(row["vmaf_statistic"]) != vmaf_statistic
+        or str(row["vmaf_recipe"]) != vmaf_recipe
     ):
         return None
     return cast("sqlite3.Row", row)
