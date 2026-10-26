@@ -159,13 +159,16 @@ def video_frame_count(path: Path) -> int | None:
     ]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=7200)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"ffprobe could not count '{path}': {error}")
         return None
     if proc.returncode != 0:
+        print(f"ffprobe could not count '{path}': {proc.stderr.strip()[-200:]}")
         return None
     try:
         return int(proc.stdout.strip())
     except ValueError:
+        print(f"ffprobe reported no frame count for '{path}': {proc.stdout.strip()!r}")
         return None
 
 
@@ -255,9 +258,7 @@ def main() -> int:
                 "so frame alignment cannot be established"
             )
             failures += 1
-            rows.append(
-                (f"{label} [frame counts unreadable]", None, None, "unmeasured", "")
-            )
+            rows.append((f"{label} [frame counts unreadable]", None, None, "unmeasured", ""))
             continue
         if reference_frames != distorted_frames:
             # A count mismatch means the two sides are not comparing the same
