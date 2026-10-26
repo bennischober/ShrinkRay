@@ -140,7 +140,8 @@ def _cancel_on_terminal_close() -> Iterator[threading.Event]:
     exit path. Callers enter the scope only around the engine work, where
     a child runs; a scan before it keeps the default signal behaviour. The
     crop pass does not check the event yet (#384); ctrl+c and a closed
-    terminal still reach its ffmpeg through the process group.
+    terminal still reach its ffmpeg through the process group, and the
+    sampled fallback that follows a failed pass does not check it either.
 
     Yields:
         threading.Event: Set when the first signal arrives.
@@ -355,9 +356,10 @@ def encode(
             if output_dir is not None
             else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=root)
         )
-        # the handler is the inner context: it is restored before the
-        # staging directory's cleanup, which then runs on every exit path
-        with work as staging, _cancel_on_terminal_close() as cancel:
+        # the signal scope is the outer context: a signal that arrives while
+        # the staging directory (possibly a multi-GB partial output) is being
+        # removed is absorbed, so the cleanup always completes
+        with _cancel_on_terminal_close() as cancel, work as staging:
             _record_encodes(
                 connection,
                 movies,
