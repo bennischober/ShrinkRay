@@ -1619,6 +1619,68 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         fake_search.assert_not_called()
         self.assertTrue(result[3], "the early exit must report a skip")
 
+    def test_a_bypassed_cache_never_reads_the_sizes(self):
+        """The use_probe_cache contract for the size decision (issue #391):
+        False means bypass ENTIRELY - the chosen-CRF decision must not read
+        the cached sizes even when every entry is present, because the flag's
+        caller (--replan) wants independence from everything stored. The
+        round-5 review's mutation deleted the use_probe_cache check and the
+        whole suite stayed green; this test is the pin it lacked.
+
+        The cache is fully seeded (every window has a row with a size): the
+        ONLY reason to fall back is the bypass itself.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            samples = []
+            for i in range(2):
+                s = root / f"s{i}.mkv"
+                s.write_bytes(b"m" * 100)
+                samples.append((s, 10.0 * i))
+
+            for _sample, offset in samples:
+                key = engine_search.probe_cache_key(
+                    movie, offset, 10.0, 22, "svt_av1", "5", None, False, None, ("hb", "1.6")
+                )
+                db.save_probe_score(connection, key, 95.0, 40)
+
+            real_get = db.get_probe_entry
+            reads: list = []
+
+            def spy(conn, key):
+                r = real_get(conn, key)
+                reads.append(r)
+                return r
+
+            with (
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5) as est,
+                patch.object(db, "get_probe_entry", side_effect=spy),
+            ):
+                factor = engine_search.check_chosen_crf_shrinks(
+                    samples,
+                    workdir,
+                    "hb",
+                    22,
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    db_file=db_file,
+                    use_probe_cache=False,
+                )
+            # the bypass: the fallback ran and the cache was never read
+            est.assert_called_once()
+            self.assertEqual(factor, 0.5)
+            self.assertEqual(reads, [], "a bypassed cache was read for the size decision")
+            connection.close()
+
     def test_the_chosen_check_is_a_separate_measurement(self):
         """The search's own chosen-CRF check encodes one window separately.
 
