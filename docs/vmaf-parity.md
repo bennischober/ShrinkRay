@@ -121,6 +121,29 @@ The same command on a 2160p source. Above 2560x1440 both sides switch to
 threshold). A 4K scope film cropped below 1440 lines stays on the 1080p model at
 native size, exactly as ab-av1 scores it - pass `--crop` so both sides agree.
 
+**Check the recipe line, not just the delta.** The script derives the model and the
+analysis pixel format from the pair itself, and it prints them:
+
+    recipe: vmaf=2;model=vmaf_4k_v0.6.1.json;scale=none;fmt=yuv420p10le;hdr=no
+
+Two rules decide that line, and getting either wrong produces a plausible number that
+is not a parity result:
+
+- **Model and scale follow the DISTORTED file's dimensions** (post-crop), so a 2160p pair
+  uses `vmaf_4k_v0.6.1`. This is ab-av1's rule (#309) and what
+  `engine/pipeline.py` passes. Until #421 the harness called `vmaf_recipe()` with no
+  dimensions, so every pair - including 4K ones - was scored with the 1080p model, and
+  nothing noticed because every previously measured pair was 1080p.
+- **The analysis pixel format follows the SOURCE's bit depth**, because that is what
+  `engine/pipeline.py` passes as `source_bit_depth`. A 10-bit source whose encode came
+  out 8-bit is scored at 10-bit on both sides, as ab-av1 does. Scoring it at 8-bit
+  measured **97.9706 vs ab-av1's 98.1441 (delta 0.1736)** - outside the 0.1 tolerance -
+  on the 2160p pair.
+
+If the printed recipe does not match ab-av1's own `format=` and `model=` on the same
+pair, the run is measuring something else. Compare the two command lines (the script
+prints ab-av1's), do not read the delta.
+
 ### 5. An HDR10 pair
 
 ```sh
