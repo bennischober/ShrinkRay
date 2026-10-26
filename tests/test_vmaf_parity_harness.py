@@ -13,11 +13,13 @@ measurement, so the test asserts on the gate and on the report, never on libvmaf
 """
 
 import importlib.util
+import io
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -139,11 +141,13 @@ class TestMismatchedPairIsNotScored(unittest.TestCase):
                 "--label",
                 "misaligned",
             ]
+            captured = io.StringIO()
             with (
                 mock.patch.object(parity, "RESULT_FILE", results),
                 mock.patch.object(parity, "measure_ours") as measure,
                 mock.patch.object(parity, "ab_av1_vmaf") as ab_av1,
                 mock.patch.object(sys, "argv", argv),
+                redirect_stdout(captured),
             ):
                 code = parity.main()
 
@@ -153,6 +157,11 @@ class TestMismatchedPairIsNotScored(unittest.TestCase):
             table = results.read_text()
             self.assertIn("misaligned", table)
             self.assertNotIn("PASS", table)
+            # the pair was never compared, so the summary must not report it as
+            # outside the tolerance
+            printed = captured.getvalue()
+            self.assertIn("1 pair(s) did not produce a usable comparison", printed)
+            self.assertIn("0 outside the 0.1 tolerance", printed)
 
 
 if __name__ == "__main__":
