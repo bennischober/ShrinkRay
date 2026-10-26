@@ -11,13 +11,13 @@ answers — is this file bigger than its quality requires, and does it carry bar
 |---|---|---|
 | The CRF search | `search.py` | `bisect_crf`, `probe_crf`, `find_optimal_crf_and_skip`, `SkipEncode`, `DEFAULT_TARGET_VMAF` (re-exported from `config.py`, #252), `DEFAULT_CRF_RANGE = (14, 45)` |
 | The plan: gates, HDR override, reuse | `plan.py` | `plan_quality`, `_lookup_plan`, `SOURCE_CODECS` whitelist, `is_1080p_class`, `MIN_ENCODE_SECONDS = 90.0` |
-| Encode + verify + batch loop | `pipeline.py` | `encode_with_quality`, `_encode_with_command`, `encode_movies`, `check_disk_space` |
+| Encode + verify + batch loop | `pipeline.py` | `encode_with_quality`, `_encode_with_command`, `check_disk_space` |
 | Black bars, one detector | `crop.py` | keyframe timeline pass + `sustained_runs` + `intersect_crop_rects`; DB-cached; `detect_crop_rect` is the no-database fallback |
 | Sample windows | `samples.py` | `sample_offsets`, `extract_samples`, `DEFAULT_SAMPLE_EVERY = 600.0` |
 | HDR/SDR encoder choice | `encoders.py` | `encoder_for`, `DEFAULT_ENCODER`/`HDR_ENCODER` |
 | Scan -> DB rows | `scan.py` | `scan_movies`, `process_movie`, `resolve_input_paths`; pool `min(8, cpu)` |
 | Inbox watchdog | `watch.py` | `watch`, `_FsWaiter`, `decide`, `next_poll_interval` |
-| One encoder per output dir | `lock.py` | `guard_encodes`, 6 h stale window; busy raises, never waits |
+| One encoder per output dir | `lock.py` | `guard_encodes`, 60 s heartbeat and a 5 min silence window; busy raises, never waits |
 | Pause: the operator's, and for a manual encode | `pause.py` | `pause_reason`, `manual_encode` (CLI marker), `wait_while_paused` (jobs), `set_operator_paused` (the TUI's switch); markers carry the process start time, so a reused pid never pauses (issue #250) |
 
 ## HOW THE DECISION FLOWS

@@ -6,11 +6,14 @@ options and the console presentation.
 """
 
 import contextlib
+import signal
 import sys
 import tempfile
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from types import FrameType
+from typing import TYPE_CHECKING, Any
 
 import typer
 from rich.console import Console
@@ -118,6 +121,62 @@ def app_command(
     # explicit --root narrows the allowlist down
     roots = [Path(r) for r in root] or None
     run_app(db_file, host=host, port=port, allowed_roots=roots, config_file=config_file)
+
+
+@contextlib.contextmanager
+def _cancel_on_terminal_close() -> Iterator[threading.Event]:
+    """Turns closing the terminal, ctrl+c and SIGTERM into a cancel.
+
+    Closing the terminal cancels the encode (PRODUCT.md, issue #326). The
+    engine's children run in their own session, so they never see the
+    terminal's SIGHUP: without a handler the CLI died, its HandBrake child
+    kept encoding orphaned, and the staging directory was never cleaned up.
+    A signal only sets the yielded event. The engine checks it every poll
+    tick, terminates its own child tree and raises Cancelled, so the CLI
+    unwinds through its normal cleanup paths. A repeated signal changes
+    nothing: closing a terminal under bash delivers SIGHUP twice, and an
+    exception raised from the handler would unwind past the child's
+    termination, orphaning it. The previous handlers come back on every
+    exit path, and a signal already ignored (`nohup`, a shell's `cmd &`)
+    stays ignored. After a cancel, SIGHUP and SIGTERM stay ignored instead,
+    so a late repeat cannot kill the exiting command; ctrl+c is restored.
+    Callers enter the scope only around the engine work, where a child
+    runs; a scan before it keeps the default signal behaviour.
+
+    Yields:
+        threading.Event: Set when the first signal arrives.
+    """
+    cancel = threading.Event()
+
+    def _on_signal(signum: int, frame: FrameType | None) -> None:
+        cancel.set()
+
+    if sys.platform == "win32":
+        signals = [signal.SIGINT, signal.SIGTERM]
+    else:
+        signals = [signal.SIGHUP, signal.SIGINT, signal.SIGTERM]
+    previous: dict[signal.Signals, Any] = {}
+    try:
+        for sig in signals:
+            # an ignored signal stays ignored: `nohup` ignores SIGHUP so the
+            # run survives logout, and a shell ignores SIGINT for `cmd &`
+            if signal.getsignal(sig) is signal.SIG_IGN:
+                continue
+            # signal.signal refuses outside the main thread (ValueError): the
+            # command then runs without the handler, as before issue #326
+            with contextlib.suppress(OSError, ValueError):
+                previous[sig] = signal.signal(sig, _on_signal)
+        yield cancel
+    finally:
+        for sig, handler in previous.items():
+            if cancel.is_set() and sig is not signal.SIGINT:
+                # cancelled: the command is on its way to exit 1, and a closed
+                # terminal's second SIGHUP (or a repeated SIGTERM) arriving
+                # after the scope must not turn that into a kill by signal
+                signal.signal(sig, signal.SIG_IGN)
+                continue
+            # None: the previous handler was not installed from Python
+            signal.signal(sig, signal.SIG_DFL if handler is None else handler)
 
 
 def _totals(movies_by_category: dict) -> tuple:
@@ -233,7 +292,7 @@ def encode(
         "--probe-encoder-preset",
         help=(
             "Quality mode: encoder speed preset for the PROBE encodes "
-            "(a measurement setting; SVT-AV1 speed 0-10, higher = slower). "
+            "(a measurement setting; SVT-AV1 speed -1 to 10, higher = faster - a lower preset is slower and compresses better). "
             "Default: the handbrake.probe_encoder_preset config value. "
             "Changing it invalidates stored plans "
             "(they are re-probed)."
@@ -244,7 +303,7 @@ def encode(
         "--encoder-preset",
         help=(
             "Quality mode: encoder speed preset for the FINAL encode "
-            "(an output setting; SVT-AV1 speed 0-10, higher = slower, "
+            "(an output setting; SVT-AV1 speed -1 to 10, higher = faster; a lower preset is slower and better, "
             "e.g. 3). Default: the handbrake.encoder_preset config value. "
             "The probes "
             "run --probe-encoder-preset."
@@ -319,7 +378,10 @@ def encode(
             if output_dir is not None
             else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=root)
         )
-        with work as staging:
+        # the signal scope is the outer context: a signal that arrives while
+        # the staging directory (possibly a multi-GB partial output) is being
+        # removed is absorbed, so the cleanup always completes
+        with _cancel_on_terminal_close() as cancel, work as staging:
             _record_encodes(
                 connection,
                 movies,
@@ -340,6 +402,7 @@ def encode(
                 sample_count,
                 output_dir is None or replace,
                 library_root=root if output_dir is None else None,
+                cancel=cancel,
             )
     finally:
         if connection is not None:
@@ -445,6 +508,7 @@ def _record_encodes(
     sample_count: int | None = None,
     replace: bool = False,
     library_root: Path | None = None,
+    cancel: "threading.Event | None" = None,
 ) -> None:
     """Runs the encoding and records the results in the database.
 
@@ -462,6 +526,10 @@ def _record_encodes(
         replan (bool): Ignore stored plans and re-probe (quality mode).
         probe_encoder_preset (str): The PROBE's speed preset (measurement).
         encoder_preset (str): The FINAL encode's speed preset (output).
+        cancel (threading.Event | None): Set by the terminal-close/interrupt
+            handler (issue #326): the engine checks it between steps and
+            terminates the running child tree, so the CLI unwinds and the
+            TemporaryDirectory cleanup runs.
         library_root (Path | None): The directory the swap renames inside when
             the run replaces sources in place (issue #230): the contended
             resource in that mode is the LIBRARY, not the per-run staging
@@ -558,9 +626,16 @@ def _record_encodes(
                             sample_every=sample_every,
                             sample_count=sample_count,
                             sample_seconds=sample_seconds,
+                            cancel=cancel,
                             audio_languages=config.handbrake_audio_languages,
                             subtitle_languages=config.handbrake_subtitle_languages,
                         )
+                        if cancel is not None and cancel.is_set():
+                            # a signal after the engine's last check (the
+                            # encode finished, or a short probe it killed in
+                            # our process group): honour it before anything
+                            # is recorded or swapped - the source stays as is
+                            raise _EncodeCancelled("cancelled by user")
                         if result.success and result.verified_vmaf is not None:
                             console.print(
                                 f"[green]Verified '{movie.name}': full-file VMAF "
@@ -688,7 +763,7 @@ def plan(
         "--probe-encoder-preset",
         help=(
             "Encoder speed preset for the probes (a measurement setting; "
-            "SVT-AV1 speed 0-10). Default: the handbrake.probe_encoder_preset "
+            "SVT-AV1 speed -1 to 10). Default: the handbrake.probe_encoder_preset "
             "config value. The plan's fingerprint keys on it."
         ),
     ),
@@ -746,6 +821,9 @@ def plan(
             log_error(problem)
         raise typer.Exit(1)
     connection = db.connect(db_file) if db_file is not None else None
+    # the probes are the expensive part: closing the terminal cancels them
+    # too (issue #326); entered once the input is resolved
+    signals = contextlib.ExitStack()
     try:
         try:
             root, files = resolve_input_paths(path, config.extensions)
@@ -771,7 +849,12 @@ def plan(
         total_input = total_output = 0
         plans: list = []
         errors = 0
+        cancel = signals.enter_context(_cancel_on_terminal_close())
         for movie in movies:
+            # a signal that landed while no child ran (recording the previous
+            # plan) is honoured here: plan_quality's crop pass would not see it
+            if cancel.is_set():
+                raise _EncodeCancelled("cancelled by user")
             try:
                 result = plan_quality(
                     movie,
@@ -793,6 +876,7 @@ def plan(
                     sample_every=sample_every,
                     sample_count=sample_count,
                     sample_seconds=config.sample_seconds,
+                    cancel=cancel,
                 )
             except (RuntimeError, FileNotFoundError) as e:
                 table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
@@ -851,7 +935,13 @@ def plan(
         if any(r.hdr and r.skipped_reason is None for r in plans):
             # the HDR estimate bias (issue #98): say so where the estimate is shown
             console.print(f"[yellow]{HDR_ESTIMATE_NOTE}[/yellow]")
+    except _EncodeCancelled as e:
+        # the plan is cut short: no table and no totals for a partial run,
+        # and a nonzero exit, the same contract as an encode's cancel
+        log_error(str(e))
+        raise typer.Exit(1) from e
     finally:
+        signals.close()
         if connection is not None:
             connection.close()
 

@@ -90,7 +90,7 @@ db | config | logger | telemetry   foundation
 | `quality._run`, `encode._terminate`, `configure_stall`, `stall_timeout_seconds`, `resources.py` (priority, spawn/session kwargs, `terminate_tree`) | `tools/process.py` |
 | `media.py`, `encode.probe_duration_seconds`, both `_source_snapshot`, `quality.is_hdr_file`, `_output_bitrate` | `tools/ffprobe.py` (one snapshot, one HDR check) |
 | `detect_vmaf_style`, `build_vmaf_command`, `parse_vmaf_log`, `measure_vmaf` | `tools/vmaf.py` |
-| `find_handbrake`, `encode.build_command`, `quality.build_encode_command`, HandBrake progress parsing | `tools/handbrake.py` |
+| `find_handbrake`, `quality.build_encode_command`, HandBrake progress parsing | `tools/handbrake.py` |
 | `_tool_versions` | composed from version functions in the `tools/` wrappers |
 | `scanner.py` | `engine/scan.py` |
 | `parse_crop_line`, `intersect_crop_rects`, `detect_crop_rect`, `helpers.check_black_bars` | `engine/crop.py` (one detector; #51 replaces the algorithm) |
@@ -98,7 +98,7 @@ db | config | logger | telemetry   foundation
 | `SampleProbe`, `bisect_crf`, `probe_crf`, `estimate_size_factor`, `find_optimal_crf`, `find_optimal_crf_and_skip` | `engine/search.py` |
 | the six HDR-encoder ternaries, `service.py:117` | `engine/encoders.py` → `encoder_for(hdr)` (#21, #26) |
 | `plan_quality`, `_plan_crop`, `_plan_probes`, `_lookup_plan` | `engine/plan.py` |
-| `QualityResult`, `SkipEncode`, `Cancelled`, `_probe_movie`, `encode_with_quality`, `encode_file`, `encode_movies`, `_encode_pending`, `EncodeResult`, `check_disk_space`, `durations_match` | `engine/pipeline.py` (split once more only if a second reason-to-change shows up, e.g. fixed vs. quality path) |
+| `QualityResult`, `SkipEncode`, `Cancelled`, `_probe_movie`, `encode_with_quality`, `EncodeResult`, `check_disk_space`, `durations_match` | `engine/pipeline.py` (split once more only if a second reason-to-change shows up) |
 | `encode_lock.py` | `engine/lock.py` |
 | `watch.py` | `engine/watch.py` (used by the CLI and the server) |
 | `_record_encodes` and other logic in `__main__.py` | `service.py`, shared with `server/jobs.py` |

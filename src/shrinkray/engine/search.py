@@ -125,37 +125,45 @@ def probe_cache_key(
 
 def _cached_or_none(
     db_file: Path | None, key: str
-) -> tuple[float | None, sqlite3.Connection | None]:
+) -> tuple[float | None, int | None, sqlite3.Connection | None]:
     """Reads a probe-cache entry, returning the connection to keep it open on.
 
     Opening one short-lived connection per probe is cheap (WAL, single
     statements) and keeps probe_crf/estimate_size_factor connection-free
-    like the rest of the engine. Returns (None, None) without a db_file:
-    probing then runs uncached (CLI one-shots without a database).
+    like the rest of the engine. Returns (None, None, None) without a
+    db_file: probing then runs uncached (CLI one-shots without a database).
 
     Args:
         db_file (Path | None): The database file (None => no caching).
         key (str): The probe cache key.
 
     Returns:
-        tuple: The cached value (None on miss) and the open connection
-            to hand to the cache write, or (None, None).
+        tuple: (cached score or None, the encoded byte size or None, the
+            open connection for the cache write); (None, None, None) without
+            a database. The size is None on pre-#314 rows - a size read
+            misses rather than misleads.
     """
     if db_file is None:
-        return None, None
+        return None, None, None
     from shrinkray import db as _db
 
     connection = _db.connect(db_file)
-    return _db.get_probe_score(connection, key), connection
+    entry = _db.get_probe_entry(connection, key)
+    if entry is None:
+        return None, None, connection
+    score, size = entry
+    return score, size, connection
 
 
-def _store_probe(connection: sqlite3.Connection | None, key: str, value: float) -> None:
+def _store_probe(
+    connection: sqlite3.Connection | None, key: str, value: float, encoded_size: int | None = None
+) -> None:
     """Stores one probe measurement (best-effort commit via db layer)."""
     if connection is None:
         return
     from shrinkray import db as _db
 
-    _db.save_probe_score(connection, key, value)
+    _db.save_probe_score(connection, key, value, encoded_size)
     connection.close()
 
 
@@ -241,14 +249,15 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
     An early stop accepts a passing probe whose score sits less than a
     tolerance above the target, where the tolerance doubles each round from
     0.1 (0.1, 0.2, 0.4, 0.8, ...) - ab-av1's formula for an encoder whose
-    CRF moves in whole steps. Each further round buys at most a CRF step, so
-    a late round accepts a looser fit; the trade is a slightly lower CRF (a
-    slightly bigger file) for fewer rounds. The stop never accepts a probe
-    below the target, and it fires only once a FAILING bound is measured
-    above the pass (review round 2): a pass with no failing bound above it
-    is the near-target plateau, where stopping would give away up to ten CRF
-    steps and could pick a CRF where the file grows - an encodable file
-    turned into a "would not shrink" skip.
+    CRF moves in whole steps. The stop never accepts a probe below the
+    target, and it fires only when the failing bound sits at most two CRF
+    above the pass (issue #395): the one CRF between them is then the only
+    one left unprobed, so the stop saves that round and gives away at most
+    one CRF step (a slightly bigger file). Without that bracket a pass near
+    the target says nothing about the CRFs above it: on a plateau-then-knee
+    curve a pass at the 20% point stopped the search eight CRF below the
+    largest passing one, and a file that would shrink there could come out
+    as a "would not shrink" skip.
 
     Args:
         score (callable): Measurement score(crf) => float, the probe's VMAF
@@ -260,12 +269,17 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
         hi (int): The highest CRF to consider (exclusive, never probed).
 
     Returns:
-        int: A passing CRF in [lo, hi) - the largest one unless the early
-            stop accepted a lower one - or lo if even lo fails (the caller
-            should use it anyway as the best available quality). The
+        int: A passing CRF in [lo, hi) - the largest one, or the one below
+            it when the early stop fired - or lo if even lo fails (the
+            caller should use it anyway as the best available quality). The
             returned CRF has always been probed, so the caller's achieved
             lookup finds it.
+
+    Raises:
+        ValueError: If the range [lo, hi) is empty.
     """
+    if hi <= lo:
+        raise ValueError(f"empty CRF range [{lo}, {hi})")
     top = hi - 1  # the highest CRF the search may return
     passing: tuple[int, float] | None = None  # the highest passing probe
     failing: tuple[int, float] | None = None  # the lowest failing probe
@@ -277,13 +291,13 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
         tolerance = 0.1 * 2 ** (round_number - 1)
         if value >= target_vmaf:
             passing = (crf, value)
-            # the plateau guard (review round 2): the stop requires a FAILING
-            # bound above the pass. A pass with no failing measurement above
-            # it is the near-target plateau - stopping there would give away
-            # up to ten CRF steps (a 1.8x-larger output on a real-shape
-            # curve) and could pick a CRF where the file GROWS, turning an
-            # encodable file into a "would not shrink" skip.
-            if failing is not None and value - target_vmaf < tolerance:
+            # the stop needs a failing bound at most two CRF above the pass
+            # (issue #395): only then is a single unprobed CRF all it can
+            # give away. A pass with no failing bound, or a distant one, is
+            # the plateau-then-knee shape where an early stop gave away many
+            # CRF steps (8 on #395's curve) and could pick a CRF where the
+            # file GROWS.
+            if failing is not None and failing[0] - crf <= 2 and value - target_vmaf < tolerance:
                 return crf
             if failing is not None:
                 if failing[0] == crf + 1:
@@ -385,9 +399,9 @@ def probe_crf(
             encoder_threads,
             tool_versions,
         )
-        cached, connection = (None, None)
+        cached, _cached_size, connection = (None, None, None)
         if use_probe_cache:
-            cached, connection = _cached_or_none(db_file, key)
+            cached, _cached_size, connection = _cached_or_none(db_file, key)
         if cached is not None:
             log(f"probe cache hit (CRF {crf}, sample {index + 1}/{len(samples)})")
             scores.append(cached)
@@ -418,7 +432,7 @@ def probe_crf(
         score = measure_vmaf(
             encoded, sample, workdir, crop=crop, hdr=hdr, cancel=cancel, db_file=db_file
         )
-        _store_probe(connection, key, score)
+        _store_probe(connection, key, score, encoded.stat().st_size)
         encoded.unlink()
         scores.append(score)
     return sum(scores) / len(scores)
@@ -498,9 +512,9 @@ def estimate_size_factor(
         tool_versions=_tool_versions(handbrake),
         kind="size",
     )
-    cached, connection = (None, None)
+    cached, _cached_size, connection = (None, None, None)
     if use_probe_cache:
-        cached, connection = _cached_or_none(db_file, key)
+        cached, _cached_size, connection = _cached_or_none(db_file, key)
     if cached is not None:
         log(f"probe cache hit (size probe, CRF {crf})")
         if connection is not None:
@@ -763,6 +777,7 @@ def find_optimal_crf_and_skip(
         encoder,
         probe_encoder_preset,
         crop=crop,
+        hdr=hdr,
         cancel=cancel,
         db_file=db_file,
         encoder_threads=encoder_threads,
@@ -788,6 +803,7 @@ def check_chosen_crf_shrinks(
     encoder: str,
     probe_encoder_preset: str,
     crop: tuple[int, int, int, int] | None = None,
+    hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
@@ -802,10 +818,15 @@ def check_chosen_crf_shrinks(
     chosen CRF is much lower and the file much bigger. A title can pass the bound
     and still grow at the CRF that gets encoded.
 
-    This costs one sample encode. It cannot reuse the search's probes: the VMAF
-    cache is keyed kind="vmaf" and the size cache kind="size", so a VMAF probe's
-    encoded bytes are not addressable as a size measurement. Folding the two into
-    one cache entry is a separate optimization; the correctness check ships first.
+    This used to cost one sample encode; since issue #314 the VMAF probes'
+    encoded byte counts live in the cache beside their scores, so the factor
+    is the total over ALL windows when every window's entry carries a size
+    (ab-av1's estimate over all samples). A missing entry (pre-#314 rows, no
+    database, cache bypass) falls back to the single-window encode below -
+    a miss degrades to the old behaviour, never to a guess. The bypass is
+    ENTIRE (issue #391): use_probe_cache=False means the stored sizes are
+    not read either - the caller (--replan) wants independence from
+    everything stored, and one fresh window encode buys it.
 
     Args:
         samples (list[tuple[Path, float]]): The sample windows.
@@ -817,6 +838,7 @@ def check_chosen_crf_shrinks(
         encoder (str): The video encoder, e.g. 'svt_av1'.
         probe_encoder_preset (str): The PROBE's speed preset.
         crop (tuple | None): Crop bars applied to the probe encode.
+        hdr (bool): True when the source is HDR (part of the cache key).
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encode.
@@ -826,6 +848,50 @@ def check_chosen_crf_shrinks(
     Returns:
         float: The encoded/source size ratio at the chosen CRF.
     """
+    # issue #314: the chosen-CRF size decision comes from ALL windows' probe
+    # encodes - the VMAF probes already encoded every window at the chosen
+    # CRF and the cache now records each encoded byte count beside its
+    # score. When every window's entry carries a size, the factor is the
+    # total encoded over the total sample bytes (ab-av1's estimate over all
+    # samples); when ANY window misses (pre-#314 cache rows, no database,
+    # cache bypass) the decision falls back to the single-window encode -
+    # a miss degrades to the old behaviour, never to a guess.
+    if db_file is not None and use_probe_cache:
+        from shrinkray import db as _db
+
+        connection = _db.connect(db_file)
+        try:
+            encoded_total = 0
+            sample_total = 0
+            complete = True
+            tool_versions = _tool_versions(handbrake)
+            for _index, (sample, offset) in enumerate(samples):
+                key = probe_cache_key(
+                    movie,
+                    offset,
+                    sample_seconds,
+                    chosen,
+                    encoder,
+                    probe_encoder_preset,
+                    crop,
+                    hdr,
+                    encoder_threads,
+                    tool_versions,
+                )
+                entry = _db.get_probe_entry(connection, key)
+                if entry is None or entry[1] is None:
+                    complete = False
+                    break
+                encoded_total += entry[1]
+                sample_total += sample.stat().st_size
+            if complete and sample_total > 0:
+                log(
+                    f"size at chosen CRF {chosen}: all {len(samples)} probe "
+                    "windows' encoded bytes reused (issue #314)"
+                )
+                return encoded_total / sample_total
+        finally:
+            connection.close()
     return estimate_size_factor(
         samples,
         workdir,

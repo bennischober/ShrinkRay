@@ -11,7 +11,10 @@ summary is cached per file version in the `crops` table. Classification by
 runtime share is report-only; the crop decision never uses it.
 """
 
+import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -24,6 +27,7 @@ from shrinkray.engine.crop import (
     detect_crop_summary_cached,
     sustained_runs,
 )
+from shrinkray.tools.process import _run
 
 
 def _reading(timestamp: float, w: int, h: int, x: int = 0, y: int = 0) -> CropReading:
@@ -142,7 +146,7 @@ class TestCropCache(unittest.TestCase):
         self.tmp.cleanup()
 
     def _timeline(self, readings: list[CropReading], frame: tuple[int, int]) -> None:
-        def fake_run(movie: Path, limit: int = 24):
+        def fake_run(movie: Path, limit: int = 24, cancel=None):
             return readings, frame
 
         return fake_run
@@ -184,6 +188,79 @@ class TestCropCache(unittest.TestCase):
             summary = detect_crop_summary_cached(self.movie, self.db_file)
         self.assertIsNone(summary)
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
+
+    def _interrupted_pass(self, run_result: object) -> str:
+        """Drives the real run_crop_timeline with a pass that did not
+        complete, asserts nothing is measured or cached, and returns what
+        was logged."""
+        with (
+            patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=300.0),
+            patch("shrinkray.engine.crop._run", **run_result),
+            patch("shrinkray.engine.crop.log") as log,
+        ):
+            summary = detect_crop_summary_cached(self.movie, self.db_file)
+        self.assertIsNone(summary)
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
+        return " ".join(str(call.args[0]) for call in log.call_args_list)
+
+    def test_an_interrupted_pass_caches_nothing(self) -> None:
+        """An ffmpeg that exits early (ctrl+c or a closed terminal reach it
+        in the CLI's process group, issue #326) printed readings for part of
+        the runtime only: caching them would crop every later run of the
+        file to the first part's bars."""
+        partial = "".join(
+            f"[Parsed_cropdetect_0 @ 0x1] x1:0 x2:1919 y1:140 y2:939 w:1920 h:800 "
+            f"x:0 y:140 pts:{i} t:{i * 5}.000000 crop=1920:800:0:140\n"
+            for i in range(20)
+        ).encode()
+        self._interrupted_pass({"return_value": (255, partial)})
+
+    def test_a_timed_out_pass_caches_nothing_and_says_why(self) -> None:
+        # the runner's code for a child it terminated at the ceiling; the log
+        # carries its reason, not a bare "-2" that reads like a crash code
+        logged = self._interrupted_pass(
+            {"return_value": (-2, "timed out after 1800s (terminated)")}
+        )
+        self.assertIn("timed out after 1800s", logged)
+
+    def test_an_unstartable_ffmpeg_fails_the_pass_without_raising(self) -> None:
+        logged = self._interrupted_pass({"side_effect": FileNotFoundError(2, "No such file")})
+        self.assertIn("could not start", logged)
+
+    def test_a_cancel_ends_the_timeline_pass_and_caches_nothing(self) -> None:
+        """Issue #384: a cancel during the pass terminates the child within
+        a poll tick and caches nothing. The real runner drives a real silent
+        child in place of ffmpeg, which would otherwise sleep 60 s; the bound
+        is counted from the moment the event is set.
+        """
+        child = ["cmd", "/c", "ping -n 60 127.0.0.1 >nul"] if os.name == "nt" else ["sleep", "60"]
+        cancel = threading.Event()
+        set_at: list[float] = []
+
+        def run_child(
+            command: list[str],
+            cancel: threading.Event | None = None,
+            timeout: float | None = None,
+        ) -> tuple[int, str]:
+            self.assertIsNotNone(cancel, "the pass must hand the runner its cancel event")
+            return _run(child, cancel=cancel, timeout=timeout)
+
+        def fire() -> None:
+            set_at.append(time.monotonic())
+            cancel.set()
+
+        with (
+            patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=3600.0),
+            patch("shrinkray.engine.crop._run", side_effect=run_child),
+        ):
+            threading.Timer(0.3, fire).start()
+            summary = detect_crop_summary_cached(self.movie, self.db_file, cancel=cancel)
+            elapsed = time.monotonic() - set_at[0]
+        self.assertIsNone(summary)
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
+        self.assertLess(elapsed, 2.0, f"the cancel took {elapsed:.1f}s to end the pass")
 
     def test_a_stateless_run_computes_without_a_cache(self) -> None:
         readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]

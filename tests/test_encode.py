@@ -257,26 +257,6 @@ class TestEncode(unittest.TestCase):
         m4v = build_encode_command("hb", Path("in.MKV"), Path("out.MKV"), 20, "svt_av1", "3")
         self.assertIn("-f", m4v)
 
-    def test_build_command(self):
-        command = tools_handbrake.build_command(
-            "C:/HandBrake/HandBrakeCLI.exe",
-            Path("in.mkv"),
-            Path("out.mkv"),
-            "Fast 1080p30",
-            "svt_av1",
-        )
-        self.assertEqual(command[0], "C:/HandBrake/HandBrakeCLI.exe")
-        self.assertIn("--input", command)
-        self.assertIn("in.mkv", command)
-        self.assertIn("--output", command)
-        self.assertIn("out.mkv", command)
-        self.assertIn("Fast 1080p30", command)
-        self.assertIn("svt_av1", command)
-        # audio passthrough without conflicting options
-        self.assertIn("--aencoder", command)
-        self.assertNotIn("--audio", command)
-        self.assertIn("--optimize", command)
-
     def test_cap_threads(self):
         """The thread cap normalizes 0/None/negative to uncapped."""
         self.assertIsNone(engine_pipeline.cap_threads(None))
@@ -300,19 +280,11 @@ class TestEncode(unittest.TestCase):
         """No code path emits H.264 or H.265 any more (issue #21).
 
         x265 is gone from every path - not demoted to a fallback, not kept
-        as an option. The check is on the HandBrake commands only: the
+        as an option. The check is on the HandBrake command only: the
         ffmpeg sample extraction uses libx264 for intermediate clips, which
         is not an output codec.
         """
-        fixed = tools_handbrake.build_command(
-            "hb",
-            Path("in.mkv"),
-            Path("out.mkv"),
-            "Fast 1080p30",
-            engine_encoders.encoder_for(8, False),
-        )
         for command in (
-            fixed,
             tools_handbrake.build_encode_command(
                 "hb",
                 Path("in.mkv"),
@@ -335,50 +307,6 @@ class TestEncode(unittest.TestCase):
                 self.assertNotIn(gone, joined)
             self.assertIn("svt_av1", joined)
 
-    def test_build_command_with_thread_cap(self):
-        command = tools_handbrake.build_command(
-            "hb",
-            Path("in.mkv"),
-            Path("out.mkv"),
-            "Fast 1080p30",
-            "svt_av1",
-            encoder_threads=8,
-        )
-        self.assertIn("--encopts", command)
-        self.assertIn("pin=8", command)
-        # uncapped: no encopts at all
-        plain = tools_handbrake.build_command(
-            "hb", Path("in.mkv"), Path("out.mkv"), "Fast 1080p30", "svt_av1"
-        )
-        self.assertNotIn("--encopts", plain)
-
-    def test_encode_movies_max_threads_tightens_share(self):
-        """The configured cap wins when tighter than the parallel CPU share."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            with (
-                tempfile.TemporaryDirectory() as out,
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
-                    encode.EncodeResult(input=i, output=o, success=True)
-                )
-                # workers=2 on 16 cores would give a big share; the cap must win
-                engine_pipeline.encode_movies(
-                    [source],
-                    Path(out),
-                    preset="Fast 1080p30",
-                    encoder="svt_av1",
-                    workers=2,
-                    max_threads=4,
-                )
-                command = enc.call_args[0][2]
-        self.assertIn("--encopts", command)
-        self.assertIn("pin=4", command)
-
     def test_saved_percent(self):
         result = encode.EncodeResult(
             input=Path("in.mkv"),
@@ -400,32 +328,6 @@ class TestEncode(unittest.TestCase):
         # zero sizes => 0
         result = encode.EncodeResult(input=Path("in.mkv"), output=Path("out.mkv"), success=True)
         self.assertEqual(result.saved_percent, 0.0)
-
-    def test_encode_file_missing_input(self):
-        with self.assertRaises(FileNotFoundError):
-            engine_pipeline.encode_file(Path("does-not-exist.mkv"), Path("out.mkv"))
-
-    def test_encode_movies_dry_run(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            out_dir = Path(tmp) / "encoded"
-            results = engine_pipeline.encode_movies(
-                [Path("a.mkv"), Path("b.mkv")], out_dir, dry_run=True
-            )
-            self.assertEqual(len(results), 0)
-            # dry run => no output directory created
-            self.assertFalse(out_dir.exists())
-
-    def test_encode_movies_skip_existing(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            out_dir = Path(tmp)
-            (out_dir / "a.mkv").write_bytes(b"x")
-            results = engine_pipeline.encode_movies([Path("a.mkv")], out_dir)
-            # skipped => no result recorded
-            self.assertEqual(len(results), 0)
 
     def test_streamed_encode_reaps_exit_code(self):
         """The streamed encode (progress path) must reap the process: at EOF
@@ -453,34 +355,6 @@ class TestEncode(unittest.TestCase):
                 result.success or result.error == "no output file was written",
                 f"streamed run misread exit code: success={result.success} error={result.error!r}",
             )
-
-    def test_encode_movies_rich_bar_survives_percent_lines(self):
-        """Fixed mode's rich bar wiring: the engine gets a CALLABLE (not the
-        rich Progress object) - the first HandBrake percent line used to
-        raise TypeError: 'Progress' object is not callable."""
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "in.mkv"
-            src.write_bytes(b"x" * 8)
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            stub = out_dir / "hb_stub.cmd" if os.name == "nt" else out_dir / "hb_stub.sh"
-            if os.name == "nt":
-                stub.write_bytes(b"@echo off\r\necho Encoding: task 1 of 1, 42.31 %%\r\nexit 0\r\n")
-            else:
-                stub.write_bytes(b'#!/bin/sh\necho "Encoding: task 1 of 1, 42.31 %"\nexit 0\n')
-                stub.chmod(0o755)
-            with (
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
-                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
-            ):
-                # must not raise TypeError; the encode result is failure
-                # (stub writes no output) but the crash is the regression
-                results = engine_pipeline.encode_movies([src], out_dir)
-            self.assertEqual(len(results), 1)
-            self.assertFalse(results[0].success)
-            self.assertEqual(results[0].error, "no output file was written")
 
     def test_cancel_responds_during_silence(self):
         """The cancel event must interrupt an encode whose child has gone
@@ -685,6 +559,22 @@ class TestEncode(unittest.TestCase):
         self.assertEqual(code, -2)
         self.assertIn("stalled", err)
 
+    def test_run_timeout_terminates_the_child_without_a_cancel_event(self):
+        """Issue #384: a bounded read (the crop pass's duration ceiling)
+        passes timeout= and no cancel event; with the stall watchdog off,
+        the runner must still take the watched path and terminate the child
+        at the ceiling, reporting -2 like a stall."""
+        from shrinkray.tools.process import _run
+
+        command = ["cmd", "/c", "ping -n 60 127.0.0.1 >nul"] if os.name == "nt" else ["sleep", "60"]
+        with mock.patch("shrinkray.tools.process.stall_timeout_seconds", return_value=None):
+            started = time.monotonic()
+            code, err = _run(command, timeout=0.5)
+            elapsed = time.monotonic() - started
+        self.assertEqual(code, -2)
+        self.assertIn("timed out", err)
+        self.assertLess(elapsed, 10.0, "the child ran past its ceiling")
+
     def test_terminated_tree_does_not_hang_on_orphaned_grandchild(self):
         """Regression (the 59-second hang): killing the direct child must
         not leave the caller waiting for an orphaned grandchild that holds
@@ -834,8 +724,9 @@ class TestEncodeLock(unittest.TestCase):
 
         with guard_encodes(self.out, holder="test") as lock:
             self.assertTrue(lock.is_file())
-            # pid-stamped (+ the process start time where the platform has one)
+            # pid-stamped, and the holder is named for the busy message
             self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
+            self.assertEqual(lock.read_text().split()[1], "test")
         self.assertFalse(lock.exists())
 
     def test_second_claimant_is_rejected(self):
@@ -844,225 +735,165 @@ class TestEncodeLock(unittest.TestCase):
         with guard_encodes(self.out), self.assertRaises(EncodeBusyError) as ctx:
             guard_encodes(self.out).__enter__()
         self.assertIn("pid", str(ctx.exception))
+        self.assertIn("heartbeat", str(ctx.exception))
 
-    def test_stale_lock_is_stolen(self):
-        """A lock whose pid is dead is stolen (not honored forever)."""
-        from shrinkray.engine.lock import _lock_path, acquire_encode_slot
+    def test_a_silent_lock_is_stolen(self):
+        """A lock whose holder stopped beating is reclaimed (issue #383):
+        the window measures silence, never the pid or the run's age."""
+        from shrinkray.engine.lock import _LOCK_STALE_SECONDS, _lock_path, acquire_encode_slot
 
         self.out.mkdir(parents=True, exist_ok=True)
         lock = _lock_path(self.out)
-        lock.write_text("999999999")  # pid that does not exist
+        lock.write_text("999999999")
+        old = time.time() - _LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
         acquired = acquire_encode_slot(self.out, holder="test")
         self.assertEqual(acquired, lock)
-        # the stolen lock is re-stamped with OUR pid
         self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
         lock.unlink()
 
-    def test_garbage_lock_content_is_stolen(self):
-        from shrinkray.engine.lock import _lock_path, acquire_encode_slot
+    def test_a_live_holder_in_another_pid_namespace_keeps_the_lock(self):
+        """Issue #383's acceptance criterion: two holders whose pids collide
+        (the server and a one-shot container are both pid 1) must still
+        exclude each other. The heartbeat decides, so the pid is irrelevant.
+        """
+        from shrinkray.engine.lock import EncodeBusyError, _lock_path, acquire_encode_slot
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        # a holder in another namespace: pid 1, which is NOT us here
+        lock.write_text("1 serve")
+        with self.assertRaises(EncodeBusyError):
+            acquire_encode_slot(self.out, holder="test")
+        self.assertTrue(lock.exists())
+        lock.unlink()
+
+    def test_a_silent_lock_from_a_live_pid_is_reclaimed(self):
+        """The pid is not the test: a lock naming a process that IS alive
+        (ours) but has not beaten for the stale window is reclaimed, so a
+        SIGKILLed run's lock cannot outlive it for hours (issue #383)."""
+        from shrinkray.engine.lock import _LOCK_STALE_SECONDS, _lock_path, acquire_encode_slot
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        lock.write_text(f"{os.getpid()} encode")
+        old = time.time() - _LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+        acquired = acquire_encode_slot(self.out, holder="test")
+        self.assertEqual(acquired, lock)
+        self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
+        lock.unlink()
+
+    def test_an_old_pid_only_lock_is_reclaimed_by_its_mtime(self):
+        """Issue #383's upgrade criterion: a lock written before this change
+        (pid only, no label) is judged by its mtime like any other, so an
+        upgrade never keeps a dead run's lock for the old six-hour window."""
+        from shrinkray.engine.lock import _LOCK_STALE_SECONDS, _lock_path, acquire_encode_slot
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        lock.write_text("999999999")
+        old = time.time() - _LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+        self.assertEqual(acquire_encode_slot(self.out, holder="test"), lock)
+        lock.unlink()
+
+    def test_the_heartbeat_keeps_a_held_slot_alive(self):
+        """The holder touches the lock while it runs, so the stale window
+        measures silence: a slot held past the window is still ours
+        (issue #383)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
+            mock.patch.object(lock_mod, "_LOCK_STALE_SECONDS", 0.05),
+            lock_mod.guard_encodes(self.out, holder="test") as held,
+        ):
+            time.sleep(0.2)
+            with self.assertRaises(lock_mod.EncodeBusyError):
+                lock_mod.acquire_encode_slot(self.out, holder="rival")
+        self.assertFalse(held.exists())
+
+    def test_a_failed_heartbeat_is_reported(self):
+        """A touch that fails is logged, never swallowed: the holder must
+        learn its slot is on a timer (invariant 5)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
+            mock.patch.object(lock_mod, "log_warning") as warning,
+            mock.patch.object(Path, "touch", side_effect=OSError("read-only")),
+            lock_mod.guard_encodes(self.out, holder="test"),
+        ):
+            time.sleep(0.2)
+        messages = " ".join(str(c.args[0]) for c in warning.call_args_list)
+        self.assertIn("Could not refresh the encode lock", messages)
+
+    def test_garbage_lock_content_is_busy_until_it_goes_silent(self):
+        """Unreadable content is not evidence of a dead holder: the mtime is
+        (issue #383). A fresh garbage file is busy; a silent one is stolen."""
+        from shrinkray.engine.lock import (
+            _LOCK_STALE_SECONDS,
+            EncodeBusyError,
+            _lock_path,
+            acquire_encode_slot,
+        )
 
         self.out.mkdir(parents=True, exist_ok=True)
         lock = _lock_path(self.out)
         lock.write_text("not-a-pid")
-        acquired = acquire_encode_slot(self.out)
-        self.assertEqual(acquired, lock)
-        lock.unlink()
-
-    def test_a_reused_pid_is_not_adopted_as_live(self):
-        """A lock whose pid is alive but was written by a DIFFERENT process
-        with that pid is stolen (issue #336): the container restarts pids
-        from 1 and the server is pid 1, so after a SIGKILLed run the restarted
-        app must not find its own pid in the dead run's lock and refuse to
-        encode (the old check was kill(pid, 0) alone)."""
-        from shrinkray.engine.lock import _lock_path, acquire_encode_slot
-        from shrinkray.tools.process import process_start_ticks
-
-        self.out.mkdir(parents=True, exist_ok=True)
-        lock = _lock_path(self.out)
-        live_start = process_start_ticks(os.getpid())
-        # our own pid (alive) with a start time that CANNOT match: a reused pid
-        lock.write_text(f"{os.getpid()} 1" if live_start != 1 else f"{os.getpid()} 999999999")
-        acquired = acquire_encode_slot(self.out, holder="test")
-        self.assertEqual(acquired, lock)
-        lock.unlink()
-
-    def test_a_matching_start_stamp_is_honoured(self):
-        """The positive case of the start stamp: a lock written by THIS
-        process (pid + start match) is still a busy lock, however old."""
-        from shrinkray.engine.lock import EncodeBusyError, _lock_path, acquire_encode_slot
-        from shrinkray.tools.process import process_start_ticks
-
-        self.out.mkdir(parents=True, exist_ok=True)
-        lock = _lock_path(self.out)
-        start = process_start_ticks(os.getpid())
-        lock.write_text(str(os.getpid()) if start is None else f"{os.getpid()} {start}")
         with self.assertRaises(EncodeBusyError):
-            acquire_encode_slot(self.out, holder="test")
+            acquire_encode_slot(self.out)
+        old = time.time() - _LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+        self.assertEqual(acquire_encode_slot(self.out), lock)
         lock.unlink()
 
-    def test_the_steal_never_deletes_a_fresh_competing_lock(self):
-        """Between reading a stale lock and unlinking it, another claimant
-        may steal and RE-CREATE the lock (PR #389's review finding 4): the
-        steal must verify the file's identity and lose, never delete the
-        competitor's brand-new live lock."""
-
-        from shrinkray.engine.lock import EncodeBusyError, _lock_path, acquire_encode_slot
+    def test_the_steal_loses_to_a_heartbeat_that_lands_first(self):
+        """Between judging a lock stale and unlinking it, the holder may beat
+        again or another claimant may re-create it (PR #389's review finding
+        4). The steal re-checks the mtime and loses, never deleting a live
+        lock."""
+        from shrinkray.engine import lock as lock_mod
+        from shrinkray.engine.lock import _LOCK_STALE_SECONDS, EncodeBusyError, _lock_path
 
         self.out.mkdir(parents=True, exist_ok=True)
         lock = _lock_path(self.out)
-        lock.write_text("999999999")  # a dead pid: stale on first read
-        competitor_stamp = f"{os.getpid()} 1"  # a live pid with a foreign start
+        lock.write_text("999999999")
+        old = time.time() - _LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
 
-        real_read = type(lock).read_text
+        real_silence = lock_mod._silence_seconds
+        calls = {"n": 0}
 
-        def read_then_race(self, *args, **kwargs):
-            text = real_read(self, *args, **kwargs)
-            if text.strip() == "999999999":
-                # the competitor steals and re-creates between our read and
-                # the steal's unlink: a NEW file with a LIVE stamp
-                lock.unlink()
-                lock.write_text(competitor_stamp)
-            return text
+        def raced(path):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                # the holder beat between the judgement and the steal
+                os.utime(path, None)
+            return real_silence(path)
 
         with (
-            mock.patch.object(type(lock), "read_text", read_then_race),
+            mock.patch.object(lock_mod, "_silence_seconds", side_effect=raced),
             self.assertRaises(EncodeBusyError),
         ):
-            acquire_encode_slot(self.out, holder="test")
-        # the competitor's lock SURVIVED with its live stamp
+            lock_mod.acquire_encode_slot(self.out, holder="test")
         self.assertTrue(lock.exists())
-        self.assertEqual(lock.read_text(), competitor_stamp)
         lock.unlink()
 
-    def test_encode_movies_forwards_caller_progress(self):
-        """The caller's progress callback receives every encode percent event.
+    def test_a_lost_holder_does_not_release_the_new_holders_lock(self):
+        """A holder that stalled past the window must not delete the new
+        holder's lock when it finally exits (issue #383)."""
+        from shrinkray.engine.lock import _lock_path, acquire_encode_slot, release_encode_slot
 
-        Regression: the loop shadowed its `progress` parameter with its own rich
-        bar, so a job's live progress (the SSE channel) fell silent for the
-        whole run and the dashboard showed no percent.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            events: list[dict] = []
-
-            def fake_encode(i, o, cmd, progress=None, db_file=None):
-                if progress is not None:
-                    progress({"stage": "encode", "percent": 42.0})
-                return encode.EncodeResult(input=i, output=o, success=True)
-
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch(
-                    "shrinkray.engine.pipeline._encode_with_command", side_effect=fake_encode
-                ),
-            ):
-                engine_pipeline.encode_movies([source], Path(tmp) / "enc", progress=events.append)
-            self.assertEqual([e.get("percent") for e in events], [42.0])
-
-    def test_encode_movies_busy_raises(self):
-        """encode_movies propagates EncodeBusyError (no clobber, no swallow)."""
-        import tempfile
-
-        from shrinkray.engine.lock import EncodeBusyError, guard_encodes
-
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            with (
-                guard_encodes(Path(tmp) / "enc"),
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                self.assertRaises(EncodeBusyError),
-            ):
-                engine_pipeline.encode_movies([source], Path(tmp) / "enc")
-
-    def test_encode_movies_reencodes_truncated_debris(self):
-        """A truncated output (interrupted encode) is removed and re-encoded,
-        not skipped forever (regression: 'output exists' trusted existence
-        alone, so crash debris blocked the movie from ever being encoded)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            debris = out_dir / "movie.mkv"
-            debris.write_bytes(b"partial garbage")  # non-empty but truncated
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=False),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
-                    encode.EncodeResult(input=i, output=o, success=True)
-                )
-                results = engine_pipeline.encode_movies([source], out_dir)
-            self.assertEqual(len(results), 1)
-            self.assertTrue(results[0].success)
-            # debris was removed BEFORE the encode (no clobber risk)
-            self.assertEqual(enc.call_count, 1)
-
-    def test_encode_movies_keeps_verified_output(self):
-        """An existing, duration-verifying output is still skipped (the
-        normal resume path must keep working)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            (out_dir / "movie.mkv").write_bytes(b"real output")
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                results = engine_pipeline.encode_movies([source], out_dir)
-            self.assertEqual(results, [])
-            enc.assert_not_called()
-
-    def test_encode_movies_empty_output_is_reencoded(self):
-        """A 0-byte output (very early crash) is re-encoded."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            (out_dir / "movie.mkv").write_bytes(b"")
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
-                    encode.EncodeResult(input=i, output=o, success=True)
-                )
-                results = engine_pipeline.encode_movies([source], out_dir)
-            self.assertEqual(len(results), 1)
-
-    def test_encode_movies_passes_db_file_for_stall_telemetry(self):
-        """The db path given to encode_movies reaches every
-        _encode_with_command call (fixed-mode jobs and CLI encode get the
-        stall watchdog's failure bundles, as quality mode already does)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x")
-            out_dir = Path(tmp) / "enc"
-            out_dir.mkdir()
-            db_path = Path(tmp) / "test.db"
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
-                mock.patch("shrinkray.engine.pipeline._encode_with_command") as enc,
-            ):
-                enc.side_effect = lambda i, o, cmd, progress=None, db_file=None: (
-                    encode.EncodeResult(input=i, output=o, success=True)
-                )
-                engine_pipeline.encode_movies([source], out_dir, db_file=db_path)
-            self.assertEqual(enc.call_count, 1)
-            self.assertEqual(enc.call_args.kwargs.get("db_file"), db_path)
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        lock.write_text("1 encode-job")
+        release_encode_slot(lock)
+        self.assertTrue(lock.exists(), "another holder's lock was deleted")
+        lock.unlink()
+        self.assertEqual(acquire_encode_slot(self.out, holder="test"), lock)
+        lock.unlink()
 
     def test_quality_progress_callback_maps_percent(self):
         """The CLI progress callback maps engine percent events onto the
@@ -1423,22 +1254,6 @@ class TestEncodeLock(unittest.TestCase):
             ok, _message = check_disk_space(blocker / "sub", 10)
             self.assertTrue(ok)  # degraded, not failed
             self.assertIn("could not be checked", _message)
-
-    def test_encode_movies_raises_on_full_disk(self):
-        """encode_movies refuses to start when the drive cannot hold the inputs."""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "movie.mkv"
-            source.write_bytes(b"x" * 100)
-            with (
-                mock.patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
-                mock.patch(
-                    "shrinkray.engine.pipeline.check_disk_space",
-                    return_value=(False, "no space left"),
-                ),
-                self.assertRaises(RuntimeError) as ctx,
-            ):
-                engine_pipeline.encode_movies([source], Path(tmp) / "enc")
-        self.assertIn("no space left", str(ctx.exception))
 
 
 class TestSubprocessTimeouts(unittest.TestCase):

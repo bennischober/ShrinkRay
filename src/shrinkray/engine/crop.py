@@ -22,6 +22,7 @@ import json
 import re
 import sqlite3
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -239,6 +240,7 @@ def intersect_crop_rects(
 def run_crop_timeline(
     movie: Path,
     limit: int = CROP_DETECT_LIMIT,
+    cancel: threading.Event | None = None,
 ) -> tuple[list[CropReading], tuple[int, int] | None]:
     """Runs the keyframe-only cropdetect pass over the whole runtime.
 
@@ -249,18 +251,30 @@ def run_crop_timeline(
     Args:
         movie (Path): The source movie file.
         limit (int): The cropdetect blackness threshold (0-255).
+        cancel (threading.Event | None): Cooperative cancellation (issue
+            #384): a set event kills the pass within a poll tick and the
+            caller caches nothing.
 
     Returns:
         tuple: The readings in file order and the (width, height) of the
-            video frame (None when the stream could not be read).
+            video frame. The frame is None when the stream could not be read
+            or the pass did not complete: an ffmpeg that exits early (killed
+            by ctrl+c or a closed terminal, a decode error, the timeout) has
+            measured only part of the runtime, and a crop from part of the
+            runtime can cut into picture a later segment shows.
     """
     from shrinkray.tools.ffprobe import probe_duration_seconds
 
     frame = source_frame(movie)
     if frame is None:
         return [], None
+    if cancel is not None and cancel.is_set():
+        return [], None
+    # the pass's duration-derived ceiling (issue #62's protection, kept through
+    # the runner: issue #384 adds the cancel event beside it)
+    ceiling = max(int((probe_duration_seconds(movie) or 0) * 4) + 600, FFPROBE_TIMEOUT)
     try:
-        proc = subprocess.run(
+        code, err = _run(
             [
                 FFMPEG_BINARY,
                 "-hide_banner",
@@ -279,13 +293,26 @@ def run_crop_timeline(
                 "null",
                 "-",
             ],
-            capture_output=True,
-            timeout=max(int((probe_duration_seconds(movie) or 0) * 4) + 600, FFPROBE_TIMEOUT),
+            cancel=cancel,
+            timeout=ceiling,
         )
-    except (OSError, subprocess.SubprocessError) as e:
-        log(f"The crop timeline pass failed for '{movie.name}': {e}")
-        return [], frame
-    return parse_crop_timeline(proc.stderr.decode(errors="replace")), frame
+    except OSError as e:
+        # ffmpeg missing or not spawnable (EMFILE, ENOMEM): no measurement,
+        # the caller falls back like any failed pass
+        log(f"The crop timeline pass could not start for '{movie.name}': {e}")
+        return [], None
+    if code == -1:
+        # cancelled (issue #384): a cancel caches nothing
+        return [], None
+    if code == -2:
+        # terminated at the ceiling or by the stall watchdog: the runner's
+        # message says which, a bare "-2" would read like an ffmpeg crash
+        log(f"The crop timeline pass failed for '{movie.name}': {err}")
+        return [], None
+    if code != 0:
+        log(f"The crop timeline pass failed for '{movie.name}': ffmpeg exited {code}")
+        return [], None
+    return parse_crop_timeline(err), frame
 
 
 def source_frame(movie: Path) -> tuple[int, int] | None:
@@ -465,6 +492,7 @@ def get_crop_summary(connection: sqlite3.Connection, movie: Path) -> CropSummary
 def detect_crop_summary_cached(
     movie: Path,
     db_file: Path | None,
+    cancel: threading.Event | None = None,
 ) -> CropSummary | None:
     """Returns the file's crop summary, computing and caching it on miss.
 
@@ -476,6 +504,9 @@ def detect_crop_summary_cached(
     Args:
         movie (Path): The source movie file.
         db_file (Path | None): The database file (None: compute uncached).
+        cancel (threading.Event | None): Cooperative cancellation (issue
+            #384): a set event ends the timeline pass within a poll tick and
+            caches nothing.
 
     Returns:
         CropSummary | None: The summary, or None when the pass failed.
@@ -498,7 +529,7 @@ def detect_crop_summary_cached(
             connection.close()
             connection = None
     try:
-        readings, frame = run_crop_timeline(movie)
+        readings, frame = run_crop_timeline(movie, cancel=cancel)
         if frame is None:
             return None
         summary = crop_summary_from_timeline(readings, frame)
@@ -513,7 +544,10 @@ def detect_crop_summary_cached(
 
 
 def detect_crop_rect(
-    movie: Path, workdir: Path, count: int = DEFAULT_CROP_SAMPLE_COUNT
+    movie: Path,
+    workdir: Path,
+    count: int = DEFAULT_CROP_SAMPLE_COUNT,
+    cancel: threading.Event | None = None,
 ) -> tuple[int, int, int, int] | None:
     """Detects baked-in black bars (letterbox) of a movie via cropdetect.
 
@@ -526,6 +560,8 @@ def detect_crop_rect(
         movie (Path): The source movie file.
         workdir (Path): Working directory (unused, kept for symmetry).
         count (int): The number of segments to probe.
+        cancel (threading.Event | None): Cooperative cancellation (issue
+            #384): a set event ends the sampled pass within a poll tick.
 
     Returns:
         tuple | None: The (top, bottom, left, right) bars to crop, or None
@@ -535,6 +571,8 @@ def detect_crop_rect(
 
     duration = probe_duration_seconds(movie)
     if duration is None:
+        return None
+    if cancel is not None and cancel.is_set():
         return None
 
     try:
@@ -569,6 +607,8 @@ def detect_crop_rect(
 
     rects: list[tuple[int, int, int, int]] = []
     for offset in sample_offsets(duration, count):
+        if cancel is not None and cancel.is_set():
+            return None
         code, err = _run(
             [
                 FFMPEG_BINARY,
@@ -586,8 +626,12 @@ def detect_crop_rect(
                 "-f",
                 "null",
                 "-",
-            ]
+            ],
+            cancel=cancel,
         )
+        if code == -1:
+            # cancelled (issue #384): the sampled pass caches nothing
+            return None
         if code != 0:
             continue
         rect = parse_crop_line(err)

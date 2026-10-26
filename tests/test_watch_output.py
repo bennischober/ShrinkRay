@@ -88,6 +88,29 @@ class TestWatchOutputEnv(unittest.TestCase):
         self.assertEqual(caught.exception.code, 1)
         out.chmod(0o755)
 
+    def test_the_shutdown_runs_exactly_once(self) -> None:
+        """Issue #386: a copy-paste had run_app's finally block shut the app
+        down twice - the second call against an already-closed AppState, and
+        the log reading "app stopped" twice per stop. The boot tests' mocked
+        AppState records every shutdown call; one boot, one stop.
+        """
+        with (
+            patch.object(app_module, "allow_roots"),
+            patch.object(app_module, "AppState") as state_cls,
+            patch.object(app_module, "auto_backlog"),
+            patch.object(app_module, "_recover_interrupted_swaps"),
+            patch.object(app_module, "start_watch"),
+            patch.object(app_module, "_serve_forever"),
+            patch.object(app_module, "log") as log_mock,
+            patch("shrinkray.service.all_problems", return_value=[]),
+        ):
+            app_module.run_app(Path(self.tmp.name) / "test.db")
+        shutdown = state_cls.return_value.shutdown
+        self.assertEqual(shutdown.call_count, 1, "the shutdown must run exactly once per stop")
+        # the log lies were half the issue: "app stopped" must appear once
+        stopped = [c for c in log_mock.call_args_list if c.args and c.args[0] == "app stopped"]
+        self.assertEqual(len(stopped), 1, "the stop must be logged exactly once")
+
 
 class TestServeForever(unittest.TestCase):
     """The seam's own body, which every other test here patches away.

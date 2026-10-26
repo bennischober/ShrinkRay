@@ -6,7 +6,7 @@ Nothing here imports upward (the layer contract forbids it); `engine/`, `service
 and `server/` all reach the binaries through these modules.
 
 **Known deviation:** three engine modules still call
-`subprocess.run` directly for SHORT reads — `engine/crop.py` (4 sites, incl. its own
+`subprocess.run` directly for SHORT reads — `engine/crop.py` (3 sites, incl. its own
 `ffprobe -show_streams`), `engine/samples.py`, `engine/pipeline.py`.
 The long children (encodes, VMAF) all go through `_run`/`spawn_kwargs`. New short
 reads belong in the matching `tools/` module, not in a fourth copy.
@@ -22,13 +22,15 @@ reads belong in the matching `tools/` module, not in a fourth copy.
 
 ## THE RUNNER CONTRACT
 
-`_run(command, cwd, cancel)` returns `(returncode, stderr)` and signals
-cancellation with `-1`. Both pipes are drained by daemon threads (`process.py`)
-— a child writing more than the ~64 K pipe buffer would otherwise deadlock a poll-only
-loop. With neither a cancel event nor a stall watchdog, it falls back to a plain
-blocking `subprocess.run` and deliberately sets NO timeout (`process.py`):
-"watchdog off" means no protection, and a fixed timeout would kill healthy
-minutes-long probes.
+`_run(command, cwd, cancel, timeout)` returns `(returncode, stderr)`, signals
+cancellation with `-1`, and a child it terminated (stall watchdog, or the
+caller's `timeout` ceiling) with `-2` and a message saying which. Both pipes are
+drained by daemon threads (`process.py`) — a child writing more than the ~64 K pipe
+buffer would otherwise deadlock a poll-only loop. `timeout` is for bounded reads
+only (the crop timeline pass's duration-derived ceiling, #384). With neither a
+cancel event, a timeout nor a stall watchdog, it falls back to a plain blocking
+`subprocess.run` and deliberately sets NO timeout (`process.py`): "watchdog off"
+means no protection, and a fixed timeout would kill healthy minutes-long probes.
 
 ## CONVENTIONS
 

@@ -63,9 +63,8 @@ terminal (planned: `shrinkray setup`, see [Direction](#direction)).
 resolution, FPS, audio languages, HDR detection, black-bar detection — cached
 in a sqlite database, so repeated scans are near-instant.
 
-**`encode`** re-encodes your library with HandBrake to save disk space. The
-default mode uses a fixed preset. The **quality mode** is where it gets
-interesting:
+**`encode`** re-encodes your library with HandBrake to save disk space. Every
+encode is quality-measured — there is no fixed-preset mode:
 
 > **Fix quality, not bitrate.** For every movie, short samples are probed at
 > different CRF values, each probe is scored with [VMAF](https://github.com/Netflix/vmaf)
@@ -269,7 +268,7 @@ removed it: an unmeasured encode can take a library file's path).
 | Option | Effect |
 |---|---|
 | `--target-vmaf N` | quality floor (default: `96`) |
-| `--probe-encoder-preset N` | the PROBES' encoder speed preset (default: the `handbrake.probe_encoder_preset` config value, shipped as `5`; SVT-AV1 speed 0-10, higher = slower; a measurement setting — changing it invalidates stored plans) |
+| `--probe-encoder-preset N` | the PROBES' encoder speed preset (default: the `handbrake.probe_encoder_preset` config value, shipped as `5`; SVT-AV1 speed -1 to 10, higher = faster (a lower preset is slower and compresses better); a measurement setting — changing it invalidates stored plans) |
 | `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `3`; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows per movie (more samples can only shrink the crop) |
@@ -295,9 +294,10 @@ size estimate comes from the short probe samples, so treat it as a ballpark;
 the probing predicts the decision, the encode measures it — the chosen CRF
 can differ by ±1 between runs.
 
-**HDR estimates are biased optimistic.** The size probe encodes one early
-window, and HDR samples skew toward easy content (dark, static shots), so the
-predicted savings land far above the real ones — measured on an HDR 4K title:
+**HDR estimates are biased optimistic.** The plan's size estimate encodes one
+early window (`estimate_size_factor`, `engine/search.py`), and HDR samples skew
+toward easy content (dark, static shots), so the predicted savings land far
+above the real ones — measured on an HDR 4K title:
 19.1% real vs 78% predicted. Every surface that shows an HDR estimate (the
 `plan` command, the dashboard's plan display) carries this note; plan an HDR
 title expecting the real number to be much smaller than the prediction.
@@ -386,8 +386,10 @@ The two rows people ask about:
   `eligibility`, and all three are checked before any ffmpeg probe runs — a
   skipped file costs one `ffprobe`, not an encode.
 - **Row 7 is the real answer to "is this file already efficient?"**: the
-  search measures a size probe at the most aggressive CRF and again at the
-  chosen CRF, and skips when the encode would grow the file. "Already
+  search measures a size probe at the most aggressive CRF, then decides at
+  the chosen CRF from the encoded byte counts the VMAF probes already
+  recorded for every window (a pre-#314 cache falls back to one encoded
+  window), and skips when the encode would grow the file. "Already
   small" is a measurement per file, not a threshold — a well-encoded 4 GB
   H.264 movie is skipped by evidence even with the size floor at 0.
 
@@ -443,7 +445,7 @@ Example [config.json](config.json):
         "black_bars": { "MIN_WIDTH": 100, "MIN_HEIGHT": 100 }
     },
     "handbrake": {
-        "preset": "Fast 1080p30",        // fixed-mode HandBrake preset NAME
+        "preset": "Fast 1080p30",        // legacy: unread by the measured pipeline
         "encoder": "svt_av1",
         "probe_encoder_preset": "5", // quality mode: the PROBES' speed preset
         "encoder_preset": "3",         // quality mode: the FINAL encode's preset
@@ -470,24 +472,23 @@ Example [config.json](config.json):
 > finished files, because the database already records them as done.
 
 Three keys named "preset" with different meanings — the distinction:
-`handbrake.preset` is the **fixed-mode** HandBrake preset *name* (a full
-quality/speed/content bundle, e.g. `Fast 1080p30`). The other two are
-**quality mode's** encoder *speed* presets — the x264/x265 ladder
-(`ultrafast`…`placebo`). **`probe_encoder_preset` is a measurement
+`handbrake.preset` is a legacy key the measured pipeline no longer reads
+(it named the removed fixed mode's HandBrake preset *name*). The other two
+are the encoder *speed* presets — the SVT-AV1 ladder. **`probe_encoder_preset` is a measurement
 setting**: the CRF search's throwaway probe encodes run at it (default
-`medium` — cheap, and representative of what the final encode will look
+`5` — cheap, and representative of what the final encode will look
 like). **`encoder_preset` is an output setting**: the final encode — the
-artifact that gets kept — runs at it (default `slow`).
+artifact that gets kept — runs at it (default `3`, slower and better).
 
-**The measured-at-medium / encoded-at-slow trade-off is deliberate** (issue
+**The measured-at-5 / encoded-at-3 trade-off is deliberate** (issue
 #22): the probe predicts the final encode, and preset shifts the CRF→VMAF
 curve, so a probe at a different preset measures a slightly different curve
 than the final encode runs — the chosen CRF can miss the target a little in
 either direction. That is accepted so the search stays cheap; if a drift
 investigation ever shows it matters on real titles, the fallback is to probe
 at the final preset and pay the time. The plan's size estimate comes from a
-probe-preset encode, so it describes a `medium`-preset file, not the
-`slow`-preset file that gets written. Both presets are recorded on every
+probe-preset encode, so it describes a preset-`5` file, not the
+preset-`3` file that gets written. Both presets are recorded on every
 encode row (`encoder_preset`, `probe_encoder_preset`) so the provenance
 page shows which number produced which measurement. A change to the PROBE
 preset invalidates stored plans (they are re-probed); a change to the FINAL
