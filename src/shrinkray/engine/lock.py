@@ -187,22 +187,64 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
             # where the file is still empty (issue #383): a fresh empty file
             # is a live claim, not a stale one.
             raise EncodeBusyError(_busy_message(output_dir, lock, silence)) from None
-        # steal ONLY a lock that is still silent when we unlink it: between
-        # the read above and this check, the holder may have beaten again or
-        # another claimant may have stolen and re-created it (the review on
-        # this PR, finding 4). The mtime - not the text - is the identity,
-        # because a live holder's text never changes.
+        # steal by RENAMING the stale file out of the way: a rename is
+        # atomic, so exactly one claimant wins it. Two claimants that both
+        # judged the lock stale used to unlink in turn and each delete the
+        # other's brand-new lock (the review on this PR, finding 4) - the
+        # re-check alone only narrows that window.
         log_warning(f"Stale encode lock in '{output_dir}' - stealing it.")
-        again = _silence_seconds(lock)
-        if again is not None and again < _LOCK_STALE_SECONDS:
-            raise EncodeBusyError(_busy_message(output_dir, lock, again)) from None
-        _release_path(lock)
+        if not _steal(lock):
+            raise EncodeBusyError(
+                f"another encoder is already using '{output_dir}' "
+                "(it claimed the slot while this one read the stale lock)"
+            ) from None
         return acquire_encode_slot(output_dir, holder)
     with os.fdopen(fd, "w", encoding="ascii") as handle:
         token = uuid.uuid4().hex[:12]
         handle.write(f"{os.getpid()} {holder} {token}")
     _OWNED[lock] = token
     return lock
+
+
+def _steal(lock: Path) -> bool:
+    """Takes a stale lock out of the way, atomically, if it is still stale.
+
+    The rename is the atomic step: of two claimants that both judged the same
+    lock stale, exactly one renames it and the other loses, so neither can
+    delete the other's brand-new lock. A holder that beat in the moment
+    between the judgement and the rename keeps its slot (the file is renamed
+    back), and only a lock still silent after the rename is discarded.
+
+    Args:
+        lock (Path): The lock file judged stale.
+
+    Returns:
+        bool: True when this claimant won the steal and may re-claim.
+    """
+    taken = lock.with_name(f"{lock.name}.stale.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+    try:
+        os.rename(lock, taken)
+    except OSError:
+        return False
+    silence = _silence_seconds(taken)
+    if silence is not None and silence < _LOCK_STALE_SECONDS:
+        # the holder beat just before the rename: restore its lock, and only
+        # over a free name (link is exclusive, so a concurrent claimant's
+        # file is never replaced)
+        try:
+            os.link(taken, lock)
+        except OSError as e:
+            log_warning(
+                f"Could not restore the live encode lock in '{lock.parent}' ({e}); "
+                f"it is at '{taken.name}'."
+            )
+        else:
+            with contextlib.suppress(OSError):
+                taken.unlink()
+        return False
+    with contextlib.suppress(OSError):
+        taken.unlink()
+    return True
 
 
 def release_encode_slot(lock: Path) -> None:

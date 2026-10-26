@@ -852,16 +852,15 @@ class TestEncodeLock(unittest.TestCase):
         lock.unlink()
 
     def test_the_steal_loses_to_a_heartbeat_that_lands_first(self):
-        """Between judging a lock stale and unlinking it, the holder may beat
-        again or another claimant may re-create it (PR #389's review finding
-        4). The steal re-checks the mtime and loses, never deleting a live
-        lock."""
+        """Between judging a lock stale and taking it, the holder may beat
+        again (PR #389's review finding 4). The steal restores the lock, never
+        discarding a live holder's slot."""
         from shrinkray.engine import lock as lock_mod
         from shrinkray.engine.lock import _LOCK_STALE_SECONDS, EncodeBusyError, _lock_path
 
         self.out.mkdir(parents=True, exist_ok=True)
         lock = _lock_path(self.out)
-        lock.write_text("999999999")
+        lock.write_text("999999999 encode 0123456789ab")
         old = time.time() - _LOCK_STALE_SECONDS - 60
         os.utime(lock, (old, old))
 
@@ -880,7 +879,38 @@ class TestEncodeLock(unittest.TestCase):
             self.assertRaises(EncodeBusyError),
         ):
             lock_mod.acquire_encode_slot(self.out, holder="test")
-        self.assertTrue(lock.exists())
+        self.assertTrue(lock.exists(), "the live holder's lock was not restored")
+        lock.unlink()
+
+    def test_two_claimants_judging_the_same_lock_only_one_wins(self):
+        """Two claimants that both read the same stale lock must not each
+        delete the other's brand-new lock (PR #389's review finding 4). Both
+        judge it stale here; the steal is a rename, so exactly one wins it and
+        the other raises instead of unlinking a live lock."""
+        from shrinkray.engine import lock as lock_mod
+        from shrinkray.engine.lock import _LOCK_STALE_SECONDS, EncodeBusyError, _lock_path
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        lock.write_text("999999999 encode 0123456789ab")
+        old = time.time() - _LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+
+        real_silence = lock_mod._silence_seconds
+
+        def always_stale(path):
+            # both claimants read the SAME stale stamp before either takes it
+            return real_silence(path) if path != lock else _LOCK_STALE_SECONDS + 60
+
+        with mock.patch.object(lock_mod, "_silence_seconds", side_effect=always_stale):
+            first = lock_mod.acquire_encode_slot(self.out, holder="first")
+            self.assertEqual(first, lock)
+            # the second claimant judged the same stamp stale: the rename loses
+            # (the file it read is gone), so it never deletes the first's lock
+            with self.assertRaises(EncodeBusyError):
+                lock_mod.acquire_encode_slot(self.out, holder="second")
+            self.assertTrue(lock.exists(), "the winner's lock was deleted")
+            self.assertEqual(lock.read_text().split()[1], "first")
         lock.unlink()
 
     def test_a_lost_holder_does_not_release_the_new_holders_lock(self):
