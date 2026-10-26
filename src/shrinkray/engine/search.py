@@ -817,7 +817,10 @@ def check_chosen_crf_shrinks(
     is the total over ALL windows when every window's entry carries a size
     (ab-av1's estimate over all samples). A missing entry (pre-#314 rows, no
     database, cache bypass) falls back to the single-window encode below -
-    a miss degrades to the old behaviour, never to a guess.
+    a miss degrades to the old behaviour, never to a guess. The bypass is
+    ENTIRE (issue #391): use_probe_cache=False means the stored sizes are
+    not read either - the caller (--replan) wants independence from
+    everything stored, and one fresh window encode buys it.
 
     Args:
         samples (list[tuple[Path, float]]): The sample windows.
