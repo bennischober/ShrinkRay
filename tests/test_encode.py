@@ -783,7 +783,7 @@ class TestEncodeLock(unittest.TestCase):
         from shrinkray.engine import lock as lock_mod
 
         with (
-            mock.patch.object(lock_mod.os, "unlink", side_effect=OSError("busy")),
+            mock.patch.object(Path, "unlink", side_effect=OSError("busy")),
             mock.patch.object(lock_mod, "log_error") as error,
             lock_mod.guard_encodes(self.out, holder="test"),
         ):
