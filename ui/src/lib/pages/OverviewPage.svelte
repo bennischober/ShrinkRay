@@ -242,6 +242,10 @@
   // question is "what remains" — the last plan predicted an outcome for
   // every open (not-yet-encoded) title, and that predicted total is a
   // plan figure, not a guess (it names its own age + basis in the panel).
+  // Measured, not guessed (Product Principle 1, issue #324): an entry
+  // without a measured prediction is EXCLUDED from the total, never
+  // defaulted to 45% — a fabricated number on the trust surface is
+  // worse than an understatement.
   const reclaimable = $derived.by(() => {
     if (planEntries.length === 0) return null
     // open titles = plan said "encode" and reality has not overtaken it
@@ -250,15 +254,26 @@
     // predicted savings per open title: saved_percent × its library size.
     // When the library join fails (suffix collisions) or size is unknown,
     // the entry's own estimated_size back-computes the source
-    // (estimated = source × (1 − saved%)) — an understatement is also a
-    // lie; the sub-line says "plan-predicted" throughout.
+    // (estimated = source × (1 − saved%)). Entries with neither a saved
+    // percent nor a back-computable size contribute nothing; unmeasured
+    // count separately so the headline cannot hide what it dropped.
+    let unmeasured = 0
     const gb = open.reduce((sum, p) => {
+      const pct = p.saved_percent
+      if (pct == null || pct <= 0) {
+        unmeasured += 1
+        return sum
+      }
       const m = movieFor(p.movie)
-      const pct = p.saved_percent ?? 45
       const sizeGb = m?.size != null && m.size > 0 ? m.size / 1024 ** 3 : p.estimated_size != null && pct < 100 ? p.estimated_size / (1 - pct / 100) / 1024 ** 3 : 0
+      if (sizeGb === 0) {
+        unmeasured += 1
+        return sum
+      }
       return sum + (sizeGb * pct) / 100
     }, 0)
-    return { count: open.length, gb }
+    if (gb <= 0 && unmeasured === open.length) return null
+    return { count: open.length, gb, unmeasured }
   })
 
   // ── resident-memory sparkline: the app watching itself ──
@@ -323,10 +338,10 @@
       <span class="stat-sub mono dim">of {totalSizeGb.toFixed(0)} GB library</span>
     </button>
     {#if reclaimable}
-      <button class="stat" onclick={() => ongoto('library')} title="Plan-predicted savings on the {reclaimable.count} titles the last plan queued for encode — realized when they encode">
+      <button class="stat" onclick={() => ongoto('library')} title="Plan-predicted savings on the {reclaimable.count} titles the last plan queued for encode — realized when they encode. Titles without a measured prediction are excluded, not estimated.">
         <span class="legend">RECLAIMABLE</span>
         <span class="stat-v mono">{reclaimable.gb.toFixed(1)} GB</span>
-        <span class="stat-sub mono dim">{reclaimable.count} planned · plan #{lastPlan?.id}</span>
+        <span class="stat-sub mono dim">{reclaimable.count} planned{reclaimable.unmeasured > 0 ? ` · ${reclaimable.unmeasured} unmeasured` : ''} · plan #{lastPlan?.id}</span>
       </button>
     {/if}
     {#if missingMovies.length > 0}
