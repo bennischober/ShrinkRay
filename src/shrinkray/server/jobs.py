@@ -946,13 +946,16 @@ def _encode_quality_or_fixed(
     total = len(movies)
     # the in-place lock identity (issue #230): the scanned root the staging
     # directory sits in - the SAME root the CLI locks in folder form and the
-    # watcher locks per pass, so all three writers contend on one identity
-    staging_root = None
+    # watcher locks per pass, so all three writers contend on one identity.
+    # execute_encode early-returns on an empty payload, so first is never
+    # empty here; the raise documents that instead of inventing a key.
     if in_place:
         first = payload_paths(payload)
-        staging_root = (
-            first[0] if (first and first[0].is_dir()) else (first[0].parent if first else None)
-        )
+        if not first:
+            raise RuntimeError("no paths in payload")
+        lock_target = first[0] if first[0].is_dir() else first[0].parent
+    else:
+        lock_target = output_dir
     if payload.get("quality", False):
         encoded_paths: set[str] = (
             set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
@@ -994,7 +997,6 @@ def _encode_quality_or_fixed(
                 # one file concurrently, both staging to the same
                 # deterministic swap path). The staging root is the contended
                 # resource: the swaps rename inside it.
-                lock_target = staging_root if in_place else output_dir
                 with guard_encodes(lock_target, holder="encode-job"):
                     result = encode_with_quality(
                         movie,
