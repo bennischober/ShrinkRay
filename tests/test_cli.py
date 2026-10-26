@@ -1,5 +1,6 @@
 """CLI command tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
+import contextlib
 import os
 import sys
 import tempfile
@@ -351,6 +352,9 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                # the CLI under test starts with SIGHUP at its default, as in
+                # a terminal, even when this test run inherited it ignored
+                preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL),
                 text=True,
             )
             try:
@@ -397,6 +401,14 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
             finally:
                 if proc.poll() is None:
                     proc.kill()
+                # a failed run must not leave the stub encoding in its own
+                # session: find it by its unique path and end it by pid
+                leftover = subprocess.run(
+                    ["pgrep", "-f", str(stubs / "HandBrakeCLI")], capture_output=True, text=True
+                )
+                for pid in leftover.stdout.split():
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(int(pid), signal.SIGKILL)
                 if proc.stdout:
                     proc.stdout.close()
 
@@ -408,6 +420,12 @@ class TestCancelOnTerminalClose(unittest.TestCase):
     def setUp(self) -> None:
         import signal
 
+        # start from the default dispositions: a test run that inherits an
+        # ignored signal (nohup, a shell's `cmd &`) must not change the result
+        saved = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        self.addCleanup(lambda: [signal.signal(s, h) for s, h in saved.items()])
         self.before = signal.getsignal(signal.SIGINT)
 
     def test_a_signal_sets_the_event_and_a_repeated_one_is_absorbed(self) -> None:
