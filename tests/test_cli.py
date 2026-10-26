@@ -261,7 +261,18 @@ class TestPresetConfigFallback(unittest.TestCase):
     the TUI saves handbrake.encoder_preset/probe_encoder_preset, the
     resident app honours them - the CLI ignored both and encoded Mode A
     files at a different speed than Mode B with the SAME saved config.
-    An explicit flag still wins."""
+    An explicit flag still wins.
+
+    The config is a process-global singleton, so every test here must start
+    and end with a clean cache: without this, a config loaded by one test
+    leaks into the next file that reads it (issue #328's review).
+    """
+
+    def setUp(self) -> None:
+        config_helper.reset_config()
+
+    def tearDown(self) -> None:
+        config_helper.reset_config()
 
     def _config_file(self, root: Path) -> Path:
         cfg = root / "config.json"
@@ -272,10 +283,7 @@ class TestPresetConfigFallback(unittest.TestCase):
 
     @contextmanager
     def _toolchain_ok(self):
-        with (
-            patch("shrinkray.service.all_problems", return_value=[]),
-            patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
-        ):
+        with patch("shrinkray.service.all_problems", return_value=[]):
             yield
 
     def test_encode_without_flags_uses_the_config_presets(self):

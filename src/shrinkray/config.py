@@ -445,7 +445,7 @@ def resolve_config_path(
 ) -> Path:
     """Resolves which config.json is in effect (issue #58).
 
-    One location, decided once per process, in this order:
+    The location is decided per load, in this order:
 
     1. an explicit config FILE path (the CLI's --config option),
     2. an explicit root DIRECTORY (tests, the app's db-dir convention),
@@ -616,7 +616,12 @@ def load_config(
     root: str | Path | None = None,
     config_file: str | Path | None = None,
 ) -> Conf:
-    """Loads the config.json file (once) and returns the settings.
+    """Loads the config.json file and returns the settings.
+
+    The result is cached for the process (one file in effect at a time), with one
+    exception: an explicit `config_file` always wins, so a caller that names a
+    file gets that file's settings even when a config is already cached (issue
+    #328: --config was silently ignored).
 
     If the config file does not exist, default values are used. The file's
     location follows resolve_config_path; the resolved path is logged once
@@ -632,18 +637,16 @@ def load_config(
         Conf: The config settings.
     """
     global _config, config_file_used, _config_signature
-    # an EXPLICIT config_file is a command-line instruction, not a cache
-    # hint: --config must win over a config another caller loaded first
-    # (issue #328's fallback test caught this - the CLI silently used the
-    # default file whenever anything had already called load_config())
-    if _config is not None:
-        if config_file is None:
-            return _config
-        explicit = resolve_config_path(config_file=config_file, root=root)
-        if explicit == config_file_used:
-            return _config
+    # an EXPLICIT config_file is a command-line instruction, not a cache hint:
+    # --config must win over a config another caller loaded first (issue #328's
+    # fallback test caught this; the CLI silently used the repo's ./config.json)
+    explicit = config_file is not None
+    if _config is not None and not explicit:
+        return _config
 
     path = resolve_config_path(config_file=config_file, root=root)
+    if _config is not None and path == config_file_used:
+        return _config
 
     data: dict[str, Any] = {}
     signature = _file_signature(path)
@@ -653,8 +656,13 @@ def load_config(
         log(f"Using config {path}")
     else:
         log_warning(f"Config file not found at '{path}', using default values!")
-    config_file_used = path
 
-    _config = Conf(data)
+    # validate BEFORE recording which file is in effect: Conf(data) raises on a bad
+    # file, and assigning config_file_used first would leave the cache pointing at
+    # a file whose settings are not in effect (refresh_config would then watch the
+    # rejected file, and a retry would silently return the stale settings).
+    fresh = Conf(data)
+    config_file_used = path
+    _config = fresh
     _config_signature = signature
     return _config
