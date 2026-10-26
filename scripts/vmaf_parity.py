@@ -172,6 +172,49 @@ def video_frame_count(path: Path) -> int | None:
         return None
 
 
+def pair_dimensions(distorted: Path) -> tuple[int | None, int | None, int | None]:
+    """Reads the distorted file's frame width, height and bit depth.
+
+    The recipe's model and scale follow the geometry being scored (issue #309), so the
+    harness must pass real dimensions: without them `vmaf_recipe` falls back to the
+    1080p model at native size and a 4K pair is scored with the wrong model.
+
+    Args:
+        distorted (Path): The encoded file the measurement scores.
+
+    Returns:
+        tuple: (width, height, bit_depth), each None when ffprobe cannot report it.
+    """
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,pix_fmt",
+        "-of",
+        "default=nw=1",
+        str(distorted),
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        return None, None, None
+    values: dict[str, str] = {}
+    for line in proc.stdout.strip().splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            values[key] = value
+    try:
+        width = int(values["width"])
+        height = int(values["height"])
+    except (KeyError, ValueError):
+        return None, None, None
+    bit_depth = 10 if "10" in values.get("pix_fmt", "") else 8
+    return width, height, bit_depth
+
+
 def measure_ours(
     reference: Path,
     distorted: Path,
@@ -191,7 +234,8 @@ def measure_ours(
             recipe is what the caches key on, so recording it keeps the result
             comparable with a later run).
     """
-    recipe = vmaf_recipe(crop=crop, hdr=hdr)
+    width, height, bit_depth = pair_dimensions(distorted)
+    recipe = vmaf_recipe(crop=crop, hdr=hdr, width=width, height=height, bit_depth=bit_depth)
     with tempfile.TemporaryDirectory(prefix="shrinkray_parity_") as tmp:
         score = measure_vmaf(
             distorted,
