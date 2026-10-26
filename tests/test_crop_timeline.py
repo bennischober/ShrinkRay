@@ -11,6 +11,7 @@ summary is cached per file version in the `crops` table. Classification by
 runtime share is report-only; the crop decision never uses it.
 """
 
+import contextlib
 import os
 import tempfile
 import threading
@@ -224,6 +225,12 @@ class TestCropCache(unittest.TestCase):
         )
         self.assertIn("timed out after 1800s", logged)
 
+    def test_a_hangup_from_outside_is_a_logged_failure_not_a_cancel(self) -> None:
+        # Popen reports a child killed by SIGHUP as -1, the runner's cancel
+        # code; with no cancel set it is a failure and must be said
+        logged = self._interrupted_pass({"return_value": (-1, "")})
+        self.assertIn("ffmpeg exited -1", logged)
+
     def test_an_unstartable_ffmpeg_fails_the_pass_without_raising(self) -> None:
         logged = self._interrupted_pass({"side_effect": FileNotFoundError(2, "No such file")})
         self.assertIn("could not start", logged)
@@ -231,10 +238,10 @@ class TestCropCache(unittest.TestCase):
     def test_a_cancel_ends_the_timeline_pass_and_caches_nothing(self) -> None:
         """Issue #384: a cancel during the pass terminates the child within
         a poll tick and caches nothing. The real runner drives a real silent
-        child in place of ffmpeg, which would otherwise sleep 60 s; the bound
+        child in place of ffmpeg, which would otherwise sleep 10 s; the bound
         is counted from the moment the event is set.
         """
-        child = ["cmd", "/c", "ping -n 60 127.0.0.1 >nul"] if os.name == "nt" else ["sleep", "60"]
+        child = ["cmd", "/c", "ping -n 10 127.0.0.1 >nul"] if os.name == "nt" else ["sleep", "10"]
         cancel = threading.Event()
         set_at: list[float] = []
 
@@ -260,7 +267,7 @@ class TestCropCache(unittest.TestCase):
             elapsed = time.monotonic() - set_at[0]
         self.assertIsNone(summary)
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
-        self.assertLess(elapsed, 2.0, f"the cancel took {elapsed:.1f}s to end the pass")
+        self.assertLess(elapsed, 1.0, f"the cancel took {elapsed:.1f}s to end the pass")
 
     def test_a_stateless_run_computes_without_a_cache(self) -> None:
         readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
@@ -349,6 +356,110 @@ class TestScanFlagProjection(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(data["crop"], 0)
         probe.assert_called_once()
+
+
+class TestCropCancelReachesBothPasses(unittest.TestCase):
+    """Issue #384: the sampled fallback honours the cancel, and both engine
+    entry points hand their cancel event to both crop passes."""
+
+    def test_a_cancel_ends_the_sampled_fallback_within_a_tick(self) -> None:
+        from shrinkray.engine.crop import detect_crop_rect
+
+        child = ["cmd", "/c", "ping -n 10 127.0.0.1 >nul"] if os.name == "nt" else ["sleep", "10"]
+        cancel = threading.Event()
+        windows: list[list[str]] = []
+        set_at: list[float] = []
+
+        def run_child(
+            command: list[str],
+            cancel: threading.Event | None = None,
+            timeout: float | None = None,
+        ) -> tuple[int, str]:
+            windows.append(command)
+            return _run(child, cancel=cancel, timeout=timeout)
+
+        def fire() -> None:
+            set_at.append(time.monotonic())
+            cancel.set()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x")
+            with (
+                patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=3600.0),
+                patch("shrinkray.engine.crop._run", side_effect=run_child),
+            ):
+                threading.Timer(0.3, fire).start()
+                rect = detect_crop_rect(movie, Path(tmp), count=3, cancel=cancel)
+                elapsed = time.monotonic() - set_at[0]
+        self.assertIsNone(rect)
+        self.assertEqual(len(windows), 1, "the windows after the cancel must not start")
+        self.assertLess(elapsed, 1.0, f"the cancel took {elapsed:.1f}s to end the fallback")
+
+    def _passes_seen(self, module: str, stack: contextlib.ExitStack) -> dict[str, object]:
+        """Patches both crop passes in `module`; the fallback raises
+        _ReachedFallback so the caller stops there. Returns the cancel each
+        pass received."""
+        seen: dict[str, object] = {}
+
+        def timeline(movie: Path, db_file: Path | None, cancel: object = None) -> None:
+            seen["timeline"] = cancel
+
+        def fallback(movie: Path, workdir: Path, count: int = 10, cancel: object = None) -> None:
+            seen["fallback"] = cancel
+            raise _ReachedFallback
+
+        stack.enter_context(
+            patch(f"shrinkray.engine.{module}.detect_crop_summary_cached", side_effect=timeline)
+        )
+        stack.enter_context(
+            patch(f"shrinkray.engine.{module}.detect_crop_rect", side_effect=fallback)
+        )
+        stack.enter_context(patch(f"shrinkray.engine.{module}.find_handbrake", return_value="hb"))
+        return seen
+
+    def test_plan_quality_hands_its_cancel_to_both_passes(self) -> None:
+        import shrinkray.engine.plan as plan_module
+
+        cancel = threading.Event()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 8)
+            seen = self._passes_seen("plan", stack)
+            stack.enter_context(
+                patch("shrinkray.engine.plan.get_data", return_value={"hdr": False})
+            )
+            with self.assertRaises(_ReachedFallback):
+                plan_module.plan_quality(movie, cancel=cancel)
+        self.assertIs(seen.get("timeline"), cancel, "the timeline pass lost the cancel")
+        self.assertIs(seen.get("fallback"), cancel, "the fallback lost the cancel")
+
+    def test_the_encode_probe_hands_its_cancel_to_both_passes(self) -> None:
+        import shrinkray.engine.pipeline as pipeline_module
+
+        cancel = threading.Event()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 8)
+            seen = self._passes_seen("pipeline", stack)
+            with self.assertRaises(_ReachedFallback):
+                pipeline_module._probe_movie(
+                    movie,
+                    target_vmaf=96.0,
+                    crf_range=(14, 45),
+                    sample_count=3,
+                    sample_seconds=2.0,
+                    encoder="svt_av1",
+                    probe_encoder_preset="8",
+                    cancel=cancel,
+                )
+        self.assertIs(seen.get("timeline"), cancel, "the timeline pass lost the cancel")
+        self.assertIs(seen.get("fallback"), cancel, "the fallback lost the cancel")
+
+
+class _ReachedFallback(Exception):
+    """Stops an engine entry point once it has called the sampled fallback."""
 
 
 class TestPlanUsesTheTimelineDetector(unittest.TestCase):

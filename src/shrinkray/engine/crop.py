@@ -301,8 +301,9 @@ def run_crop_timeline(
         # the caller falls back like any failed pass
         log(f"The crop timeline pass could not start for '{movie.name}': {e}")
         return [], None
-    if code == -1:
-        # cancelled (issue #384): a cancel caches nothing
+    if code == -1 and cancel is not None and cancel.is_set():
+        # cancelled (issue #384): a cancel caches nothing. Without the event a
+        # -1 is a SIGHUP from outside and is logged as a failure below
         return [], None
     if code == -2:
         # terminated at the ceiling or by the stall watchdog: the runner's
@@ -342,7 +343,10 @@ def source_frame(movie: Path) -> tuple[int, int] | None:
         KeyError,
         ValueError,
         json.JSONDecodeError,
-    ):
+    ) as e:
+        # OSError: ffprobe missing. TimeoutExpired: a stale mount blocking the
+        # read (issue #62). No frame size => no crop, said out loud
+        log(f"ffprobe could not read the frame size of '{movie.name}': {e!r}")
         return None
 
 
@@ -575,32 +579,8 @@ def detect_crop_rect(
     if cancel is not None and cancel.is_set():
         return None
 
-    try:
-        proc = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_streams",
-                str(movie),
-            ],
-            capture_output=True,
-            timeout=FFPROBE_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        # OSError: ffprobe missing. TimeoutExpired: stale mount blocking the
-        # kernel read — without a timeout the watch loop/job worker stalls
-        # forever with no error (issue #62). No frame size => no crop.
-        log(f"ffprobe could not read '{movie}' within {FFPROBE_TIMEOUT}s: {e}")
-        return None
-    try:
-        stream = next(
-            s for s in json.loads(proc.stdout.decode())["streams"] if s.get("codec_type") == "video"
-        )
-        frame = (int(stream["width"]), int(stream["height"]))
-    except (StopIteration, KeyError, ValueError, json.JSONDecodeError):
+    frame = source_frame(movie)
+    if frame is None:
         return None
 
     from shrinkray.engine.samples import sample_offsets
@@ -629,8 +609,8 @@ def detect_crop_rect(
             ],
             cancel=cancel,
         )
-        if code == -1:
-            # cancelled (issue #384): the sampled pass caches nothing
+        if code == -1 and cancel is not None and cancel.is_set():
+            # cancelled (issue #384): the sampled pass measures nothing
             return None
         if code != 0:
             continue
