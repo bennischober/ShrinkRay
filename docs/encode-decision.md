@@ -62,8 +62,8 @@ Every gate is a cheap question asked before the expensive next step.
 | 3 | Size | At least the configured size floor? (`min_source_size_gb`, `engine/plan.py:419`) | skip — payoff below the probe cost |
 | 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` extended by the config's `candidate_codecs`, `engine/plan.py:55`; the list may be extended, never shrunk — issue #233) | skip — a source codec outside the list is not re-encoded |
 | 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py`, called at `engine/plan.py:616`) | no crop; the encode proceeds uncropped |
-| 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:592`) | skip — target unreachable |
-| 7 | **Size gate** | Would the result be smaller? (`engine/search.py:675`, and again at the chosen CRF `:721`) | skip — "would not shrink" |
+| 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:651`) | skip — target unreachable |
+| 7 | **Size gate** | Would the result be smaller? (`engine/search.py:722` at the bound CRF, and at the chosen CRF `:764` from every window's cached encoded bytes — `check_chosen_crf_shrinks`) | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, **with the crop** | — |
 
 Note gate 5 cannot fail in the sense of aborting: "no bars found" is a normal outcome and the
@@ -102,6 +102,27 @@ would only shrink *after* cropping gets a false "won't shrink".
   unmeasured, never silently encoded and never silently dropped.
 - **Never leaves bars in a re-encoded file.** There is no flag to keep them.
 
+
+## The search's shape: probe count and the early stop
+
+The CRF search brackets and interpolates in VMAF space (issue #23) and spends one round per probed CRF
+— each round encodes and scores every sample window, so rounds are the dominant cost of `plan` and of
+every encode. Two deliberate shapes keep that cost down (issue **#313**):
+
+- **The round structure is ab-av1's** (`crf_search`, read at ab-av1 `ed5f5461f0aa`): the first probe is
+the range's midpoint; while only one side of the target is known, round two moves to the 20%/80% point of
+the range and round three to its end; once a passing and a failing probe bracket the target, each round
+interpolates between them (with issue #23's safeguards). The range's ends are probed only when the
+search heads there, so "target unreachable" costs three rounds (midpoint, 20% point, lowest CRF) and the
+SkipEncode evidence is the lowest CRF's probe, as before. The old shape probed CRF 14 - the slowest,
+largest probe - upfront on every file.
+- **An early stop accepts a passing CRF whose score is less than a tolerance above the target**, the
+tolerance doubling per round from 0.1 (0.1, 0.2, 0.4, 0.8, ...): ab-av1's formula for an encoder whose
+CRF moves in whole steps. A probe below the target is never accepted. The trade, measured on 5000
+simulated SVT-AV1-like curves (VMAF = 100 - k·e^(CRF/s), crossing the target at CRF 16-44): 4.17 rounds
+per passing file instead of 5.91, and 23% of files end below the best passing CRF, by 1.27 steps on
+average (at most 2) - a slightly bigger file. Not yet measured on real titles (#313).
+
 ## The prior art this matches
 
 `Find_CRF_for_folder_V4.ps1` walks the directory, filters by size (`-MinFileSizeGB`) and height
@@ -126,13 +147,13 @@ the claim, because `--verify` arrived in v0.11.7.
 **What matches ab-av1's method:**
 
 - The model is Netflix's **vmaf_v0.6.1** (shipped as package data; `model_path=` on legacy ffmpeg,
-  `model=path=` on modern — `tools/vmaf.py:134-137`), the model ab-av1 defaults to — at resolutions up
+  `model=path=` on modern — `tools/vmaf.py:134-138`), the model ab-av1 defaults to — at resolutions up
   to 2560x1440. Above that, ab-av1 v0.11.7 switches to **vmaf_4k_v0.6.1** and `--vmaf-scale auto`
   bicubic-upscales content below 1728x972 (towards 1080p) or 3456x1944 (towards 4K) — ShrinkRay
   always scores vmaf_v0.6.1 at native resolution, no scaling. That is a MEASUREMENT difference, not a
   search difference, and it is open issue **#309** (the 2160p parity pair in #306's harness reports
   the gap: ~4.1 VMAF on the same input).
-- The per-window score is libvmaf's **pooled mean** (`pooled_metrics.vmaf.mean`, `tools/vmaf.py:190`).
+- The per-window score is libvmaf's **pooled mean** (`pooled_metrics.vmaf.mean`, `tools/vmaf.py:207`).
 - The per-CRF decision statistic is the **mean of the per-sample means** (`VMAF_STATISTIC = "mean",
   `engine/search.py:44`, issue #15) — the same aggregate ab-av1 reports.
 - The comparison runs inside one ffmpeg invocation with both inputs in a single filtergraph
@@ -147,7 +168,7 @@ the claim, because `--verify` arrived in v0.11.7.
   `engine/samples.py:152`); ab-av1 cuts 20 s by frame count (`-frames:v`). A duration cut can end a
   frame early at most; a frame-count cut on variable-frame-rate content varies in wall time. 10 s keeps
   a probe cheap; whether 20 s would move the score is unmeasured (#306's baseline covers it).
-- **HDR is tone-mapped to SDR before scoring** (`tools/vmaf.py:145-149`, both inputs through the same
+- **HDR is tone-mapped to SDR before scoring** (`tools/vmaf.py:145-151`, both inputs through the same
   hable chain): the v0.6.1 model is SDR-trained, so scoring the PQ signal directly would measure the
   tone-mapping mismatch, not the encode. When bars are present the reference is cropped first
   (issue #307's fix) so the bars cannot influence the tone-map and the geometries match. ab-av1 scores the PQ signal directly. HDR carries a separate
@@ -156,7 +177,7 @@ the claim, because `--verify` arrived in v0.11.7.
   a probe measures the CRF, and a slower preset is believed to be at least as good at the same CRF, so
   the sample measurement errs safe. **Believed, not measured** — the error direction is recorded, not
   quantified. ab-av1 encodes probes and final at one preset.
-- **The reference is cropped to the encoded geometry** (`tools/vmaf.py:157`): bar removal is part
+- **The reference is cropped to the encoded geometry** (`tools/vmaf.py:157-167`): bar removal is part
   of every encode, so the distorted output is smaller than the source; scoring it against the uncropped
   reference would measure the bars, not the encode. The crop itself is NOT a deviation: ab-av1's
   `--reference-vfilter crop=...` is the same mechanism (its help text exists for exactly this), and

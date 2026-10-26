@@ -290,24 +290,25 @@ def encode(
             "output directory is given, so it only matters alongside one."
         ),
     ),
-    probe_encoder_preset: str = typer.Option(
-        DEFAULT_PROBE_ENCODER_PRESET,
+    probe_encoder_preset: str | None = typer.Option(
+        None,
         "--probe-encoder-preset",
         help=(
             "Quality mode: encoder speed preset for the PROBE encodes "
             "(a measurement setting; SVT-AV1 speed 0-10, higher = slower). "
-            "The final encode "
-            "runs --encoder-preset. Changing it invalidates stored plans "
+            "Default: the handbrake.probe_encoder_preset config value. "
+            "Changing it invalidates stored plans "
             "(they are re-probed)."
         ),
     ),
-    encoder_preset: str = typer.Option(
-        DEFAULT_ENCODER_PRESET,
+    encoder_preset: str | None = typer.Option(
+        None,
         "--encoder-preset",
         help=(
             "Quality mode: encoder speed preset for the FINAL encode "
             "(an output setting; SVT-AV1 speed 0-10, higher = slower, "
-            "e.g. 3). The probes "
+            "e.g. 3). Default: the handbrake.encoder_preset config value. "
+            "The probes "
             "run --probe-encoder-preset."
         ),
     ),
@@ -339,6 +340,17 @@ def encode(
     config = load_config(config_file=config_file)
     # the flag wins; without it the config's required VMAF applies (issue #252)
     target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
+    # the presets follow the same rule (issue #328): the config keys
+    # (handbrake.probe_encoder_preset / handbrake.encoder_preset - what the
+    # TUI saves and the resident app honours) are the defaults, an explicit
+    # flag wins. They were hardcoded constants here, so the same saved
+    # config produced different encodes in Mode A than in Mode B.
+    probe_encoder_preset = (
+        config.handbrake_probe_encoder_preset
+        if probe_encoder_preset is None
+        else probe_encoder_preset
+    )
+    encoder_preset = config.handbrake_encoder_preset if encoder_preset is None else encoder_preset
     apply_config(config)
     # encode probes and re-encodes: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems
@@ -749,20 +761,22 @@ def plan(
     no_table: bool = typer.Option(
         False, "--no-table", help="Do not print the results as table to the console."
     ),
-    probe_encoder_preset: str = typer.Option(
-        DEFAULT_PROBE_ENCODER_PRESET,
+    probe_encoder_preset: str | None = typer.Option(
+        None,
         "--probe-encoder-preset",
         help=(
             "Encoder speed preset for the probes (a measurement setting; "
-            "SVT-AV1 speed 0-10). The plan's fingerprint keys on it."
+            "SVT-AV1 speed 0-10). Default: the handbrake.probe_encoder_preset "
+            "config value. The plan's fingerprint keys on it."
         ),
     ),
-    encoder_preset: str = typer.Option(
-        DEFAULT_ENCODER_PRESET,
+    encoder_preset: str | None = typer.Option(
+        None,
         "--encoder-preset",
         help=(
             "The planned FINAL encode's speed preset (an output setting; "
-            "plan never encodes - recorded for provenance only)."
+            "plan never encodes - recorded for provenance only). Default: "
+            "the handbrake.encoder_preset config value."
         ),
     ),
     db_file: Path | None = typer.Option(
@@ -791,6 +805,15 @@ def plan(
     config = load_config(config_file=config_file)
     # the flag wins; without it the config's required VMAF applies (issue #252)
     target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
+    # the presets follow the same rule (issue #328): the config keys are the
+    # defaults, an explicit flag wins (the TUI saves them; the resident app
+    # and now the CLI honour them alike)
+    probe_encoder_preset = (
+        config.handbrake_probe_encoder_preset
+        if probe_encoder_preset is None
+        else probe_encoder_preset
+    )
+    encoder_preset = config.handbrake_encoder_preset if encoder_preset is None else encoder_preset
     apply_config(config)
     # plan probes every movie's CRF: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems

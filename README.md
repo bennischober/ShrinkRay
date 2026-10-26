@@ -269,8 +269,8 @@ removed it: an unmeasured encode can take a library file's path).
 | Option | Effect |
 |---|---|
 | `--target-vmaf N` | quality floor (default: `96`) |
-| `--probe-encoder-preset N` | the PROBES' encoder speed preset (`5` default; SVT-AV1 speed 0-10, higher = slower; a measurement setting — changing it invalidates stored plans) |
-| `--encoder-preset N` | the FINAL encode's speed preset (`3` default; an output setting — the probes run `--probe-encoder-preset`) |
+| `--probe-encoder-preset N` | the PROBES' encoder speed preset (default: the `handbrake.probe_encoder_preset` config value, shipped as `5`; SVT-AV1 speed 0-10, higher = slower; a measurement setting — changing it invalidates stored plans) |
+| `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `3`; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows per movie (more samples can only shrink the crop) |
 | `--dry-run` | show what would be encoded, without encoding |
@@ -295,9 +295,10 @@ size estimate comes from the short probe samples, so treat it as a ballpark;
 the probing predicts the decision, the encode measures it — the chosen CRF
 can differ by ±1 between runs.
 
-**HDR estimates are biased optimistic.** The size probe encodes one early
-window, and HDR samples skew toward easy content (dark, static shots), so the
-predicted savings land far above the real ones — measured on an HDR 4K title:
+**HDR estimates are biased optimistic.** The plan's size estimate encodes one
+early window (`estimate_size_factor`, `engine/search.py`), and HDR samples skew
+toward easy content (dark, static shots), so the predicted savings land far
+above the real ones — measured on an HDR 4K title:
 19.1% real vs 78% predicted. Every surface that shows an HDR estimate (the
 `plan` command, the dashboard's plan display) carries this note; plan an HDR
 title expecting the real number to be much smaller than the prediction.
@@ -386,8 +387,10 @@ The two rows people ask about:
   `eligibility`, and all three are checked before any ffmpeg probe runs — a
   skipped file costs one `ffprobe`, not an encode.
 - **Row 7 is the real answer to "is this file already efficient?"**: the
-  search measures a size probe at the most aggressive CRF and again at the
-  chosen CRF, and skips when the encode would grow the file. "Already
+  search measures a size probe at the most aggressive CRF, then decides at
+  the chosen CRF from the encoded byte counts the VMAF probes already
+  recorded for every window (a pre-#314 cache falls back to one encoded
+  window), and skips when the encode would grow the file. "Already
   small" is a measurement per file, not a threshold — a well-encoded 4 GB
   H.264 movie is skipped by evidence even with the size floor at 0.
 
