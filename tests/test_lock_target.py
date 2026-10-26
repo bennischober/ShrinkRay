@@ -63,13 +63,11 @@ class TestInPlaceSlotKeying(unittest.TestCase):
             guard_encodes(self.root, holder="two").__enter__()
         self.assertFalse(_lock_path(self.root).exists())
 
-    def test_the_cli_parks_the_slot_on_the_movies_directory_in_place(self) -> None:
-        """`_record_encodes` keys the slot on each MOVIE's own directory.
+    def test_the_cli_parks_the_slot_on_the_library_root_in_place(self) -> None:
+        """`_record_encodes` keys the slot on the library root when in place.
 
-        That is where the staging copy and the swap's two renames happen, so it is
-        the one key the job and the watcher can agree on (#379). Asserted at the
-        seam: the guard receives the movie's folder, never the staging directory
-        or the scanned root.
+        Asserted at the seam: the guard receives the library root, never the
+        staging directory, when the run replaces sources in place.
         """
         from shrinkray import __main__ as cli
 
@@ -100,8 +98,9 @@ class TestInPlaceSlotKeying(unittest.TestCase):
                 threads=None,
                 db_file=None,
                 replace=True,
+                library_root=self.root,
             )
-        self.assertEqual(captured["dir"], self.source.parent)
+        self.assertEqual(captured["dir"], self.root)
         self.assertEqual(captured["holder"], "encode-cli")
 
     def test_the_cli_parks_the_slot_on_the_output_dir_when_given(self) -> None:
@@ -135,6 +134,7 @@ class TestInPlaceSlotKeying(unittest.TestCase):
                 threads=None,
                 db_file=None,
                 replace=False,
+                library_root=None,
             )
         self.assertEqual(captured["dir"], out)
 
