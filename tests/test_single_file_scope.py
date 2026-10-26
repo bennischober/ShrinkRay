@@ -71,8 +71,8 @@ class TestSingleFileScope(unittest.TestCase):
         self.assertEqual(plan.call_count, 1, "a one-file plan planned the folder")
 
     def test_encode_on_one_file_encodes_one_movie(self) -> None:
-        # encode_movies' inner worker calls find_handbrake; a None return
-        # makes run_one raise => the command exits 1 naming the missing
+        # the engine's encode path calls find_handbrake; a None return
+        # makes the encode raise => the command exits 1 naming the missing
         # binary. The touched count is the SCAN's count (1/1 vs the old bug's
         # 3/3), and the untouched files keep their mtimes.
         mtimes_before = {name: (self.root / name).stat().st_mtime_ns for name in self.names}
