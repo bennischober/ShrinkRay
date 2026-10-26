@@ -53,3 +53,15 @@ report.html
 *.log
 .omo/
 TODO.md
+ISSUES.md
+
+# the maintainer's scratch at the repo root (movies.txt, the old scan output;
+# config.json and container-config.json are tracked ON PURPOSE - everything
+# else is scratch)
+movies.txt
+ (config.json and
+# container-config.json are tracked ON PURPOSE - everything else is scratch)
+/*.json
+!config.json
+!container-config.json
+!docs/handbrake-preset-reference.json
