@@ -835,6 +835,17 @@ class TestDb(unittest.TestCase):
             status_only = client.get("/api/status").json()
             for key in status_only:
                 self.assertIn(key, body["status"], f"snapshot.status lost /api/status key {key!r}")
+            # value parity for the three DERIVED fields (review finding 2,
+            # PR #347): both handlers compute them from the same inputs, so
+            # equality holds here and pins the handlers against drift.
+            # rss_mib is excluded on purpose: it is a live measurement taken
+            # milliseconds apart and will legitimately differ.
+            for key in ("config_error", "paused", "reveal_available"):
+                self.assertEqual(
+                    status_only[key],
+                    body["status"][key],
+                    f"snapshot.status[{key!r}] disagrees with /api/status",
+                )
             # the library is fully present on the first call
             self.assertIsInstance(body["library"], list)
             movie = next(m for m in body["library"] if m["name"] == "snap")
