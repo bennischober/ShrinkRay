@@ -363,8 +363,10 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
                 deadline = time_mod.monotonic() + 60
                 hb_pid = None
                 while time_mod.monotonic() < deadline and hb_pid is None:
+                    # an encode child (--quality), not a preflight probe: a
+                    # signal during the preflight would meet no handler yet
                     out = subprocess.run(
-                        ["pgrep", "-f", str(stubs / "HandBrakeCLI")],
+                        ["pgrep", "-f", f"{stubs / 'HandBrakeCLI'} .*--quality"],
                         capture_output=True,
                         text=True,
                     )
@@ -385,6 +387,9 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     self.fail("the CLI did not exit after SIGHUP")
+                # cancelled (exit 1), not killed by SIGHUP's default action
+                self.assertEqual(proc.returncode, 1, "the CLI did not exit as a cancel")
+                self.assertEqual(movie.read_bytes(), b"x" * 64, "the source was changed")
                 # the HandBrake child is gone (not orphaned, still encoding)
                 deadline = time_mod.monotonic() + 15
                 while time_mod.monotonic() < deadline:
@@ -513,6 +518,40 @@ class TestCancelOnTerminalClose(unittest.TestCase):
             self.assertEqual(movie.read_bytes(), b"x" * 100, "the source was swapped")
             self.assertEqual([p.name for p in lib.iterdir()], ["one.mkv"])
         log_error.assert_called_once_with("cancelled by user")
+
+    def test_a_signal_between_plans_stops_before_the_next_movie(self) -> None:
+        """A signal that lands while no child runs must not wait for the next
+        movie's crop pass: the plan stops before planning it, exit 1."""
+        import signal
+
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp).resolve() / "movies"
+            lib.mkdir()
+            movies = [lib / "a.mkv", lib / "b.mkv"]
+            for m in movies:
+                m.write_bytes(b"x" * 16)
+
+            def fake_plan(movie_in, **kwargs):
+                os.kill(os.getpid(), signal.SIGINT)  # ctrl+c, no child running
+                return QualityResult(
+                    input=movie_in,
+                    output=movie_in,
+                    success=False,
+                    skipped_reason="resolution too low",
+                    target_vmaf=96.0,
+                )
+
+            with (
+                patch("shrinkray.service.all_problems", return_value=[]),
+                patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan) as plan,
+                patch("shrinkray.__main__.scan_movies", return_value=(None, movies, None)),
+                patch("shrinkray.__main__.log_error"),
+            ):
+                result = CliRunner().invoke(app, ["plan", str(lib)])
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertEqual(plan.call_count, 1, "the second movie was planned after the cancel")
 
     def test_an_ignored_signal_stays_ignored(self) -> None:
         """`nohup` ignores SIGHUP so a long encode survives logout: the scope
