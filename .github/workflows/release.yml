@@ -33,14 +33,14 @@ jobs:
         run: uv run python tools/release_notes.py "${{ github.ref_name }}" > RELEASE_NOTES.md
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           body_path: RELEASE_NOTES.md
           files: dist/*
 
       - name: Upload artifacts (on failure for debugging)
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
           path: dist/
