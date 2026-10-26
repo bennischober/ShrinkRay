@@ -107,6 +107,20 @@ class TestDockerignore(unittest.TestCase):
         excluded = {p.rstrip("/") for p in patterns if p.endswith("/")}
         self.assertIn(".opencode", excluded)
 
+    def test_the_context_excludes_the_maintainers_personal_files(self) -> None:
+        """Issue #332: ISSUES.md is a local work file (never committed), and the
+        repo root collects scratch JSON (the preset experiment) plus the old
+        scan output. A local 'docker build .' must not bake them into /app
+        where any contributor's personal notes become part of an image layer.
+        The tracked config files must survive: the image seeds from them.
+        """
+        patterns = self._patterns()
+        for expected in ("ISSUES.md", "movies.txt", "/*.json"):
+            self.assertIn(expected, patterns)
+        # the negations keep the tracked configs in the context
+        for kept in ("!config.json", "!container-config.json"):
+            self.assertIn(kept, patterns)
+
 
 class TestDockerfile(unittest.TestCase):
     def setUp(self) -> None:
@@ -247,6 +261,34 @@ class TestHealthcheck(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cmdline = self._cmdline(tmp, "/app/.venv/bin/shrinkray", "plan", "/media/app")
             self.assertFalse(healthcheck.runs_server(cmdline))
+
+
+class TestInstallPs1(unittest.TestCase):
+    """install.ps1's final quick-start names only commands the CLI has
+    (issue #322): a Windows user's first command after install must not be
+    'No such command'. Same drift-guard shape as the banner test above."""
+
+    def test_every_quick_start_command_exists(self) -> None:
+        """The quick-start names only commands the CLI registers, and the two
+        defects #322 found never return: the removed `scan` command and the
+        hidden no-op `--quality` flag. The subset check is the real guard (the
+        whole script is scanned); the assertNotIn lines pin the two named
+        regressions for a reader, not for coverage - the pre-fix file fails
+        this test through the subset check alone.
+        """
+        import re
+
+        from typer.main import get_command
+
+        from shrinkray.__main__ import app
+
+        text = (REPO / "install.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("shrinkray scan", text)
+        self.assertNotIn("--quality", text)
+        commands = set(get_command(app).commands)  # type: ignore[attr-defined]
+        named = set(re.findall(r"shrinkray ([a-z]+)", text))
+        self.assertTrue(named)
+        self.assertLessEqual(named, commands, f"the installer names {named - commands}")
 
 
 class TestConsoleBanner(unittest.TestCase):
