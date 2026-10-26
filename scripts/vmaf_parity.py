@@ -239,7 +239,7 @@ def main() -> int:
                 print(f"MISSING: {path}")
                 return 1
 
-    rows: list[tuple[str, float, float, str, str]] = []
+    rows: list[tuple[str, float | None, float | None, str, str]] = []
     failures = 0
     for index, (reference, distorted) in enumerate(pairs):
         label = labels[index]
@@ -256,7 +256,7 @@ def main() -> int:
             )
             failures += 1
             rows.append(
-                (f"{label} [frame counts unreadable]", float("nan"), float("nan"), "unmeasured", "")
+                (f"{label} [frame counts unreadable]", None, None, "unmeasured", "")
             )
             continue
         if reference_frames != distorted_frames:
@@ -271,8 +271,8 @@ def main() -> int:
             rows.append(
                 (
                     f"{label} [misaligned: {reference_frames} vs {distorted_frames} frames]",
-                    float("nan"),
-                    float("nan"),
+                    None,
+                    None,
                     "unmeasured",
                     "",
                 )
@@ -307,7 +307,7 @@ def main() -> int:
         fh.write("| pair | ShrinkRay | ab-av1 | delta | verdict | recipe |\n")
         fh.write("|---|---|---|---|---|---|\n")
         for label, ours, theirs, note, recipe in rows:
-            if note == "unmeasured":
+            if note == "unmeasured" or ours is None or theirs is None:
                 fh.write(f"| {label} | — | — | — | unmeasured | — |\n")
                 continue
             delta = abs(ours - theirs)
