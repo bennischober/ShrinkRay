@@ -1149,6 +1149,42 @@ class TestEncodeLock(unittest.TestCase):
         one = build_vmaf_command(Path("d.mkv"), Path("r.mkv"), 4, style="modern", subsample=1)
         self.assertNotIn("n_subsample", " ".join(one))
 
+    def test_encode_with_quality_forwards_crop_sample_count(self):
+        """The encode re-detects the crop with the SAME window count the
+        plan fingerprint carries (issue #327): the parameter existed on
+        _probe_movie and in the fingerprint, but the encode path never
+        forwarded it - --crop-samples 3 fingerprinted 3 and measured 10, so
+        the fallback detector could decide a different crop than the plan
+        predicted.
+        """
+        import tempfile
+
+        from shrinkray.engine.pipeline import encode_with_quality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            src = root / "in.mkv"
+            out_dir = root / "enc"
+            out_dir.mkdir()
+            out = out_dir / "in.mkv"
+            src.write_bytes(b"x" * 8)
+            stub = root / "hb_stub.cmd" if os.name == "nt" else root / "hb_stub.sh"
+            if os.name == "nt":
+                stub.write_bytes(b"@echo off\r\necho x > %~4\r\nexit 0\r\n")
+            else:
+                stub.write_bytes(b'#!/bin/sh\necho x > "$4"\nexit 0\n')
+                stub.chmod(0o755)
+            with (
+                mock.patch(
+                    "shrinkray.engine.pipeline._probe_movie", return_value=(20, 95.2, [], None)
+                ) as probe,
+                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
+                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
+                mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None),
+            ):
+                encode_with_quality(src, out, progress=None, crop_sample_count=3)
+            self.assertEqual(probe.call_args.kwargs.get("crop_sample_count"), 3)
+
     def test_encode_with_quality_verify_runs_measurement(self):
         """verify=True measures the OUTPUT against the SOURCE after the
         encode; a measurement failure is non-fatal (the encode stands)."""
