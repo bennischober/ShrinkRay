@@ -378,11 +378,16 @@ class TestEncodeJobInPlace(unittest.TestCase):
         directory — the per-run staging directory is a fresh path no other
         encoder ever locks, so the old key guarded nothing. A CLI encode
         holding the movie's directory must make the job's encode skip, not
-        encode beside it.
+        encode beside it. The movie sits in its own folder below the payload
+        root, as in a one-folder-per-title library, so a key on the root (or
+        on the staging directory's parent) cannot pass for the movie's.
         """
         from shrinkray.engine.lock import acquire_encode_slot, release_encode_slot
 
-        lock = acquire_encode_slot(self.root, holder="encode-cli")
+        title = self.root / "Title (2020)"
+        title.mkdir()
+        self.movie.rename(title / self.movie.name)
+        lock = acquire_encode_slot(title, holder="encode-cli")
         try:
             with (
                 patch("shrinkray.engine.pipeline.encode_with_quality") as fake_encode,
