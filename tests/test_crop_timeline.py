@@ -11,6 +11,7 @@ summary is cached per file version in the `crops` table. Classification by
 runtime share is report-only; the crop decision never uses it.
 """
 
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -184,6 +185,39 @@ class TestCropCache(unittest.TestCase):
             summary = detect_crop_summary_cached(self.movie, self.db_file)
         self.assertIsNone(summary)
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
+
+    def _interrupted_pass(self, run_result: object) -> None:
+        """Drives the real run_crop_timeline with a pass that did not
+        complete, and asserts nothing is measured or cached."""
+        with (
+            patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=300.0),
+            patch("shrinkray.engine.crop.subprocess.run", **run_result),
+        ):
+            summary = detect_crop_summary_cached(self.movie, self.db_file)
+        self.assertIsNone(summary)
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
+
+    def test_an_interrupted_pass_caches_nothing(self) -> None:
+        """An ffmpeg that exits early (ctrl+c or a closed terminal reach it
+        in the CLI's process group, issue #326) printed readings for part of
+        the runtime only: caching them would crop every later run of the
+        file to the first part's bars."""
+        partial = "".join(
+            f"[Parsed_cropdetect_0 @ 0x1] x1:0 x2:1919 y1:140 y2:939 w:1920 h:800 "
+            f"x:0 y:140 pts:{i} t:{i * 5}.000000 crop=1920:800:0:140\n"
+            for i in range(20)
+        ).encode()
+        self._interrupted_pass(
+            {
+                "return_value": subprocess.CompletedProcess(
+                    args=[], returncode=255, stdout=b"", stderr=partial
+                )
+            }
+        )
+
+    def test_a_timed_out_pass_caches_nothing(self) -> None:
+        self._interrupted_pass({"side_effect": subprocess.TimeoutExpired(cmd="ffmpeg", timeout=1)})
 
     def test_a_stateless_run_computes_without_a_cache(self) -> None:
         readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]

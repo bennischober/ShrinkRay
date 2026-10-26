@@ -1,7 +1,9 @@
 """CLI command tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
+import contextlib
 import json
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -9,6 +11,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 from unittest.mock import patch
+
+import typer
+from typer.testing import CliRunner
 
 from shrinkray import config as config_helper
 from shrinkray import db
@@ -399,6 +404,341 @@ class TestPresetConfigFallback(unittest.TestCase):
                 )
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertEqual(captured["encoder_preset"], "2")
+
+
+class TestTerminalCloseCancelsEncode(unittest.TestCase):
+    """Closing the terminal cancels the encode (issue #326): SIGHUP used to
+    kill the CLI while its detached HandBrake child kept encoding for hours
+    and the staging TemporaryDirectory never ran its cleanup. The CLI now
+    installs a SIGHUP/SIGINT/SIGTERM handler that sets the engine's cancel
+    event; the engine terminates the child tree and unwinds through the
+    normal cleanup."""
+
+    def _stubs(self, root: Path) -> Path:
+        """Stub toolchain: the preflight probes (ffprobe JSON, --version,
+        --encoder-preset-list) answer instantly; the encode's children write
+        their output file immediately and then run long (sleep 60) so the
+        cancel poll has a real child to terminate when SIGHUP arrives.
+        """
+        stubs = root / "stubs"
+        stubs.mkdir()
+        (stubs / "ffprobe").write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            '  *show_entries=format=duration*) echo \'{"format":{"duration":"300.0"}}\';;\n'
+            '  *-show_streams*) echo \'{"streams":[{"index":0,"codec_name":"h264","codec_type":"video","width":1920,"height":1080,"duration":"300.0"},{"index":1,"codec_name":"aac","codec_type":"audio","duration":"300.0"}]}\';;\n'
+            '  *) echo \'{"format":{"duration":"300.0"},"streams":[]}\';;\n'
+            "esac\n"
+        )
+        (stubs / "ffmpeg").write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            "  *filter=libvmaf*) echo '  libvmaf AVOptions:';;\n"
+            "  *) :;;\n"
+            "esac\n"
+            "# any invocation with an output path writes it (sample extraction)\n"
+            'prev=""\n'
+            'for a in "$@"; do\n'
+            '  case "$a" in\n'
+            "    *.mkv|*.ts|*.mp4|*.bin)\n"
+            '      if [ "$prev" != "-i" ]; then printf \'fake media bytes fake media bytes\' > "$a"; fi\n'
+            "      ;;\n"
+            "  esac\n"
+            '  prev="$a"\n'
+            "done\n"
+            "exit 0\n"
+        )
+        (stubs / "HandBrakeCLI").write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            "  *--version*) echo 'HandBrakeCLI 1.11.2'; exit 0;;\n"
+            "  *--encoder-preset-list*) echo 'auto 1 2 3 4 5 6 7 8 9 10'; exit 0;;\n"
+            "esac\n"
+            "# the encode's child: write the output immediately, then run long\n"
+            'prev=""\n'
+            'for a in "$@"; do\n'
+            '  if [ "$prev" = "-o" ] || [ "$prev" = "--output" ]; then\n'
+            "    printf 'fake mkv bytes fake mkv bytes' > \"$a\"\n"
+            "  fi\n"
+            '  prev="$a"\n'
+            "done\n"
+            "echo 'Encoding: task 1 of 1, 1.00 %'\nsleep 60\n"
+        )
+        for stub in stubs.iterdir():
+            stub.chmod(0o755)
+        return stubs
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX signals only")
+    def test_sighup_cancels_the_encode_and_cleans_staging(self):
+        import signal
+        import subprocess
+        import sys
+        import time as time_mod
+
+        repo = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            lib = root / "lib"
+            lib.mkdir()
+            movie = lib / "movie.mkv"
+            movie.write_bytes(b"x" * 64)
+            stubs = self._stubs(root)
+
+            env = dict(os.environ)
+            env["PATH"] = f"{stubs}:{env.get('PATH', '')}"
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "shrinkray",
+                    "encode",
+                    str(movie),
+                    "--db",
+                    str(root / "test.db"),
+                ],
+                cwd=repo,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                # the CLI under test starts with SIGHUP at its default, as in
+                # a terminal, even when this test run inherited it ignored
+                preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_DFL),
+                text=True,
+            )
+            try:
+                # wait until the HandBrake stub is actually running (the
+                # encode started), bounded
+                deadline = time_mod.monotonic() + 60
+                hb_pid = None
+                while time_mod.monotonic() < deadline and hb_pid is None:
+                    # an encode child (--quality), not a preflight probe: a
+                    # signal during the preflight would meet no handler yet
+                    out = subprocess.run(
+                        ["pgrep", "-f", f"{stubs / 'HandBrakeCLI'} .*--quality"],
+                        capture_output=True,
+                        text=True,
+                    )
+                    pids = [int(p) for p in out.stdout.split()]
+                    hb_pid = pids[0] if pids else None
+                    if hb_pid is None:
+                        time_mod.sleep(0.2)
+                self.assertIsNotNone(hb_pid, "the HandBrake stub never started")
+                # the terminal closes: interactive bash forwards SIGHUP to
+                # its job, then the kernel sends SIGHUP again to the old
+                # foreground group - two signals in quick succession
+                proc.send_signal(signal.SIGHUP)
+                time_mod.sleep(0.01)
+                proc.send_signal(signal.SIGHUP)
+                # the CLI must EXIT (not hang), well inside the stub's 60s
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    self.fail("the CLI did not exit after SIGHUP")
+                # cancelled (exit 1), not killed by SIGHUP's default action
+                self.assertEqual(proc.returncode, 1, "the CLI did not exit as a cancel")
+                self.assertEqual(movie.read_bytes(), b"x" * 64, "the source was changed")
+                # the HandBrake child is gone (not orphaned, still encoding)
+                deadline = time_mod.monotonic() + 15
+                while time_mod.monotonic() < deadline:
+                    out = subprocess.run(
+                        ["pgrep", "-f", str(stubs / "HandBrakeCLI")], capture_output=True, text=True
+                    )
+                    if not out.stdout.strip():
+                        break
+                    time_mod.sleep(0.2)
+                self.assertFalse(out.stdout.strip(), "the HandBrake child survived SIGHUP")
+                # the staging dir was cleaned (no .shrinkray-* left in lib)
+                debris = [p.name for p in lib.iterdir() if p.name.startswith(".shrinkray-")]
+                self.assertEqual(debris, [], f"staging debris: {debris}")
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                # a failed run must not leave the stub encoding in its own
+                # session: find it by its unique path and end it by pid
+                leftover = subprocess.run(
+                    ["pgrep", "-f", str(stubs / "HandBrakeCLI")], capture_output=True, text=True
+                )
+                for pid in leftover.stdout.split():
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(int(pid), signal.SIGKILL)
+                if proc.stdout:
+                    proc.stdout.close()
+
+
+class TestCancelOnTerminalClose(unittest.TestCase):
+    """The signal scope behind issue #326: a signal cancels, a repeated one
+    changes nothing, and the previous handlers come back on every exit path."""
+
+    def setUp(self) -> None:
+        import signal
+
+        # start from the default dispositions: a test run that inherits an
+        # ignored signal (nohup, a shell's `cmd &`) must not change the result
+        sigs = [signal.SIGINT, signal.SIGTERM] + (
+            [] if sys.platform == "win32" else [signal.SIGHUP]
+        )
+        saved = {s: signal.getsignal(s) for s in sigs}
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        for s in sigs[1:]:
+            signal.signal(s, signal.SIG_DFL)
+        self.addCleanup(lambda: [signal.signal(s, h) for s, h in saved.items()])
+        self.before = signal.getsignal(signal.SIGINT)
+
+    def test_a_signal_sets_the_event_and_a_repeated_one_is_absorbed(self) -> None:
+        import signal
+
+        from shrinkray.__main__ import _cancel_on_terminal_close
+
+        with _cancel_on_terminal_close() as cancel:
+            handler = signal.getsignal(signal.SIGINT)
+            assert callable(handler)
+            handler(signal.SIGINT, None)
+            self.assertTrue(cancel.is_set())
+            # raising here would unwind past the engine's terminate_tree
+            handler(signal.SIGINT, None)
+            self.assertTrue(cancel.is_set())
+        self.assertIs(signal.getsignal(signal.SIGINT), self.before)
+
+    def test_the_previous_handlers_return_when_the_body_raises(self) -> None:
+        import signal
+
+        from shrinkray.__main__ import _cancel_on_terminal_close
+
+        with self.assertRaises(typer.Exit), _cancel_on_terminal_close():
+            raise typer.Exit(1)
+        self.assertIs(signal.getsignal(signal.SIGINT), self.before)
+
+    def test_a_cancelled_plan_exits_nonzero_without_a_traceback(self) -> None:
+        from typer.testing import CliRunner
+
+        from shrinkray.tools.process import Cancelled
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp).resolve() / "movie.mkv"
+            movie.write_bytes(b"x" * 16)
+            with (
+                patch("shrinkray.service.all_problems", return_value=[]),
+                patch(
+                    "shrinkray.engine.plan.plan_quality", side_effect=Cancelled("cancelled by user")
+                ),
+                patch(
+                    "shrinkray.__main__.scan_movies",
+                    return_value=(None, [movie], None),
+                ),
+                patch("shrinkray.__main__.log_error") as log_error,
+            ):
+                result = CliRunner().invoke(app, ["plan", str(movie)])
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertNotIsInstance(result.exception, Cancelled)
+        log_error.assert_called_once_with("cancelled by user")
+
+    def test_a_signal_after_the_final_encode_keeps_the_source(self) -> None:
+        """A cancel that lands after the engine's last check (the encode has
+        finished) must not be lost: no swap, no record, exit 1."""
+        import signal
+
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp).resolve() / "movies"
+            lib.mkdir()
+            movie = lib / "one.mkv"
+            movie.write_bytes(b"x" * 100)
+
+            def fake_encode(movie_in, output, **kwargs):
+                Path(output).write_bytes(b"y" * 50)
+                os.kill(os.getpid(), signal.SIGINT)  # ctrl+c, after the last check
+                return QualityResult(
+                    input=Path(movie_in),
+                    output=Path(output),
+                    success=True,
+                    chosen_crf=20,
+                    achieved_vmaf=96.0,
+                    input_size=100,
+                    output_size=50,
+                )
+
+            with (
+                patch("shrinkray.service.all_problems", return_value=[]),
+                patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+                patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode),
+                patch("shrinkray.__main__.log_error") as log_error,
+            ):
+                result = CliRunner().invoke(app, ["encode", str(lib)])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertEqual(movie.read_bytes(), b"x" * 100, "the source was swapped")
+            self.assertEqual([p.name for p in lib.iterdir()], ["one.mkv"])
+        log_error.assert_called_once_with("cancelled by user")
+
+    def test_a_signal_between_plans_stops_before_the_next_movie(self) -> None:
+        """A signal that lands while no child runs must not wait for the next
+        movie's crop pass: the plan stops before planning it, exit 1."""
+        import signal
+
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp).resolve() / "movies"
+            lib.mkdir()
+            movies = [lib / "a.mkv", lib / "b.mkv"]
+            for m in movies:
+                m.write_bytes(b"x" * 16)
+
+            def fake_plan(movie_in, **kwargs):
+                os.kill(os.getpid(), signal.SIGINT)  # ctrl+c, no child running
+                return QualityResult(
+                    input=movie_in,
+                    output=movie_in,
+                    success=False,
+                    skipped_reason="resolution too low",
+                    target_vmaf=96.0,
+                )
+
+            with (
+                patch("shrinkray.service.all_problems", return_value=[]),
+                patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan) as plan,
+                patch("shrinkray.__main__.scan_movies", return_value=(None, movies, None)),
+                patch("shrinkray.__main__.log_error"),
+            ):
+                result = CliRunner().invoke(app, ["plan", str(lib)])
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertEqual(plan.call_count, 1, "the second movie was planned after the cancel")
+
+    @unittest.skipIf(sys.platform == "win32", "SIGHUP is POSIX-only")
+    def test_after_a_cancel_a_late_hangup_cannot_kill_the_exit(self) -> None:
+        """Closing a terminal under bash sends SIGHUP twice: the second may
+        land after the scope, while the cancelled command exits. It must not
+        take SIGHUP's default action then; an uncancelled scope restores it."""
+        import signal
+
+        from shrinkray.__main__ import _cancel_on_terminal_close
+
+        with _cancel_on_terminal_close():
+            pass
+        self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_DFL)
+        with _cancel_on_terminal_close():
+            handler = signal.getsignal(signal.SIGHUP)
+            assert callable(handler)
+            handler(signal.SIGHUP, None)
+        self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        self.assertIs(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+        self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)
+
+    def test_an_ignored_signal_stays_ignored(self) -> None:
+        """`nohup` ignores SIGHUP so a long encode survives logout: the scope
+        must not turn that hangup into a cancel."""
+        import signal
+
+        from shrinkray.__main__ import _cancel_on_terminal_close
+
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            with _cancel_on_terminal_close():
+                self.assertIs(signal.getsignal(signal.SIGINT), signal.SIG_IGN)
+            self.assertIs(signal.getsignal(signal.SIGINT), signal.SIG_IGN)
+        finally:
+            signal.signal(signal.SIGINT, previous)
 
 
 if __name__ == "__main__":
