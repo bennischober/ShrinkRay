@@ -1003,7 +1003,10 @@ class TestProbeCache(unittest.TestCase):
         """Issue #314: the chosen-CRF size decision reads the encoded sizes
         the VMAF probes already recorded for EVERY window - not one
         re-encoded window. A fixture where window 0 shrinks but the total
-        grows must SKIP; the reverse must encode."""
+        grows must SKIP; the reverse (every window shrinks) must ENCODE,
+        asserted as a factor below 1.0 so a production change that never
+        returns a shrinking factor fails here.
+        """
         import tempfile
 
         from shrinkray import db as db_mod
@@ -1062,6 +1065,104 @@ class TestProbeCache(unittest.TestCase):
             self.assertAlmostEqual(factor, 2440 / 2100, places=4)
             connection.close()
 
+    def test_the_chosen_crf_size_encodes_when_every_window_shrinks(self):
+        """The reverse direction (issue #314's acceptance): a cache whose
+        every window shrank yields a factor BELOW 1.0 - the file encodes.
+        A production change that never returns a shrinking factor (e.g. the
+        totals summed on the wrong side) fails here.
+        """
+        import tempfile
+
+        from shrinkray import db as db_mod
+        from shrinkray.engine import search as engine_search_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db_mod.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            samples = []
+            for i in range(3):
+                s = root / f"s{i}.mkv"
+                s.write_bytes(b"m" * 1000)
+                samples.append((s, 10.0 * i))
+
+            # every window encoded to 400 bytes (0.4x)
+            for _sample, offset in samples:
+                key = engine_search_mod.probe_cache_key(
+                    movie, offset, 10.0, 22, "svt_av1", "5", None, False, None, ("hb", "1.6")
+                )
+                db_mod.save_probe_score(connection, key, 95.0, 400)
+
+            with patch.object(engine_search_mod, "_tool_versions", return_value=("hb", "1.6")):
+                factor = engine_search_mod.check_chosen_crf_shrinks(
+                    samples,
+                    workdir,
+                    "hb",
+                    22,
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    db_file=db_file,
+                )
+            self.assertLess(factor, 1.0)
+            self.assertAlmostEqual(factor, 1200 / 3000, places=4)
+            connection.close()
+
+    def test_probe_crf_records_the_encoded_size(self):
+        """The producer side of #314: when probe_crf encodes a window it
+        stores that window's encoded byte count beside the score. Deleting
+        the encoded.stat().st_size argument must fail this test - otherwise
+        the all-window decision reads a cache that nothing fills.
+        """
+        import tempfile
+
+        from shrinkray import db as db_mod
+        from shrinkray.engine import search as engine_search_mod
+
+        def fake_run(command, cancel=None):
+            # the command's output path follows the --output flag: create it
+            # with known bytes so the recorded size is exact
+            out = Path(command[command.index("--output") + 1])
+            out.write_bytes(b"e" * 777)
+            return 0, ""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db_mod.connect(db_file)
+            connection.close()
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            sample = root / "s0.mkv"
+            sample.write_bytes(b"m" * 100)
+
+            with (
+                patch.object(engine_search_mod, "_run", side_effect=fake_run),
+                patch.object(engine_search_mod, "measure_vmaf", return_value=95.0),
+                patch.object(
+                    engine_search_mod, "_tool_versions", return_value=("hb", "1.6")
+                ),
+            ):
+                score = engine_search_mod.probe_crf(
+                    [(sample, 0.0)], 22, workdir, "hb", movie, 10.0, "svt_av1", "5",
+                    db_file=db_file,
+                )
+            self.assertEqual(score, 95.0)
+            # the producer wrote the size: the row reads (95.0, 777)
+            connection = db_mod.connect(db_file)
+            key = engine_search_mod.probe_cache_key(
+                movie, 0.0, 10.0, 22, "svt_av1", "5", None, False, None, ("hb", "1.6"),
+            )
+            self.assertEqual(db_mod.get_probe_entry(connection, key), (95.0, 777))
+            connection.close()
+
     def test_the_chosen_crf_size_falls_back_on_a_partial_cache(self):
         """A window whose cache entry predates #314 (size NULL) or is
         missing makes the all-window estimate incomplete: the decision
@@ -1086,7 +1187,9 @@ class TestProbeCache(unittest.TestCase):
                 s.write_bytes(b"m" * 100)
                 samples.append((s, 10.0 * i))
 
-            # seed only window 0 (and with a size), leave 1-2 missing
+            # seed window 0 twice over: a legacy row with NO size (the
+            # pre-#314 NULL case - the reviewer's mutation removed the
+            # entry[1] is None guard and this must catch it) and a full row
             key0 = engine_search_mod.probe_cache_key(
                 movie,
                 0.0,
@@ -1099,7 +1202,22 @@ class TestProbeCache(unittest.TestCase):
                 None,
                 ("hb", "1.6"),
             )
-            db_mod.save_probe_score(connection, key0, 95.0, 40)
+            db_mod.save_probe_score(connection, key0, 95.0)  # NULL size
+            # window 1 exists WITH a size, window 2 is missing entirely:
+            # both incompleteness shapes must hit the fallback
+            key1 = engine_search_mod.probe_cache_key(
+                movie,
+                10.0,
+                10.0,
+                22,
+                "svt_av1",
+                "5",
+                None,
+                False,
+                None,
+                ("hb", "1.6"),
+            )
+            db_mod.save_probe_score(connection, key1, 95.0, 40)
 
             with (
                 patch.object(engine_search_mod, "estimate_size_factor", return_value=0.5) as est,

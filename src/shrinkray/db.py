@@ -817,20 +817,6 @@ def get_probe_entry(connection: sqlite3.Connection, key: str) -> tuple[float, in
     return float(row["value"]), size
 
 
-def get_probe_score(connection: sqlite3.Connection, key: str) -> float | None:
-    """Returns the cached measurement for a cache key, or None.
-
-    Args:
-        connection (sqlite3.Connection): The database connection.
-        key (str): The sha256 cache key (probe_cache_key).
-
-    Returns:
-        float | None: The stored value, or None when not cached.
-    """
-    row = connection.execute("SELECT value FROM probe_cache WHERE key = ?", (key,)).fetchone()
-    return float(row["value"]) if row is not None else None
-
-
 def get_valid_plan(
     connection: sqlite3.Connection,
     path: Path,

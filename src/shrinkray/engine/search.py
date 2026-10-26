@@ -130,8 +130,8 @@ def _cached_or_none(
 
     Opening one short-lived connection per probe is cheap (WAL, single
     statements) and keeps probe_crf/estimate_size_factor connection-free
-    like the rest of the engine. Returns (None, None) without a db_file:
-    probing then runs uncached (CLI one-shots without a database).
+    like the rest of the engine. Returns (None, None, None) without a
+    db_file: probing then runs uncached (CLI one-shots without a database).
 
     Args:
         db_file (Path | None): The database file (None => no caching).
@@ -780,6 +780,7 @@ def check_chosen_crf_shrinks(
         encoder (str): The video encoder, e.g. 'svt_av1'.
         probe_encoder_preset (str): The PROBE's speed preset.
         crop (tuple | None): Crop bars applied to the probe encode.
+        hdr (bool): True when the source is HDR (part of the cache key).
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encode.
