@@ -1,3 +1,12 @@
+> **For the human reviewer** (a claim is backed by a pointer — a command, a link, a finding number, a file+function — or belongs under Not verified; a `needs-human-review` PR is not ready without this block)
+> - **Does:** <one sentence, artifact not effect: "changes the rename-aside step in `replace.py`", not "makes replace safe">
+> - **Why a human:** <the trigger area, named: the replace/retain/rename path, the encode decision, server authentication, path containment or routes, a migration, a dependency, CI/gate/release/AGENTS.md/CONTRIBUTING.md — or "n/a" on a PR that needs no label>
+> - **Check first:** <the review finding or open dispute that outranks everything else, or "none">
+> - **Spot-check:** <one minutes-level action with its expected outcome — a command, a CI run link, a declared reading task — or the honest "no minutes-level check exists for this class">
+> - **Not verified:** <what you could not run, and why>
+
+<!-- A claim is backed by a pointer (a command, a link, a finding number, a file+function) or belongs under Not verified — "Why a human" names an area, "Not verified" states a reason. Re-check this block against the final diff as the last act before applying `needs-human-review` (AGENTS.md, step 6); an edit after the review gets a one-line PR comment. -->
+
 Closes #
 
 ## Problem and root cause
@@ -25,7 +34,7 @@ Closes #
 
 ## Risk: what a reviewer should look at
 
-<!-- The part most likely to be wrong. Anything touching the replace/retain path, the encode decision, auth/path containment, a migration, a dependency or CI gets the `needs-human-review` label. -->
+<!-- The part most likely to be wrong, beyond what the `For the human reviewer` brief at the top already says. Anything touching the replace, retain or rename path, the encode decision, server authentication, path containment or routes, a migration, a dependency, CI, the gate, the release workflow, AGENTS.md or CONTRIBUTING.md gets the `needs-human-review` label. -->
 
 ## Independent review
 
