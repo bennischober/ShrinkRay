@@ -74,6 +74,15 @@ class EncodeBusyError(RuntimeError):
     """
 
 
+class LockUnreadableError(RuntimeError):
+    """Raised when a lock file exists but cannot be inspected.
+
+    A missing lock means the slot is free; an unreadable one means nothing can be
+    concluded. Treating the second as the first steals a live holder's slot, and
+    treating it as a rival names a phantom encoder (invariant 5).
+    """
+
+
 def _lock_path(output_dir: Path) -> Path:
     """Returns the lock file path for an output directory.
 
@@ -101,7 +110,7 @@ def _read_fields(lock: Path) -> list[str] | None:
         return lock.read_text(encoding="ascii").split()
     except FileNotFoundError:
         return []
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         log_warning(f"Could not read the encode lock '{lock}' ({e}).")
         return None
 
@@ -109,16 +118,26 @@ def _read_fields(lock: Path) -> list[str] | None:
 def _silence_seconds(lock: Path) -> float | None:
     """Returns how long the lock has been silent, or None when it is gone.
 
+    A stat that fails for any reason other than the file being absent raises
+    `LockUnreadableError`: "cannot tell" is not "stale", and reading it as stale
+    would delete a live holder's lock.
+
     Args:
         lock (Path): The lock file.
 
     Returns:
-        float | None: Seconds since its last heartbeat (its mtime).
+        float | None: Seconds since its last heartbeat (its mtime), or None when the
+            file is gone.
+
+    Raises:
+        LockUnreadableError: The file exists but could not be inspected.
     """
     try:
         return time.time() - lock.stat().st_mtime
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError as e:
+        raise LockUnreadableError(f"could not inspect '{lock}': {e}") from e
 
 
 def _busy_message(output_dir: Path, lock: Path, silence: float) -> str:
@@ -192,7 +211,15 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
     for _ in range(_CLAIM_ATTEMPTS):
         if _claim(lock, holder):
             return lock
-        silence = _silence_seconds(lock)
+        try:
+            silence = _silence_seconds(lock)
+        except LockUnreadableError as e:
+            # "cannot tell" is neither "free" nor "busy": say which, and do not
+            # touch the file (PR #409's review finding 2)
+            log_error(f"Could not claim the encode slot in '{output_dir}': {e}")
+            raise EncodeBusyError(
+                f"could not inspect the encode lock in '{output_dir}' ({e})"
+            ) from None
         if silence is None:
             continue  # it vanished: the path is free again
         if silence < _LOCK_STALE_SECONDS:
@@ -204,7 +231,10 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
         log_warning(f"Stale encode lock in '{output_dir}' - stealing it.")
         outcome = _steal(lock)
         if outcome == "live":
-            again = _silence_seconds(lock)
+            try:
+                again = _silence_seconds(lock)
+            except LockUnreadableError:
+                again = None
             raise EncodeBusyError(_busy_message(output_dir, lock, again or 0.0)) from None
         if outcome == "error":
             raise EncodeBusyError(
@@ -228,7 +258,7 @@ def _steal(lock: Path) -> str:
     Returns:
         str: "won" (the path is free), "gone" (someone else took it), "live"
             (the holder beat in the meantime and its lock was restored), or
-            "error" (the filesystem refused the rename; it is logged).
+            "error" (the lock could not be inspected or restored; it is logged).
     """
     taken = lock.with_name(f"{lock.name}.stale.{os.getpid()}.{uuid.uuid4().hex[:8]}")
     try:
@@ -238,31 +268,56 @@ def _steal(lock: Path) -> str:
     except OSError as e:
         log_error(f"Could not take the stale encode lock '{lock}' ({e}).")
         return "error"
-    silence = _silence_seconds(taken)
+    try:
+        silence = _silence_seconds(taken)
+    except LockUnreadableError as e:
+        # cannot tell whether the holder is alive: put the lock back untouched
+        _restore(taken, lock)
+        log_error(f"Could not inspect the stale encode lock '{lock}' ({e}).")
+        return "error"
     if silence is not None and silence < _LOCK_STALE_SECONDS:
         # the holder beat between the judgement and the rename: put it back
-        try:
-            os.link(taken, lock)
-        except FileExistsError:
-            log_error(
-                f"A rival claimed '{lock}' while a live holder's lock was being "
-                f"restored; two encoders may now be running in '{lock.parent}'."
-            )
-            with contextlib.suppress(OSError):
-                taken.unlink()
-            return "live"
-        except OSError as e:
-            log_error(
-                f"Could not restore the live encode lock '{lock}' ({e}); "
-                f"it is at '{taken}'. Two encoders may now be running in '{lock.parent}'."
-            )
-            return "live"
-        with contextlib.suppress(OSError):
-            taken.unlink()
+        if not _restore(taken, lock):
+            return "error"
         return "live"
     with contextlib.suppress(OSError):
         taken.unlink()
     return "won"
+
+
+def _restore(taken: Path, lock: Path) -> bool:
+    """Puts a renamed-aside lock back at its path, if the path is free.
+
+    `os.link` is exclusive, so a rival that claimed the path in the meantime is
+    never replaced. The caller turns a failure into an error naming the cause, never
+    into "another encoder" - that would name a phantom holder (invariant 5).
+
+    Args:
+        taken (Path): The renamed-aside lock file.
+        lock (Path): The path it belongs at.
+
+    Returns:
+        bool: True when the lock is back where it was.
+    """
+    try:
+        os.link(taken, lock)
+    except FileExistsError:
+        log_error(
+            f"A rival claimed '{lock}' while a live holder's lock was being "
+            f"restored; two encoders may now be running in '{lock.parent}'."
+        )
+        with contextlib.suppress(OSError):
+            taken.unlink()
+        return False
+    except OSError as e:
+        log_error(
+            f"Could not restore the live encode lock '{lock}' ({e}); it is at "
+            f"'{taken}'. Two encoders may now be running in '{lock.parent}'."
+        )
+        return False
+    with contextlib.suppress(OSError):
+        taken.unlink()
+    return True
 
 
 def _beat(lock: Path, token: str) -> str:

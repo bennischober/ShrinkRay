@@ -856,6 +856,127 @@ class TestEncodeLock(unittest.TestCase):
                 lock_mod.acquire_encode_slot(self.out, holder="rival")
         self.assertFalse(held.exists())
 
+    def test_a_stat_that_fails_is_not_read_as_stale(self):
+        """A stat that fails for any reason other than absence must not be read as
+        "stale": that unlinks a live holder's lock with no log (PR #409's review
+        finding 1)."""
+        from shrinkray.engine import lock as lock_mod
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = lock_mod._lock_path(self.out)
+        lock.write_text("1 encode-job 0123456789ab")
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+        real_stat = Path.stat
+
+        def lock_stat_fails(self_, *a, **k):
+            # only the LOCK's stat fails: mkdir/is_dir on the directory must work
+            if self_.name.startswith(lock.name):
+                raise OSError("EIO")
+            return real_stat(self_, *a, **k)
+
+        with (
+            mock.patch.object(Path, "stat", lock_stat_fails),
+            mock.patch.object(lock_mod, "log_error") as error,
+            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertIn("could not inspect the encode lock", str(ctx.exception))
+        self.assertNotIn("another encoder is already using", str(ctx.exception))
+        self.assertTrue(lock.exists(), "the live holder's lock was deleted")
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("EIO", messages)
+        lock.unlink()
+
+    def test_a_stat_failure_during_the_steal_restores_the_lock(self):
+        """The steal re-stats the renamed-aside file; if that stat fails it must
+        put the lock back and report an error, never discard it (finding 1)."""
+        from shrinkray.engine import lock as lock_mod
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = lock_mod._lock_path(self.out)
+        lock.write_text("1 encode-job 0123456789ab")
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+
+        real_stat = Path.stat
+
+        def stat_then_fail(self_, *a, **k):
+            # the first stat judges the lock stale; the second (on the renamed
+            # file) fails
+            if self_.name.startswith(lock.name):
+                if not hasattr(stat_then_fail, "n"):
+                    stat_then_fail.n = 0
+                stat_then_fail.n += 1
+                if stat_then_fail.n > 1:
+                    raise OSError("EIO")
+            return real_stat(self_, *a, **k)
+
+        with (
+            mock.patch.object(Path, "stat", stat_then_fail),
+            mock.patch.object(lock_mod, "log_error") as error,
+            self.assertRaises(lock_mod.EncodeBusyError),
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertTrue(lock.exists(), "the lock was discarded on a failed stat")
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("Could not inspect the stale encode lock", messages)
+        lock.unlink()
+
+    def test_a_non_ascii_lock_does_not_crash_the_beat(self):
+        """A corrupt lock with a non-ASCII byte raises UnicodeDecodeError from
+        read_text, which is not an OSError: unhandled it killed the heartbeat
+        thread and escaped into the watcher (PR #409's review finding 3)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
+            mock.patch.object(lock_mod, "log_warning") as warning,
+            lock_mod.guard_encodes(self.out, holder="test") as held,
+        ):
+            held.write_bytes(b"\xff\xfe\x00not-a-stamp")
+            time.sleep(0.15)  # the beat must survive this without raising
+        messages = " ".join(str(c.args[0]) for c in warning.call_args_list)
+        self.assertIn("Could not read the encode lock", messages)
+        # an unreadable lock is left alone: ownership is unknown, so neither
+        # releasing nor stealing it is safe
+        self.assertTrue(held.exists())
+
+    def test_a_refused_restore_is_reported_as_itself(self):
+        """A restore the filesystem refuses must not be reported as another
+        encoder: that names a phantom holder (finding 5)."""
+        from shrinkray.engine import lock as lock_mod
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = lock_mod._lock_path(self.out)
+        lock.write_text("1 encode-job 0123456789ab")
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+
+        real_stat = Path.stat
+        calls = {"n": 0}
+
+        def stale_then_beat(self_, *a, **k):
+            if self_.name.startswith(lock.name):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    # the holder beat before this stat reads the mtime (the file
+                    # being inspected is the renamed-aside one)
+                    os.utime(self_, None)
+            return real_stat(self_, *a, **k)
+
+        with (
+            mock.patch.object(Path, "stat", stale_then_beat),
+            mock.patch.object(lock_mod.os, "link", side_effect=OSError("EPERM")),
+            mock.patch.object(lock_mod, "log_error") as error,
+            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertIn("could not take the stale encode lock", str(ctx.exception))
+        self.assertNotIn("another encoder is already using", str(ctx.exception))
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("Could not restore", messages)
+
     def test_a_read_error_is_not_a_takeover(self):
         """A lock that cannot be READ (an EIO or EACCES on a NAS mount) must not
         be reported as a rival taking the slot: the beat says "failed", warns,

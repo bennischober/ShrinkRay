@@ -597,9 +597,14 @@ def _record_encodes(
                         # the staging copy and the swap's two renames happen there,
                         # so it is the key the job and the watcher can agree on
                         # (#379); two-directory mode keys on the output directory.
-                        # Per movie, never nested.
-                        lock_target = movie.parent if replace else output_dir
-                        with guard_encodes(lock_target, holder="encode-cli"):
+                        # `--output-dir X --replace` writes into X and swaps into the
+                        # movie's folder, so BOTH are contended and both are taken
+                        # (outermost first, never nested per directory).
+                        # one lock order, so two CLI runs cannot deadlock
+                        targets = sorted({movie.parent, output_dir}) if replace else [output_dir]
+                        with contextlib.ExitStack() as slots:
+                            for target in targets:
+                                slots.enter_context(guard_encodes(target, holder="encode-cli"))
                             result = encode_with_quality(
                                 movie,
                                 output_dir / movie.name,

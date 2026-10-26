@@ -76,7 +76,7 @@ class TestInPlaceSlotKeying(unittest.TestCase):
         captured: dict = {}
 
         def fake_guard(directory, holder="encode"):
-            captured["dir"] = directory
+            captured.setdefault("dirs", []).append(directory)
             captured["holder"] = holder
             return _null_guard(directory)
 
@@ -101,8 +101,49 @@ class TestInPlaceSlotKeying(unittest.TestCase):
                 db_file=None,
                 replace=True,
             )
-        self.assertEqual(captured["dir"], self.source.parent)
+        # both contended directories: the staging path the run writes into, and
+        # the movie's folder the swap renames inside (sorted, one lock order)
+        self.assertEqual(
+            captured["dirs"], sorted([self.source.parent, self.root / ".shrinkray-stage"])
+        )
         self.assertEqual(captured["holder"], "encode-cli")
+
+    def test_the_cli_guards_the_output_dir_too_when_replacing(self) -> None:
+        """`--output-dir X --replace` writes into X and swaps into the movie's
+        folder, so both are contended and both are guarded (PR #409's review
+        finding 4: main guarded X here, and keying only on movie.parent lost it)."""
+        from shrinkray import __main__ as cli
+
+        out = self.root / "out"
+        out.mkdir()
+        captured: dict = {}
+
+        def fake_guard(directory, holder="encode"):
+            captured.setdefault("dirs", []).append(directory)
+            return _null_guard(directory)
+
+        with (
+            mock.patch.object(cli, "guard_encodes", side_effect=fake_guard),
+            mock.patch.object(engine_pipeline, "encode_with_quality") as fake_encode,
+        ):
+            fake_encode.return_value = engine_pipeline.QualityResult(
+                input=self.source, output=out / "movie.mkv", success=False
+            )
+            cli._record_encodes(
+                None,
+                [self.source],
+                out,
+                _conf_stub(),
+                dry_run=False,
+                overwrite=False,
+                quality=True,
+                target_vmaf=96.0,
+                verify=False,
+                threads=None,
+                db_file=None,
+                replace=True,
+            )
+        self.assertEqual(captured["dirs"], sorted([out, self.source.parent]))
 
     def test_the_cli_parks_the_slot_on_the_output_dir_when_given(self) -> None:
         """A two-directory run keeps the output directory as the slot's target."""
