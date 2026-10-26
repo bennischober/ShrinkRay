@@ -102,6 +102,27 @@ would only shrink *after* cropping gets a false "won't shrink".
   unmeasured, never silently encoded and never silently dropped.
 - **Never leaves bars in a re-encoded file.** There is no flag to keep them.
 
+
+## The search's shape: probe count and the early stop
+
+The CRF search brackets and interpolates in VMAF space (issue #23) and spends one round per probed CRF
+— each round encodes and scores every sample window, so rounds are the dominant cost of `plan` and of
+every encode. Two deliberate shapes keep that cost down (issue **#313**):
+
+- **The round structure is ab-av1's** (`crf_search`, read at ab-av1 `ed5f5461f0aa`): the first probe is
+the range's midpoint; while only one side of the target is known, round two moves to the 20%/80% point of
+the range and round three to its end; once a passing and a failing probe bracket the target, each round
+interpolates between them (with issue #23's safeguards). The range's ends are probed only when the
+search heads there, so "target unreachable" costs three rounds (midpoint, 20% point, lowest CRF) and the
+SkipEncode evidence is the lowest CRF's probe, as before. The old shape probed CRF 14 - the slowest,
+largest probe - upfront on every file.
+- **An early stop accepts a passing CRF whose score is less than a tolerance above the target**, the
+tolerance doubling per round from 0.1 (0.1, 0.2, 0.4, 0.8, ...): ab-av1's formula for an encoder whose
+CRF moves in whole steps. A probe below the target is never accepted. The trade, measured on 5000
+simulated SVT-AV1-like curves (VMAF = 100 - k·e^(CRF/s), crossing the target at CRF 16-44): 4.17 rounds
+per passing file instead of 5.91, and 23% of files end below the best passing CRF, by 1.27 steps on
+average (at most 2) - a slightly bigger file. Not yet measured on real titles (#313).
+
 ## The prior art this matches
 
 `Find_CRF_for_folder_V4.ps1` walks the directory, filters by size (`-MinFileSizeGB`) and height
