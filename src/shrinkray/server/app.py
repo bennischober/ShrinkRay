@@ -1259,6 +1259,22 @@ def _recover_interrupted_swaps() -> None:
             log(f"swap recovery: '{name}' {outcome}")
 
 
+def _serve_forever(host: str, port: int) -> None:
+    """Runs the ASGI server until it stops (the resident mode's blocking call).
+
+    A module-level seam rather than an inline `uvicorn.Server(...)`: uvicorn
+    exports `Server` through a re-export in its `__init__`, so patching
+    `uvicorn.Server` raises AttributeError whenever that attribute has not
+    materialized yet - which is import-order dependent and made the tests fail on
+    a fresh CI session (issue #373). Tests patch THIS name, where the code reads
+    it, so the patch no longer depends on a third-party module's import state.
+    """
+    import uvicorn
+
+    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    uvicorn.Server(config).run()
+
+
 def run_app(
     db_file: Path,
     host: str = "127.0.0.1",
@@ -1354,12 +1370,8 @@ def run_app(
     monitor = threading.Thread(target=monitor_memory, name="memory-monitor", daemon=True)
     monitor.start()
 
-    import uvicorn
-
-    config = uvicorn.Config(app, host=host, port=port, log_level="info")
-    server = uvicorn.Server(config)
     try:
-        server.run()
+        _serve_forever(host, port)
     finally:
         state.shutdown()
         log("app stopped")

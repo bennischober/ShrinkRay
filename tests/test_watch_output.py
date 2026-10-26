@@ -44,7 +44,11 @@ class TestWatchOutputEnv(unittest.TestCase):
             patch.object(app_module, "auto_backlog"),
             patch.object(app_module, "_recover_interrupted_swaps"),
             patch.object(app_module, "start_watch") as start_watch,
-            patch("uvicorn.Server"),
+            # patch the seam run_app resolves, never a third-party attribute: uvicorn
+            # re-exports Server from its __init__, so patch("uvicorn.Server") raises
+            # AttributeError whenever that re-export has not materialized yet - an
+            # import-order dependency that failed on a fresh CI session (issue #373)
+            patch.object(app_module, "_serve_forever"),
             patch("shrinkray.service.all_problems", return_value=[]),
         ):
             app_module.run_app(Path(self.tmp.name) / "test.db", **kwargs)
