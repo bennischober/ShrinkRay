@@ -1,6 +1,6 @@
 > **For the human reviewer** (every field a pointer into evidence — a command, a link, a finding number, a file+function — never prose; a `needs-human-review` PR is not ready without this block)
 > - **Does:** <one sentence, artifact not effect: "changes the rename-aside step in `replace.py`", not "makes replace safe">
-> - **Why a human:** <the trigger area, named: the replace/retain/rename path, the encode decision, server auth/path containment, a migration, a dependency, CI/gate/release/AGENTS.md/CONTRIBUTING.md — or "n/a">
+> - **Why a human:** <the trigger area, named: the replace/retain/rename path, the encode decision, server authentication, path containment or routes, a migration, a dependency, CI/gate/release/AGENTS.md/CONTRIBUTING.md — or "n/a" on a PR that needs no label>
 > - **Check first:** <the review finding or open dispute that outranks everything else, or "none">
 > - **Spot-check:** <one minutes-level action with its expected outcome — a command, a CI run link, a declared reading task — or the honest "no minutes-level check exists for this class">
 > - **Not verified:** <what you could not run, and why>
