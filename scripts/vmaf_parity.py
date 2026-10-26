@@ -318,8 +318,14 @@ def main() -> int:
         fh.write("\n")
 
     print(f"\nresults appended to {RESULT_FILE}")
+    unmeasured = sum(1 for row in rows if row[3] == "unmeasured")
     if failures:
-        print(f"{failures} comparison(s) outside the {TOLERANCE} tolerance")
+        # an unmeasured pair was never compared, so it is not "outside the
+        # tolerance": the two outcomes are counted apart
+        print(
+            f"{failures} pair(s) did not produce a usable comparison "
+            f"({unmeasured} unmeasured, {failures - unmeasured} outside the {TOLERANCE} tolerance)"
+        )
         return 1
     print(f"every held comparison is within {TOLERANCE}")
     return 0
