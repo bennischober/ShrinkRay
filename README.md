@@ -295,9 +295,9 @@ size estimate comes from the short probe samples, so treat it as a ballpark;
 the probing predicts the decision, the encode measures it — the chosen CRF
 can differ by ±1 between runs.
 
-**HDR estimates are biased optimistic.** The size estimate reads the
-windows' cached encoded bytes where every window has one (one window on a
-pre-#314 cache), and HDR samples skew toward easy content (dark, static
+**HDR estimates are biased optimistic.** The plan's size estimate encodes one
+early window (`estimate_size_factor`, `engine/search.py`), and HDR samples skew
+toward easy content (dark, static
 shots), so the
 predicted savings land far above the real ones — measured on an HDR 4K title:
 19.1% real vs 78% predicted. Every surface that shows an HDR estimate (the
