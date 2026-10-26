@@ -1,6 +1,7 @@
 """Quality/CRF-search tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -238,33 +239,74 @@ class TestQuality(unittest.TestCase):
         self.assertEqual(chosen, 31)
 
     def test_bisect_crf_early_stop_tolerance_doubles_per_round(self):
-        """Issue #313's early stop uses ab-av1's tolerance: a passing score
-        less than 0.1 * 2**(round-1) above the target ends the search.
-        Round 1 (tolerance 0.1) must not stop at +0.15; round 2 (0.2) must."""
-        scores = {23: 95.15, 18: 97.0, 28: 80.0}
+        """Issue #313's early stop uses ab-av1's tolerance, 0.1 * 2**(round-1),
+        and fires only on a bracket at most 2 CRF wide (issue #395). Here round
+        3 lands on a 2-wide bracket (21 passing, 23 failing) at +0.35: inside
+        the doubled 0.4, where a linear 0.3 would probe 22 as well."""
         calls: list[int] = []
+        # 23 fails; 18 passes; interpolation between them lands on 21
+        scores = {23: 94.333, 18: 96.0, 21: 95.35, 22: 80.0}
 
         def score(c: int) -> float:
             calls.append(c)
-            return scores.get(c, 95.15 if c < 23 else 80.0)
+            return scores[c]
 
-        # round 1: CRF 23 passes at +0.15, above round 1's 0.1 => continue
-        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 23)
-        self.assertEqual(calls[0], 23)
-        self.assertGreater(len(calls), 1, "round 1 stopped above its 0.1 tolerance")
+        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 21)
+        self.assertEqual(calls, [23, 18, 21])
 
+        # the same bracket at +0.45 is outside round 3's 0.4 => 22 is probed
         calls.clear()
-        scores = {23: 80.0, 18: 95.15}
-        # round 2: CRF 18 passes at +0.15, inside round 2's 0.2 => stop there
-        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 18)
-        self.assertEqual(calls, [23, 18])
+        scores[21] = 95.45
+        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 21)
+        self.assertEqual(calls, [23, 18, 21, 22])
 
-        calls.clear()
-        scores = {23: 80.0, 18: 80.0, 14: 95.35, 15: 95.35, 16: 95.35, 17: 95.35}
-        # round 3: CRF 14 passes at +0.35 - inside the doubled 0.4, where a
-        # linear 0.3 would keep searching
-        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 14)
-        self.assertEqual(calls, [23, 18, 14])
+    def test_bisect_crf_early_stop_waits_for_a_narrow_bracket(self):
+        """Issue #395 (the 22:21 review of #339): a pass inside the tolerance
+        must not stop the search while the failing bound is far above it. On
+        this plateau-then-knee curve the midpoint (29) fails and the 20% point
+        (20) passes at +0.19, inside round 2's 0.2; stopping there returned 20
+        while CRF 28 still passes - 8 CRF given away, and a file that shrinks
+        at 28 but grows at 20 turned into a 'would not shrink' skip."""
+
+        def score(c: int) -> float:
+            return 94.367 - 0.0232 * (c - 14) if c <= 30 else 80.0
+
+        self.assertEqual(engine_search.bisect_crf(score, 14, 45, target_vmaf=94.034), 28)
+
+    def test_bisect_crf_early_stop_gives_away_at_most_one_crf(self):
+        """Issue #395: the early stop fires only on a bracket at most 2 wide,
+        so the result is the largest passing CRF or the one below it - never
+        further (the merged #339 shape lost up to 8 on a plateau). Two curve
+        families over the default range: plateau-then-knee curves with the
+        target just under the plateau at every knee, and the smooth
+        100 - k*e^(crf/s) curves docs/encode-decision.md simulates."""
+        lo, hi = 14, 45
+        curves: list[tuple[dict[int, float], float]] = []
+        for knee in range(lo + 1, hi - 1):
+            for slope in (0.0, 0.0232, 0.1):
+                for margin in (0.01, 0.15, 0.35):
+                    curve = {
+                        c: 96.0 - slope * (c - lo) if c <= knee else 80.0 - (c - knee)
+                        for c in range(lo, hi)
+                    }
+                    curves.append((curve, curve[knee] - margin))
+        for s in (8.0, 10.0, 12.0, 14.0, 16.0):
+            for cross in range(16, 45, 2):
+                for target in (94.0, 95.5, 97.0):
+                    k = (100.0 - target) / math.exp(cross / s)
+                    curves.append(({c: 100.0 - k * math.exp(c / s) for c in range(lo, hi)}, target))
+        for curve, target in curves:
+            chosen = engine_search.bisect_crf(curve.__getitem__, lo, hi, target)
+            best = max(c for c, v in curve.items() if v >= target)
+            with self.subTest(target=target, best=best):
+                self.assertGreaterEqual(curve[chosen], target)
+                self.assertGreaterEqual(chosen, best - 1)
+
+    def test_bisect_crf_rejects_an_empty_range(self):
+        """bisect_crf's contract is a CRF in [lo, hi); an empty range used to
+        probe outside it (lo=hi=20 probed 20 and 19, returned 19)."""
+        with self.assertRaises(ValueError):
+            engine_search.bisect_crf(lambda c: 99.0, 20, 20, target_vmaf=95.0)
 
     def test_bisect_crf_early_stop_never_misses_the_target(self):
         """The early stop never returns a CRF whose score misses the target:
