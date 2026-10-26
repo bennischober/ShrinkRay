@@ -763,6 +763,7 @@ def snapshot(
     """
     import hashlib
 
+    from shrinkray import config as config_module
     from shrinkray.tools.process import rss_mib
 
     s = get_state()
@@ -863,6 +864,14 @@ def snapshot(
             "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
             "database": str(s.db_file),
             "rss_mib": round(data["rss_mib"], 1) if data["rss_mib"] is not None else None,
+            # the snapshot is the UI's one state channel (App.svelte reads
+            # snap.status alone): it must carry the same fields /api/status
+            # does, or the built surfaces behind them can never render
+            # (issue #323) - the config-error strip (#247), the pause notice
+            # (#250) and the reveal button (#239)
+            "config_error": config_module.config_error,
+            "paused": pause_reason(s.db_file.resolve().parent),
+            "reveal_available": _reveal_available(),
         },
         "jobs": None if jobs_unchanged else [j.to_dict() for j in data["jobs"]],
         "jobs_etag": etag_jobs,
