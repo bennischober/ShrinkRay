@@ -172,19 +172,46 @@ def video_frame_count(path: Path) -> int | None:
         return None
 
 
-def pair_dimensions(distorted: Path) -> tuple[int | None, int | None, int | None]:
-    """Reads the distorted file's frame width, height and bit depth.
+def pair_dimensions(reference: Path, distorted: Path) -> tuple[int | None, int | None, int | None]:
+    """Reads the geometry and bit depth the recipe is derived from.
 
-    The recipe's model and scale follow the geometry being scored (issue #309), so the
-    harness must pass real dimensions: without them `vmaf_recipe` falls back to the
-    1080p model at native size and a 4K pair is scored with the wrong model.
+    The model and scale follow the geometry being scored (issue #309), and the analysis
+    pixel format follows the SOURCE's bit depth, which is what `engine/pipeline.py`
+    passes as `source_bit_depth`. Taking the bit depth from the distorted file instead
+    scores a 10-bit source's 8-bit encode at 8-bit, where ab-av1 scores it at 10-bit -
+    measured as a 0.1736 VMAF gap on the 2160p pair.
 
     Args:
-        distorted (Path): The encoded file the measurement scores.
+        reference (Path): The pristine source, whose bit depth sets the pixel format.
+        distorted (Path): The encoded file, whose dimensions select model and scale.
 
     Returns:
         tuple: (width, height, bit_depth), each None when ffprobe cannot report it.
     """
+    width, height = _video_dimensions(distorted)
+    return width, height, _video_bit_depth(reference)
+
+
+def _video_dimensions(path: Path) -> tuple[int | None, int | None]:
+    """Reads a file's video frame width and height."""
+    values = _probe_video_stream(path, "width,height")
+    try:
+        return int(values["width"]), int(values["height"])
+    except (KeyError, ValueError):
+        return None, None
+
+
+def _video_bit_depth(path: Path) -> int | None:
+    """Reads a file's video bit depth from its pixel format."""
+    values = _probe_video_stream(path, "pix_fmt")
+    pix_fmt = values.get("pix_fmt")
+    if not pix_fmt:
+        return None
+    return 10 if "10" in pix_fmt else 8
+
+
+def _probe_video_stream(path: Path, entries: str) -> dict[str, str]:
+    """Reads selected fields of a file's first video stream via ffprobe."""
     command = [
         "ffprobe",
         "-v",
@@ -192,27 +219,21 @@ def pair_dimensions(distorted: Path) -> tuple[int | None, int | None, int | None
         "-select_streams",
         "v:0",
         "-show_entries",
-        "stream=width,height,pix_fmt",
+        f"stream={entries}",
         "-of",
         "default=nw=1",
-        str(distorted),
+        str(path),
     ]
     try:
         proc = subprocess.run(command, capture_output=True, text=True, timeout=600)
     except (OSError, subprocess.SubprocessError):
-        return None, None, None
+        return {}
     values: dict[str, str] = {}
     for line in proc.stdout.strip().splitlines():
         if "=" in line:
             key, _, value = line.partition("=")
             values[key] = value
-    try:
-        width = int(values["width"])
-        height = int(values["height"])
-    except (KeyError, ValueError):
-        return None, None, None
-    bit_depth = 10 if "10" in values.get("pix_fmt", "") else 8
-    return width, height, bit_depth
+    return values
 
 
 def measure_ours(
@@ -234,7 +255,7 @@ def measure_ours(
             recipe is what the caches key on, so recording it keeps the result
             comparable with a later run).
     """
-    width, height, bit_depth = pair_dimensions(distorted)
+    width, height, bit_depth = pair_dimensions(reference, distorted)
     recipe = vmaf_recipe(crop=crop, hdr=hdr, width=width, height=height, bit_depth=bit_depth)
     with tempfile.TemporaryDirectory(prefix="shrinkray_parity_") as tmp:
         score = measure_vmaf(

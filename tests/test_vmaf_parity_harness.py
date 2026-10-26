@@ -102,7 +102,7 @@ class TestPairDimensions(unittest.TestCase):
                 capture_output=True,
                 timeout=300,
             )
-            width, height, bit_depth = parity.pair_dimensions(clip)
+            width, height, bit_depth = parity.pair_dimensions(clip, clip)
             self.assertEqual((width, height), (3840, 2160))
             self.assertEqual(bit_depth, 8)
             # the recipe's model must follow the real geometry (issue #309):
@@ -121,7 +121,43 @@ class TestPairDimensions(unittest.TestCase):
     def test_a_missing_file_yields_no_dimensions(self) -> None:
         parity = load_parity_module()
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(parity.pair_dimensions(Path(tmp) / "absent.mkv"), (None, None, None))
+            absent = Path(tmp) / "absent.mkv"
+            self.assertEqual(parity.pair_dimensions(absent, absent), (None, None, None))
+
+    @unittest.skipUnless(FFMPEG_OK, "ffmpeg required to build the fixture")
+    def test_bit_depth_comes_from_the_source_not_the_encode(self) -> None:
+        parity = load_parity_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src10.mkv"
+            encoded = root / "enc8.mkv"
+            for path, pix_fmt in ((source, "yuv420p10le"), (encoded, "yuv420p")):
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-v",
+                        "error",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "testsrc2=size=3840x2160:rate=1:duration=1",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "ultrafast",
+                        "-pix_fmt",
+                        pix_fmt,
+                        str(path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=300,
+                )
+            _w, _h, bit_depth = parity.pair_dimensions(source, encoded)
+            # ab-av1 scores the SOURCE's depth; taking it from the 8-bit encode
+            # measured a 0.1736 VMAF gap on the 2160p acceptance pair
+            self.assertEqual(bit_depth, 10)
 
 
 class TestMismatchedPairIsNotScored(unittest.TestCase):
