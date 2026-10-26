@@ -139,8 +139,9 @@ def _cancel_on_terminal_close() -> Iterator[threading.Event]:
     termination, orphaning it. The previous handlers come back on every
     exit path, and a signal already ignored (`nohup`, a shell's `cmd &`)
     stays ignored. After a cancel, SIGHUP and SIGTERM stay ignored instead,
-    so a late repeat cannot kill the exiting command; ctrl+c is restored. Callers enter the scope only around the engine work, where
-    a child runs; a scan before it keeps the default signal behaviour. The
+    so a late repeat cannot kill the exiting command; ctrl+c is restored.
+    Callers enter the scope only around the engine work, where a child
+    runs; a scan before it keeps the default signal behaviour. The
     crop pass does not check the event yet (#384); ctrl+c and a closed
     terminal still reach its ffmpeg through the process group, and the
     sampled fallback that follows a failed pass does not check it either.
