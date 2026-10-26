@@ -249,14 +249,15 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
     An early stop accepts a passing probe whose score sits less than a
     tolerance above the target, where the tolerance doubles each round from
     0.1 (0.1, 0.2, 0.4, 0.8, ...) - ab-av1's formula for an encoder whose
-    CRF moves in whole steps. Each further round buys at most a CRF step, so
-    a late round accepts a looser fit; the trade is a slightly lower CRF (a
-    slightly bigger file) for fewer rounds. The stop never accepts a probe
-    below the target, and it fires only once a FAILING bound is measured
-    above the pass (review round 2): a pass with no failing bound above it
-    is the near-target plateau, where stopping would give away up to ten CRF
-    steps and could pick a CRF where the file grows - an encodable file
-    turned into a "would not shrink" skip.
+    CRF moves in whole steps. The stop never accepts a probe below the
+    target, and it fires only when the failing bound sits at most two CRF
+    above the pass (issue #395): the one CRF between them is then the only
+    one left unprobed, so the stop saves that round and gives away at most
+    one CRF step (a slightly bigger file). Without that bracket a pass near
+    the target says nothing about the CRFs above it: on a plateau-then-knee
+    curve a pass at the 20% point stopped the search eight CRF below the
+    largest passing one, and a file that would shrink there could come out
+    as a "would not shrink" skip.
 
     Args:
         score (callable): Measurement score(crf) => float, the probe's VMAF
@@ -268,12 +269,17 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
         hi (int): The highest CRF to consider (exclusive, never probed).
 
     Returns:
-        int: A passing CRF in [lo, hi) - the largest one unless the early
-            stop accepted a lower one - or lo if even lo fails (the caller
-            should use it anyway as the best available quality). The
+        int: A passing CRF in [lo, hi) - the largest one, or the one below
+            it when the early stop fired - or lo if even lo fails (the
+            caller should use it anyway as the best available quality). The
             returned CRF has always been probed, so the caller's achieved
             lookup finds it.
+
+    Raises:
+        ValueError: If the range [lo, hi) is empty.
     """
+    if hi <= lo:
+        raise ValueError(f"empty CRF range [{lo}, {hi})")
     top = hi - 1  # the highest CRF the search may return
     passing: tuple[int, float] | None = None  # the highest passing probe
     failing: tuple[int, float] | None = None  # the lowest failing probe
@@ -285,13 +291,13 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
         tolerance = 0.1 * 2 ** (round_number - 1)
         if value >= target_vmaf:
             passing = (crf, value)
-            # the plateau guard (review round 2): the stop requires a FAILING
-            # bound above the pass. A pass with no failing measurement above
-            # it is the near-target plateau - stopping there would give away
-            # up to ten CRF steps (a 1.8x-larger output on a real-shape
-            # curve) and could pick a CRF where the file GROWS, turning an
-            # encodable file into a "would not shrink" skip.
-            if failing is not None and value - target_vmaf < tolerance:
+            # the stop needs a failing bound at most two CRF above the pass
+            # (issue #395): only then is a single unprobed CRF all it can
+            # give away. A pass with no failing bound, or a distant one, is
+            # the plateau-then-knee shape where an early stop gave away many
+            # CRF steps (8 on #395's curve) and could pick a CRF where the
+            # file GROWS.
+            if failing is not None and failing[0] - crf <= 2 and value - target_vmaf < tolerance:
                 return crf
             if failing is not None:
                 if failing[0] == crf + 1:
