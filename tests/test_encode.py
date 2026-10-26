@@ -900,6 +900,40 @@ class TestEncodeLock(unittest.TestCase):
             acquire_encode_slot(self.out, holder="test")
         lock.unlink()
 
+    def test_the_steal_never_deletes_a_fresh_competing_lock(self):
+        """Between reading a stale lock and unlinking it, another claimant
+        may steal and RE-CREATE the lock (PR #389's review finding 4): the
+        steal must verify the file's identity and lose, never delete the
+        competitor's brand-new live lock."""
+
+        from shrinkray.engine.lock import EncodeBusyError, _lock_path, acquire_encode_slot
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = _lock_path(self.out)
+        lock.write_text("999999999")  # a dead pid: stale on first read
+        competitor_stamp = f"{os.getpid()} 1"  # a live pid with a foreign start
+
+        real_read = type(lock).read_text
+
+        def read_then_race(self, *args, **kwargs):
+            text = real_read(self, *args, **kwargs)
+            if text.strip() == "999999999":
+                # the competitor steals and re-creates between our read and
+                # the steal's unlink: a NEW file with a LIVE stamp
+                lock.unlink()
+                lock.write_text(competitor_stamp)
+            return text
+
+        with (
+            mock.patch.object(type(lock), "read_text", read_then_race),
+            self.assertRaises(EncodeBusyError),
+        ):
+            acquire_encode_slot(self.out, holder="test")
+        # the competitor's lock SURVIVED with its live stamp
+        self.assertTrue(lock.exists())
+        self.assertEqual(lock.read_text(), competitor_stamp)
+        lock.unlink()
+
     def test_encode_movies_forwards_caller_progress(self):
         """The caller's progress callback receives every encode percent event.
 

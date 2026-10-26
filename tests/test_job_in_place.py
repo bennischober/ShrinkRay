@@ -496,6 +496,76 @@ class TestEncodeJobInPlace(unittest.TestCase):
             self.assertEqual(result["outcomes"][0]["state"], "encoded")
             self.assertFalse(_lock_path(nested).exists())
 
+    def test_a_multi_path_payload_locks_each_movies_own_root(self) -> None:
+        """A payload naming TWO roots keys each movie's slot on the root that
+        CONTAINS it (PR #389's review finding 2): the old first-path key
+        guarded a root-B movie with a root-A lock, so a CLI scanning root B
+        found no lock and the #230 race survived exactly where the fix
+        claimed."""
+        from shrinkray.engine.lock import _lock_path, guard_encodes
+
+        root_b = self.root / "second"
+        root_b.mkdir()
+        movie_b = root_b / "b.mkv"
+        movie_b.write_bytes(b"x" * 16)
+        payload = {"paths": [str(self.root), str(root_b)], "quality": True}
+        job = jobs.Job(kind=jobs.JobKind.ENCODE, payload=payload)
+
+        def fake_quality(movie_in, output_file, **kwargs):
+            output_file.write_bytes(b"y" * 8)
+            return SimpleNamespace(
+                input_size=16,
+                output_size=8,
+                chosen_crf=20,
+                achieved_vmaf=95.0,
+                error=None,
+                success=True,
+                skipped_reason=None,
+                probes=[],
+                probe_seconds=1.0,
+                encode_seconds=1.0,
+                target_vmaf=96.0,
+                hdr=False,
+                encoder="svt_av1",
+                encoder_preset="3",
+                probe_encoder_preset="5",
+                input_width=None,
+                input_height=None,
+                input_codec=None,
+                input_bit_depth=None,
+                input_duration=None,
+                input_bitrate=None,
+                output_bitrate=None,
+                verified_vmaf=None,
+                verified_subsample=None,
+                crf_source="probe",
+                plan_created_at=None,
+            )
+
+        from unittest.mock import patch as _patch
+
+        with (
+            _patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_quality),
+            _patch("shrinkray.service.record_quality_results") as fake_record,
+            _patch("shrinkray.service.swap_encode_into_place") as fake_swap,
+        ):
+            fake_record.return_value = SimpleNamespace(
+                encoded=True, skipped=False, error=None, encode_id=None
+            )
+            fake_swap.return_value = SimpleNamespace(replaced=True, reason=None)
+            # a CLI run scanning ROOT B holds root B's slot: the root-B movie
+            # must skip, although root A is free (the old first-path key made
+            # this job take root A's lock and encode)
+            with guard_encodes(root_b, holder="encode-cli-b"):
+                result = jobs.execute_encode(job, self.connection, threading.Event())
+        by_movie = {o["movie"]: o for o in result["outcomes"]}
+        self.assertEqual(by_movie["b.mkv"]["state"], "skipped")
+        self.assertIn("another encoder", by_movie["b.mkv"]["error"])
+        # root A's movie was unaffected: the keys are per root
+        self.assertEqual(by_movie["movie.mkv"]["state"], "encoded")
+        # the lock the CLI's hold competed with was root B's, not root A's
+        self.assertFalse(_lock_path(root_b).exists())
+
 
 if __name__ == "__main__":
     unittest.main()

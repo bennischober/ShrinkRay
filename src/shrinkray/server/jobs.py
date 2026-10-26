@@ -584,10 +584,11 @@ def resolve_movies(
     from shrinkray.engine.scan import scan_movies
 
     movies: list[Path] = []
+    seen: set[Path] = set()
     for path in payload_paths(payload):
         if path.is_file():
             # single movie file (per-movie action) => pass through directly
-            movies.append(path)
+            candidates = [path]
         else:
             # the crop-cache projection needs the db FILE: the connection may
             # be None here (a stateless scan), and _db_file_of needs one
@@ -601,7 +602,17 @@ def resolve_movies(
                 exclude=exclude,
                 db_file=derived,
             )
-            movies.extend(part_movies)
+            candidates = part_movies
+        for movie in candidates:
+            # overlapping payload paths (a root and a subfolder of it both
+            # named) scan the same file twice: the second sighting is a
+            # duplicate that would encode twice (the multi-root review case
+            # on PR #389 found b.mkv three times in one payload)
+            key = movie.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            movies.append(movie)
     return movies
 
 
@@ -946,14 +957,21 @@ def _encode_quality_or_fixed(
     total = len(movies)
     # the in-place lock identity (issue #230): the scanned root the staging
     # directory sits in - the SAME root the CLI locks in folder form and the
-    # watcher locks per pass, so all three writers contend on one identity.
-    # execute_encode early-returns on an empty payload, so first is never
-    # empty here; the raise documents that instead of inventing a key.
+    # watcher locks per movie (its movie's own root), so all three writers
+    # contend on one identity. The review on this PR (finding 2): a
+    # multi-path payload's movies under the OTHER paths were guarded by the
+    # first path's lock - the key is the payload path that CONTAINS the
+    # movie, chosen per movie in the loop; resolved here so a symlinked or
+    # relative root cannot split one directory into two lock files
+    # (finding 3). execute_encode early-returns on an empty payload, so
+    # first is never empty here; the raise documents that instead of
+    # inventing a key.
+    payload_roots: list[Path] = []
     if in_place:
         first = payload_paths(payload)
         if not first:
             raise RuntimeError("no paths in payload")
-        lock_target = first[0] if first[0].is_dir() else first[0].parent
+        payload_roots = [(p.resolve() if p.is_dir() else p.parent.resolve()) for p in first]
     else:
         lock_target = output_dir
     if payload.get("quality", False):
@@ -989,14 +1007,24 @@ def _encode_quality_or_fixed(
                 # hold the encode slot: encode_with_quality does not take it
                 # itself, and this loop previously took NO slot at all - a CLI
                 # encode running beside the app encoded the same file
-                # concurrently (issue #230). Keyed on the LIBRARY ROOT in
-                # in-place mode (issue #230's contract: one lock identity per
-                # library root, taken by all three writers - the CLI locks the
-                # root it scanned, the watcher locks its watch root; a
-                # per-movie key let a folder-form CLI run and this job encode
-                # one file concurrently, both staging to the same
-                # deterministic swap path). The staging root is the contended
-                # resource: the swaps rename inside it.
+                # concurrently (issue #230). Keyed on the payload root that
+                # CONTAINS this movie, resolved (see the payload_roots note
+                # above) - one lock identity per library root, taken by all
+                # three writers: the CLI locks the root it scanned, the
+                # watcher locks the movie's own root; the staging root is the
+                # contended resource (the swaps rename inside it).
+                if in_place:
+                    movie_path = movie.resolve()
+                    # the DEEPEST containing root: a payload naming a root and
+                    # a subfolder of it must key the subfolder's movie on the
+                    # SUBFOLDER (the identity the CLI scanning that subfolder
+                    # would lock), never the shallower root
+                    containing = [r for r in payload_roots if movie_path.is_relative_to(r)]
+                    lock_target = (
+                        max(containing, key=lambda r: len(r.parts))
+                        if containing
+                        else movie_path.parent
+                    )
                 with guard_encodes(lock_target, holder="encode-job"):
                     result = encode_with_quality(
                         movie,

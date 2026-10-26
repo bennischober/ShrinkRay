@@ -28,6 +28,7 @@ in; the lock file lives inside it and is removed on release.
 
 import contextlib
 import os
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -68,10 +69,12 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
     """Acquires the encode slot for an output directory (blocking-free).
 
     Creates the output directory if needed, then claims the lock file
-    atomically (O_CREAT|O_EXCL). A stale lock (dead pid or older than the
-    stale window) is stolen with a warning. Concurrent claimants get the
-    exception, never a wait - the product's answer to "already encoding"
-    is a clear no, not a queue.
+    atomically (O_CREAT|O_EXCL). A stale lock (dead pid, a reused pid whose
+    start stamp does not match, or one older than the stale window - which
+    guard_encodes' refresher keeps touched, so the window measures silence,
+    not age) is stolen with a warning, and only the exact file that was
+    read. Concurrent claimants get the exception, never a wait - the
+    product's answer to "already encoding" is a clear no, not a queue.
 
     Args:
         output_dir (Path): The output directory to guard.
@@ -84,6 +87,10 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
         EncodeBusyError: When another live encoder holds the slot.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+    # canonicalize BEFORE keying: a symlinked or relative path must not
+    # produce a second lock file for one directory (the review on this PR,
+    # finding 3) - every writer resolves, so one directory is one lock
+    output_dir = output_dir.resolve()
     lock = _lock_path(output_dir)
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -94,12 +101,17 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
         # stamps its process start time beside the pid, and a recorded start
         # that does not match the living pid's start means the pid was
         # REUSED and the lock is stale regardless of age (issue #336).
+        raw_text: str | None = None
         try:
-            age = time.time() - lock.stat().st_mtime
-            raw = lock.read_text(encoding="ascii").strip().split()
+            lock_stat = lock.stat()
+            age = time.time() - lock_stat.st_mtime
+            raw_text = lock.read_text(encoding="ascii").strip()
+            raw = raw_text.split()
             pid = int(raw[0]) if raw and raw[0].isdigit() else 0
             recorded_start = int(raw[1]) if len(raw) > 1 and raw[1].isdigit() else None
         except (OSError, ValueError):
+            lock_stat = None
+            raw_text = None
             age, pid, recorded_start = _LOCK_STALE_SECONDS + 1, 0, None  # unreadable => stale
         if pid and _pid_alive(pid) and age < _LOCK_STALE_SECONDS:
             started = process_start_ticks(pid)
@@ -110,7 +122,23 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
                 ) from None
             # the pid is alive but is NOT the process that wrote the lock:
             # a reused pid after a crash/restart - the lock is stale
+        # steal ONLY the file that was read: between the read and this
+        # unlink, another claimant may have stolen and RE-CREATED the lock
+        # (the review's finding 4) - an unconditional unlink would delete a
+        # live holder's brand-new lock and let two writers run. Identity is
+        # checked by CONTENT (an inode can be reused by a delete+create on
+        # some filesystems): a lock whose text changed since the read is no
+        # longer the stale one this claimant judged.
         log_warning(f"Stale encode lock in '{output_dir}' (pid {pid or '?'}) - stealing it.")
+        try:
+            current_text = lock.read_text(encoding="ascii").strip()
+        except OSError:
+            current_text = None
+        if current_text is not None and current_text != (raw_text or ""):
+            raise EncodeBusyError(
+                f"another encoder is already using '{output_dir}' "
+                "(it claimed the slot while this one read the stale lock)"
+            ) from None
         _release_path(lock)
         return acquire_encode_slot(output_dir, holder)
     with os.fdopen(fd, "w", encoding="ascii") as handle:
@@ -150,7 +178,18 @@ def guard_encodes(output_dir: Path, holder: str = "encode") -> Iterator[Path]:
         Path: The lock file path.
     """
     lock = acquire_encode_slot(output_dir, holder)
+    stop = threading.Event()
+
+    def _refresh() -> None:
+        while not stop.wait(3600.0):
+            with contextlib.suppress(OSError):
+                lock.touch()
+
+    refresher = threading.Thread(target=_refresh, name="encode-lock-refresh", daemon=True)
+    refresher.start()
     try:
         yield lock
     finally:
+        stop.set()
+        refresher.join(timeout=5)
         release_encode_slot(lock)

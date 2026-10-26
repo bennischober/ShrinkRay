@@ -690,9 +690,11 @@ def watch(
                     _wait_or_stop(sleep_interval, stop_event, waiter=waiter)
                     continue
                 candidates = [
-                    movie for root in roots for movie in find_new_movies(root, extensions, known)
+                    (root, movie)
+                    for root in roots
+                    for movie in find_new_movies(root, extensions, known)
                 ]
-                for movie in candidates:
+                for movie_root, movie in candidates:
                     if stop_event is not None and stop_event.is_set():
                         log("Watch stopped (stop event set).")
                         return
@@ -739,15 +741,19 @@ def watch(
                         # hold the encode slot: encode_with_quality does not
                         # take it itself; a running CLI/job encode makes the
                         # watcher retry this movie on the next pass. In place
-                        # the slot is keyed on the LIBRARY ROOT (issue #230's
-                        # contract: one lock identity per library root, taken
-                        # by all three writers - the CLI locks the root it
-                        # scanned, the job locks the root it stages in; a
-                        # per-movie key let a folder-form CLI run and a job
-                        # encode one file concurrently, both staging to the
-                        # same deterministic swap path). One slot at a time,
-                        # never nested - the pass walks roots sequentially.
-                        lock_target = roots[0] if in_place_mode else target_dir
+                        # the slot is keyed on the LIBRARY ROOT THIS MOVIE
+                        # came from (issue #230's contract: one lock identity
+                        # per library root, taken by all three writers - the
+                        # CLI locks the root it scanned, the job locks the root
+                        # it stages in; a per-movie key let a folder-form CLI
+                        # run and a job encode one file concurrently, both
+                        # staging to the same deterministic swap path). The
+                        # review on this PR (finding 2): roots[0] guarded a
+                        # root-B movie with a root-A lock, so a CLI scanning
+                        # root B found no lock - the key must be the movie's
+                        # own root. One slot at a time, never nested - the
+                        # pass walks roots sequentially.
+                        lock_target = movie_root if in_place_mode else target_dir
                         with guard_encodes(lock_target, holder="watch"):
                             result = encode_with_quality(
                                 movie,
@@ -783,6 +789,45 @@ def watch(
                                 else default_subtitle_languages,
                                 progress=progress,
                             )
+                            # the ledger write and the swap stay INSIDE the
+                            # slot (the review on this PR, finding 1): the
+                            # in-place form's deterministic
+                            # '<source>.shrinkray-staging' name and the swap's
+                            # two renames are what two writers keyed on the
+                            # same root race on - the job path covers them
+                            # inside its guard, the watcher must too
+                            if result.skipped_reason:
+                                log(f"Skipping '{movie.name}': {result.skipped_reason}.")
+                                if record is not None:
+                                    record(movie, result, None)
+                            elif result.success:
+                                encode_id = (
+                                    record(movie, result, movie if in_place_mode else None)
+                                    if record
+                                    else None
+                                )
+                                if in_place_mode:
+                                    if not _swap(
+                                        db_file, movie, result.output, encode_id, error=result.error
+                                    ):
+                                        # declined (a verification finding, a grown
+                                        # output or a refused rename): _swap said why,
+                                        # and the green "Done" below would read as a
+                                        # replacement
+                                        continue
+                                    log(
+                                        f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
+                                        f"(VMAF {result.achieved_vmaf}), "
+                                        f"{result.saved_percent:.1f}% saved (original retained)."
+                                    )
+                                else:
+                                    log(
+                                        f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
+                                        f"(VMAF {result.achieved_vmaf}), "
+                                        f"{result.saved_percent:.1f}% saved (source left untouched)."
+                                    )
+                            else:
+                                log_error(f"Encoding '{movie.name}' failed: {result.error}")
                     except EncodeBusyError as e:
                         log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
                         known.discard(_identity(movie))  # eligible again next pass
@@ -804,38 +849,6 @@ def watch(
                         # retried at all is #231's failure-memory decision.
                         log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
                         continue
-                    if result.skipped_reason:
-                        log(f"Skipping '{movie.name}': {result.skipped_reason}.")
-                        if record is not None:
-                            record(movie, result, None)
-                    elif result.success:
-                        encode_id = (
-                            record(movie, result, movie if in_place_mode else None)
-                            if record
-                            else None
-                        )
-                        if in_place_mode:
-                            if not _swap(
-                                db_file, movie, result.output, encode_id, error=result.error
-                            ):
-                                # declined (a verification finding, a grown
-                                # output or a refused rename): _swap said why,
-                                # and the green "Done" below would read as a
-                                # replacement
-                                continue
-                            log(
-                                f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
-                                f"(VMAF {result.achieved_vmaf}), "
-                                f"{result.saved_percent:.1f}% saved (original retained)."
-                            )
-                        else:
-                            log(
-                                f"Done: '{movie.name}' -> CRF {result.chosen_crf} "
-                                f"(VMAF {result.achieved_vmaf}), "
-                                f"{result.saved_percent:.1f}% saved (source left untouched)."
-                            )
-                    else:
-                        log_error(f"Encoding '{movie.name}' failed: {result.error}")
 
                 sleep_interval = next_poll_interval(sleep_interval, poll_interval, bool(candidates))
                 if once:
