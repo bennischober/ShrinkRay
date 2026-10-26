@@ -1882,6 +1882,76 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         fake_search.assert_not_called()
         self.assertTrue(result[3], "the early exit must report a skip")
 
+    def test_a_pre_314_row_heals_on_the_next_probe(self):
+        """The heal-on-encounter shape (issue #387): a cache row written
+        before #314 (a score with a NULL size) is RE-ENCODED once on the next
+        probe and the row overwritten with the size recorded - the cache
+        converges to the size-carrying schema in normal use instead of
+        falling back forever. Before this fix, the score hit skipped the
+        encode and the NULL size stayed NULL for the row's life.
+        """
+        import tempfile
+
+        from shrinkray import db
+        from shrinkray.engine import search as engine_search
+
+        def fake_run(command, cancel=None):
+            out = Path(command[command.index("--output") + 1])
+            out.write_bytes(b"e" * 555)
+            return 0, ""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            sample = root / "s0.mkv"
+            sample.write_bytes(b"m" * 100)
+
+            # the legacy row: a score, NO size (the pre-#314 shape); the key
+            # carries the REAL recipe identifier (the same one probe_crf uses)
+            recipe = engine_search.vmaf_recipe(crop=None, hdr=False)
+            key = engine_search.probe_cache_key(
+                movie,
+                0.0,
+                10.0,
+                22,
+                "svt_av1",
+                "5",
+                None,
+                False,
+                None,
+                "hb-1.6",
+                recipe.identifier(),
+            )
+            db.save_probe_score(connection, key, 95.0)
+            connection.close()
+
+            with (
+                patch.object(engine_search, "_run", side_effect=fake_run),
+                patch.object(engine_search, "measure_vmaf", return_value=95.5),
+                patch.object(engine_search, "_tool_versions", return_value="hb-1.6"),
+            ):
+                score = engine_search.probe_crf(
+                    [(sample, 0.0)],
+                    22,
+                    workdir,
+                    "hb",
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    db_file=db_file,
+                )
+            self.assertEqual(score, 95.5)
+            # the row healed: the size is recorded
+            connection = db.connect(db_file)
+            self.assertEqual(db.get_probe_entry(connection, key), (95.5, 555))
+            connection.close()
+
     def test_a_bypassed_cache_never_reads_the_sizes(self):
         """The use_probe_cache contract for the size decision (issue #391):
         False means bypass ENTIRELY - the chosen-CRF decision must not read

@@ -360,7 +360,10 @@ def probe_crf(
     Per-sample measurements are cached (probe_cache table, content-addressed
     via probe_cache_key): a sample whose identity, encode settings and
     measurement mode all match a previous run is reused instead of being
-    re-encoded. A cache hit IS a fresh measurement of unchanged inputs.
+    re-encoded. A pre-#314 row (a score without a recorded size) is re-encoded
+    ONCE and overwritten - the cache converges to the size-carrying schema in
+    normal use (issue #387); the one-time cost per legacy row is the accepted
+    trade. A cache hit IS a fresh measurement of unchanged inputs.
 
     Args:
         samples (list[tuple[Path, float]]): The sample files with their
@@ -418,12 +421,23 @@ def probe_crf(
         cached, _cached_size, connection = (None, None, None)
         if use_probe_cache:
             cached, _cached_size, connection = _cached_or_none(db_file, key)
-        if cached is not None:
+        if cached is not None and _cached_size is not None:
+            # a full hit: score AND size (issue #314 schema) - reuse both
             log(f"probe cache hit (CRF {crf}, sample {index + 1}/{len(samples)})")
             scores.append(cached)
             if connection is not None:
                 connection.close()
             continue
+        if cached is not None:
+            # a score hit with NO size: a pre-#314 row (issue #387). The score
+            # is reusable but the size is not - re-encode this window once and
+            # overwrite the row, so the cache converges to the new schema in
+            # normal use instead of falling back forever. The one-time cost is
+            # the issue accepted trade.
+            log(
+                f"probe cache hit without a size (pre-#314 row, CRF {crf}, "
+                f"sample {index + 1}/{len(samples)}): re-encoding once to heal it"
+            )
         encoded = workdir / f"probe_crf{crf}_{index}.mkv"
         command = build_encode_command(
             handbrake,
