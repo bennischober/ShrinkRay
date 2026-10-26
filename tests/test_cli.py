@@ -9,6 +9,7 @@ from unittest import mock
 from unittest.mock import patch
 
 import typer
+from typer.testing import CliRunner
 
 from shrinkray import config as config_helper
 from shrinkray import db
@@ -455,6 +456,44 @@ class TestCancelOnTerminalClose(unittest.TestCase):
                 result = CliRunner().invoke(app, ["plan", str(movie)])
         self.assertEqual(result.exit_code, 1, result.output)
         self.assertNotIsInstance(result.exception, Cancelled)
+        log_error.assert_called_once_with("cancelled by user")
+
+    def test_a_signal_after_the_final_encode_keeps_the_source(self) -> None:
+        """A cancel that lands after the engine's last check (the encode has
+        finished) must not be lost: no swap, no record, exit 1."""
+        import signal
+
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp).resolve() / "movies"
+            lib.mkdir()
+            movie = lib / "one.mkv"
+            movie.write_bytes(b"x" * 100)
+
+            def fake_encode(movie_in, output, **kwargs):
+                Path(output).write_bytes(b"y" * 50)
+                os.kill(os.getpid(), signal.SIGINT)  # ctrl+c, after the last check
+                return QualityResult(
+                    input=Path(movie_in),
+                    output=Path(output),
+                    success=True,
+                    chosen_crf=20,
+                    achieved_vmaf=96.0,
+                    input_size=100,
+                    output_size=50,
+                )
+
+            with (
+                patch("shrinkray.service.all_problems", return_value=[]),
+                patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+                patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode),
+                patch("shrinkray.__main__.log_error") as log_error,
+            ):
+                result = CliRunner().invoke(app, ["encode", str(lib)])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertEqual(movie.read_bytes(), b"x" * 100, "the source was swapped")
+            self.assertEqual([p.name for p in lib.iterdir()], ["one.mkv"])
         log_error.assert_called_once_with("cancelled by user")
 
     def test_an_ignored_signal_stays_ignored(self) -> None:

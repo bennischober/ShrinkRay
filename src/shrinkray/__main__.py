@@ -613,6 +613,12 @@ def _record_encodes(
                             audio_languages=config.handbrake_audio_languages,
                             subtitle_languages=config.handbrake_subtitle_languages,
                         )
+                        if cancel is not None and cancel.is_set():
+                            # a signal after the engine's last check (the
+                            # encode finished, or a short probe it killed in
+                            # our process group): honour it before anything
+                            # is recorded or swapped - the source stays as is
+                            raise _EncodeCancelled("cancelled by user")
                         if result.success and result.verified_vmaf is not None:
                             console.print(
                                 f"[green]Verified '{movie.name}': full-file VMAF "
