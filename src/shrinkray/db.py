@@ -897,7 +897,11 @@ def get_valid_plan(
         or abs(row["sample_seconds"] - sample_seconds) > 0.01
         or int(row["crop_sample_count"]) != crop_sample_count
         or str(row["vmaf_statistic"]) != vmaf_statistic
-        or str(row["vmaf_recipe"]) != vmaf_recipe
+        # the recipe only matters when the plan MEASURED something: a gate skip
+        # (too short, resolution, size, codec) never ran a VMAF measurement, so
+        # its row carries '' and must stay reusable - requiring a recipe there
+        # would re-derive every gate skip on every run (issue #308's review).
+        or (row["achieved_vmaf"] is not None and str(row["vmaf_recipe"]) != vmaf_recipe)
     ):
         return None
     return cast("sqlite3.Row", row)

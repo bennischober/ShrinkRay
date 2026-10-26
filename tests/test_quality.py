@@ -1236,6 +1236,102 @@ class TestProbeCache(unittest.TestCase):
             self.assertIsNone(db.get_probe_entry(connection, uhd_key))
             connection.close()
 
+    def test_a_gate_skip_stays_reusable_without_a_recipe(self):
+        """Issue #308's review: a GATE skip (too short, resolution, size, codec)
+        never runs a VMAF measurement, so its plan row carries no recipe. The
+        lookup must still reuse it - requiring a recipe there would re-derive every
+        gate skip on every run, a cache regression the measured-plan rule must not
+        cause. A MEASURED plan still rejects a different recipe.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 16)
+            connection = db.connect(root / "meta.db")
+            file_id = db.upsert_file(
+                connection,
+                db.MovieRecord(
+                    path=movie,
+                    mtime=movie.stat().st_mtime,
+                    size=movie.stat().st_size,
+                    name=movie.name,
+                    category="Cat",
+                ),
+            )
+            connection.commit()
+            save = {
+                "encoder": "svt_av1",
+                "encoder_preset": "5",
+                "target_vmaf": 96.0,
+                "crf_low": 14,
+                "crf_high": 45,
+                "sample_count": 3,
+                "sample_seconds": 10.0,
+            }
+            lookup = {
+                "encoder": "svt_av1",
+                "encoder_preset": "5",
+                "target_vmaf": 96.0,
+                "crf_range": (14, 45),
+                "sample_count": 3,
+                "sample_seconds": 10.0,
+            }
+            # a gate skip: achieved_vmaf None, no recipe
+            db.save_plan(
+                connection,
+                file_id,
+                None,
+                None,
+                None,
+                [],
+                "too short",
+                None,
+                movie.stat().st_mtime,
+                movie.stat().st_size,
+                **save,
+            )
+            hit = db.get_valid_plan(
+                connection,
+                movie,
+                vmaf_recipe=tools_vmaf.vmaf_recipe().fingerprint(),
+                **lookup,
+            )
+            self.assertIsNotNone(hit, "a gate skip must stay reusable")
+            self.assertEqual(hit["skipped_reason"], "too short")
+
+            # a MEASURED plan still keys on the recipe
+            db.save_plan(
+                connection,
+                file_id,
+                22,
+                95.5,
+                None,
+                [],
+                None,
+                100,
+                movie.stat().st_mtime,
+                movie.stat().st_size,
+                vmaf_recipe=tools_vmaf.vmaf_recipe(bit_depth=8).fingerprint(),
+                **save,
+            )
+            self.assertIsNotNone(
+                db.get_valid_plan(
+                    connection,
+                    movie,
+                    vmaf_recipe=tools_vmaf.vmaf_recipe(bit_depth=8).fingerprint(),
+                    **lookup,
+                )
+            )
+            self.assertIsNone(
+                db.get_valid_plan(
+                    connection,
+                    movie,
+                    vmaf_recipe=tools_vmaf.vmaf_recipe(bit_depth=10).fingerprint(),
+                    **lookup,
+                )
+            )
+            connection.close()
+
     def test_a_recipe_change_invalidates_the_plan_fingerprint(self):
         """The same rule for the plan: a stored plan measured with one recipe is
         never reused under another (issue #308). The recipe part the fingerprint
