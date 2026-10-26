@@ -18,7 +18,10 @@ Usage (from the repository root, with the pinned tools on PATH):
     uv run scripts/vmaf_parity.py --pair ref.mkv dis.mkv --hdr
 
 Each pair measures ShrinkRay's score and ab-av1's score on the same two files and
-prints the delta. The tolerance is |delta| <= 0.1 VMAF (issue #306); an HDR pair is
+prints the delta. Before scoring, both sides' video frame counts are compared: a
+pair whose counts differ is not comparing the same frames, so it is reported as
+unmeasured and fails the run instead of printing a meaningless number (issue #408).
+The tolerance is |delta| <= 0.1 VMAF (issue #306); an HDR pair is
 measured TWICE - with tone-mapping on (the shipped ShrinkRay path, REPORTED against
 ab-av1's PQ-direct score as the documented deviation in docs/encode-decision.md)
 and with tone-mapping off (the like-for-like comparison, HELD). Results append to
@@ -126,6 +129,46 @@ def ab_av1_vmaf(reference: Path, distorted: Path, crop: tuple[int, int, int, int
     return float(lines[-1])
 
 
+def video_frame_count(path: Path) -> int | None:
+    """Counts a file's video frames, the check that catches a misaligned pair.
+
+    A pair whose sides have different frame counts is not comparing the same
+    frames, so its score is meaningless however closely the two tools agree
+    (issue #408). Counting decodes the file, which is why it belongs to this
+    harness and not to every measurement the product runs.
+
+    Args:
+        path (Path): The media file.
+
+    Returns:
+        int | None: The video frame count, or None when ffprobe could not report
+            one (missing binary, unreadable file, no video stream).
+    """
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-count_frames",
+        "-show_entries",
+        "stream=nb_read_frames",
+        "-of",
+        "default=nw=1:nk=1",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=7200)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        return int(proc.stdout.strip())
+    except ValueError:
+        return None
+
+
 def measure_ours(
     reference: Path,
     distorted: Path,
@@ -203,6 +246,38 @@ def main() -> int:
         crop = crops[index]
         hdr = hdrs[index]
         print(f"\n=== {label} ===")
+        reference_frames = video_frame_count(reference)
+        distorted_frames = video_frame_count(distorted)
+        print(f"frames: reference {reference_frames}, distorted {distorted_frames}")
+        if reference_frames is None or distorted_frames is None:
+            print(
+                f"{label}: UNMEASURABLE - the frame counts could not be read, "
+                "so frame alignment cannot be established"
+            )
+            failures += 1
+            rows.append(
+                (f"{label} [frame counts unreadable]", float("nan"), float("nan"), "unmeasured", "")
+            )
+            continue
+        if reference_frames != distorted_frames:
+            # A count mismatch means the two sides are not comparing the same
+            # frames: the score would be meaningless even where both tools agree
+            # to four decimals (issue #408 measured 17.71 on a 1448/1445 pair).
+            print(
+                f"{label}: MISALIGNED - {reference_frames} vs {distorted_frames} frames "
+                f"(delta {reference_frames - distorted_frames:+d}); not scoring this pair"
+            )
+            failures += 1
+            rows.append(
+                (
+                    f"{label} [misaligned: {reference_frames} vs {distorted_frames} frames]",
+                    float("nan"),
+                    float("nan"),
+                    "unmeasured",
+                    "",
+                )
+            )
+            continue
         ours, recipe = measure_ours(reference, distorted, crop, hdr)
         theirs = ab_av1_vmaf(reference, distorted, crop)
         delta = abs(ours - theirs)
@@ -232,6 +307,9 @@ def main() -> int:
         fh.write("| pair | ShrinkRay | ab-av1 | delta | verdict | recipe |\n")
         fh.write("|---|---|---|---|---|---|\n")
         for label, ours, theirs, note, recipe in rows:
+            if note == "unmeasured":
+                fh.write(f"| {label} | — | — | — | unmeasured | — |\n")
+                continue
             delta = abs(ours - theirs)
             verdict = note or ("PASS" if delta <= TOLERANCE else "FAIL")
             fh.write(
