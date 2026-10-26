@@ -568,9 +568,9 @@ def plan_quality(
         # cached per file version in the db, so the keyframe-only pass runs
         # once per file. Without a database (stateless runs) the sampled
         # fallback keeps bar detection working.
-        summary = detect_crop_summary_cached(input_file, db_file)
+        summary = detect_crop_summary_cached(input_file, db_file, cancel=cancel)
         if summary is None or summary.bars is None:
-            crop = detect_crop_rect(input_file, workdir, count=crop_sample_count)
+            crop = detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel)
         else:
             crop = summary.bars
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")

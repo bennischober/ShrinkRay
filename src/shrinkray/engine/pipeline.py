@@ -996,9 +996,9 @@ def _probe_movie(
         # file with no bars simply proceeds uncropped. The timeline detector
         # is the one bar measurement (issue #181), cached per file version;
         # the sampled detector is the fallback for stateless runs.
-        summary = detect_crop_summary_cached(input_file, db_file)
+        summary = detect_crop_summary_cached(input_file, db_file, cancel=cancel)
         if summary is None or summary.bars is None:
-            crop = detect_crop_rect(input_file, workdir, count=crop_sample_count)
+            crop = detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel)
         else:
             crop = summary.bars
         if crop is not None:
