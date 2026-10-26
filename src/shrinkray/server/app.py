@@ -283,7 +283,8 @@ class JobRequest(BaseModel):
         target_vmaf (float): The VMAF quality floor.
         overwrite (bool): Re-encode already encoded movies.
         verify (bool): Full-file VMAF verification after each quality encode.
-        workers (int | None): Concurrent encodes (fixed mode).
+        workers (int | None): Concurrent encodes (the scan's pool; unused by
+            the measured encode path).
         encoder_preset (str | None): Quality mode's encoder speed preset
             (None = the configured value).
         rescan (bool): Ignore the scan cache.

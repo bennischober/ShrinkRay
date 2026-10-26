@@ -63,9 +63,8 @@ terminal (planned: `shrinkray setup`, see [Direction](#direction)).
 resolution, FPS, audio languages, HDR detection, black-bar detection — cached
 in a sqlite database, so repeated scans are near-instant.
 
-**`encode`** re-encodes your library with HandBrake to save disk space. The
-default mode uses a fixed preset. The **quality mode** is where it gets
-interesting:
+**`encode`** re-encodes your library with HandBrake to save disk space. Every
+encode is quality-measured — there is no fixed-preset mode:
 
 > **Fix quality, not bitrate.** For every movie, short samples are probed at
 > different CRF values, each probe is scored with [VMAF](https://github.com/Netflix/vmaf)
@@ -443,7 +442,7 @@ Example [config.json](config.json):
         "black_bars": { "MIN_WIDTH": 100, "MIN_HEIGHT": 100 }
     },
     "handbrake": {
-        "preset": "Fast 1080p30",        // fixed-mode HandBrake preset NAME
+        "preset": "Fast 1080p30",        // legacy: unread by the measured pipeline
         "encoder": "svt_av1",
         "probe_encoder_preset": "5", // quality mode: the PROBES' speed preset
         "encoder_preset": "3",         // quality mode: the FINAL encode's preset
@@ -470,10 +469,9 @@ Example [config.json](config.json):
 > finished files, because the database already records them as done.
 
 Three keys named "preset" with different meanings — the distinction:
-`handbrake.preset` is the **fixed-mode** HandBrake preset *name* (a full
-quality/speed/content bundle, e.g. `Fast 1080p30`). The other two are
-**quality mode's** encoder *speed* presets — the x264/x265 ladder
-(`ultrafast`…`placebo`). **`probe_encoder_preset` is a measurement
+`handbrake.preset` is a legacy key the measured pipeline no longer reads
+(it named the removed fixed mode's HandBrake preset *name*). The other two
+are the encoder *speed* presets — the SVT-AV1 ladder. **`probe_encoder_preset` is a measurement
 setting**: the CRF search's throwaway probe encodes run at it (default
 `medium` — cheap, and representative of what the final encode will look
 like). **`encoder_preset` is an output setting**: the final encode — the

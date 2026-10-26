@@ -830,7 +830,7 @@ def execute_encode(
 
     Args:
         job (Job): The job (payload: path, output_dir, quality, target_vmaf,
-            overwrite, workers).
+            overwrite).
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
         progress (callable | None): Callback progress(dict) for live updates.
