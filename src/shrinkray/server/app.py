@@ -295,7 +295,9 @@ class JobRequest(BaseModel):
     path: str = ""
     paths: list[str] | None = None
     output_dir: str | None = None
-    quality: bool = False
+    # defaulted True (issue #375 review): the measured quality path is the
+    # only encode mode; jobs.py rejects an explicit false payload regardless
+    quality: bool = True
     target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
     overwrite: bool = False
     verify: bool = False
