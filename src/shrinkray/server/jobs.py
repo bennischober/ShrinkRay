@@ -986,9 +986,14 @@ def _encode_measured(
             # hold the encode slot: encode_with_quality does not take it
             # itself, and this loop previously took NO slot at all - a CLI
             # encode running beside the app encoded the same file
-            # concurrently (issue #230). Keyed on the output directory: it
-            # is the contended resource of this mode. Taken per movie.
-            with guard_encodes(output_dir, holder="encode-job"):
+            # concurrently (issue #230). Keyed on the contended directory
+            # (issue #336): in place that is the MOVIE's own directory (the
+            # swaps rename inside it — same rule as the watcher, watch.py);
+            # a slot on the per-run staging directory excluded no one,
+            # because every run creates a fresh staging path. Two-directory
+            # mode keys on the output directory it writes into. Per movie.
+            lock_target = movie.parent if in_place else output_dir
+            with guard_encodes(lock_target, holder="encode-job"):
                 result = encode_with_quality(
                     movie,
                     output_dir / movie.name,

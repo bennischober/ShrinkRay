@@ -194,6 +194,90 @@ class TestQuality(unittest.TestCase):
                     f"than bisect ({probes_plain})",
                 )
 
+    def test_bisect_crf_does_not_probe_the_low_end_upfront(self):
+        """Issue #313: the range's lowest CRF is probed only when the
+        search actually heads there - the unconditional CRF-14 round spent
+        the search's most expensive probe on nearly every file."""
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return 99.0 - (c - 14) * 0.5
+
+        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        self.assertEqual(chosen, 22)
+        self.assertNotIn(14, calls, "the low end was probed without the search heading there")
+
+    def test_bisect_crf_unreachable_costs_three_rounds(self):
+        """The unreachable case follows ab-av1's round structure: the
+        midpoint, the 20% point of the range, then lo - whose probe is the
+        SkipEncode evidence. The PR's first shape walked down by midpoints
+        and spent five rounds here (review of #339)."""
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return 80.0
+
+        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        self.assertEqual(chosen, 14)
+        self.assertEqual(calls, [23, 18, 14])
+
+    def test_bisect_crf_round_two_moves_to_the_eighty_percent_point(self):
+        """A passing midpoint moves round two to the 80% point of the range
+        (ab-av1's cut), not to the range's end."""
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return 99.0
+
+        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        # midpoint 23, then round(0.4*23 + 0.6*31) = 28, then the top (31)
+        self.assertEqual(calls, [23, 28, 31])
+        self.assertEqual(chosen, 31)
+
+    def test_bisect_crf_early_stop_tolerance_doubles_per_round(self):
+        """Issue #313's early stop uses ab-av1's tolerance: a passing score
+        less than 0.1 * 2**(round-1) above the target ends the search.
+        Round 1 (tolerance 0.1) must not stop at +0.15; round 2 (0.2) must."""
+        scores = {23: 95.15, 18: 97.0, 28: 80.0}
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return scores.get(c, 95.15 if c < 23 else 80.0)
+
+        # round 1: CRF 23 passes at +0.15, above round 1's 0.1 => continue
+        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 23)
+        self.assertEqual(calls[0], 23)
+        self.assertGreater(len(calls), 1, "round 1 stopped above its 0.1 tolerance")
+
+        calls.clear()
+        scores = {23: 80.0, 18: 95.15}
+        # round 2: CRF 18 passes at +0.15, inside round 2's 0.2 => stop there
+        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 18)
+        self.assertEqual(calls, [23, 18])
+
+        calls.clear()
+        scores = {23: 80.0, 18: 80.0, 14: 95.35, 15: 95.35, 16: 95.35, 17: 95.35}
+        # round 3: CRF 14 passes at +0.35 - inside the doubled 0.4, where a
+        # linear 0.3 would keep searching
+        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 14)
+        self.assertEqual(calls, [23, 18, 14])
+
+    def test_bisect_crf_early_stop_never_misses_the_target(self):
+        """The early stop never returns a CRF whose score misses the target:
+        the tolerance is measured ABOVE the target on a PASSING probe."""
+        calls: list[int] = []
+
+        def score(c: int) -> float:
+            calls.append(c)
+            return 96.4 if c <= 25 else 60.0
+
+        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
+        self.assertGreaterEqual(score(chosen), 95.0)
+
     def test_build_vmaf_command(self):
         for style in (tools_vmaf.VMAF_STYLE_LEGACY, tools_vmaf.VMAF_STYLE_MODERN):
             command = tools_vmaf.build_vmaf_command(Path("enc.mkv"), Path("ref.mkv"), style=style)
@@ -999,6 +1083,414 @@ class TestProbeCache(unittest.TestCase):
         self.assertEqual(score2, 95.5)
         self.assertEqual(len(encodes2), 1)
 
+    def test_the_chosen_crf_size_uses_all_windows(self):
+        """Issue #314: the chosen-CRF size decision reads the encoded sizes
+        the VMAF probes already recorded for EVERY window - not one
+        re-encoded window. A fixture where window 0 shrinks but the total
+        grows must SKIP. The reverse direction (every window shrinks =>
+        encode) lives in test_the_chosen_crf_size_encodes_when_every_window_shrinks.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            # three sample windows: the first small (its encode shrinks),
+            # the others large (their encodes grow)
+            samples = []
+            sizes = [100, 1000, 1000]
+            for i, size in enumerate(sizes):
+                s = root / f"s{i}.mkv"
+                s.write_bytes(b"m" * size)
+                samples.append((s, 10.0 * i))
+
+            # seed the cache: at the chosen CRF, window 0 encoded to 40
+            # bytes (0.4x), windows 1-2 to 1200 each (1.2x)
+            encoded = [40, 1200, 1200]
+            for i, (_sample, offset) in enumerate(samples):
+                key = engine_search.probe_cache_key(
+                    movie,
+                    offset,
+                    10.0,
+                    22,
+                    "svt_av1",
+                    "5",
+                    None,
+                    False,
+                    None,
+                    ("hb", "1.6"),
+                )
+                db.save_probe_score(connection, key, 95.0, encoded[i])
+
+            with (
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+                # a cache miss here must fail as a DIAGNOSTIC (the fallback
+                # was reached), not as FileNotFoundError from a real encode
+                patch.object(
+                    engine_search,
+                    "estimate_size_factor",
+                    side_effect=AssertionError("the fallback ran: the cache was incomplete"),
+                ),
+            ):
+                factor = engine_search.check_chosen_crf_shrinks(
+                    samples,
+                    workdir,
+                    "hb",
+                    22,
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    db_file=db_file,
+                )
+            # the total: 2440 encoded / 2100 sample = 1.1619 (GROWS) -
+            # window 0 alone would have said 0.4 (shrinks)
+            self.assertGreater(factor, 1.0)
+            self.assertAlmostEqual(factor, 2440 / 2100, places=4)
+            connection.close()
+
+    def test_the_chosen_crf_size_keys_on_hdr(self):
+        """The cache key carries the HDR flag (issue #314's reviewer round 3):
+        a cache seeded under hdr=True must be READ under hdr=True - flipping
+        the flag on either side misses every entry and falls back. Mutating
+        the reader's hdr to False fails this test (the fallback fires); the
+        all-windows test above cannot catch it because its fixture is SDR.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            samples = []
+            for i in range(2):
+                s = root / f"s{i}.mkv"
+                s.write_bytes(b"m" * 100)
+                samples.append((s, 10.0 * i))
+
+            for _sample, offset in samples:
+                key = engine_search.probe_cache_key(
+                    movie, offset, 10.0, 22, "svt_av1", "5", None, True, None, ("hb", "1.6")
+                )
+                db.save_probe_score(connection, key, 95.0, 40)
+
+            with (
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+                patch.object(
+                    engine_search,
+                    "estimate_size_factor",
+                    side_effect=AssertionError("the fallback ran: the cache was incomplete"),
+                ),
+            ):
+                factor = engine_search.check_chosen_crf_shrinks(
+                    samples,
+                    workdir,
+                    "hb",
+                    22,
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    hdr=True,
+                    db_file=db_file,
+                )
+            # the HDR-keyed rows were found: the factor came from the cache
+            self.assertAlmostEqual(factor, 80 / 200, places=4)
+            connection.close()
+
+    def test_the_chosen_crf_size_encodes_when_every_window_shrinks(self):
+        """The reverse direction (issue #314's acceptance): a cache whose
+        every window shrank yields a factor BELOW 1.0 - the file encodes.
+        A production change that never returns a shrinking factor (e.g. the
+        totals summed on the wrong side) fails here.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            samples = []
+            for i in range(3):
+                s = root / f"s{i}.mkv"
+                s.write_bytes(b"m" * 1000)
+                samples.append((s, 10.0 * i))
+
+            # every window encoded to 400 bytes (0.4x)
+            for _sample, offset in samples:
+                key = engine_search.probe_cache_key(
+                    movie, offset, 10.0, 22, "svt_av1", "5", None, False, None, ("hb", "1.6")
+                )
+                db.save_probe_score(connection, key, 95.0, 400)
+
+            with (
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+                patch.object(
+                    engine_search,
+                    "estimate_size_factor",
+                    side_effect=AssertionError("the fallback ran: the cache was incomplete"),
+                ),
+            ):
+                factor = engine_search.check_chosen_crf_shrinks(
+                    samples,
+                    workdir,
+                    "hb",
+                    22,
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    db_file=db_file,
+                )
+            self.assertLess(factor, 1.0)
+            self.assertAlmostEqual(factor, 1200 / 3000, places=4)
+            connection.close()
+
+    def test_probe_crf_records_the_encoded_size(self):
+        """The producer side of #314: when probe_crf encodes a window it
+        stores that window's encoded byte count beside the score. Deleting
+        the encoded.stat().st_size argument must fail this test - otherwise
+        the all-window decision reads a cache that nothing fills.
+        """
+
+        def fake_run(command, cancel=None):
+            # the command's output path follows the --output flag: create it
+            # with known bytes so the recorded size is exact
+            out = Path(command[command.index("--output") + 1])
+            out.write_bytes(b"e" * 777)
+            return 0, ""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            connection.close()
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            sample = root / "s0.mkv"
+            sample.write_bytes(b"m" * 100)
+
+            with (
+                patch.object(engine_search, "_run", side_effect=fake_run),
+                patch.object(engine_search, "measure_vmaf", return_value=95.0),
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+            ):
+                score = engine_search.probe_crf(
+                    [(sample, 0.0)],
+                    22,
+                    workdir,
+                    "hb",
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    db_file=db_file,
+                )
+            self.assertEqual(score, 95.0)
+            # the producer wrote the size: the row reads (95.0, 777)
+            connection = db.connect(db_file)
+            key = engine_search.probe_cache_key(
+                movie,
+                0.0,
+                10.0,
+                22,
+                "svt_av1",
+                "5",
+                None,
+                False,
+                None,
+                ("hb", "1.6"),
+            )
+            self.assertEqual(db.get_probe_entry(connection, key), (95.0, 777))
+            connection.close()
+
+    def test_the_chosen_crf_size_falls_back_on_a_null_size(self):
+        """A cache entry whose size predates #314 (NULL) makes the all-window
+        estimate incomplete: the decision falls back to the single-window
+        encode - a miss degrades to the old behaviour, never to a guess.
+
+        Every window HAS a row here; the only defect is the missing size.
+        That isolates the NULL half of the guard: a mutation that treats a
+        NULL size as usable puts None into the sum (TypeError) or, if the
+        guard is skipped entirely, returns a factor computed from fewer
+        windows - either way this test fails, because the fallback must be
+        the outcome.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            samples = []
+            for i in range(3):
+                s = root / f"s{i}.mkv"
+                s.write_bytes(b"m" * 100)
+                samples.append((s, 10.0 * i))
+
+            # every window has a row; window 0's size is NULL (the legacy shape)
+            for i, offset in enumerate(10.0 * n for n in range(3)):
+                key = engine_search.probe_cache_key(
+                    movie,
+                    offset,
+                    10.0,
+                    22,
+                    "svt_av1",
+                    "5",
+                    None,
+                    False,
+                    None,
+                    ("hb", "1.6"),
+                )
+                if i == 0:
+                    db.save_probe_score(connection, key, 95.0)  # NULL size
+                else:
+                    db.save_probe_score(connection, key, 95.0, 40)
+
+            logged: list[str] = []
+
+            def fake_log(message: str) -> None:
+                logged.append(message)
+
+            real_get = db.get_probe_entry
+            reads: list = []
+
+            def spy(conn, key):
+                r = real_get(conn, key)
+                reads.append((key, r))
+                return r
+
+            with (
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5) as est,
+                patch.object(engine_search, "log", side_effect=fake_log),
+                patch.object(db, "get_probe_entry", side_effect=spy),
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+            ):
+                factor = engine_search.check_chosen_crf_shrinks(
+                    samples,
+                    workdir,
+                    "hb",
+                    22,
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    db_file=db_file,
+                )
+                # the fallback path ran (the old single-window estimate)
+                est.assert_called_once()
+                self.assertEqual(factor, 0.5)
+                # the decision came from the FALLBACK: the function logs
+                # only its completeness claim, so ANY log on the fallback
+                # path is the reviewer's V2 lie (a partial factor announced
+                # as the all-window one) - caught structurally, whatever the
+                # message says. Every guard weakening ends either here, in
+                # the factor mismatch above, or in a TypeError from the sum.
+                self.assertEqual(
+                    len(logged), 0, f"the fallback path logged a completeness claim: {logged}"
+                )
+                # the fixture's NULL entry was actually READ: without this a
+                # key mismatch silently turns the test into the missing-
+                # window case (the reads-spy's one non-tautological job)
+                self.assertTrue(
+                    any(entry is not None and entry[1] is None for _, entry in reads),
+                    f"the seeded NULL entry was never read: {reads}",
+                )
+            connection.close()
+
+    def test_the_chosen_crf_size_falls_back_on_a_missing_window(self):
+        """A window with NO cache row makes the all-window estimate
+        incomplete the same way (issue #314): the fallback runs. This test
+        isolates the missing-entry half of the guard - no NULL sizes exist
+        here, so a mutation that drops the missing-entry half hits
+        entry[1] on None (TypeError) or returns a partial sum as the
+        all-window estimate; either way the fallback was owed and this
+        test fails without it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            samples = []
+            for i in range(3):
+                s = root / f"s{i}.mkv"
+                s.write_bytes(b"m" * 100)
+                samples.append((s, 10.0 * i))
+
+            # window 0 has a full row; windows 1-2 have NO row at all
+            key0 = engine_search.probe_cache_key(
+                movie,
+                0.0,
+                10.0,
+                22,
+                "svt_av1",
+                "5",
+                None,
+                False,
+                None,
+                ("hb", "1.6"),
+            )
+            db.save_probe_score(connection, key0, 95.0, 40)
+
+            logged: list[str] = []
+
+            def fake_log(message: str) -> None:
+                logged.append(message)
+
+            real_get = db.get_probe_entry
+            reads: list = []
+
+            def spy(conn, key):
+                r = real_get(conn, key)
+                reads.append((key, r))
+                return r
+
+            with (
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5) as est,
+                patch.object(engine_search, "log", side_effect=fake_log),
+                patch.object(db, "get_probe_entry", side_effect=spy),
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+            ):
+                factor = engine_search.check_chosen_crf_shrinks(
+                    samples,
+                    workdir,
+                    "hb",
+                    22,
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    db_file=db_file,
+                )
+                est.assert_called_once()
+                self.assertEqual(factor, 0.5)
+                # the same structural log pin: ANY log on the fallback path
+                # is a completeness lie, whatever it says
+                self.assertEqual(
+                    len(logged), 0, f"the fallback path logged a completeness claim: {logged}"
+                )
+                # the fixture's MISSING window was actually read (a None
+                # read): the exercise-shape witness, not a tautology
+                self.assertTrue(
+                    any(entry is None for _, entry in reads), f"no missing read seen: {reads}"
+                )
+            connection.close()
+
     def test_size_factor_is_cached(self):
         factor, _ = self._size_factor()
         self.assertEqual(factor, 0.5)
@@ -1128,17 +1620,78 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         self.assertTrue(result[3], "the early exit must report a skip")
 
     def test_the_chosen_check_is_a_separate_measurement(self):
-        """The chosen-CRF size probe is not served by the VMAF cache.
+        """The search's own chosen-CRF check encodes one window separately.
 
-        The VMAF cache is keyed kind='vmaf' and the size cache kind='size', so
-        reusing a VMAF probe's bytes as a size measurement would need a shared
-        cache entry - a separate optimization, not this fix. Asserting the two CRFs
-        were both measured keeps that honest.
+        Since #314 the size DECISION at the chosen CRF reads the VMAF probes'
+        recorded byte counts when every window's cache entry carries a size
+        (check_chosen_crf_shrinks). The path this test exercises is the
+        NO-DATABASE one (_run_search passes no db_file): with nothing cached,
+        the decision falls back to a separate single-window encode - two
+        encodes at two CRFs, the bound and the chosen. Asserting both were
+        measured keeps the fallback honest.
         """
         _result, seen = self._run_search({45: 0.5, 22: 1.2})
         self.assertEqual(len(seen), 2, "one bound probe + one chosen-CRF probe")
         self.assertEqual(seen.count(45), 1)
         self.assertEqual(seen.count(22), 1)
+
+    def test_the_plumbing_reaches_the_chosen_check(self):
+        """find_optimal_crf_and_skip forwards hdr and db_file to the chosen-CRF
+        check (review round 4, finding 4): the decision's cache key must carry
+        the HDR flag and the database the caller was given - mutating either
+        at the call site left the whole suite green before this test.
+        """
+        captured: dict = {}
+
+        def fake_check(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return 0.5
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_file = Path(tmp) / "meta.db"
+            with (
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+                patch.object(engine_search, "check_chosen_crf_shrinks", side_effect=fake_check),
+            ):
+                engine_search.find_optimal_crf_and_skip(
+                    self.movie,
+                    self.workdir,
+                    "hb",
+                    samples=[(self.sample, 10.0)],
+                    hdr=True,
+                    db_file=db_file,
+                )
+        self.assertEqual(
+            captured["kwargs"].get("hdr"), True, "the HDR flag did not reach the chosen check"
+        )
+        self.assertEqual(
+            captured["kwargs"].get("db_file"),
+            db_file,
+            "the database did not reach the chosen check",
+        )
+
+        # the False half (review round 5, MEDIUM 1): a call site that
+        # hard-codes hdr=True passes the capture above; a False call must
+        # arrive as False
+        captured.clear()
+        with (
+            patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+            patch.object(engine_search, "check_chosen_crf_shrinks", side_effect=fake_check),
+        ):
+            engine_search.find_optimal_crf_and_skip(
+                self.movie,
+                self.workdir,
+                "hb",
+                samples=[(self.sample, 10.0)],
+                hdr=False,
+                db_file=db_file,
+            )
+        self.assertEqual(
+            captured["kwargs"].get("hdr"), False, "the HDR flag did not reach the chosen check"
+        )
 
 
 class TestSubprocessTimeouts(unittest.TestCase):
