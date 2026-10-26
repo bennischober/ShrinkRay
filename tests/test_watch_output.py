@@ -48,10 +48,13 @@ class TestWatchOutputEnv(unittest.TestCase):
             # re-exports Server from its __init__, so patch("uvicorn.Server") raises
             # AttributeError whenever that re-export has not materialized yet - an
             # import-order dependency that failed on a fresh CI session (issue #373)
-            patch.object(app_module, "_serve_forever"),
+            patch.object(app_module, "_serve_forever") as serve,
             patch("shrinkray.service.all_problems", return_value=[]),
         ):
             app_module.run_app(Path(self.tmp.name) / "test.db", **kwargs)
+        # the seam must actually be reached: without this the tests stay green even
+        # if run_app never calls the server (verified by deleting the call)
+        self.assertIsNotNone(serve.call_args, "run_app must reach the ASGI server")
         return start_watch
 
     def test_unset_starts_the_watcher_in_place(self) -> None:
@@ -84,6 +87,29 @@ class TestWatchOutputEnv(unittest.TestCase):
             self._boot()
         self.assertEqual(caught.exception.code, 1)
         out.chmod(0o755)
+
+
+class TestServeForever(unittest.TestCase):
+    """The seam's own body, which every other test here patches away.
+
+    Without this the seam could construct a wrong `uvicorn.Config` - or none at all -
+    and the whole file would stay green (verified: an invalid Config kwarg passed all
+    four output-knob tests before this class existed).
+    """
+
+    def test_it_builds_the_config_from_its_arguments_and_runs_the_server(self) -> None:
+        # a non-wildcard host on purpose: the assertion is about the arguments being
+        # threaded through, and bandit flags a hardcoded bind-all address (S104)
+        with (
+            patch("uvicorn.Config") as config,
+            patch("uvicorn.Server") as server,
+        ):
+            app_module._serve_forever("127.0.0.2", 9999)
+        config.assert_called_once_with(
+            app_module.app, host="127.0.0.2", port=9999, log_level="info"
+        )
+        server.assert_called_once_with(config.return_value)
+        server.return_value.run.assert_called_once_with()
 
 
 if __name__ == "__main__":
