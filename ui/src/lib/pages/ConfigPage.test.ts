@@ -17,18 +17,18 @@ vi.mock('../api', async (importOriginal) => {
 
 const configFixture = vi.hoisted(() => ({
   codec: { hdr: { color_space: ['bt2020nc'], color_transfer: ['smpte2084'] } },
-  file: { extensions: ['.mkv', '.mp4'], output: { seperator: ';' } },
+  file: { extensions: ['.mkv', '.mp4'], output: { separator: ';' } },
   ffmpeg: { black_bars: { MIN_WIDTH: 24, MIN_HEIGHT: 24 }, crop_sample_count: 10 },
   handbrake: { preset: 'Fast 1080p30', encoder: 'svt_av1', encoder_preset: '3', max_threads: 0 },
   resources: { idle_priority: true },
-  quality: { sample_every: 600, sample_count: 3, sample_seconds: 10 },
+  quality: { target_vmaf: 96, sample_every: 600, sample_count: 3, sample_seconds: 10 },
   eligibility: { min_source_height: 1080, min_source_size_gb: 0, candidate_codecs: ['h264'] },
   language: 'en',
 }))
 
 const config: Config = {
   codec: { hdr: { color_space: ['bt2020nc'], color_transfer: ['smpte2084'] } },
-  file: { extensions: ['.mkv', '.mp4'], output: { seperator: ';' } },
+  file: { extensions: ['.mkv', '.mp4'], output: { separator: ';' } },
   ffmpeg: { black_bars: { MIN_WIDTH: 24, MIN_HEIGHT: 24 }, crop_sample_count: 10 },
   handbrake: { preset: 'Fast 1080p30', encoder: 'svt_av1', encoder_preset: '3', max_threads: 0 },
   resources: { idle_priority: true },
@@ -43,11 +43,6 @@ describe('ConfigPage render (issue #239)', () => {
       scanPaths: ['/m'],
       outputDir: '/out',
       targetVmaf: 96,
-      workers: null,
-      onpathsChange: () => {},
-      onoutputChange: () => {},
-      onvmafChange: () => {},
-      onworkersChange: () => {},
     })
     // the editable-tool-settings form is gone; the page displays values
     expect(screen.queryByText('SAVE CONFIG')).toBeNull()
@@ -59,11 +54,6 @@ describe('ConfigPage render (issue #239)', () => {
       scanPaths: ['/m'],
       outputDir: '/out',
       targetVmaf: 96,
-      workers: null,
-      onpathsChange: () => {},
-      onoutputChange: () => {},
-      onvmafChange: () => {},
-      onworkersChange: () => {},
     })
     // a value display: the effective settings are visible
     expect(screen.getByText('svt_av1')).toBeTruthy()
