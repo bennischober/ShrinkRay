@@ -306,6 +306,7 @@ def record_plan(
         result.sample_seconds,
         result.crop_sample_count,
         result.vmaf_statistic,
+        result.vmaf_recipe or "",
     )
 
 

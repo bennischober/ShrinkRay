@@ -45,6 +45,7 @@ from shrinkray.engine.search import (
 from shrinkray.logger import log
 from shrinkray.tools.ffprobe import get_data, probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
+from shrinkray.tools.vmaf import vmaf_recipe
 
 # the codec gate: which source codecs are candidates at all (issue #21).
 # One whitelist, spelled out: an operator's config extends it (candidate_codecs),
@@ -104,6 +105,7 @@ def _lookup_plan(
     sample_count: int,
     sample_seconds: float,
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
+    vmaf_recipe: str = "",
 ) -> sqlite3.Row | None:
     """Consults the plan cache for a valid plan of this movie+settings.
 
@@ -122,6 +124,9 @@ def _lookup_plan(
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
         crop_sample_count (int): The pending encode's crop sample count.
+        vmaf_recipe (str): The crop-independent part of the measurement
+            recipe (`VmafRecipe.fingerprint`, issue #308). An empty string is
+            a stored plan measured before the recipe existed - never a match.
 
     Returns:
         sqlite3.Row | None: The valid plan row, or None.
@@ -143,6 +148,7 @@ def _lookup_plan(
             sample_seconds=sample_seconds,
             crop_sample_count=crop_sample_count,
             vmaf_statistic=VMAF_STATISTIC,
+            vmaf_recipe=vmaf_recipe,
         )
     finally:
         connection.close()
@@ -337,6 +343,11 @@ class QualityResult:
     # which aggregation produced achieved_vmaf: "mean" is the decision
     # statistic (issue #15), "min" marks a plan measured before it
     vmaf_statistic: str = "mean"
+    # how the VMAF scores were measured (issue #308): model, scale, pixel
+    # format, tone-map and the recipe version. Part of the plan fingerprint, so
+    # a changed measurement re-probes instead of reusing stored scores. None for
+    # a plan that measured nothing (a gate skip).
+    vmaf_recipe: str | None = None
     # provenance of the CRF decision ('plan' when reused from a stored
     # plan, 'probe' when measured now, None when not applicable)
     crf_source: str | None = None
@@ -573,6 +584,17 @@ def plan_quality(
             crop = detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel)
         else:
             crop = summary.bars
+        # the measurement recipe follows the source's dimensions (for the model
+        # and the scale, through the crop), its bit depth (the analysis pixel
+        # format) and the HDR flag (the tone-map). Derived once here so the
+        # probes and the recorded fingerprint cannot disagree (issue #308).
+        recipe = vmaf_recipe(
+            crop=crop,
+            hdr=hdr,
+            width=width,
+            height=height,
+            bit_depth=source_bit_depth(input_file),
+        )
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
         # extract the windows once and hand the same list to the search and
         # the reported size factor: each extraction decodes and writes every
@@ -593,6 +615,7 @@ def plan_quality(
             sample_seconds=sample_seconds,
             encoder=effective_encoder,
             probe_encoder_preset=probe_encoder_preset,
+            recipe=recipe,
             crop=crop,
             hdr=hdr,
             cancel=cancel,
@@ -642,6 +665,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
+                vmaf_recipe=recipe.fingerprint(),
             )
         if achieved < target_vmaf and crf == crf_range[0]:
             return QualityResult(
@@ -667,6 +691,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
+                vmaf_recipe=recipe.fingerprint(),
             )
 
         return QualityResult(
@@ -688,6 +713,7 @@ def plan_quality(
             sample_seconds=sample_seconds,
             hdr=hdr,
             encoder=effective_encoder,
+            vmaf_recipe=recipe.fingerprint(),
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

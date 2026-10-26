@@ -1187,6 +1187,167 @@ class TestEncodeLock(unittest.TestCase):
         one = build_vmaf_command(Path("d.mkv"), Path("r.mkv"), 4, style="modern", subsample=1)
         self.assertNotIn("n_subsample", " ".join(one))
 
+    def test_vmaf_model_follows_ab_av1_thresholds(self):
+        """Issue #309: the 4K model above 2560x1440 (both axes), the 1080p
+        model otherwise - ab-av1's rule, read at v0.11.7. The dimensions are
+        the POST-CROP ones, so a 4K scope film cropped to 3840x1390 stays on
+        the 1080p model exactly as ab-av1 would score it."""
+        from shrinkray.tools.vmaf import vmaf_model
+
+        # below or at either threshold => 1080p model
+        self.assertEqual(vmaf_model(1920, 1080), "vmaf_v0.6.1.json")
+        self.assertEqual(vmaf_model(2560, 1440), "vmaf_v0.6.1.json")
+        self.assertEqual(vmaf_model(2561, 1440), "vmaf_v0.6.1.json")
+        self.assertEqual(vmaf_model(2560, 1441), "vmaf_v0.6.1.json")
+        # above BOTH => 4K model
+        self.assertEqual(vmaf_model(2561, 1441), "vmaf_4k_v0.6.1.json")
+        self.assertEqual(vmaf_model(3840, 2160), "vmaf_4k_v0.6.1.json")
+        # 4K scope: wide enough, too short => 1080p model (ab-av1's edge)
+        self.assertEqual(vmaf_model(3840, 1390), "vmaf_v0.6.1.json")
+        # unknown dimensions never guess the 4K model
+        self.assertEqual(vmaf_model(None, 2160), "vmaf_v0.6.1.json")
+        self.assertEqual(vmaf_model(3840, None), "vmaf_v0.6.1.json")
+
+    def test_vmaf_auto_scale_follows_ab_av1_thresholds(self):
+        """Issue #309: ab-av1's --vmaf-scale auto. The 1080p model upscales
+        below 1728x972 towards 1080p, the 4K model below 3456x1944 towards
+        4K, minimally on one axis so the aspect ratio is kept."""
+        from shrinkray.tools.vmaf import vmaf_auto_scale
+
+        # at or above a threshold: no scaling
+        self.assertIsNone(vmaf_auto_scale("vmaf_v0.6.1.json", 1920, 1080))
+        self.assertIsNone(vmaf_auto_scale("vmaf_v0.6.1.json", 1728, 972))
+        self.assertIsNone(vmaf_auto_scale("vmaf_4k_v0.6.1.json", 3840, 2160))
+        self.assertIsNone(vmaf_auto_scale("vmaf_4k_v0.6.1.json", 3456, 1944))
+        # below both: the proportionally further axis is scaled, the other -1
+        self.assertEqual(vmaf_auto_scale("vmaf_v0.6.1.json", 1280, 720), (1920, -1))
+        self.assertEqual(vmaf_auto_scale("vmaf_4k_v0.6.1.json", 3008, 1692), (3840, -1))
+        self.assertEqual(vmaf_auto_scale("vmaf_v0.6.1.json", 640, 480), (-1, 1080))
+        # unknown dimensions: no scaling rather than a guess
+        self.assertIsNone(vmaf_auto_scale("vmaf_v0.6.1.json", None, 1080))
+
+    def test_vmaf_recipe_uses_the_cropped_dimensions(self):
+        """Issue #308/#309: the model and scale follow the dimensions the
+        ENCODER produces, i.e. the source minus the crop - the distorted side
+        of the comparison is already cropped by HandBrake."""
+        from shrinkray.tools.vmaf import vmaf_recipe
+
+        # 3840x2160 with 140+140 vertical bars => 3840x1880: still 4K
+        self.assertEqual(
+            vmaf_recipe(crop=(140, 140, 0, 0), width=3840, height=2160).model,
+            "vmaf_4k_v0.6.1.json",
+        )
+        # the same source cropped to 3840x1390 is NOT 4K by ab-av1's rule
+        self.assertEqual(
+            vmaf_recipe(crop=(385, 385, 0, 0), width=3840, height=2160).model,
+            "vmaf_v0.6.1.json",
+        )
+
+    def test_vmaf_recipe_pixel_format_follows_bit_depth(self):
+        """Issue #308: one explicit format for both inputs, 10-bit for a
+        10-bit source (dropping the two extra bits would score a conversion
+        the encode never made)."""
+        from shrinkray.tools.vmaf import vmaf_pix_fmt, vmaf_recipe
+
+        self.assertEqual(vmaf_pix_fmt(10), "yuv420p10le")
+        self.assertEqual(vmaf_pix_fmt(12), "yuv420p10le")
+        self.assertEqual(vmaf_pix_fmt(8), "yuv420p")
+        self.assertEqual(vmaf_pix_fmt(None), "yuv420p")
+        self.assertEqual(vmaf_recipe(bit_depth=10).pix_fmt, "yuv420p10le")
+
+    def test_vmaf_recipe_identifier_covers_every_score_moving_input(self):
+        """Issue #308: the recipe identifier is the cache key's measurement
+        half, so each field that can move a score must change it - and the plan
+        fingerprint must stay stable across the crop, which it cannot know."""
+        from shrinkray.tools.vmaf import vmaf_recipe
+
+        base = vmaf_recipe(width=1920, height=1080, bit_depth=8)
+        self.assertIn("model=vmaf_v0.6.1.json", base.identifier())
+        self.assertIn("fmt=yuv420p", base.identifier())
+        self.assertIn("hdr=no", base.identifier())
+        # a different model / pixel format / tone-map => a different identifier
+        self.assertNotEqual(base.identifier(), vmaf_recipe(width=3840, height=2160).identifier())
+        self.assertNotEqual(base.identifier(), vmaf_recipe(bit_depth=10).identifier())
+        self.assertNotEqual(base.identifier(), vmaf_recipe(hdr=True).identifier())
+        # the plan fingerprint ignores the crop-dependent model/scale: the plan
+        # lookup runs before bar detection and cannot know them
+        self.assertEqual(
+            base.fingerprint(),
+            vmaf_recipe(crop=(140, 140, 0, 0), width=1920, height=1080).fingerprint(),
+        )
+        self.assertNotEqual(base.fingerprint(), vmaf_recipe(bit_depth=10).fingerprint())
+
+    def test_build_vmaf_command_rebases_timestamps_and_syncs(self):
+        """Issue #308: ab-av1's alignment. Both inputs are rebased to PTS 0
+        with a common timebase and paired by nearest timestamp, so a probe
+        sample cut before -i on an open-GOP source cannot pair frames one or
+        two apart (which silently lowers every score)."""
+        from shrinkray.tools.vmaf import build_vmaf_command
+
+        command = build_vmaf_command(Path("d.mkv"), Path("r.mkv"), 4, style="modern")
+        joined = " ".join(command)
+        self.assertIn("setpts=PTS-STARTPTS", joined)
+        self.assertIn("settb=AVTB", joined)
+        self.assertIn("shortest=true", joined)
+        self.assertIn("ts_sync_mode=nearest", joined)
+        # one explicit pixel format on BOTH inputs, before the sync
+        self.assertEqual(joined.count("format=yuv420p"), 2)
+        self.assertIn("[0:v]format=yuv420p,setpts=PTS-STARTPTS,settb=AVTB[d]", joined)
+        self.assertIn("[1:v]format=yuv420p,setpts=PTS-STARTPTS,settb=AVTB[r]", joined)
+
+    def test_build_vmaf_command_10bit_formats_both_inputs(self):
+        """Issue #308: a 10-bit source converts BOTH sides to 10-bit, so the
+        comparison is not an 8-bit conversion of one side only."""
+        from shrinkray.tools.vmaf import build_vmaf_command, vmaf_recipe
+
+        command = build_vmaf_command(
+            Path("d.mkv"),
+            Path("r.mkv"),
+            4,
+            style="modern",
+            recipe=vmaf_recipe(bit_depth=10),
+        )
+        joined = " ".join(command)
+        self.assertEqual(joined.count("format=yuv420p10le"), 2)
+        self.assertNotIn("format=yuv420p,", joined)
+
+    def test_build_vmaf_command_4k_uses_the_4k_model(self):
+        """Issue #309: a 4K measurement names the 4K model in the
+        filtergraph (the shipped file, by bare filename like the 1080p one)."""
+        from shrinkray.tools.vmaf import build_vmaf_command, vmaf_recipe
+
+        command = build_vmaf_command(
+            Path("d.mkv"),
+            Path("r.mkv"),
+            4,
+            style="modern",
+            recipe=vmaf_recipe(width=3840, height=2160),
+        )
+        self.assertIn("model=path=vmaf_4k_v0.6.1.json", " ".join(command))
+
+    def test_build_vmaf_command_scales_both_inputs(self):
+        """Issue #309: an auto scale applies to BOTH inputs, after the
+        reference's crop (so the scale target matches the cropped geometry)."""
+        from shrinkray.tools.vmaf import build_vmaf_command, vmaf_recipe
+
+        recipe = vmaf_recipe(crop=(140, 140, 0, 0), width=1280, height=720)
+        command = build_vmaf_command(
+            Path("d.mkv"), Path("r.mkv"), 4, style="modern", crop=(140, 140, 0, 0), recipe=recipe
+        )
+        joined = " ".join(command)
+        self.assertEqual(joined.count("scale=1920:-1:flags=bicubic"), 2)
+        # the reference crops first, then scales
+        self.assertIn("crop=iw-0:ih-280:0:140,format=yuv420p,scale=1920:-1:flags=bicubic", joined)
+
+    def test_vmaf_model_and_4k_model_ship_as_package_data(self):
+        """Both models are shipped (old libvmaf cannot load embedded models)
+        and the 4K file is the model the identifier names."""
+        from shrinkray.tools.vmaf import VMAF_4K_MODEL, VMAF_MODEL, vmaf_model
+
+        self.assertTrue(VMAF_MODEL.is_file())
+        self.assertTrue(VMAF_4K_MODEL.is_file())
+        self.assertEqual(VMAF_4K_MODEL.name, vmaf_model(3840, 2160))
+
     def test_encode_with_quality_forwards_crop_sample_count(self):
         """The encode re-detects the crop with the SAME window count the
         plan fingerprint carries (issue #327): the parameter existed on
