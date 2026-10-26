@@ -1390,9 +1390,6 @@ def run_app(
         state.shutdown()
         log("app stopped")
 
-        state.shutdown()
-        log("app stopped")
-
 
 def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -> None:
     """Starts the watch loop as a daemon thread (the resident app's own work).
