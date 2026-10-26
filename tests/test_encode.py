@@ -825,13 +825,16 @@ class TestEncodeLock(unittest.TestCase):
 
     def test_an_old_pid_only_lock_is_reclaimed_by_its_mtime(self):
         """Issue #383's upgrade criterion: a lock written before this change
-        (pid only, no label) is judged by its mtime like any other, so an
-        upgrade never keeps a dead run's lock for the old six-hour window."""
+        carries only a pid - and that pid may be ALIVE (the restarted server is
+        pid 1 again). It is judged by its mtime like any other, so an upgrade
+        never keeps a dead run's lock for the old six-hour window."""
         from shrinkray.engine.lock import _LOCK_STALE_SECONDS, _lock_path, acquire_encode_slot
 
         self.out.mkdir(parents=True, exist_ok=True)
         lock = _lock_path(self.out)
-        lock.write_text("999999999")
+        # a LIVE pid (ours) in the old, token-less format: pid-only locks must
+        # not be honoured on liveness alone
+        lock.write_text(str(os.getpid()))
         old = time.time() - _LOCK_STALE_SECONDS - 60
         os.utime(lock, (old, old))
         self.assertEqual(acquire_encode_slot(self.out, holder="test"), lock)
@@ -852,6 +855,27 @@ class TestEncodeLock(unittest.TestCase):
             with self.assertRaises(lock_mod.EncodeBusyError):
                 lock_mod.acquire_encode_slot(self.out, holder="rival")
         self.assertFalse(held.exists())
+
+    def test_a_read_error_is_not_a_takeover(self):
+        """A lock that cannot be READ (an EIO or EACCES on a NAS mount) must not
+        be reported as a rival taking the slot: the beat says "failed", warns,
+        and keeps beating, so the holder's own lease is not abandoned on a
+        transient filesystem error (PR #409's review finding 1)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
+            mock.patch.object(lock_mod, "log_error") as error,
+            mock.patch.object(lock_mod, "log_warning") as warning,
+            mock.patch.object(lock_mod, "_read_fields", return_value=None),
+            lock_mod.guard_encodes(self.out, holder="test") as held,
+        ):
+            time.sleep(0.2)
+        errors = " ".join(str(c.args[0]) for c in error.call_args_list)
+        warnings = " ".join(str(c.args[0]) for c in warning.call_args_list)
+        self.assertNotIn("Another encoder took the slot", errors)
+        self.assertIn("Could not refresh the encode lock", warnings)
+        self.assertTrue(held.exists())
 
     def test_a_failed_heartbeat_is_reported(self):
         """A beat that cannot write is logged, never swallowed: the holder must
@@ -974,16 +998,19 @@ class TestEncodeLock(unittest.TestCase):
         """A holder that stalled past the window must not delete the new
         holder's lock when it finally exits (issue #383). The pid cannot tell
         them apart - the server and a one-shot container are both pid 1 - so
-        the token written at acquisition decides."""
-        from shrinkray.engine.lock import _lock_path, release_encode_slot
+        the token written at acquisition decides.
 
-        self.out.mkdir(parents=True, exist_ok=True)
-        lock = _lock_path(self.out)
-        # a lock another holder wrote (pid 1, like us in the container)
-        lock.write_text("1 encode-job 0123456789ab")
-        release_encode_slot(lock)
-        self.assertTrue(lock.exists(), "another holder's lock was deleted")
-        lock.unlink()
+        This acquires through the API first, so the token comparison is reached:
+        the missing-_OWNED early return is a different path."""
+        from shrinkray.engine.lock import acquire_encode_slot, release_encode_slot
+
+        acquired = acquire_encode_slot(self.out, holder="test")
+        # a rival in another namespace takes the slot and writes its own stamp
+        acquired.write_text("1 encode-job 0123456789ab")
+        release_encode_slot(acquired)
+        self.assertTrue(acquired.exists(), "the rival's lock was deleted")
+        self.assertEqual(acquired.read_text(), "1 encode-job 0123456789ab")
+        acquired.unlink()
 
     def test_a_holder_whose_lock_was_stolen_does_not_delete_the_new_one(self):
         """This process acquires, a rival steals the silent lock and writes its

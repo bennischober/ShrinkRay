@@ -547,12 +547,10 @@ def _record_encodes(
 
     if not dry_run:
         try:
-            # the whole quality run holds the encode slot once (probes and
-            # final encodes all write into output_dir). In place the slot is
-            # keyed on the LIBRARY root (issue #230): the staging directory is
-            # a fresh per-run path nothing else ever locks, so a slot on it
-            # excluded no one, and two encoders of one file raced on the
-            # deterministic swap staging name.
+            # the slot is taken PER MOVIE, on the movie's own directory (issue
+            # #230, #379): that is where the staging copy and the swap's two
+            # renames happen, so it is the key the job and the watcher agree on.
+            # A library root is not an identity - roots nest.
             from shrinkray.engine.pause import manual_encode, state_dir_for_cli
 
             if sys.stdin.isatty() and sys.stdout.isatty():

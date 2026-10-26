@@ -86,19 +86,24 @@ def _lock_path(output_dir: Path) -> Path:
     return output_dir / ".shrinkray_encode.lock"
 
 
-def _read_fields(lock: Path) -> list[str]:
-    """Returns the lock file's whitespace-separated fields ([] when unreadable).
+def _read_fields(lock: Path) -> list[str] | None:
+    """Returns the lock file's whitespace-separated fields.
 
     Args:
         lock (Path): The lock file.
 
     Returns:
-        list[str]: The stamp's fields (pid, holder, token).
+        list[str] | None: The stamp's fields (pid, holder, token), or None when
+            the file could not be READ. A missing file and an unreadable one are
+            different facts: only the first means the slot is free.
     """
     try:
         return lock.read_text(encoding="ascii").split()
-    except OSError:
+    except FileNotFoundError:
         return []
+    except OSError as e:
+        log_warning(f"Could not read the encode lock '{lock}' ({e}).")
+        return None
 
 
 def _silence_seconds(lock: Path) -> float | None:
@@ -129,7 +134,7 @@ def _busy_message(output_dir: Path, lock: Path, silence: float) -> str:
     """
     fields = _read_fields(lock)
     pid = int(fields[0]) if fields and fields[0].isdigit() else 0
-    label = fields[1] if len(fields) > 1 else ""
+    label = fields[1] if fields and len(fields) > 1 else ""
     who = f"pid {pid}" if pid else "an unknown process"
     if label:
         who = f"{label}, {who}"
@@ -273,10 +278,12 @@ def _beat(lock: Path, token: str) -> str:
         token (str): The token this process wrote when it acquired the slot.
 
     Returns:
-        str: "ok" (refreshed), "lost" (no longer ours), or "failed" (ours, but
-            the refresh failed and the slot is on a timer).
+        str: "ok" (refreshed), "lost" (no longer ours), or "failed" (the refresh
+            could not be attempted or written; the slot is on a timer).
     """
     fields = _read_fields(lock)
+    if fields is None:
+        return "failed"
     if len(fields) < 3 or fields[2] != token:
         return "lost"
     try:
@@ -304,6 +311,10 @@ def release_encode_slot(lock: Path) -> None:
     if token is None:
         return
     fields = _read_fields(lock)
+    if fields is None:
+        # unreadable, so ownership is unknown: leaving the file alone is the
+        # only safe choice, and it goes stale on its own
+        return
     if len(fields) < 3 or fields[2] != token:
         return
     try:

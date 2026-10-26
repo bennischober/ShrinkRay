@@ -141,8 +141,9 @@ class TestInPlaceSlotKeying(unittest.TestCase):
     def test_the_watcher_parks_the_slot_on_the_movies_directory_in_place(self) -> None:
         """The watcher's in-place slot is keyed on the movie's own directory.
 
-        The swaps rename inside it, and one slot at a time keeps the pass
-        nesting-free across multiple roots.
+        The movie sits in a NESTED folder, so its directory differs from the
+        watched root: a key on the root (the #389 shape) fails this test. The
+        swaps rename inside the movie's folder, so that is what must be guarded.
         """
         from shrinkray.engine import watch as watch_mod
 
@@ -160,6 +161,10 @@ class TestInPlaceSlotKeying(unittest.TestCase):
                 skipped_reason="no size gain",
             )
 
+        nested = self.root / "Title (2020)"
+        nested.mkdir()
+        (nested / "movie.mkv").write_bytes(b"x" * 8)
+        self.source.unlink()
         with (
             mock.patch.object(watch_mod, "WATCH_LOCK_FILE", self.root / "watch.lock"),
             mock.patch.object(watch_mod, "_wait_or_stop", lambda *a, **k: None),
@@ -170,7 +175,7 @@ class TestInPlaceSlotKeying(unittest.TestCase):
             mock.patch.object(watch_mod, "disk_free_bytes", return_value=None),
         ):
             watch_mod.watch([self.root], None, once=True, poll_interval=0.0)
-        self.assertEqual(captured["dirs"], [self.root])
+        self.assertEqual(captured["dirs"], [nested])
 
     def test_the_watcher_parks_the_slot_on_the_output_dir_when_given(self) -> None:
         """A two-directory watcher run keeps the output dir as the slot target.
