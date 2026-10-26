@@ -74,6 +74,92 @@ class TestVideoFrameCount(unittest.TestCase):
             self.assertIsNone(parity.video_frame_count(Path(tmp) / "absent.mkv"))
 
 
+class TestPairDimensions(unittest.TestCase):
+    @unittest.skipUnless(FFMPEG_OK, "ffmpeg required to build the fixture")
+    def test_a_4k_clip_selects_the_4k_model(self) -> None:
+        parity = load_parity_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "uhd.mkv"
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=3840x2160:rate=1:duration=1",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "ultrafast",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(clip),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=300,
+            )
+            width, height, bit_depth = parity.pair_dimensions(clip, clip)
+            self.assertEqual((width, height), (3840, 2160))
+            self.assertEqual(bit_depth, 8)
+            # the recipe's model must follow the real geometry (issue #309):
+            # without dimensions the harness scored 4K pairs with the 1080p model
+            from shrinkray.tools.vmaf import vmaf_recipe
+
+            with_dims = vmaf_recipe(width=width, height=height, bit_depth=bit_depth)
+            without = vmaf_recipe()
+            self.assertNotEqual(
+                with_dims.model,
+                without.model,
+                "a 4K pair must not fall back to the 1080p model",
+            )
+            self.assertIn("4k", with_dims.model)
+
+    def test_a_missing_file_yields_no_dimensions(self) -> None:
+        parity = load_parity_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            absent = Path(tmp) / "absent.mkv"
+            self.assertEqual(parity.pair_dimensions(absent, absent), (None, None, None))
+
+    @unittest.skipUnless(FFMPEG_OK, "ffmpeg required to build the fixture")
+    def test_bit_depth_comes_from_the_source_not_the_encode(self) -> None:
+        parity = load_parity_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src10.mkv"
+            encoded = root / "enc8.mkv"
+            for path, pix_fmt in ((source, "yuv420p10le"), (encoded, "yuv420p")):
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-v",
+                        "error",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "testsrc2=size=3840x2160:rate=1:duration=1",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "ultrafast",
+                        "-pix_fmt",
+                        pix_fmt,
+                        str(path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    timeout=300,
+                )
+            _w, _h, bit_depth = parity.pair_dimensions(source, encoded)
+            # ab-av1 scores the SOURCE's depth; taking it from the 8-bit encode
+            # measured a 0.1736 VMAF gap on the 2160p acceptance pair
+            self.assertEqual(bit_depth, 10)
+
+
 class TestMismatchedPairIsNotScored(unittest.TestCase):
     @unittest.skipUnless(FFMPEG_OK, "ffmpeg required to build the fixture")
     def test_a_frame_count_mismatch_fails_without_measuring(self) -> None:
