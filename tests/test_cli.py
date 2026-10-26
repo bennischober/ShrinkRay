@@ -427,9 +427,13 @@ class TestCancelOnTerminalClose(unittest.TestCase):
 
         # start from the default dispositions: a test run that inherits an
         # ignored signal (nohup, a shell's `cmd &`) must not change the result
-        saved = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
+        sigs = [signal.SIGINT, signal.SIGTERM] + (
+            [] if sys.platform == "win32" else [signal.SIGHUP]
+        )
+        saved = {s: signal.getsignal(s) for s in sigs}
         signal.signal(signal.SIGINT, signal.default_int_handler)
-        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        for s in sigs[1:]:
+            signal.signal(s, signal.SIG_DFL)
         self.addCleanup(lambda: [signal.signal(s, h) for s, h in saved.items()])
         self.before = signal.getsignal(signal.SIGINT)
 
@@ -552,6 +556,26 @@ class TestCancelOnTerminalClose(unittest.TestCase):
                 result = CliRunner().invoke(app, ["plan", str(lib)])
         self.assertEqual(result.exit_code, 1, result.output)
         self.assertEqual(plan.call_count, 1, "the second movie was planned after the cancel")
+
+    @unittest.skipIf(sys.platform == "win32", "SIGHUP is POSIX-only")
+    def test_after_a_cancel_a_late_hangup_cannot_kill_the_exit(self) -> None:
+        """Closing a terminal under bash sends SIGHUP twice: the second may
+        land after the scope, while the cancelled command exits. It must not
+        take SIGHUP's default action then; an uncancelled scope restores it."""
+        import signal
+
+        from shrinkray.__main__ import _cancel_on_terminal_close
+
+        with _cancel_on_terminal_close():
+            pass
+        self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_DFL)
+        with _cancel_on_terminal_close():
+            handler = signal.getsignal(signal.SIGHUP)
+            assert callable(handler)
+            handler(signal.SIGHUP, None)
+        self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        self.assertIs(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+        self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)
 
     def test_an_ignored_signal_stays_ignored(self) -> None:
         """`nohup` ignores SIGHUP so a long encode survives logout: the scope

@@ -138,7 +138,8 @@ def _cancel_on_terminal_close() -> Iterator[threading.Event]:
     exception raised from the handler would unwind past the child's
     termination, orphaning it. The previous handlers come back on every
     exit path, and a signal already ignored (`nohup`, a shell's `cmd &`)
-    stays ignored. Callers enter the scope only around the engine work, where
+    stays ignored. After a cancel, SIGHUP and SIGTERM stay ignored instead,
+    so a late repeat cannot kill the exiting command; ctrl+c is restored. Callers enter the scope only around the engine work, where
     a child runs; a scan before it keeps the default signal behaviour. The
     crop pass does not check the event yet (#384); ctrl+c and a closed
     terminal still reach its ffmpeg through the process group, and the
@@ -170,6 +171,12 @@ def _cancel_on_terminal_close() -> Iterator[threading.Event]:
         yield cancel
     finally:
         for sig, handler in previous.items():
+            if cancel.is_set() and sig is not signal.SIGINT:
+                # cancelled: the command is on its way to exit 1, and a closed
+                # terminal's second SIGHUP (or a repeated SIGTERM) arriving
+                # after the scope must not turn that into a kill by signal
+                signal.signal(sig, signal.SIG_IGN)
+                continue
             # None: the previous handler was not installed from Python
             signal.signal(sig, signal.SIG_DFL if handler is None else handler)
 
