@@ -114,7 +114,15 @@ def running_manual_encodes(state_dir: Path) -> list[int]:
     if not folder.is_dir():
         return []
     live: list[int] = []
-    for marker in folder.iterdir():
+    # an unreadable or half-unmounted data folder must not take the caller
+    # down: this now runs on the dashboard's poll path (the snapshot's
+    # status carries pause_reason, issue #323's review finding 3) — report
+    # unmeasured ([]) rather than raise
+    try:
+        markers = list(folder.iterdir())
+    except OSError:
+        return []
+    for marker in markers:
         if _marker_alive(marker):
             live.append(int(marker.name))
         else:
