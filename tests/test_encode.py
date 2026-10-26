@@ -559,6 +559,22 @@ class TestEncode(unittest.TestCase):
         self.assertEqual(code, -2)
         self.assertIn("stalled", err)
 
+    def test_run_timeout_terminates_the_child_without_a_cancel_event(self):
+        """Issue #384: a bounded read (the crop pass's duration ceiling)
+        passes timeout= and no cancel event; with the stall watchdog off,
+        the runner must still take the watched path and terminate the child
+        at the ceiling, reporting -2 like a stall."""
+        from shrinkray.tools.process import _run
+
+        command = ["cmd", "/c", "ping -n 60 127.0.0.1 >nul"] if os.name == "nt" else ["sleep", "60"]
+        with mock.patch("shrinkray.tools.process.stall_timeout_seconds", return_value=None):
+            started = time.monotonic()
+            code, err = _run(command, timeout=0.5)
+            elapsed = time.monotonic() - started
+        self.assertEqual(code, -2)
+        self.assertIn("timed out", err)
+        self.assertLess(elapsed, 10.0, "the child ran past its ceiling")
+
     def test_terminated_tree_does_not_hang_on_orphaned_grandchild(self):
         """Regression (the 59-second hang): killing the direct child must
         not leave the caller waiting for an orphaned grandchild that holds

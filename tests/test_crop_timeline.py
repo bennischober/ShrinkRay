@@ -11,8 +11,10 @@ summary is cached per file version in the `crops` table. Classification by
 runtime share is report-only; the crop decision never uses it.
 """
 
-import subprocess
+import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -25,6 +27,7 @@ from shrinkray.engine.crop import (
     detect_crop_summary_cached,
     sustained_runs,
 )
+from shrinkray.tools.process import _run
 
 
 def _reading(timestamp: float, w: int, h: int, x: int = 0, y: int = 0) -> CropReading:
@@ -192,7 +195,7 @@ class TestCropCache(unittest.TestCase):
         with (
             patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
             patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=300.0),
-            patch("shrinkray.engine.crop.subprocess.run", **run_result),
+            patch("shrinkray.engine.crop._run", **run_result),
         ):
             summary = detect_crop_summary_cached(self.movie, self.db_file)
         self.assertIsNone(summary)
@@ -208,16 +211,45 @@ class TestCropCache(unittest.TestCase):
             f"x:0 y:140 pts:{i} t:{i * 5}.000000 crop=1920:800:0:140\n"
             for i in range(20)
         ).encode()
-        self._interrupted_pass(
-            {
-                "return_value": subprocess.CompletedProcess(
-                    args=[], returncode=255, stdout=b"", stderr=partial
-                )
-            }
-        )
+        self._interrupted_pass({"return_value": (255, partial)})
 
     def test_a_timed_out_pass_caches_nothing(self) -> None:
-        self._interrupted_pass({"side_effect": subprocess.TimeoutExpired(cmd="ffmpeg", timeout=1)})
+        # the runner's code for a child it terminated at the ceiling
+        self._interrupted_pass({"return_value": (-2, "timed out after 1800s (terminated)")})
+
+    def test_a_cancel_ends_the_timeline_pass_and_caches_nothing(self) -> None:
+        """Issue #384: a cancel during the pass terminates the child within
+        a poll tick and caches nothing. The real runner drives a real silent
+        child in place of ffmpeg, which would otherwise sleep 60 s; the bound
+        is counted from the moment the event is set.
+        """
+        child = ["cmd", "/c", "ping -n 60 127.0.0.1 >nul"] if os.name == "nt" else ["sleep", "60"]
+        cancel = threading.Event()
+        set_at: list[float] = []
+
+        def run_child(
+            command: list[str],
+            cancel: threading.Event | None = None,
+            timeout: float | None = None,
+        ) -> tuple[int, str]:
+            self.assertIsNotNone(cancel, "the pass must hand the runner its cancel event")
+            return _run(child, cancel=cancel, timeout=timeout)
+
+        def fire() -> None:
+            set_at.append(time.monotonic())
+            cancel.set()
+
+        with (
+            patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=3600.0),
+            patch("shrinkray.engine.crop._run", side_effect=run_child),
+        ):
+            threading.Timer(0.3, fire).start()
+            summary = detect_crop_summary_cached(self.movie, self.db_file, cancel=cancel)
+            elapsed = time.monotonic() - set_at[0]
+        self.assertIsNone(summary)
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
+        self.assertLess(elapsed, 2.0, f"the cancel took {elapsed:.1f}s to end the pass")
 
     def test_a_stateless_run_computes_without_a_cache(self) -> None:
         readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
@@ -306,42 +338,6 @@ class TestScanFlagProjection(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(data["crop"], 0)
         probe.assert_called_once()
-
-    def test_a_cancel_ends_the_timeline_pass_within_a_tick(self) -> None:
-        """Issue #384: the crop timeline pass honours the cancel event - a
-        set event ends the pass within a poll tick and caches nothing (the
-        pass returns ([], None)). The stub blocks on the cancel event the
-        way a real ffmpeg blocks on its decode; the wall-clock bound (one
-        second) is the acceptance criterion, not timing luck: the stub's
-        release IS the cancel.
-        """
-        import threading
-        import time
-
-        from shrinkray.engine import crop as crop_mod
-
-        def fake_run(command, cancel=None, timeout=None):
-            if cancel is None:
-                raise AssertionError("run_crop_timeline must pass the cancel event")
-            # block until cancelled (the real child's decode-shaped wait)
-            cancel.wait(timeout=5)
-            return -1, "cancelled by user"
-
-        with tempfile.TemporaryDirectory() as tmp:
-            movie = Path(tmp) / "movie.mkv"
-            movie.write_bytes(b"x")
-            with (
-                patch.object(crop_mod, "source_frame", return_value=(1920, 1080)),
-                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
-                patch.object(crop_mod, "_run", side_effect=fake_run),
-            ):
-                cancel = threading.Event()
-                threading.Timer(0.2, cancel.set).start()
-                started = time.monotonic()
-                readings, frame = crop_mod.run_crop_timeline(movie, cancel=cancel)
-                elapsed = time.monotonic() - started
-            self.assertEqual((readings, frame), ([], None), "a cancel caches nothing")
-            self.assertLess(elapsed, 2.0, f"the cancel took {elapsed:.2f}s to end the pass")
 
 
 class TestPlanUsesTheTimelineDetector(unittest.TestCase):
