@@ -87,17 +87,18 @@ movies that cannot profit (already efficient sources) are skipped — not
 wasted.
 
 > [!NOTE]
-> **HDR10 sources are encoded, not guaranteed** (issue
+> **HDR10 sources are processed, not guaranteed** (issue
 > [#358](https://github.com/bennischober/ShrinkRay/issues/358)). They are
-> neither blocked nor validated: an HDR source always encodes 10-bit, but VMAF
-> has no HDR model, so its quality is measured on a tone-mapped SDR copy of
-> both files against a separate HDR target. That score is an approximation —
-> on the one real HDR10 pair compared so far it read ~2.9 below the reference
-> tool's, which errs toward larger files, not worse ones
-> ([#340](https://github.com/bennischober/ShrinkRay/issues/340)). Carrying the
-> HDR10 metadata into the output is left to HandBrake's defaults; nothing
-> verifies it survives an encode.
-> Dolby Vision is not handled
+> neither blocked nor validated: by default (`codec.hdr`) a file whose colour
+> space is bt2020nc or whose transfer is PQ (smpte2084) is treated as HDR, is
+> re-encoded only to 10-bit, and — because VMAF has no HDR model — is measured
+> on a tone-mapped SDR copy of both files against a fixed HDR target of 95.5,
+> which `--target-vmaf` and `quality.target_vmaf` do not change ([#361](https://github.com/bennischober/ShrinkRay/issues/361)). That
+> score is an approximation — on the one real HDR10 pair compared so far it
+> read ~2.9 below the reference tool's, which errs toward larger files, not
+> worse ones ([#340](https://github.com/bennischober/ShrinkRay/issues/340)).
+> Carrying the HDR10 metadata into the output is left to HandBrake's defaults;
+> nothing verifies it survives an encode. Dolby Vision is not handled
 > ([#104](https://github.com/bennischober/ShrinkRay/issues/104)). The original
 > is always kept aside, so check an HDR result before removing it.
 
@@ -123,13 +124,13 @@ uv run shrinkray serve        # the dashboard on http://127.0.0.1:8420
 > pass `--db`: a one-shot run is stateless. Omit the output directory and the encode lands in
 > the source's own path, with the original renamed aside and kept — nothing is deleted.
 
-**Already have uv?** Run straight from GitHub without cloning:
+**Already have uv?** Run straight from GitHub without cloning (the `--from git+…` form matters: the bare `uvx shrinkray` name on PyPI belongs to an unrelated project — issue #321):
 
 ```bash
-uvx shrinkray encode 'D:\Movies' --dry-run
+uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray encode 'D:\Movies' --dry-run
 
 # shrink it (quality-measured, black bars removed)
-uvx shrinkray encode 'D:\Movies' 'D:\Encoded' --quality
+uvx --from git+https://github.com/bennischober/ShrinkRay shrinkray encode 'D:\Movies' 'D:\Encoded'
 ```
 
 > [!TIP]
