@@ -375,6 +375,7 @@ def _run(
     command: list[str],
     cwd: Path | None = None,
     cancel: threading.Event | None = None,
+    timeout: float | None = None,
 ) -> tuple[int, str]:
     """Runs a subprocess and returns (returncode, stderr as text).
 
@@ -389,11 +390,18 @@ def _run(
         command (list[str]): The command to run.
         cwd (Path | None): Working directory.
         cancel (threading.Event | None): Cooperative cancellation.
+        timeout (float | None): Wall-clock ceiling in seconds for BOUNDED
+            reads (issue #384): the crop pass needs its duration-derived
+            ceiling even when the caller passes no cancel event. A timeout
+            expiry terminates the tree and returns -2 (the stall code —
+            same "the child did not finish" semantics); None keeps the
+            documented no-timeout behaviour of the unprotected path.
 
     Returns:
-        tuple[int, str]: The returncode (-1 when cancelled) and stderr text.
+        tuple[int, str]: The returncode (-1 when cancelled, -2 when timed
+            out or stalled) and stderr text.
     """
-    if cancel is None and stall_timeout_seconds() is None:
+    if cancel is None and timeout is None and stall_timeout_seconds() is None:
         # Neither cancellation nor stall watching is possible: the simple
         # blocking run (used when both protections are explicitly off).
         # Fallback decision (issue #62): no timeout here on purpose — the
@@ -439,6 +447,7 @@ def _run(
     cancelled = False
     stalled = False
     stall_seconds = stall_timeout_seconds()
+    deadline = time.monotonic() + timeout if timeout is not None else None
     try:
         while popen.poll() is None:
             if cancel is not None and cancel.is_set():
@@ -457,6 +466,11 @@ def _run(
                 cancelled = False
                 stalled = True
                 break
+            # the caller's bounded-read ceiling (issue #384): the crop pass's
+            # duration-derived timeout, honoured even without a cancel event
+            if deadline is not None and time.monotonic() > deadline:
+                terminate_tree(popen)
+                return -2, f"timed out after {timeout:.0f}s (terminated)"
             time.sleep(0.2)
         for drainer in drainers:
             drainer.join(timeout=5)

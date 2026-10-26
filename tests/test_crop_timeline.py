@@ -143,7 +143,7 @@ class TestCropCache(unittest.TestCase):
         self.tmp.cleanup()
 
     def _timeline(self, readings: list[CropReading], frame: tuple[int, int]) -> None:
-        def fake_run(movie: Path, limit: int = 24):
+        def fake_run(movie: Path, limit: int = 24, cancel=None):
             return readings, frame
 
         return fake_run
@@ -306,6 +306,42 @@ class TestScanFlagProjection(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(data["crop"], 0)
         probe.assert_called_once()
+
+    def test_a_cancel_ends_the_timeline_pass_within_a_tick(self) -> None:
+        """Issue #384: the crop timeline pass honours the cancel event - a
+        set event ends the pass within a poll tick and caches nothing (the
+        pass returns ([], None)). The stub blocks on the cancel event the
+        way a real ffmpeg blocks on its decode; the wall-clock bound (one
+        second) is the acceptance criterion, not timing luck: the stub's
+        release IS the cancel.
+        """
+        import threading
+        import time
+
+        from shrinkray.engine import crop as crop_mod
+
+        def fake_run(command, cancel=None, timeout=None):
+            if cancel is None:
+                raise AssertionError("run_crop_timeline must pass the cancel event")
+            # block until cancelled (the real child's decode-shaped wait)
+            cancel.wait(timeout=5)
+            return -1, "cancelled by user"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x")
+            with (
+                patch.object(crop_mod, "source_frame", return_value=(1920, 1080)),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
+                patch.object(crop_mod, "_run", side_effect=fake_run),
+            ):
+                cancel = threading.Event()
+                threading.Timer(0.2, cancel.set).start()
+                started = time.monotonic()
+                readings, frame = crop_mod.run_crop_timeline(movie, cancel=cancel)
+                elapsed = time.monotonic() - started
+            self.assertEqual((readings, frame), ([], None), "a cancel caches nothing")
+            self.assertLess(elapsed, 2.0, f"the cancel took {elapsed:.2f}s to end the pass")
 
 
 class TestPlanUsesTheTimelineDetector(unittest.TestCase):
