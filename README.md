@@ -269,8 +269,8 @@ removed it: an unmeasured encode can take a library file's path).
 | Option | Effect |
 |---|---|
 | `--target-vmaf N` | quality floor (default: `96`) |
-| `--probe-encoder-preset N` | the PROBES' encoder speed preset (`5` default; SVT-AV1 speed 0-10, higher = slower; a measurement setting — changing it invalidates stored plans) |
-| `--encoder-preset N` | the FINAL encode's speed preset (`3` default; an output setting — the probes run `--probe-encoder-preset`) |
+| `--probe-encoder-preset N` | the PROBES' encoder speed preset (default: the `handbrake.probe_encoder_preset` config value, shipped as `5`; SVT-AV1 speed 0-10, higher = slower; a measurement setting — changing it invalidates stored plans) |
+| `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `3`; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows per movie (more samples can only shrink the crop) |
 | `--dry-run` | show what would be encoded, without encoding |

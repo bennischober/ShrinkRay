@@ -197,6 +197,35 @@ class TestRefreshConfig(unittest.TestCase):
         self.assertIs(refresh_config(), self.config)
         self.assertIn("no longer exists", config_module.config_error or "")
 
+    def test_an_explicit_file_wins_over_an_already_cached_config(self) -> None:
+        """--config is an instruction, not a cache hint (issue #328).
+
+        load_config returned the cached config before consulting config_file, so a
+        process that had loaded any config silently ignored the explicit file.
+        The repo's own tracked ./config.json is what made this visible: a test
+        running from the repo root read it instead of the file it passed.
+        """
+        other = Path(self.tmp.name) / "other.json"
+        _write_config(other, {"handbrake": {"max_threads": 9}}, self.mtime)
+        # self.config is cached from self.path; the explicit file must still win
+        self.assertEqual(load_config(config_file=other).handbrake_max_threads, 9)
+        # and the cache now refers to the explicit file, so a no-arg load keeps it
+        self.assertEqual(load_config().handbrake_max_threads, 9)
+
+    def test_a_rejected_explicit_file_leaves_the_cache_identity_intact(self) -> None:
+        """A bad explicit file must not become the file refresh_config watches.
+
+        Recording the path before Conf(data) validated left the cache pointing at a
+        file whose settings are not in effect: refresh_config would then watch the
+        rejected file, and a retry would silently return the stale settings.
+        """
+        bad = Path(self.tmp.name) / "bad.json"
+        bad.write_text(json.dumps({"eligibility": {"min_source_height": 720}}), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            load_config(config_file=bad)
+        # the cache still refers to the good file, and still yields its settings
+        self.assertEqual(load_config().handbrake_max_threads, 2)
+
 
 class TestWatcherAppliesSettingsPerFile(unittest.TestCase):
     def test_settings_are_asked_for_before_every_file(self) -> None:
