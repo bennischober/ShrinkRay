@@ -754,6 +754,43 @@ class TestEncodeLock(unittest.TestCase):
         self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
         lock.unlink()
 
+    def test_a_steal_the_filesystem_refuses_is_reported_not_called_busy(self):
+        """A rename the filesystem refuses (a read-only library, EBUSY) is not
+        "another encoder": reporting it as one names a phantom holder and hides
+        the real fault (PR #389's review finding 4, invariant 5)."""
+        from shrinkray.engine import lock as lock_mod
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = lock_mod._lock_path(self.out)
+        lock.write_text("999999999 encode 0123456789ab")
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+        with (
+            mock.patch.object(lock_mod.os, "rename", side_effect=OSError("read-only")),
+            mock.patch.object(lock_mod, "log_error") as error,
+            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertIn("could not take the stale encode lock", str(ctx.exception))
+        self.assertNotIn("another encoder is already using", str(ctx.exception))
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("read-only", messages)
+
+    def test_a_failed_release_is_reported(self):
+        """A release that cannot unlink is logged, not swallowed: the next encode
+        of that directory would be refused for the whole stale window with no
+        explanation (PR #389's review finding 5)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod.os, "unlink", side_effect=OSError("busy")),
+            mock.patch.object(lock_mod, "log_error") as error,
+            lock_mod.guard_encodes(self.out, holder="test"),
+        ):
+            pass
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("Could not release the encode lock", messages)
+
     def test_a_live_holder_in_another_pid_namespace_keeps_the_lock(self):
         """Issue #383's acceptance criterion: two holders whose pids collide
         (the server and a one-shot container are both pid 1) must still
@@ -817,19 +854,39 @@ class TestEncodeLock(unittest.TestCase):
         self.assertFalse(held.exists())
 
     def test_a_failed_heartbeat_is_reported(self):
-        """A touch that fails is logged, never swallowed: the holder must
+        """A beat that cannot write is logged, never swallowed: the holder must
         learn its slot is on a timer (invariant 5)."""
         from shrinkray.engine import lock as lock_mod
 
         with (
             mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
             mock.patch.object(lock_mod, "log_warning") as warning,
-            mock.patch.object(Path, "touch", side_effect=OSError("read-only")),
+            mock.patch.object(lock_mod.os, "utime", side_effect=OSError("read-only")),
             lock_mod.guard_encodes(self.out, holder="test"),
         ):
             time.sleep(0.2)
         messages = " ".join(str(c.args[0]) for c in warning.call_args_list)
         self.assertIn("Could not refresh the encode lock", messages)
+
+    def test_a_beat_never_refreshes_a_lock_that_is_no_longer_ours(self):
+        """A holder that lost its slot must not keep the rival's lease alive:
+        the beat compares the token first, reports the loss as an error, and
+        stops (PR #389's review finding 2)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
+            mock.patch.object(lock_mod, "log_error") as error,
+            lock_mod.guard_encodes(self.out, holder="test") as held,
+        ):
+            # a rival steals the slot and writes its own stamp
+            held.write_text("1 rival fedcba987654")
+            time.sleep(0.2)
+            self.assertEqual(
+                held.read_text(), "1 rival fedcba987654", "the rival's lease was refreshed"
+            )
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("Another encoder took the slot", messages)
 
     def test_garbage_lock_content_is_busy_until_it_goes_silent(self):
         """Unreadable content is not evidence of a dead holder: the mtime is

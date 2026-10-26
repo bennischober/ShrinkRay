@@ -11,27 +11,33 @@ Two encoders writing the same output filename (the watch loop and a job
 both encoding an inbox title that also lives in the library produce the
 same `output_dir / movie.name`) clobber each other's output — a corrupt
 archive that passes the duration check only by luck. A lock file inside
-the CONTENDED directory (heartbeat-detected) makes the collision
-impossible instead of unlikely.
+the CONTENDED directory makes the collision a clear "busy" instead of a
+silent race.
 
 Which directory is contended depends on the mode (issue #230):
 
 - two-directory mode: the output directory — every writer writes into it.
-- in place: the LIBRARY directory the swaps rename inside — the staging
-  directory each process creates for itself is a per-run path nothing else
-  ever locks, so a slot keyed on it excluded no one, and two encoders of one
-  file raced on the deterministic swap staging name (`replace.staging_path_for`).
+- in place: the MOVIE'S OWN DIRECTORY. That is where `replace.stage` writes
+  `<source>.shrinkray-staging` and where `replace.swap` performs its two
+  renames, so it is the only key every writer can agree on. A key on a library
+  root is NOT an identity: two writers given nested roots (`/media` and
+  `/media/Movies`) take two different lock files for one file (#379). A key on
+  each run's staging directory excluded no one at all (#336).
 
-A caller that is unsure must pass the directory its writes ultimately land
-in; the lock file lives inside it and is removed on release.
+Staleness is a heartbeat, not a pid (issue #383). The holder touches the file
+every minute and a lock silent for five minutes is reclaimed. Pids cannot answer
+"is this still live?" in the target deployment: the server is pid 1 on every
+container start, a one-shot `docker run` is pid 1 in its own namespace, and pids
+are reused after a restart. The pid is written into the file only to name the
+holder in the busy message.
 
-Staleness is a heartbeat, not a pid (issue #383): the holder touches the
-file every minute, and a file that has been silent for the stale window is
-reclaimed. Pids cannot answer the question in the target deployment — the
-server is pid 1 in its container on every start, a one-shot `docker run`
-is pid 1 in its own namespace, and pids are reused after a restart — so a
-live holder's lock must be honoured without consulting them. The pid stays
-in the file only to name the holder in the busy message.
+The steal is a rename, which is atomic: of two claimants that both judged the
+same lock stale, exactly one takes it. A rename cannot be made conditional on
+the file still being silent, so a holder that beats in the microseconds between
+the judgement and the rename has its lock renamed away and then restored; if a rival
+has already claimed the path in that instant, the restore cannot win and both
+runs proceed. That residual window is logged as an error rather than hidden, and
+the holder's own heartbeat notices the loss at its next beat.
 """
 
 import contextlib
@@ -42,7 +48,7 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
-from shrinkray.logger import log_warning
+from shrinkray.logger import log_error, log_warning
 
 # how often the holder proves it is still alive (a touch of the lock file)
 _HEARTBEAT_SECONDS = 60.0
@@ -50,6 +56,14 @@ _HEARTBEAT_SECONDS = 60.0
 # five missed beats: the window measures SILENCE, not the age of the run, so a
 # multi-hour encode keeps its slot and a killed one is reclaimed in minutes
 _LOCK_STALE_SECONDS = 300.0
+
+# bounded retries when the path is being stolen and re-claimed under us
+_CLAIM_ATTEMPTS = 8
+
+# the token this process wrote into each lock it holds, by lock path. The pid
+# cannot answer "is this still my lock?" - the server and a one-shot container
+# are both pid 1 - so ownership is compared by token (issue #383)
+_OWNED: dict[Path, str] = {}
 
 
 class EncodeBusyError(RuntimeError):
@@ -72,24 +86,6 @@ def _lock_path(output_dir: Path) -> Path:
     return output_dir / ".shrinkray_encode.lock"
 
 
-def _read_holder(lock: Path) -> tuple[int, str]:
-    """Returns the pid and label a lock names, best effort.
-
-    The stamp is a diagnostic only: the staleness decision is the file's
-    mtime, never the pid (issue #383). A half-written or garbage file
-    yields pid 0 and an empty label.
-
-    Args:
-        lock (Path): The lock file.
-
-    Returns:
-        tuple[int, str]: The holder's pid (0 when unreadable) and its label.
-    """
-    fields = _read_fields(lock)
-    pid = int(fields[0]) if fields and fields[0].isdigit() else 0
-    return pid, fields[1] if len(fields) > 1 else ""
-
-
 def _read_fields(lock: Path) -> list[str]:
     """Returns the lock file's whitespace-separated fields ([] when unreadable).
 
@@ -97,18 +93,12 @@ def _read_fields(lock: Path) -> list[str]:
         lock (Path): The lock file.
 
     Returns:
-        list[str]: The stamp's fields.
+        list[str]: The stamp's fields (pid, holder, token).
     """
     try:
         return lock.read_text(encoding="ascii").split()
     except OSError:
         return []
-
-
-# the token this process wrote into each lock it holds, by lock path. The pid
-# cannot answer "is this still my lock?" - the server and a one-shot container
-# are both pid 1 - so release compares the token it wrote (issue #383)
-_OWNED: dict[Path, str] = {}
 
 
 def _silence_seconds(lock: Path) -> float | None:
@@ -137,7 +127,9 @@ def _busy_message(output_dir: Path, lock: Path, silence: float) -> str:
     Returns:
         str: The message.
     """
-    pid, label = _read_holder(lock)
+    fields = _read_fields(lock)
+    pid = int(fields[0]) if fields and fields[0].isdigit() else 0
+    label = fields[1] if len(fields) > 1 else ""
     who = f"pid {pid}" if pid else "an unknown process"
     if label:
         who = f"{label}, {who}"
@@ -147,114 +139,163 @@ def _busy_message(output_dir: Path, lock: Path, silence: float) -> str:
     )
 
 
-def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
-    """Acquires the encode slot for an output directory (blocking-free).
-
-    Creates the output directory if needed, then claims the lock file
-    atomically (O_CREAT|O_EXCL). A lock that has been silent for the stale
-    window is stolen with a warning — and only if it is still silent when
-    the steal re-checks it, so a heartbeat that lands in between wins.
-    Concurrent claimants get the exception, never a wait - the product's
-    answer to "already encoding" is a clear no, not a queue.
+def _claim(lock: Path, holder: str) -> bool:
+    """Creates the lock file and stamps it, exclusively.
 
     Args:
-        output_dir (Path): The output directory to guard.
+        lock (Path): The lock file to create.
+        holder (str): A short label naming the encoder (job/watch/CLI).
+
+    Returns:
+        bool: True when this call created it; False when it already exists.
+    """
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    token = uuid.uuid4().hex[:12]
+    with os.fdopen(fd, "w", encoding="ascii") as handle:
+        handle.write(f"{os.getpid()} {holder} {token}")
+    _OWNED[lock] = token
+    return True
+
+
+def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
+    """Acquires the encode slot for a directory (blocking-free).
+
+    Creates the directory if needed, then claims the lock file atomically
+    (O_CREAT|O_EXCL). A lock that has been silent for the stale window is
+    stolen with a warning. Concurrent claimants get the exception, never a wait -
+    the product's answer to "already encoding" is a clear no, not a queue.
+
+    Args:
+        output_dir (Path): The directory to guard.
         holder (str): A short label naming the encoder (job/watch/CLI).
 
     Returns:
         Path: The lock file path (release_encode_slot takes it back).
 
     Raises:
-        EncodeBusyError: When another live encoder holds the slot.
+        EncodeBusyError: When another live encoder holds the slot, or the stale
+            lock could not be taken.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    # canonicalize BEFORE keying: a symlinked or relative path must not
-    # produce a second lock file for one directory (the review on this PR,
-    # finding 3) - every writer resolves, so one directory is one lock
+    # canonicalize BEFORE keying: a symlinked or relative path must not produce a
+    # second lock file for one directory
     output_dir = output_dir.resolve()
     lock = _lock_path(output_dir)
-    try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
+    for _ in range(_CLAIM_ATTEMPTS):
+        if _claim(lock, holder):
+            return lock
         silence = _silence_seconds(lock)
         if silence is None:
-            # it vanished between the failed create and the stat: retry the
-            # claim, which is now free
-            return acquire_encode_slot(output_dir, holder)
+            continue  # it vanished: the path is free again
         if silence < _LOCK_STALE_SECONDS:
             # the holder's heartbeat is recent: busy, whoever the pid names.
             # This also covers the window between O_CREAT and the stamp write,
-            # where the file is still empty (issue #383): a fresh empty file
-            # is a live claim, not a stale one.
+            # where the file is still empty (issue #383): a fresh empty file is
+            # a live claim, not a stale one.
             raise EncodeBusyError(_busy_message(output_dir, lock, silence)) from None
-        # steal by RENAMING the stale file out of the way: a rename is
-        # atomic, so exactly one claimant wins it. Two claimants that both
-        # judged the lock stale used to unlink in turn and each delete the
-        # other's brand-new lock (the review on this PR, finding 4) - the
-        # re-check alone only narrows that window.
         log_warning(f"Stale encode lock in '{output_dir}' - stealing it.")
-        if not _steal(lock):
+        outcome = _steal(lock)
+        if outcome == "live":
+            again = _silence_seconds(lock)
+            raise EncodeBusyError(_busy_message(output_dir, lock, again or 0.0)) from None
+        if outcome == "error":
             raise EncodeBusyError(
-                f"another encoder is already using '{output_dir}' "
-                "(it claimed the slot while this one read the stale lock)"
+                f"could not take the stale encode lock in '{output_dir}' (see the log)"
             ) from None
-        return acquire_encode_slot(output_dir, holder)
-    with os.fdopen(fd, "w", encoding="ascii") as handle:
-        token = uuid.uuid4().hex[:12]
-        handle.write(f"{os.getpid()} {holder} {token}")
-    _OWNED[lock] = token
-    return lock
+        # "won" or "gone": the path is free, claim it again
+    raise EncodeBusyError(
+        f"could not claim the encode slot for '{output_dir}' after {_CLAIM_ATTEMPTS} attempts"
+    )
 
 
-def _steal(lock: Path) -> bool:
+def _steal(lock: Path) -> str:
     """Takes a stale lock out of the way, atomically, if it is still stale.
 
     The rename is the atomic step: of two claimants that both judged the same
-    lock stale, exactly one renames it and the other loses, so neither can
-    delete the other's brand-new lock. A holder that beat in the moment
-    between the judgement and the rename keeps its slot (the file is renamed
-    back), and only a lock still silent after the rename is discarded.
+    lock stale, exactly one renames it and the other finds nothing to take.
 
     Args:
         lock (Path): The lock file judged stale.
 
     Returns:
-        bool: True when this claimant won the steal and may re-claim.
+        str: "won" (the path is free), "gone" (someone else took it), "live"
+            (the holder beat in the meantime and its lock was restored), or
+            "error" (the filesystem refused the rename; it is logged).
     """
     taken = lock.with_name(f"{lock.name}.stale.{os.getpid()}.{uuid.uuid4().hex[:8]}")
     try:
         os.rename(lock, taken)
-    except OSError:
-        return False
+    except FileNotFoundError:
+        return "gone"
+    except OSError as e:
+        log_error(f"Could not take the stale encode lock '{lock}' ({e}).")
+        return "error"
     silence = _silence_seconds(taken)
     if silence is not None and silence < _LOCK_STALE_SECONDS:
-        # the holder beat just before the rename: restore its lock, and only
-        # over a free name (link is exclusive, so a concurrent claimant's
-        # file is never replaced)
+        # the holder beat between the judgement and the rename: put it back
         try:
             os.link(taken, lock)
-        except OSError as e:
-            log_warning(
-                f"Could not restore the live encode lock in '{lock.parent}' ({e}); "
-                f"it is at '{taken.name}'."
+        except FileExistsError:
+            log_error(
+                f"A rival claimed '{lock}' while a live holder's lock was being "
+                f"restored; two encoders may now be running in '{lock.parent}'."
             )
-        else:
             with contextlib.suppress(OSError):
                 taken.unlink()
-        return False
+            return "live"
+        except OSError as e:
+            log_error(
+                f"Could not restore the live encode lock '{lock}' ({e}); "
+                f"it is at '{taken}'. Two encoders may now be running in '{lock.parent}'."
+            )
+            return "live"
+        with contextlib.suppress(OSError):
+            taken.unlink()
+        return "live"
     with contextlib.suppress(OSError):
         taken.unlink()
-    return True
+    return "won"
+
+
+def _beat(lock: Path, token: str) -> str:
+    """Refreshes a held lock's mtime, if it is still ours.
+
+    A holder that lost its slot must not refresh the new holder's file: that would
+    keep the rival's lease alive and hide the loss from this run (PR #389's review
+    finding 2). `os.utime` is used, never `Path.touch`, because touch CREATES a
+    missing file and would leave a token-less lock behind.
+
+    Args:
+        lock (Path): The lock file.
+        token (str): The token this process wrote when it acquired the slot.
+
+    Returns:
+        str: "ok" (refreshed), "lost" (no longer ours), or "failed" (ours, but
+            the refresh failed and the slot is on a timer).
+    """
+    fields = _read_fields(lock)
+    if len(fields) < 3 or fields[2] != token:
+        return "lost"
+    try:
+        os.utime(lock)
+    except FileNotFoundError:
+        return "lost"
+    except OSError as e:
+        log_warning(f"Could not refresh the encode lock '{lock}' ({e}).")
+        return "failed"
+    return "ok"
 
 
 def release_encode_slot(lock: Path) -> None:
     """Releases a held encode slot.
 
-    Only the lock this process wrote is removed: a holder that stalled long
-    enough to lose its slot must not delete the new holder's file on its way
-    out, and the pid cannot tell the two apart (the server and a one-shot
-    container are both pid 1), so the token written at acquisition decides
-    (issue #383).
+    Only the lock this process wrote is removed: a holder that lost its slot must
+    not delete the new holder's file on its way out, and the pid cannot tell the
+    two apart (the server and a one-shot container are both pid 1), so the token
+    written at acquisition decides (issue #383).
 
     Args:
         lock (Path): The lock file path returned by acquire_encode_slot.
@@ -265,55 +306,54 @@ def release_encode_slot(lock: Path) -> None:
     fields = _read_fields(lock)
     if len(fields) < 3 or fields[2] != token:
         return
-    _release_path(lock)
-
-
-def _release_path(lock: Path) -> None:
-    """Removes a lock file, tolerating races and missing files.
-
-    Args:
-        lock (Path): The lock file to remove.
-    """
-    with contextlib.suppress(OSError):
+    try:
         lock.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log_error(f"Could not release the encode lock '{lock}' ({e}).")
 
 
 @contextlib.contextmanager
 def guard_encodes(output_dir: Path, holder: str = "encode") -> Iterator[Path]:
     """Context manager around a whole encode run (all entry points).
 
-    Keeps the slot alive for the run's whole duration by touching the lock
-    every `_HEARTBEAT_SECONDS`, so the stale window measures silence
-    (issue #383). A failed touch is reported, never swallowed: a slot whose
-    heartbeat cannot be written will be reclaimed by the next claimant, and
-    the operator has to know why.
+    Keeps the slot alive for the run's whole duration by beating every
+    `_HEARTBEAT_SECONDS`, so the stale window measures silence (issue #383).
+    A beat that finds the lock taken over, or that cannot write, is reported
+    once and stops: the run is then unguarded and the operator has to know.
 
     Args:
-        output_dir (Path): The output directory the run writes into.
+        output_dir (Path): The directory the run writes into.
         holder (str): A short label naming the encoder (job/watch/CLI).
 
     Yields:
         Path: The lock file path.
     """
     lock = acquire_encode_slot(output_dir, holder)
+    token = _OWNED[lock]
     stop = threading.Event()
-    failing = False
 
     def _refresh() -> None:
-        nonlocal failing
+        reported: str | None = None
         while not stop.wait(_HEARTBEAT_SECONDS):
-            try:
-                lock.touch()
-            except OSError as e:
-                if not failing:
-                    failing = True
-                    log_warning(
-                        f"Could not refresh the encode lock in '{output_dir}' ({e}); "
-                        "another encoder may take the slot after "
-                        f"{_LOCK_STALE_SECONDS / 60:.0f} min of silence."
-                    )
-            else:
-                failing = False
+            status = _beat(lock, token)
+            if status == "ok":
+                reported = None
+                continue
+            if reported == status:
+                continue
+            reported = status
+            if status == "lost":
+                log_error(
+                    f"Another encoder took the slot for '{output_dir}'; "
+                    "this run is no longer exclusive."
+                )
+                return
+            log_warning(
+                f"Could not refresh the encode lock in '{output_dir}'; another "
+                f"encoder may take the slot after {_LOCK_STALE_SECONDS / 60:.0f} min."
+            )
 
     refresher = threading.Thread(target=_refresh, name="encode-lock-refresh", daemon=True)
     refresher.start()
@@ -322,4 +362,6 @@ def guard_encodes(output_dir: Path, holder: str = "encode") -> Iterator[Path]:
     finally:
         stop.set()
         refresher.join(timeout=5)
+        if refresher.is_alive():
+            log_warning(f"The encode-lock heartbeat for '{output_dir}' did not stop.")
         release_encode_slot(lock)
