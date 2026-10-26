@@ -144,6 +144,7 @@ class TestJobs(unittest.TestCase):
             sample_seconds=10.0,
             crop_sample_count=10,
             vmaf_statistic="mean",
+            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
             hdr=False,
             encoder="svt_av1",
         )
@@ -202,6 +203,7 @@ class TestJobs(unittest.TestCase):
             sample_seconds=10.0,
             crop_sample_count=10,
             vmaf_statistic="mean",
+            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
             hdr=False,
             encoder="svt_av1",
         )
