@@ -17,9 +17,13 @@ src/ invokes it, and it is not a dependency.
 
 The ab-av1 version used for the baseline is pinned in the issue: v0.11.7
 (recipe read at main ed5f5461f0aa). Its fps override is DISABLED here
-(--vmaf-fps 0) so both sides score the source's own timestamps, and its
-scaling is left at auto - which for the resolutions these pairs use
-(1080p, 2160p) scales nothing, matching ShrinkRay's no-scale filtergraph.
+(--vmaf-fps 0) so both sides score the source's own timestamps; since #308
+ShrinkRay rebases both inputs to PTS 0 too, so the two agree either way.
+
+Its scaling is left at ab-av1's default auto, and since #309 ShrinkRay applies
+the same auto rule (the 4K model above 2560x1440, the 1080p model otherwise,
+each with ab-av1's upscale thresholds). For the 1080p and 2160p pairs neither
+side scales, and the model choice is what the 2160p pair now proves.
 """
 
 import os
@@ -232,24 +236,14 @@ class TestVmafParityAgainstAbAv1(_AbAv1Mixin):
         self._check("SDR 10-bit", ref, dis)
 
     def test_2160p(self) -> None:
-        # ab-av1 switches to the 4k model above 2560x1440; at 3840x2160 its
-        # auto-scale scales nothing (>=3456x1944), matching our no-scale
         # ab-av1 switches to the 4k model (vmaf_4k_v0.6.1) above 2560x1440;
-        # ShrinkRay still scores with vmaf_v0.6.1 - the model gap is issue
-        # #309's bug, so this pair is REPORTED, not held, until that fix.
-        # The auto-scale scales nothing at 3840x2160 on either side.
+        # since #309 ShrinkRay picks the same model from the cropped
+        # dimensions, so this pair is HELD. At 3840x2160 neither side's
+        # auto-scale scales anything (both are >= their 4K threshold).
         ref = self._clip("ref4k.mkv", size="3840x2160")
         dis = self.root / "dis4k.mkv"
         self._encode(ref, dis, crf="28")
-        # hold=False: #312 flips this pair to held once #309 (the 4k model)
-        # lands - until then the pair guards nothing, by design.
-        self._check(
-            "2160p (ab-av1's 4k model)",
-            ref,
-            dis,
-            hold=False,
-            why="model gap: issue #309",
-        )
+        self._check("2160p (ab-av1's 4k model)", ref, dis)
 
     def test_hdr10_reported_not_held(self) -> None:
         # a PQ/bt2020 clip; ShrinkRay tone-maps both inputs, ab-av1 scores PQ
@@ -289,16 +283,20 @@ class TestVmafParityAgainstAbAv1(_AbAv1Mixin):
         )
         dis = self.root / "dishdr.mkv"
         self._encode(ref, dis, crf="28", pix_fmt="yuv420p10le")
-        # hold=False: the tone-map deviation is #310's documented behaviour;
-        # #312 decides whether the pair is ever held (it is not expected to be).
+        # the tone-map deviation is #310's documented behaviour, REPORTED
         self._check(
-            "HDR10 (reported, not held)",
+            "HDR10 tone-mapped (reported, not held)",
             ref,
             dis,
             hdr=True,
             hold=False,
             why="tone-map deviation, #310",
         )
+        # Issue #312's HDR criterion: with tone-mapping OFF both sides score the
+        # PQ signal directly, which is exactly ab-av1's comparison. HELD - it
+        # proves the rest of the pipeline (model, scale, pixel format, sync)
+        # matches on an HDR pair, so the tone-map is the only remaining gap.
+        self._check("HDR10 PQ-direct (tone-map off)", ref, dis, hdr=False)
 
 
 @unittest.skipUnless(SMOKE_ENV, "smoke: opt-in (SHRINKRAY_SMOKE=1)")
@@ -313,9 +311,10 @@ class TestVmafParityProbeSample(_AbAv1Mixin):
     stream-copied window), encoded by HandBrake at the probe preset the way
     probe_crf does - the one pair that exercises the real probe pipeline.
 
-    UNTESTED AS OF #306's baseline: the baseline host has no HandBrakeCLI
-    (apt's is 1.3.1, below the 1.6 minimum), so this pair has never executed.
-    The first run with HandBrakeCLI present must paste the delta on #306.
+    Baseline (2026-10-25, HandBrake 1.11.2 in the repo's smoke image):
+    probe-sample parity 56.5253 vs 56.5253 (delta 0.0000), 1 passed in 33.4s -
+    the pair held on its first real run, so this class is a guard now, not a
+    placeholder.
     """
 
     def test_probe_sample_parity(self) -> None:

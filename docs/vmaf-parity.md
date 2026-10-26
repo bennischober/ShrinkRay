@@ -1,0 +1,227 @@
+# Manual VMAF parity run on real content
+
+Status: **the manual leg of issue #306**, the counterpart of the opt-in test
+`tests/test_vmaf_parity.py`. That test proves the measurement recipe on synthetic
+clips generated at test time; this procedure runs the same comparison on real
+content from `test_media/`, which is the only place grain, real letterboxing, a real
+HDR master and a real open-GOP source show up. Issue #312's acceptance run uses it.
+
+## Why both exist
+
+The synthetic pairs are exact: `testsrc2` re-encoded with libx264, so a delta of
+0.0000 proves the two measurements agree *on that clip*. They cannot prove the
+recipe survives real content, and they structurally cannot catch a defect in the
+HandBrake encode path, because every synthetic SDR pair is encoded with
+ffmpeg/libx264 (which preserves colour tags and frame counts) while production
+encodes with HandBrakeCLI (which does neither - see #258 and #408).
+
+That is not hypothetical. The first real run of this procedure measured a normal
+1080p HandBrake encode at VMAF 17.71 while the synthetic pairs all read 0.0000
+delta, because the delta is the *agreement* between two tools, not the correctness
+of either. Print the frame counts (step 7) before trusting any number.
+
+The comparison is always the **measurement**, not the search: for the same
+(reference, distorted) pair, `measure_vmaf(distorted, reference)` against
+`ab-av1 vmaf --reference <ref> --distorted <dis>`. Comparing chosen CRFs would not
+be meaningful, because ab-av1 encodes with ffmpeg's libsvtav1 and ShrinkRay with
+HandBrakeCLI.
+
+## Tolerance
+
+`|ShrinkRay - ab-av1| <= 0.1` VMAF per pair (issue #306's proposal). One exception,
+documented rather than waived: an HDR pair measured through ShrinkRay's tone-map is
+**reported, not held** (the deviation in `docs/encode-decision.md`, measured at
+~2.9 VMAF on a real HDR10 pair by #340). The same pair with tone-mapping off is
+held, and that is what proves the rest of the pipeline matches.
+
+## What you need
+
+| Tool | Version | Why |
+|---|---|---|
+| ffmpeg | with `libvmaf` and `zscale` | the measurement itself; `ffmpeg -hide_banner -h filter=libvmaf` must list the filter |
+| ab-av1 | **v0.11.7** | the reference implementation; the version is part of the claim, because `--verify` arrived in v0.11.7 |
+| HandBrakeCLI | 1.6 or newer | only for the probe-sample pair (the encode side) |
+
+ab-av1 is a **development tool only**: nothing under `src/` invokes it and it is not
+a dependency. Install it from its releases page
+(`https://github.com/alexheretic/ab-av1/releases/tag/v0.11.7`); the Linux asset is a
+`.tar.zst`, so `zstd -d` is needed to unpack it.
+
+The repository's own smoke image has the right ffmpeg and HandBrake:
+
+```sh
+docker run --rm --entrypoint sh shrinkray:test -c \
+  'ffmpeg -version | head -1; HandBrakeCLI --version'
+```
+
+`ab-av1` is not in that image; mount it in, as the examples below do.
+
+## The pairs to cover
+
+`test_media/` holds whatever the operator put there. Cover what your library has,
+and say in the report which of these you actually ran:
+
+| Pair | What it exercises | How to make the distorted side |
+|---|---|---|
+| SDR 1080p, no bars | the baseline case | any HandBrake encode of a source clip |
+| SDR with black bars | the reference crop, and the cropped dimensions driving the model | `shrinkray encode` a letterboxed file, measure its output against the source with `--crop` |
+| SDR 10-bit | the 10-bit analysis pixel format | `--pix_fmt yuv420p10le` on the distorter |
+| 2160p | the 4K model and ab-av1's auto scale | `shrinkray encode` a 4K file (or a 4K `--vf` crop of one) |
+| Probe sample | the stream copy + HandBrake probe path | the probe-sample recipe below |
+| Full-file verification | the frame alignment between a source with audio and a HandBrake output | `shrinkray encode` a real file, then measure its output against the source (step 7) |
+| HDR10 | the tone-map deviation, and the PQ-direct parity underneath | `shrinkray encode` an HDR10 file |
+
+No filename from `test_media/` may appear in code, docs or a test (AGENTS.md); refer
+to files by role ("the 4K HDR episode"), never by name.
+
+## Procedure
+
+Run from the repository root. The script appends every result to
+`test_media/scratch/vmaf_parity.md`, so a long run keeps what finished and a
+Ctrl+C loses nothing already measured.
+
+### 1. A plain SDR pair
+
+Pick a source and an encoded version of it (any encode whose output is smaller -
+`shrinkray encode` output, or an existing file you know is derived from the source):
+
+```sh
+uv run scripts/vmaf_parity.py --pair "/path/to/source.mkv" "/path/to/encoded.mkv" \
+  --label "SDR 1080p"
+```
+
+### 2. A pair with bars
+
+Pass the same rectangle the encoder removed, as `top,bottom,left,right`. ShrinkRay
+crops the reference; ab-av1 gets the identical `--reference-vfilter crop=...`:
+
+```sh
+uv run scripts/vmaf_parity.py --pair "/path/to/source.mkv" "/path/to/encoded.mkv" \
+  --label "SDR with bars" --crop 140,140,0,0
+```
+
+Read the rectangle off the encode's own log line
+(`Removing stable black bars of '<name>': top N, bottom N, left N, right N`) or from
+`shrinkray plan`'s output. If the numbers do not match what the encoder actually
+removed, the pair measures a geometry mismatch, not a quality difference.
+
+### 3. A 10-bit pair
+
+The same command as step 1 on a 10-bit source. The script derives the analysis pixel
+format from the distorted file's own bit depth, so a 10-bit source is compared at
+10-bit on both sides.
+
+### 4. A 4K pair
+
+The same command on a 2160p source. Above 2560x1440 both sides switch to
+`vmaf_4k_v0.6.1`, and neither scales (both are at or above their 4K auto-scale
+threshold). A 4K scope film cropped below 1440 lines stays on the 1080p model at
+native size, exactly as ab-av1 scores it - pass `--crop` so both sides agree.
+
+### 5. An HDR10 pair
+
+```sh
+uv run scripts/vmaf_parity.py --pair "/path/to/hdr_source.mkv" "/path/to/hdr_encoded.mkv" \
+  --label "HDR10" --hdr true
+```
+
+This measures the pair twice:
+
+- **tone-mapped** (ShrinkRay's shipped path) - REPORTED against ab-av1's PQ-direct
+  score. The gap is the documented deviation, expected around 3 VMAF on real content
+  (#340 measured ~2.9); a much larger gap means something else broke.
+- **PQ-direct** (tone-mapping off) - HELD to the tolerance. This is the like-for-like
+  comparison and it is what #312's HDR criterion asks for.
+
+### 6. The probe-sample pair
+
+This is the one pair that exercises the real probe pipeline: a stream-copied window,
+encoded by HandBrake at the probe preset, exactly as `engine/samples.extract_samples`
+and `probe_crf` produce it.
+
+```sh
+# 1. a stream-copied window, video-only (this is what extract_samples does)
+ffmpeg -ss 600 -i "/path/to/source.mkv" -t 10 -map 0:v:0 -c:v copy -an \
+  -avoid_negative_ts make_zero /tmp/sample.mkv
+
+# 2. HandBrake at the probe preset - the shape probe_crf builds
+HandBrakeCLI -i /tmp/sample.mkv -o /tmp/sample_enc.mkv \
+  -e svt_av1 --encoder-preset 5 --quality 28 -f av_mkv \
+  --crop 0:0:0:0 --all-audio --aencoder copy
+
+# 3. measure both ways
+uv run scripts/vmaf_parity.py --pair /tmp/sample.mkv /tmp/sample_enc.mkv \
+  --label "probe sample"
+```
+
+### 7. The full-file pair (the one that found #408)
+
+The verification path compares a HandBrake output against the source **with audio**, and
+that is where frame alignment can break: HandBrake can drop leading frames when its
+input starts at a non-zero timestamp, which collapses the score (~92 to ~17 measured on
+real content) while both tools still agree with each other. **Always print the frame
+counts** before trusting a number:
+
+```sh
+for f in ref.mkv dis.mkv; do
+  printf '%s frames: ' "$f"
+  ffprobe -v error -select_streams v:0 -count_frames \
+    -show_entries stream=nb_read_frames -of default=nw=1:nk=1 "$f"
+  printf '%s start:  ' "$f"
+  ffprobe -v error -select_streams v:0 -show_entries stream=start_time \
+    -of default=nw=1:nk=1 "$f"
+done
+```
+
+A frame-count mismatch means the two sides are not comparing the same frames, and the
+score is meaningless whatever the delta says. Report it as a finding (issue #408), not as
+a parity failure.
+
+## Reporting the run
+
+Post a table on the issue (or the PR) with one row per pair, both scores, the delta,
+and the verdict. Include the versions you ran:
+
+```sh
+ffmpeg -version | head -1
+ab-av1 --version
+HandBrakeCLI --version | head -1
+```
+
+The script writes exactly that table to `test_media/scratch/vmaf_parity.md`, which is
+gitignored - copy the rows into the issue, do not commit the file.
+
+A pair outside tolerance is a finding, not a number to wave through: either it gets a
+fix, or it becomes a documented deviation in `docs/encode-decision.md` with its reason.
+
+### Evidence from the first real run (2026-10-26)
+
+Run on the untagged 1080p h264 WEBDL in `test_media/`, in the pinned image with ab-av1
+v0.11.7:
+
+| Pair | ShrinkRay | ab-av1 | delta | frames (ref / dis) |
+|---|---|---|---|---|
+| zero-based window, video-only | 92.6662 | 92.6662 | 0.0000 | 729 / 729 |
+| window with audio, HandBrake segment | **17.7090** | 17.7090 | 0.0000 | **729 / 719** |
+
+The second row is the point of this whole procedure: a perfect 0.0000 delta on a
+meaningless score. The frame counts are what caught it (issue #408).
+
+## What this run cannot tell you
+
+- **Whether the two sides compare the same frames.** This is the caveat that matters
+  most, and it is measured, not theorised: on real content a HandBrake output with 719
+  frames against a 729-frame reference scored **17.71**, and both tools reported the
+  same wrong number. Check the frame counts (step 7) before reading any delta. Parity
+  between the tools says they measure the same thing, never that they measure the right
+  thing (issue #408).
+- **Whether the encode itself is faithful.** It measures a file you already have
+  against its source. If HandBrake converted the colours on the way out (untagged
+  source, #258), both measurements agree with each other and both are low - parity
+  says the two tools measure the same thing, not that the artifact is right. Compare
+  the output's colour tags against the source's with `ffprobe` when that is the
+  question.
+- **Whether the tone-map is the best available chain.** #340 owns that, and this
+  procedure only reports its footprint.
+- **Whether the CRF search picks the right CRF.** That is the search, tracked outside
+  the parity milestone (#313-#317).

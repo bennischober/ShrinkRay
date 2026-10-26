@@ -348,9 +348,12 @@ class TestQuality(unittest.TestCase):
         )
         joined = " ".join(command)
         # cropped to the distorted geometry first, then tone-mapped
-        self.assertIn("[1:v]crop=iw-0:ih-280:0:140[rc]", joined)
-        self.assertIn("[rc]zscale=t=linear", joined)
+        self.assertIn("[1:v]crop=iw-0:ih-280:0:140,zscale=t=linear", joined)
         self.assertIn("[0:v]zscale=t=linear", joined)
+        # exactly one explicit pixel format per input, AFTER the tone-map: the
+        # tone-mapped float intermediate must not be converted back to 8-bit
+        self.assertEqual(joined.count("format=yuv420p10le"), 2)
+        self.assertNotIn("format=yuv420p,", joined)
 
     def test_build_vmaf_command_hdr_without_crop_is_unchanged(self):
         """The plain HDR path (no bars) keeps its tone-map-only graph."""
@@ -481,6 +484,7 @@ class TestPlanReuse(unittest.TestCase):
         """Stores a plan for the movie via the service write path."""
         from shrinkray.engine.search import SampleProbe
 
+        hdr_value = overrides.get("hdr", False)
         result = engine_plan.QualityResult(
             input=movie,
             output=movie,
@@ -498,8 +502,14 @@ class TestPlanReuse(unittest.TestCase):
             crf_range=overrides.pop("crf_range", engine_search.DEFAULT_CRF_RANGE),
             sample_count=engine_search.sample_count_for(600.0, engine_plan.DEFAULT_SAMPLE_EVERY),
             sample_seconds=10.0,
-            hdr=overrides.pop("hdr", False),
+            hdr=hdr_value,
             encoder=overrides.pop("encoder", "svt_av1"),
+            # the fingerprint's crop-independent recipe part, derived from the
+            # same hdr flag the result carries (the tests' source snapshot has
+            # no dimensions, so the model and scale cannot enter it)
+            vmaf_recipe=overrides.pop(
+                "vmaf_recipe", tools_vmaf.vmaf_recipe(hdr=hdr_value).fingerprint()
+            ),
         )
         config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
         record_plan = overrides.pop("record_plan", service.record_plan)
@@ -1164,6 +1174,7 @@ class TestProbeCache(unittest.TestCase):
                     False,
                     None,
                     ("hb", "1.6"),
+                    tools_vmaf.vmaf_recipe().identifier(),
                 )
                 db.save_probe_score(connection, key, 95.0, encoded[i])
 
@@ -1194,6 +1205,193 @@ class TestProbeCache(unittest.TestCase):
             self.assertAlmostEqual(factor, 2440 / 2100, places=4)
             connection.close()
 
+    def test_a_recipe_change_misses_both_caches(self):
+        """Issue #308's acceptance: the measurement recipe is part of the probe
+        cache key AND of the plan fingerprint, so changing how a score is measured
+        re-measures instead of reusing the old number.
+
+        A stored probe measured with the 1080p model must not answer a 4K
+        measurement of the same window: the model, the scale, the pixel format and
+        the tone-map each move the score, and none of them used to be in the key.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+
+            hd = tools_vmaf.vmaf_recipe(width=1920, height=1080, bit_depth=8)
+            uhd = tools_vmaf.vmaf_recipe(width=3840, height=2160, bit_depth=10)
+            key_args = (movie, 10.0, 10.0, 22, "svt_av1", "5", None, False, None, ("hb", "1.6"))
+            hd_key = engine_search.probe_cache_key(*key_args, hd.identifier())
+            uhd_key = engine_search.probe_cache_key(*key_args, uhd.identifier())
+            self.assertNotEqual(hd_key, uhd_key)
+
+            # a probe stored under the 1080p recipe is invisible to the 4K one
+            db.save_probe_score(connection, hd_key, 95.0, 40)
+            self.assertIsNotNone(db.get_probe_entry(connection, hd_key))
+            self.assertIsNone(db.get_probe_entry(connection, uhd_key))
+            connection.close()
+
+    def test_a_gate_skip_stays_reusable_without_a_recipe(self):
+        """Issue #308's review: a GATE skip (too short, resolution, size, codec)
+        never runs a VMAF measurement, so its plan row carries no recipe. The
+        lookup must still reuse it - requiring a recipe there would re-derive every
+        gate skip on every run, a cache regression the measured-plan rule must not
+        cause. A MEASURED plan still rejects a different recipe.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 16)
+            connection = db.connect(root / "meta.db")
+            file_id = db.upsert_file(
+                connection,
+                db.MovieRecord(
+                    path=movie,
+                    mtime=movie.stat().st_mtime,
+                    size=movie.stat().st_size,
+                    name=movie.name,
+                    category="Cat",
+                ),
+            )
+            connection.commit()
+            save = {
+                "encoder": "svt_av1",
+                "encoder_preset": "5",
+                "target_vmaf": 96.0,
+                "crf_low": 14,
+                "crf_high": 45,
+                "sample_count": 3,
+                "sample_seconds": 10.0,
+            }
+            lookup = {
+                "encoder": "svt_av1",
+                "encoder_preset": "5",
+                "target_vmaf": 96.0,
+                "crf_range": (14, 45),
+                "sample_count": 3,
+                "sample_seconds": 10.0,
+            }
+            # a gate skip: achieved_vmaf None, no recipe
+            db.save_plan(
+                connection,
+                file_id,
+                None,
+                None,
+                None,
+                [],
+                "too short",
+                None,
+                movie.stat().st_mtime,
+                movie.stat().st_size,
+                **save,
+            )
+            hit = db.get_valid_plan(
+                connection,
+                movie,
+                vmaf_recipe=tools_vmaf.vmaf_recipe().fingerprint(),
+                **lookup,
+            )
+            self.assertIsNotNone(hit, "a gate skip must stay reusable")
+            self.assertEqual(hit["skipped_reason"], "too short")
+
+            # a MEASURED plan still keys on the recipe
+            db.save_plan(
+                connection,
+                file_id,
+                22,
+                95.5,
+                None,
+                [],
+                None,
+                100,
+                movie.stat().st_mtime,
+                movie.stat().st_size,
+                vmaf_recipe=tools_vmaf.vmaf_recipe(bit_depth=8).fingerprint(),
+                **save,
+            )
+            self.assertIsNotNone(
+                db.get_valid_plan(
+                    connection,
+                    movie,
+                    vmaf_recipe=tools_vmaf.vmaf_recipe(bit_depth=8).fingerprint(),
+                    **lookup,
+                )
+            )
+            self.assertIsNone(
+                db.get_valid_plan(
+                    connection,
+                    movie,
+                    vmaf_recipe=tools_vmaf.vmaf_recipe(bit_depth=10).fingerprint(),
+                    **lookup,
+                )
+            )
+            connection.close()
+
+    def test_a_recipe_change_invalidates_the_plan_fingerprint(self):
+        """The same rule for the plan: a stored plan measured with one recipe is
+        never reused under another (issue #308). The recipe part the fingerprint
+        carries is the crop-independent half (the plan lookup runs before bar
+        detection), so the pixel format and the tone-map must each invalidate it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 16)
+            connection = db.connect(root / "meta.db")
+            file_id = db.upsert_file(
+                connection,
+                db.MovieRecord(
+                    path=movie,
+                    mtime=movie.stat().st_mtime,
+                    size=movie.stat().st_size,
+                    name=movie.name,
+                    category="Cat",
+                ),
+            )
+            connection.commit()
+            common = {
+                "encoder": "svt_av1",
+                "encoder_preset": "5",
+                "target_vmaf": 96.0,
+                "crf_low": 14,
+                "crf_high": 45,
+                "sample_count": 3,
+                "sample_seconds": 10.0,
+            }
+            eight_bit = tools_vmaf.vmaf_recipe(bit_depth=8).fingerprint()
+            ten_bit = tools_vmaf.vmaf_recipe(bit_depth=10).fingerprint()
+            self.assertNotEqual(eight_bit, ten_bit)
+            db.save_plan(
+                connection,
+                file_id,
+                22,
+                95.5,
+                None,
+                [],
+                None,
+                100,
+                movie.stat().st_mtime,
+                movie.stat().st_size,
+                vmaf_recipe=eight_bit,
+                **common,
+            )
+            lookup = {
+                "crf_range": (14, 45),
+                **{k: v for k, v in common.items() if k != "crf_low" and k != "crf_high"},
+            }
+            self.assertIsNotNone(
+                db.get_valid_plan(connection, movie, vmaf_recipe=eight_bit, **lookup)
+            )
+            self.assertIsNone(db.get_valid_plan(connection, movie, vmaf_recipe=ten_bit, **lookup))
+            # an empty recipe (a plan stored before the field existed) never matches
+            self.assertIsNone(db.get_valid_plan(connection, movie, **lookup))
+            connection.close()
+
     def test_the_chosen_crf_size_keys_on_hdr(self):
         """The cache key carries the HDR flag (issue #314's reviewer round 3):
         a cache seeded under hdr=True must be READ under hdr=True - flipping
@@ -1217,7 +1415,17 @@ class TestProbeCache(unittest.TestCase):
 
             for _sample, offset in samples:
                 key = engine_search.probe_cache_key(
-                    movie, offset, 10.0, 22, "svt_av1", "5", None, True, None, ("hb", "1.6")
+                    movie,
+                    offset,
+                    10.0,
+                    22,
+                    "svt_av1",
+                    "5",
+                    None,
+                    True,
+                    None,
+                    ("hb", "1.6"),
+                    tools_vmaf.vmaf_recipe(hdr=True).identifier(),
                 )
                 db.save_probe_score(connection, key, 95.0, 40)
 
@@ -1268,7 +1476,17 @@ class TestProbeCache(unittest.TestCase):
             # every window encoded to 400 bytes (0.4x)
             for _sample, offset in samples:
                 key = engine_search.probe_cache_key(
-                    movie, offset, 10.0, 22, "svt_av1", "5", None, False, None, ("hb", "1.6")
+                    movie,
+                    offset,
+                    10.0,
+                    22,
+                    "svt_av1",
+                    "5",
+                    None,
+                    False,
+                    None,
+                    ("hb", "1.6"),
+                    tools_vmaf.vmaf_recipe().identifier(),
                 )
                 db.save_probe_score(connection, key, 95.0, 400)
 
@@ -1351,6 +1569,7 @@ class TestProbeCache(unittest.TestCase):
                 False,
                 None,
                 ("hb", "1.6"),
+                tools_vmaf.vmaf_recipe().identifier(),
             )
             self.assertEqual(db.get_probe_entry(connection, key), (95.0, 777))
             connection.close()
@@ -1394,6 +1613,7 @@ class TestProbeCache(unittest.TestCase):
                     False,
                     None,
                     ("hb", "1.6"),
+                    tools_vmaf.vmaf_recipe().identifier(),
                 )
                 if i == 0:
                     db.save_probe_score(connection, key, 95.0)  # NULL size
@@ -1486,6 +1706,7 @@ class TestProbeCache(unittest.TestCase):
                 False,
                 None,
                 ("hb", "1.6"),
+                tools_vmaf.vmaf_recipe().identifier(),
             )
             db.save_probe_score(connection, key0, 95.0, 40)
 
@@ -1688,7 +1909,17 @@ class TestChosenCrfSizeGate(unittest.TestCase):
 
             for _sample, offset in samples:
                 key = engine_search.probe_cache_key(
-                    movie, offset, 10.0, 22, "svt_av1", "5", None, False, None, ("hb", "1.6")
+                    movie,
+                    offset,
+                    10.0,
+                    22,
+                    "svt_av1",
+                    "5",
+                    None,
+                    False,
+                    None,
+                    ("hb", "1.6"),
+                    tools_vmaf.vmaf_recipe().identifier(),
                 )
                 db.save_probe_score(connection, key, 95.0, 40)
 

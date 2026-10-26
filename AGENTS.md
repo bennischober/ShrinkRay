@@ -128,6 +128,7 @@ tools/gate.sh && git push
 | Product direction, modes, deployment target | `PRODUCT.md` |
 | Every gate of the encode decision | `docs/encode-decision.md` |
 | The plan cache | `docs/plan-reuse.md` |
+| Measuring VMAF parity with ab-av1 by hand, on real content | `docs/vmaf-parity.md` |
 | Crop measurements (its #131 two-measurement decision is superseded by #181's single timeline detector) | `docs/black-bar-spike.md` |
 | The container deployment | `docs/docker.md` |
 | The terminal control surface (`shrinkray setup`) | `docs/tui.md` |

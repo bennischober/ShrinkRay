@@ -29,11 +29,19 @@ approximation.
 3. **Fingerprint validation** — reuse ONLY when ALL match; ANY mismatch
    => normal probing path (fail-safe to re-probe, never guess):
    input mtime+size, encoder, encoder_preset, target_vmaf, crf_range,
-   sample_count, sample_seconds, crop_sample_count, vmaf_statistic.
-   Deliberately EXCLUDED: `encoder_threads` (does not change output
-   bytes). HDR: `encode_with_quality()` overrides target_vmaf/crf_range
+   sample_count, sample_seconds, crop_sample_count, vmaf_statistic,
+   vmaf_recipe. HDR: `encode_with_quality()` overrides target_vmaf/crf_range
    for HDR before the lookup — the lookup derives from the OVERRIDDEN
    values, so HDR consistency falls out of the same rule.
+   Deliberately EXCLUDED: `encoder_threads` (does not change output
+   bytes). `vmaf_recipe` is the measurement's crop-independent half
+   (`VmafRecipe.fingerprint`, issue #308): the recipe version, the analysis
+   pixel format and the tone-map. The plan lookup runs BEFORE bar detection,
+   so it cannot know the post-crop dimensions the model and scale follow —
+   those are already pinned by the file's identity plus `crop_sample_count`
+   (a different file or a different crop window count re-measures the crop).
+   A recipe bump therefore re-probes every file; the probe cache carries the
+   full recipe (`VmafRecipe.identifier`), so its rows miss too.
 4. **Provenance** — a plan-driven encode records `crf_source='plan'` +
    `plan_created_at` (in the QualityResult AND the encodes row). A
    decision's origin stays visible: "probed now" vs "trusted plan from
