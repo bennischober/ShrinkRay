@@ -301,12 +301,14 @@ def run_crop_timeline(
         # the caller falls back like any failed pass
         log(f"The crop timeline pass could not start for '{movie.name}': {e}")
         return [], None
-    if code == -1:
-        # cancelled (issue #384): a cancel caches nothing
+    if code == -1 and cancel is not None and cancel.is_set():
+        # cancelled (issue #384): a cancel caches nothing. Without the event a
+        # -1 is a child that died of SIGHUP and is logged as a failure below
         return [], None
-    if code == -2:
+    if code == -2 and err.startswith(("timed out after", "stalled:")):
         # terminated at the ceiling or by the stall watchdog: the runner's
-        # message says which, a bare "-2" would read like an ffmpeg crash
+        # message says which. A child that died of SIGINT also returns -2,
+        # but its stderr is ffmpeg's own and is logged as an exit code below
         log(f"The crop timeline pass failed for '{movie.name}': {err}")
         return [], None
     if code != 0:
@@ -331,18 +333,18 @@ def source_frame(movie: Path) -> tuple[int, int] | None:
             capture_output=True,
             timeout=FFPROBE_TIMEOUT,
         )
-        stream = next(
-            s for s in json.loads(proc.stdout.decode())["streams"] if s.get("codec_type") == "video"
-        )
+        streams = json.loads(proc.stdout.decode())["streams"]
+    except (OSError, subprocess.SubprocessError, KeyError, ValueError) as e:
+        # OSError: ffprobe missing. TimeoutExpired: a stale mount blocking the
+        # read (issue #62). ValueError covers unparsable output (-v quiet
+        # leaves stdout empty when ffprobe fails). No frame size => no crop
+        log(f"ffprobe could not read the frame size of '{movie.name}': {e}")
+        return None
+    try:
+        stream = next(s for s in streams if s.get("codec_type") == "video")
         return (int(stream["width"]), int(stream["height"]))
-    except (
-        OSError,
-        subprocess.SubprocessError,
-        StopIteration,
-        KeyError,
-        ValueError,
-        json.JSONDecodeError,
-    ):
+    except (StopIteration, KeyError, ValueError, TypeError):
+        log(f"'{movie.name}' has no video stream with a frame size: no crop")
         return None
 
 
@@ -575,32 +577,8 @@ def detect_crop_rect(
     if cancel is not None and cancel.is_set():
         return None
 
-    try:
-        proc = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_streams",
-                str(movie),
-            ],
-            capture_output=True,
-            timeout=FFPROBE_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        # OSError: ffprobe missing. TimeoutExpired: stale mount blocking the
-        # kernel read — without a timeout the watch loop/job worker stalls
-        # forever with no error (issue #62). No frame size => no crop.
-        log(f"ffprobe could not read '{movie}' within {FFPROBE_TIMEOUT}s: {e}")
-        return None
-    try:
-        stream = next(
-            s for s in json.loads(proc.stdout.decode())["streams"] if s.get("codec_type") == "video"
-        )
-        frame = (int(stream["width"]), int(stream["height"]))
-    except (StopIteration, KeyError, ValueError, json.JSONDecodeError):
+    frame = source_frame(movie)
+    if frame is None:
         return None
 
     from shrinkray.engine.samples import sample_offsets
@@ -629,8 +607,15 @@ def detect_crop_rect(
             ],
             cancel=cancel,
         )
-        if code == -1:
-            # cancelled (issue #384): the sampled pass caches nothing
+        if code == -1 and cancel is not None and cancel.is_set():
+            # cancelled (issue #384): the sampled pass measures nothing
+            return None
+        if code < 0:
+            # the child died of a signal (the runner's stall watchdog, SIGKILL,
+            # a crash): a crop from the windows left would lose its veto. A
+            # SIGHUP/SIGINT/SIGTERM is caught by ffmpeg, which exits 255:
+            # that is a failed window like any positive exit (issue #403)
+            log(f"The sampled crop pass failed for '{movie.name}': ffmpeg exited {code}")
             return None
         if code != 0:
             continue

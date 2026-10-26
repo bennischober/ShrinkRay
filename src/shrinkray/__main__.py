@@ -852,7 +852,7 @@ def plan(
         cancel = signals.enter_context(_cancel_on_terminal_close())
         for movie in movies:
             # a signal that landed while no child ran (recording the previous
-            # plan) is honoured here: plan_quality's crop pass would not see it
+            # plan) stops the loop before the next file's work starts
             if cancel.is_set():
                 raise _EncodeCancelled("cancelled by user")
             try:

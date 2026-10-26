@@ -6,7 +6,7 @@ Nothing here imports upward (the layer contract forbids it); `engine/`, `service
 and `server/` all reach the binaries through these modules.
 
 **Known deviation:** three engine modules still call
-`subprocess.run` directly for SHORT reads — `engine/crop.py` (3 sites, incl. its own
+`subprocess.run` directly for SHORT reads — `engine/crop.py` (2 sites, incl. its own
 `ffprobe -show_streams`), `engine/samples.py`, `engine/pipeline.py`.
 The long children (encodes, VMAF) all go through `_run`/`spawn_kwargs`. New short
 reads belong in the matching `tools/` module, not in a fourth copy.
