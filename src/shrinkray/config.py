@@ -111,6 +111,10 @@ class HandbrakeSection(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # accepted and ignored (issue #375): the measured pipeline never reads
+    # this key - it is HandBrake's preset NAME from the removed fixed mode,
+    # kept in the schema so an old config.json still loads (the reviewer of
+    # #370: removing the key is a schema decision beyond that issue)
     preset: str = "Fast 1080p30"
     encoder: str = "svt_av1"
     probe_encoder_preset: str = DEFAULT_PROBE_ENCODER_PRESET
