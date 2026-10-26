@@ -1059,6 +1059,50 @@ class TestProbeCache(unittest.TestCase):
             self.assertAlmostEqual(factor, 2440 / 2100, places=4)
             connection.close()
 
+    def test_the_chosen_crf_size_keys_on_hdr(self):
+        """The cache key carries the HDR flag (issue #314's reviewer round 3):
+        a cache seeded under hdr=True must be READ under hdr=True - flipping
+        the flag on either side misses every entry and falls back. Mutating
+        the reader's hdr to False fails this test (the fallback fires); the
+        all-windows test above cannot catch it because its fixture is SDR.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            samples = []
+            for i in range(2):
+                s = root / f"s{i}.mkv"
+                s.write_bytes(b"m" * 100)
+                samples.append((s, 10.0 * i))
+
+            for _sample, offset in samples:
+                key = engine_search.probe_cache_key(
+                    movie, offset, 10.0, 22, "svt_av1", "5", None, True, None, ("hb", "1.6")
+                )
+                db.save_probe_score(connection, key, 95.0, 40)
+
+            with patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")):
+                factor = engine_search.check_chosen_crf_shrinks(
+                    samples,
+                    workdir,
+                    "hb",
+                    22,
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    hdr=True,
+                    db_file=db_file,
+                )
+            # the HDR-keyed rows were found: the factor came from the cache
+            self.assertAlmostEqual(factor, 80 / 200, places=4)
+            connection.close()
+
     def test_the_chosen_crf_size_encodes_when_every_window_shrinks(self):
         """The reverse direction (issue #314's acceptance): a cache whose
         every window shrank yields a factor BELOW 1.0 - the file encodes.
@@ -1162,11 +1206,18 @@ class TestProbeCache(unittest.TestCase):
             self.assertEqual(db.get_probe_entry(connection, key), (95.0, 777))
             connection.close()
 
-    def test_the_chosen_crf_size_falls_back_on_a_partial_cache(self):
-        """A window whose cache entry predates #314 (size NULL) or is
-        missing makes the all-window estimate incomplete: the decision
-        falls back to the single-window encode - a miss degrades to the
-        old behaviour, never to a guess."""
+    def test_the_chosen_crf_size_falls_back_on_a_null_size(self):
+        """A cache entry whose size predates #314 (NULL) makes the all-window
+        estimate incomplete: the decision falls back to the single-window
+        encode - a miss degrades to the old behaviour, never to a guess.
+
+        Every window HAS a row here; the only defect is the missing size.
+        That isolates the NULL half of the guard: a mutation that treats a
+        NULL size as usable puts None into the sum (TypeError) or, if the
+        guard is skipped entirely, returns a factor computed from fewer
+        windows - either way this test fails, because the fallback must be
+        the outcome.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             db_file = root / "meta.db"
@@ -1181,42 +1232,42 @@ class TestProbeCache(unittest.TestCase):
                 s.write_bytes(b"m" * 100)
                 samples.append((s, 10.0 * i))
 
-            # the two incompleteness shapes, ordered so the NULL row comes
-            # FIRST (window 0 full-size would let a missing window 1 break
-            # the loop before the NULL row was ever reached): any loosening
-            # of either guard half - the missing-entry branch or the NULL-
-            # size branch - lets the None size into the sum and fails this
-            # test with a TypeError. Neither branch can be weakened silently.
-            key0 = engine_search.probe_cache_key(
-                movie,
-                0.0,
-                10.0,
-                22,
-                "svt_av1",
-                "5",
-                None,
-                False,
-                None,
-                ("hb", "1.6"),
-            )
-            db.save_probe_score(connection, key0, 95.0)  # NULL size (legacy)
-            key1 = engine_search.probe_cache_key(
-                movie,
-                10.0,
-                10.0,
-                22,
-                "svt_av1",
-                "5",
-                None,
-                False,
-                None,
-                ("hb", "1.6"),
-            )
-            db.save_probe_score(connection, key1, 95.0, 40)  # full row
+            # every window has a row; window 0's size is NULL (the legacy shape)
+            for i, offset in enumerate(10.0 * i for i in range(3)):
+                key = engine_search.probe_cache_key(
+                    movie,
+                    offset,
+                    10.0,
+                    22,
+                    "svt_av1",
+                    "5",
+                    None,
+                    False,
+                    None,
+                    ("hb", "1.6"),
+                )
+                if i == 0:
+                    db.save_probe_score(connection, key, 95.0)  # NULL size
+                else:
+                    db.save_probe_score(connection, key, 95.0, 40)
+
+            logged: list[str] = []
+
+            def fake_log(message: str) -> None:
+                logged.append(message)
+
+            real_get = db.get_probe_entry
+            reads: list = []
+
+            def spy(conn, key):
+                r = real_get(conn, key)
+                reads.append((key, r))
+                return r
 
             with (
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5) as est,
-                patch.object(engine_search, "_run", return_value=(0, "")),
+                patch.object(engine_search, "log", side_effect=fake_log),
+                patch.object(db, "get_probe_entry", side_effect=spy),
                 patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
             ):
                 factor = engine_search.check_chosen_crf_shrinks(
@@ -1233,6 +1284,110 @@ class TestProbeCache(unittest.TestCase):
                 # the fallback path ran (the old single-window estimate)
                 est.assert_called_once()
                 self.assertEqual(factor, 0.5)
+                # and the log never CLAIMED the all-window estimate: a
+                # partial cache that announces "all N windows reused" is the
+                # reviewer's V2 consequence - a one-window factor presented
+                # as the complete one. Every guard weakening ends either in
+                # a wrong log line (caught here) or a TypeError (caught by
+                # the sum); neither can pass silently.
+                self.assertFalse(
+                    any("all 3 probe windows' encoded bytes reused" in line for line in logged),
+                    f"a partial cache logged the all-window claim: {logged}",
+                )
+                # the invariant the reviewer's mutations broke: a read that
+                # returned a None size FORCES the fallback. If any read saw
+                # (score, None), the decision must not have been taken from
+                # the sums - est must have been called. This holds no matter
+                # how the guard is shaped (break/continue/dropped halves):
+                # it pins the CONTRACT, not the implementation.
+                saw_null = any(r is not None and r[1] is None for r in reads)
+                if saw_null:
+                    self.assertEqual(
+                        est.call_count, 1, "a None-size read did not force the fallback"
+                    )
+            connection.close()
+
+    def test_the_chosen_crf_size_falls_back_on_a_missing_window(self):
+        """A window with NO cache row makes the all-window estimate
+        incomplete the same way (issue #314): the fallback runs. This test
+        isolates the missing-entry half of the guard - no NULL sizes exist
+        here, so a mutation that drops the missing-entry half hits
+        entry[1] on None (TypeError) or returns a partial sum as the
+        all-window estimate; either way the fallback was owed and this
+        test fails without it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            db_file = root / "meta.db"
+            connection = db.connect(db_file)
+            workdir = root / "w"
+            workdir.mkdir()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            samples = []
+            for i in range(3):
+                s = root / f"s{i}.mkv"
+                s.write_bytes(b"m" * 100)
+                samples.append((s, 10.0 * i))
+
+            # window 0 has a full row; windows 1-2 have NO row at all
+            key0 = engine_search.probe_cache_key(
+                movie,
+                0.0,
+                10.0,
+                22,
+                "svt_av1",
+                "5",
+                None,
+                False,
+                None,
+                ("hb", "1.6"),
+            )
+            db.save_probe_score(connection, key0, 95.0, 40)
+
+            logged: list[str] = []
+
+            def fake_log(message: str) -> None:
+                logged.append(message)
+
+            real_get = db.get_probe_entry
+            reads: list = []
+
+            def spy(conn, key):
+                r = real_get(conn, key)
+                reads.append(r)
+                return r
+
+            with (
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5) as est,
+                patch.object(engine_search, "log", side_effect=fake_log),
+                patch.object(db, "get_probe_entry", side_effect=spy),
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+            ):
+                factor = engine_search.check_chosen_crf_shrinks(
+                    samples,
+                    workdir,
+                    "hb",
+                    22,
+                    movie,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    db_file=db_file,
+                )
+                est.assert_called_once()
+                self.assertEqual(factor, 0.5)
+                # the same log-honesty pin as the NULL-size test: a missing
+                # window must never be announced as "all N windows reused"
+                self.assertFalse(
+                    any("all 3 probe windows' encoded bytes reused" in line for line in logged),
+                    f"a partial cache logged the all-window claim: {logged}",
+                )
+                # the same invariant: a missing entry (a None read) forces
+                # the fallback, whatever the guard's shape
+                saw_missing = any(r is None for r in reads)
+                if saw_missing:
+                    self.assertEqual(est.call_count, 1, "a missing read did not force the fallback")
             connection.close()
 
     def test_size_factor_is_cached(self):
