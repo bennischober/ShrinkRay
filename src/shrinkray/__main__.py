@@ -295,7 +295,7 @@ def encode(
         "--probe-encoder-preset",
         help=(
             "Quality mode: encoder speed preset for the PROBE encodes "
-            "(a measurement setting; SVT-AV1 speed 0-10, higher = slower). "
+            "(a measurement setting; SVT-AV1 speed -1 to 10, higher = faster - a lower preset is slower and compresses better). "
             "Default: the handbrake.probe_encoder_preset config value. "
             "Changing it invalidates stored plans "
             "(they are re-probed)."
@@ -306,7 +306,7 @@ def encode(
         "--encoder-preset",
         help=(
             "Quality mode: encoder speed preset for the FINAL encode "
-            "(an output setting; SVT-AV1 speed 0-10, higher = slower, "
+            "(an output setting; SVT-AV1 speed -1 to 10, higher = faster; a lower preset is slower and better, "
             "e.g. 3). Default: the handbrake.encoder_preset config value. "
             "The probes "
             "run --probe-encoder-preset."
@@ -766,7 +766,7 @@ def plan(
         "--probe-encoder-preset",
         help=(
             "Encoder speed preset for the probes (a measurement setting; "
-            "SVT-AV1 speed 0-10). Default: the handbrake.probe_encoder_preset "
+            "SVT-AV1 speed -1 to 10). Default: the handbrake.probe_encoder_preset "
             "config value. The plan's fingerprint keys on it."
         ),
     ),
