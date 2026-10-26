@@ -806,6 +806,7 @@ def check_chosen_crf_shrinks(
             encoded_total = 0
             sample_total = 0
             complete = True
+            tool_versions = _tool_versions(handbrake)
             for _index, (sample, offset) in enumerate(samples):
                 key = probe_cache_key(
                     movie,
@@ -817,7 +818,7 @@ def check_chosen_crf_shrinks(
                     crop,
                     hdr,
                     encoder_threads,
-                    _tool_versions(handbrake),
+                    tool_versions,
                 )
                 entry = _db.get_probe_entry(connection, key)
                 if entry is None or entry[1] is None:
