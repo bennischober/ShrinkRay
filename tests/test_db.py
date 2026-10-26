@@ -282,6 +282,43 @@ class TestDb(unittest.TestCase):
             self.assertEqual(migrated.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
             migrated.close()
 
+    def test_migration_v18_adds_encoded_size(self):
+        """A v17 database gains the probe cache's encoded_size column (issue
+        #314).
+
+        The column is new storage beside the score: legacy rows keep NULL,
+        which the readers treat as a MISS for size purposes, never as zero.
+        After the migration a v17-built database answers get_probe_entry with
+        (score, None) and its integrity check passes.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v17.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (17);
+                CREATE TABLE probe_cache (
+                    key TEXT PRIMARY KEY,
+                    value REAL NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                INSERT INTO probe_cache (key, value) VALUES ('abc', 95.5);
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = db.connect(db_path)
+            version = migrated.execute("SELECT version FROM schema_version").fetchone()
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
+            columns = {row["name"] for row in migrated.execute("PRAGMA table_info(probe_cache)")}
+            self.assertIn("encoded_size", columns)
+            # the legacy row survives and reads as (score, None): a size miss
+            self.assertEqual(db.get_probe_entry(migrated, "abc"), (95.5, None))
+            self.assertIsNone(db.get_probe_entry(migrated, "nope"))
+            migrated.close()
+
     def test_migration_v15_drops_plans_probed_without_bars(self):
         """A pre-v15 plan is discarded, never reused (issue #128).
 
