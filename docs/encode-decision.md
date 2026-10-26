@@ -106,7 +106,8 @@ would only shrink *after* cropping gets a false "won't shrink".
 
 The CRF search brackets and interpolates in VMAF space (issue #23) and spends one round per probed CRF
 — each round encodes and scores every sample window, so rounds are the dominant cost of `plan` and of
-every encode. Two deliberate shapes keep that cost down (issue **#313**):
+every encode. Two deliberate shapes keep that cost down (issues **#313**, **#395**), and their measured
+trade follows them:
 
 - **The round structure is ab-av1's** (`crf_search`, read at ab-av1 `ed5f5461f0aa`): the first probe is
 the range's midpoint; while only one side of the target is known, round two moves to the 20%/80% point of

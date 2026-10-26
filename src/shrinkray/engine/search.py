@@ -294,8 +294,9 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
             # the stop needs a failing bound at most two CRF above the pass
             # (issue #395): only then is a single unprobed CRF all it can
             # give away. A pass with no failing bound, or a distant one, is
-            # the plateau-then-knee shape where an early stop lost up to
-            # eight CRF steps and could pick a CRF where the file GROWS.
+            # the plateau-then-knee shape where an early stop gave away many
+            # CRF steps (8 on #395's curve) and could pick a CRF where the
+            # file GROWS.
             if failing is not None and failing[0] - crf <= 2 and value - target_vmaf < tolerance:
                 return crf
             if failing is not None:
