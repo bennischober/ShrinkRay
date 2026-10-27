@@ -758,7 +758,7 @@ def watch(
                             except sqlite3.Error as e:
                                 # the enqueue's database write failed (a read-only
                                 # or full db, issue #427): a per-file failure -
-                                # the file stays eligible, retried next pass
+                                # the file stays eligible, retried when the file changes
                                 log_error(
                                     f"Queuing '{movie.name}' failed: {e}"
                                     " => retried when the file changes."
