@@ -779,17 +779,23 @@ class TestEncodeLock(unittest.TestCase):
     def test_an_unusable_directory_raises_busy_not_oserror(self):
         """A read-only or unmounted library must reach the caller as
         EncodeBusyError: the watcher catches only that (plus Cancelled and
-        RuntimeError), so a raw OSError would end the unattended loop (PR #409's
-        review finding 3)."""
+        RuntimeError), so a raw OSError would end the unattended loop.
+
+        Three separate sites are covered, because each is a different call the
+        filesystem can refuse: mkdir, resolve, and the exclusive open. Patching only
+        mkdir certified a branch the code already wrapped and left the open
+        uncovered (PR #409's review round 5, finding 1).
+        """
         from shrinkray.engine import lock as lock_mod
 
-        with (
-            mock.patch.object(Path, "mkdir", side_effect=OSError("EROFS")),
-            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
-        ):
-            lock_mod.acquire_encode_slot(self.out, holder="test")
-        self.assertIn("could not use", str(ctx.exception))
-        self.assertIn("EROFS", str(ctx.exception))
+        cases = {
+            "mkdir": mock.patch.object(Path, "mkdir", side_effect=OSError("EROFS")),
+            "resolve": mock.patch.object(Path, "resolve", side_effect=OSError("EACCES")),
+            "open": mock.patch.object(lock_mod.os, "open", side_effect=OSError("EROFS")),
+        }
+        for name, patcher in cases.items():
+            with self.subTest(site=name), patcher, self.assertRaises(lock_mod.EncodeBusyError):
+                lock_mod.acquire_encode_slot(self.out, holder="test")
 
     def test_a_failed_stamp_write_removes_the_empty_lock(self):
         """A stamp write that fails (a full disk) must not leave an empty lock that

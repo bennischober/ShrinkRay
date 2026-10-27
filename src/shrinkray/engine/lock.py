@@ -180,12 +180,16 @@ def _claim(lock: Path, holder: str) -> str | None:
         str | None: The token written, or None when the file already exists.
 
     Raises:
-        EncodeBusyError: The stamp could not be written (the lock is removed).
+        EncodeBusyError: The lock could not be created or stamped (it is removed).
     """
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         return None
+    except OSError as e:
+        # a read-only or unmounted library: the same "cannot encode here" answer as
+        # the directory checks, never a raw OSError (the watcher does not catch one)
+        raise EncodeBusyError(f"could not create the encode lock '{lock}' ({e})") from e
     token = uuid.uuid4().hex[:12]
     try:
         with os.fdopen(fd, "w", encoding="ascii") as handle:
