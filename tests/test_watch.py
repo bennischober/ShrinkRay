@@ -87,7 +87,7 @@ class TestWatch(unittest.TestCase):
             old = time.time() - 7200
             for f in (broken, good):
                 os.utime(f, (old, old))  # stable
-            processed: list = []
+            processed: list[str] = []
 
             def fake_quality(m, o, **kwargs):
                 processed.append(m.name)
@@ -710,14 +710,11 @@ class TestWatchInPlace(unittest.TestCase):
             os.utime(f, (old, old))  # stable
         processed: list = []
 
-        staged_outputs: list[Path] = []
-
         def fake_quality(m, o, **kwargs):
             processed.append(m.name)
             # the staged output must EXIST with content smaller than the
             # source: the swap's size gate passes and the stage patch fires
             o.write_bytes(b"e" * 50)
-            staged_outputs.append(o)
             return engine_plan.QualityResult(
                 input=m,
                 output=o,
@@ -735,34 +732,18 @@ class TestWatchInPlace(unittest.TestCase):
         def failing_stage(*args, **kwargs):
             raise OSError("No space left on device")
 
-        import time as _time
-
-        _t0 = _time.monotonic()
         stack = ExitStack()
         with (
             mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
             mock.patch("shrinkray.replace.stage", side_effect=failing_stage),
-            # the failed swaps churn the staging dir, whose mtime resets the
-            # watcher's startup quiet-window (60 s): the loop's survival is
-            # the test's subject, not the waiter's patience
-            mock.patch.object(
-                watch_mod,
-                "_FsWaiter",
-                lambda *a, **k: type(
-                    "W",
-                    (),
-                    {
-                        "wait": lambda self, *a, **k: None,
-                        "start": lambda self: None,
-                        "stop": lambda self: None,
-                    },
-                )(),
-            ),
+            # the test's own runtime: is_stable's STABLE_CHECK_INTERVAL sleep
+            # (60 s) runs its course inside the pass - the seven sibling tests
+            # patch it to 0.0; so does this one
+            mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
         ):
             _isolated_lock(stack, self.tmp.name)
             with stack:
                 watch_mod.watch([inbox], None, once=True)
-        print(f"PHASES: total={_time.monotonic() - _t0:.1f}s")
         # BOTH processed in place: the swap's OSError did not end the loop
         self.assertEqual(
             sorted(processed),

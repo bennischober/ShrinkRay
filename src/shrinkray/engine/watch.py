@@ -94,7 +94,14 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
         return True
     from shrinkray.config import load_config
 
-    data, error = process_movie(movie, root, load_config(), db_file=db_file)
+    try:
+        data, error = process_movie(movie, root, load_config(), db_file=db_file)
+    except OSError as e:
+        # the scan's own filesystem reads (getsize/stat) raise on a file
+        # that vanished or a mount that dropped (issue #427): a per-file
+        # failure, retried when the file changes - never a thread kill
+        log_error(f"Scanning '{movie.name}' failed: {e} => retried when the file changes.")
+        return False
     if data is None:
         log_error(f"Scanning '{movie.name}' failed: {error} => retried when the file changes.")
         return False
@@ -161,7 +168,18 @@ def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list
     # is the same non-movie class: an in-flight or crashed run's encode must
     # not be picked up as a new arrival (issue #237).
     unique = list(dict.fromkeys(movies))
-    return [m for m in unique if _identity(m) not in known and not is_staging_path(m, inbox)]
+    kept = []
+    for m in unique:
+        try:
+            identity = _identity(m)
+        except OSError:
+            # a dangling entry: the file vanished between the listing and
+            # this stat (issue #427's discovery-class escapes) - skip it;
+            # it is gone, there is nothing to watch
+            continue
+        if identity not in known and not is_staging_path(m, inbox):
+            kept.append(m)
+    return kept
 
 
 def _identity(path: Path) -> str:
@@ -710,7 +728,12 @@ def watch(
                     # file and the rest back; the next pass reports the pause
                     if pause_reason(state_dir) is not None:
                         break
-                    known.add(_identity(movie))
+                    try:
+                        known.add(_identity(movie))
+                    except OSError:
+                        # the file vanished mid-pass (issue #427): skip it
+                        continue
+
                     if settings is not None:
                         current = settings()
                     decision = decide(movie, current.target_vmaf, encoder)
@@ -843,14 +866,14 @@ def watch(
                         log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
                         continue
                     except (OSError, sqlite3.Error) as e:
-                        # the swap's filesystem/database work (issue #427): a
-                        # full disk during stage, a permission change, a mount
-                        # dropping mid-rename, a database write failing - is a
-                        # PER-FILE failure under the same #260 rule as the
-                        # RuntimeError branch above: logged with the file's
-                        # name and the watcher continues. Without this branch
-                        # the exception kills the watcher thread while
-                        # /api/status keeps reporting it as running.
+                        # the DIRECT path's swap and encode filesystem work
+                        # (issue #427): a full disk during staging, a database
+                        # write failing - a PER-FILE failure under the same
+                        # #260 rule as the RuntimeError branch above: logged
+                        # with the file's name and the watcher continues. This
+                        # branch covers the stateless/direct form; the QUEUE
+                        # path's discovery and scan escapes are guarded in
+                        # find_new_movies and _scan_into_db.
                         log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
                         continue
 
