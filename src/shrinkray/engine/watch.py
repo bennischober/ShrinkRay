@@ -9,12 +9,14 @@ logic as the encode/plan commands and encodes them (source stays untouched
 import contextlib
 import ctypes
 import os
+import sqlite3
 import struct
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -93,7 +95,14 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
         return True
     from shrinkray.config import load_config
 
-    data, error = process_movie(movie, root, load_config(), db_file=db_file)
+    try:
+        data, error = process_movie(movie, root, load_config(), db_file=db_file)
+    except OSError as e:
+        # the scan's own filesystem reads (getsize/stat) raise on a file
+        # that vanished or a mount that dropped (issue #427): a per-file
+        # failure, retried when the file changes - never a thread kill
+        log_error(f"Scanning '{movie.name}' failed: {e} => retried when the file changes.")
+        return False
     if data is None:
         log_error(f"Scanning '{movie.name}' failed: {error} => retried when the file changes.")
         return False
@@ -160,7 +169,18 @@ def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list
     # is the same non-movie class: an in-flight or crashed run's encode must
     # not be picked up as a new arrival (issue #237).
     unique = list(dict.fromkeys(movies))
-    return [m for m in unique if _identity(m) not in known and not is_staging_path(m, inbox)]
+    kept = []
+    for m in unique:
+        try:
+            identity = _identity(m)
+        except OSError:
+            # a dangling entry: the file vanished between the listing and
+            # this stat (issue #427's discovery-class escapes) - skip it;
+            # it is gone, there is nothing to watch
+            continue
+        if identity not in known and not is_staging_path(m, inbox):
+            kept.append(m)
+    return kept
 
 
 def _identity(path: Path) -> str:
@@ -709,7 +729,12 @@ def watch(
                     # file and the rest back; the next pass reports the pause
                     if pause_reason(state_dir) is not None:
                         break
-                    known.add(_identity(movie))
+                    try:
+                        known.add(_identity(movie))
+                    except OSError:
+                        # the file vanished mid-pass (issue #427): skip it
+                        continue
+
                     if settings is not None:
                         current = settings()
                     decision = decide(movie, current.target_vmaf, encoder)
@@ -728,7 +753,18 @@ def watch(
                         # (e.g. the same file is already queued) and the file
                         # stays eligible for a later pass.
                         if _scan_into_db(movie, roots[0], db_file):
-                            if submit(movie):
+                            try:
+                                queued = submit(movie)
+                            except sqlite3.Error as e:
+                                # the enqueue's database write failed (a read-only
+                                # or full db, issue #427): a per-file failure -
+                                # the file stays eligible, retried when the file changes
+                                log_error(
+                                    f"Queuing '{movie.name}' failed: {e}"
+                                    " => retried when the file changes."
+                                )
+                                continue
+                            if queued:
                                 log(f"Queued '{movie.name}' for the backlog.")
                             continue
                         # the scan failed (unreadable file): log and retry when
@@ -822,14 +858,19 @@ def watch(
                                 log_error(f"Encoding '{movie.name}' failed: {result.error}")
                     except EncodeBusyError as e:
                         log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
-                        known.discard(_identity(movie))  # eligible again next pass
+                        # the file vanished mid-pass (issue #427): there is
+                        # nothing to retry - the next scan re-decides it
+                        with suppress(OSError):
+                            known.discard(_identity(movie))
                         continue
                     except Cancelled as e:
                         # disk watchdog (free space hit the floor) or user cancel:
                         # partial output already removed by the engine; retry
                         # when space freed up (or the user re-ran watch)
                         log_error(f"Encoding '{movie.name}' cancelled: {e} => retry next pass.")
-                        known.discard(_identity(movie))
+                        # the file vanished mid-pass (issue #427)
+                        with suppress(OSError):
+                            known.discard(_identity(movie))
                         continue
                     except RuntimeError as e:
                         # a per-file failure (unreadable, unprobeable, encode
@@ -839,6 +880,19 @@ def watch(
                         # file is already in `known` (marked above), so it is
                         # not retried until it changes; whether it should be
                         # retried at all is #231's failure-memory decision.
+                        log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
+                        continue
+                    except (OSError, sqlite3.Error) as e:
+                        # the DIRECT path's swap and encode filesystem work
+                        # (issue #427): the stat/rename/unlink and db-write
+                        # calls that are not SwapError-wrapped (stage/swap's
+                        # own causes convert) - a PER-FILE failure under the same
+                        # #260 rule as the RuntimeError branch above: logged
+                        # with the file's name and the watcher continues. This
+                        # branch covers the stateless/direct form; the QUEUE
+                        # path's escapes are guarded in find_new_movies (the
+                        # identity stat), _scan_into_db (the scan's reads) and
+                        # the submit/enqueue call (its sqlite write).
                         log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
                         continue
 
