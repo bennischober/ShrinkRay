@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -856,23 +857,19 @@ def watch(
                                 log_error(f"Encoding '{movie.name}' failed: {result.error}")
                     except EncodeBusyError as e:
                         log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
-                        try:
+                        # the file vanished mid-pass (issue #427): there is
+                        # nothing to retry - the next scan re-decides it
+                        with suppress(OSError):
                             known.discard(_identity(movie))
-                        except OSError:
-                            # the file vanished mid-pass (issue #427): there is
-                            # nothing to retry - the next scan re-decides it
-                            pass
                         continue
                     except Cancelled as e:
                         # disk watchdog (free space hit the floor) or user cancel:
                         # partial output already removed by the engine; retry
                         # when space freed up (or the user re-ran watch)
                         log_error(f"Encoding '{movie.name}' cancelled: {e} => retry next pass.")
-                        try:
+                        # the file vanished mid-pass (issue #427)
+                        with suppress(OSError):
                             known.discard(_identity(movie))
-                        except OSError:
-                            # the file vanished mid-pass (issue #427)
-                            pass
                         continue
                     except RuntimeError as e:
                         # a per-file failure (unreadable, unprobeable, encode

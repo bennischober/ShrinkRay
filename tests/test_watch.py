@@ -691,10 +691,12 @@ class TestWatchInPlace(unittest.TestCase):
 
     def test_a_dangling_entry_is_skipped_not_fatal(self) -> None:
         """Issue #427's discovery-class escape, on the RESIDENT shape
-        (submit set): a file listed by the directory scan that vanishes
+        (submit set): a file the directory listing reports that vanishes
         before its identity stat (a rename/delete race) raised out of
         find_new_movies and killed the watcher thread. The guard skips it;
-        the loop continues and the surviving movie is queued.
+        the loop continues and the surviving movie is queued. The REAL
+        find_new_movies runs - the guard under test is its per-candidate
+        identity stat; the dangling entry is a real dangling symlink.
         """
         from shrinkray.engine import watch as watch_mod
 
@@ -703,33 +705,16 @@ class TestWatchInPlace(unittest.TestCase):
         good.write_bytes(b"x" * 100)
         old = time.time() - 7200
         os.utime(good, (old, old))
+        dangling = inbox / "vanished.mkv"
+        os.symlink(inbox / "gone-target.mkv", dangling)
 
-        real_list = watch_mod.find_new_movies
         queued: list[str] = []
 
-        def listing_with_dangling(root, extensions, known):
-            # the directory listing's shape: the entries exist at scan time,
-            # one of them vanishes before its identity stat
-            found = real_list(root, extensions, set())
-            found.append(inbox / "vanished.mkv")
-            return found
-
-        real_identity = watch_mod._identity
-
-        def fake_identity(path):
-            if path.name == "vanished.mkv":
-                raise FileNotFoundError(f"{path} vanished mid-listing")
-            return real_identity(path)
-
         with (
-            mock.patch.object(watch_mod, "find_new_movies", side_effect=listing_with_dangling),
-            mock.patch.object(watch_mod, "_identity", side_effect=fake_identity),
             mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
-            mock.patch.object(
-                watch_mod, "_scan_into_db", return_value=True
-            ) as scan_spy,
+            mock.patch.object(watch_mod, "_scan_into_db", return_value=True) as scan_spy,
             mock.patch("shrinkray.engine.watch.encode_with_quality"),
-        ) :
+        ):
             _isolated_lock(stack := ExitStack(), self.tmp.name)
             with stack:
                 watch_mod.watch(
@@ -737,10 +722,10 @@ class TestWatchInPlace(unittest.TestCase):
                     None,
                     once=True,
                     db_file=Path(self.tmp.name) / "test.db",
-                    submit=lambda p: (queued.append(p.name) or True),
+                    submit=lambda p: queued.append(p.name) or True,
                 )
         # the dangling entry did not kill the loop: the good movie got
-        # scanned and queued
+        # scanned and queued; the dangling one was skipped
         self.assertEqual(queued, ["good.mkv"], "the loop died on the dangling entry")
         self.assertEqual(scan_spy.call_count, 1)
 
@@ -784,7 +769,7 @@ class TestWatchInPlace(unittest.TestCase):
                     None,
                     once=True,
                     db_file=Path(self.tmp.name) / "test.db",
-                    submit=lambda p: (queued.append(p.name) or True),
+                    submit=lambda p: queued.append(p.name) or True,
                 )
         # the scan-failing file's guard returned False (stayed eligible, no
         # queue) and the OTHER movies were still queued: the loop is alive
