@@ -60,10 +60,12 @@ _LOCK_STALE_SECONDS = 300.0
 # bounded retries when the path is being stolen and re-claimed under us
 _CLAIM_ATTEMPTS = 8
 
-# the token this process wrote into each lock it holds, by lock path. The pid
-# cannot answer "is this still my lock?" - the server and a one-shot container
-# are both pid 1 - so ownership is compared by token (issue #383)
-_OWNED: dict[Path, str] = {}
+# the tokens this process wrote into each lock it holds, by lock path. The pid
+# cannot answer "is this still my lock?" - the server and a one-shot container are
+# both pid 1 - so ownership is compared by token (issue #383). A list per path,
+# because a holder that lost its slot and re-acquired it holds two acquisitions in
+# turn: the first must not release the second's lock.
+_OWNED: dict[Path, list[str]] = {}
 
 
 class EncodeBusyError(RuntimeError):
@@ -163,7 +165,7 @@ def _busy_message(output_dir: Path, lock: Path, silence: float) -> str:
     )
 
 
-def _claim(lock: Path, holder: str) -> bool:
+def _claim(lock: Path, holder: str) -> str | None:
     """Creates the lock file and stamps it, exclusively.
 
     Args:
@@ -171,17 +173,27 @@ def _claim(lock: Path, holder: str) -> bool:
         holder (str): A short label naming the encoder (job/watch/CLI).
 
     Returns:
-        bool: True when this call created it; False when it already exists.
+        str | None: The token written, or None when the file already exists.
+
+    Raises:
+        EncodeBusyError: The stamp could not be written (the lock is removed).
     """
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
-        return False
+        return None
     token = uuid.uuid4().hex[:12]
-    with os.fdopen(fd, "w", encoding="ascii") as handle:
-        handle.write(f"{os.getpid()} {holder} {token}")
-    _OWNED[lock] = token
-    return True
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(f"{os.getpid()} {holder} {token}")
+    except OSError as e:
+        # a full disk left an empty lock, which would read as a live claim for the
+        # whole stale window: remove it and report the real cause
+        with contextlib.suppress(OSError):
+            lock.unlink()
+        raise EncodeBusyError(f"could not write the encode lock '{lock}' ({e})") from e
+    _OWNED.setdefault(lock, []).append(token)
+    return token
 
 
 def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
@@ -203,13 +215,19 @@ def acquire_encode_slot(output_dir: Path, holder: str = "encode") -> Path:
         EncodeBusyError: When another live encoder holds the slot, or the stale
             lock could not be taken.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    # canonicalize BEFORE keying: a symlinked or relative path must not produce a
-    # second lock file for one directory
-    output_dir = output_dir.resolve()
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        # canonicalize BEFORE keying: a symlinked or relative path must not produce
+        # a second lock file for one directory
+        output_dir = output_dir.resolve()
+    except OSError as e:
+        # a read-only or unmounted library must not kill the watcher loop or
+        # surface as a CLI traceback: it is the same "cannot encode here" answer
+        raise EncodeBusyError(f"could not use '{output_dir}' ({e})") from e
     lock = _lock_path(output_dir)
     for _ in range(_CLAIM_ATTEMPTS):
-        if _claim(lock, holder):
+        token = _claim(lock, holder)
+        if token is not None:
             return lock
         try:
             silence = _silence_seconds(lock)
@@ -351,7 +369,7 @@ def _beat(lock: Path, token: str) -> str:
     return "ok"
 
 
-def release_encode_slot(lock: Path) -> None:
+def release_encode_slot(lock: Path, token: str | None = None) -> None:
     """Releases a held encode slot.
 
     Only the lock this process wrote is removed: a holder that lost its slot must
@@ -359,12 +377,26 @@ def release_encode_slot(lock: Path) -> None:
     two apart (the server and a one-shot container are both pid 1), so the token
     written at acquisition decides (issue #383).
 
+    The token is what identifies the ACQUISITION, not the path: one process can hold
+    a path more than once in turn (a holder that stalled past the window and
+    re-acquired), and releasing the older acquisition must not remove the newer
+    lock. Callers that hold their token pass it; a caller that passes only the path
+    releases the most recent acquisition.
+
     Args:
         lock (Path): The lock file path returned by acquire_encode_slot.
+        token (str | None): The token this acquisition wrote.
     """
-    token = _OWNED.pop(lock, None)
-    if token is None:
+    tokens = _OWNED.get(lock)
+    if not tokens:
         return
+    if token is None:
+        token = tokens[-1]
+    if token not in tokens:
+        return
+    tokens.remove(token)
+    if not tokens:
+        _OWNED.pop(lock, None)
     fields = _read_fields(lock)
     if fields is None:
         # unreadable, so ownership is unknown: leaving the file alone is the
@@ -397,7 +429,7 @@ def guard_encodes(output_dir: Path, holder: str = "encode") -> Iterator[Path]:
         Path: The lock file path.
     """
     lock = acquire_encode_slot(output_dir, holder)
-    token = _OWNED[lock]
+    token = _OWNED[lock][-1]
     stop = threading.Event()
 
     def _refresh() -> None:
@@ -430,4 +462,4 @@ def guard_encodes(output_dir: Path, holder: str = "encode") -> Iterator[Path]:
         refresher.join(timeout=5)
         if refresher.is_alive():
             log_warning(f"The encode-lock heartbeat for '{output_dir}' did not stop.")
-        release_encode_slot(lock)
+        release_encode_slot(lock, token)

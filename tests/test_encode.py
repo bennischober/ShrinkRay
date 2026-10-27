@@ -776,6 +776,58 @@ class TestEncodeLock(unittest.TestCase):
         messages = " ".join(str(c.args[0]) for c in error.call_args_list)
         self.assertIn("read-only", messages)
 
+    def test_an_unusable_directory_raises_busy_not_oserror(self):
+        """A read-only or unmounted library must reach the caller as
+        EncodeBusyError: the watcher catches only that (plus Cancelled and
+        RuntimeError), so a raw OSError would end the unattended loop (PR #409's
+        review finding 3)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(Path, "mkdir", side_effect=OSError("EROFS")),
+            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertIn("could not use", str(ctx.exception))
+        self.assertIn("EROFS", str(ctx.exception))
+
+    def test_a_failed_stamp_write_removes_the_empty_lock(self):
+        """A stamp write that fails (a full disk) must not leave an empty lock that
+        reads as a live claim for the whole stale window (PR #409's review
+        finding 2)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod.os, "fdopen", side_effect=OSError("ENOSPC")),
+            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertIn("could not write the encode lock", str(ctx.exception))
+        self.assertFalse(lock_mod._lock_path(self.out).exists())
+
+    def test_a_second_acquisition_on_one_path_survives_the_first_release(self):
+        """_OWNED must be per acquisition, not per path: a holder that lost its slot
+        and re-acquired it holds two acquisitions in turn, and the first release
+        must not delete the second's live lock (PR #409's review finding 1). With a
+        path-keyed dict the second acquisition overwrote the first's token and this
+        release unlinked a live lock."""
+        from shrinkray.engine import lock as lock_mod
+
+        first = lock_mod.acquire_encode_slot(self.out, holder="first")
+        # the first holder stalls past the window and a rival steals the slot
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(first, (old, old))
+        rival = lock_mod.acquire_encode_slot(self.out, holder="rival")
+        self.assertEqual(rival, first)
+        # the first holder now finishes, naming its OWN acquisition: the rival's
+        # lock must survive
+        first_token = lock_mod._OWNED[first][0]
+        lock_mod.release_encode_slot(first, first_token)
+        self.assertTrue(rival.exists(), "the rival's live lock was deleted")
+        self.assertEqual(rival.read_text().split()[1], "rival")
+        lock_mod.release_encode_slot(rival)
+        self.assertFalse(rival.exists())
+
     def test_a_failed_release_is_reported(self):
         """A release that cannot unlink is logged, not swallowed: the next encode
         of that directory would be refused for the whole stale window with no
@@ -981,21 +1033,28 @@ class TestEncodeLock(unittest.TestCase):
         """A lock that cannot be READ (an EIO or EACCES on a NAS mount) must not
         be reported as a rival taking the slot: the beat says "failed", warns,
         and keeps beating, so the holder's own lease is not abandoned on a
-        transient filesystem error (PR #409's review finding 1)."""
+        transient filesystem error (PR #409's review finding 1).
+
+        The real read path is exercised (a lock file the process cannot decode),
+        not a patched private helper: patching _read_fields left the conflation in
+        _read_fields itself unpinned (round-3 finding 5).
+        """
         from shrinkray.engine import lock as lock_mod
 
         with (
             mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
             mock.patch.object(lock_mod, "log_error") as error,
             mock.patch.object(lock_mod, "log_warning") as warning,
-            mock.patch.object(lock_mod, "_read_fields", return_value=None),
             lock_mod.guard_encodes(self.out, holder="test") as held,
         ):
+            # a corrupt stamp: read_text raises UnicodeDecodeError, not OSError
+            held.write_bytes(b"\xff\xfe\x00not-a-stamp")
             time.sleep(0.2)
         errors = " ".join(str(c.args[0]) for c in error.call_args_list)
         warnings = " ".join(str(c.args[0]) for c in warning.call_args_list)
         self.assertNotIn("Another encoder took the slot", errors)
-        self.assertIn("Could not refresh the encode lock", warnings)
+        self.assertIn("Could not read the encode lock", warnings)
+        self.assertTrue(held.exists())
         self.assertTrue(held.exists())
 
     def test_a_failed_heartbeat_is_reported(self):
@@ -1014,9 +1073,13 @@ class TestEncodeLock(unittest.TestCase):
         self.assertIn("Could not refresh the encode lock", messages)
 
     def test_a_beat_never_refreshes_a_lock_that_is_no_longer_ours(self):
-        """A holder that lost its slot must not keep the rival's lease alive:
-        the beat compares the token first, reports the loss as an error, and
-        stops (PR #389's review finding 2)."""
+        """A holder that lost its slot must not keep the rival's lease alive: the
+        beat compares the token BEFORE touching the file, reports the loss as an
+        error, and stops (PR #389's review finding 2).
+
+        The rival's mtime is asserted too: asserting only the content left
+        "utime before the token check" passing green (round-3 finding 4).
+        """
         from shrinkray.engine import lock as lock_mod
 
         with (
@@ -1024,11 +1087,15 @@ class TestEncodeLock(unittest.TestCase):
             mock.patch.object(lock_mod, "log_error") as error,
             lock_mod.guard_encodes(self.out, holder="test") as held,
         ):
-            # a rival steals the slot and writes its own stamp
+            # a rival steals the slot and writes its own stamp, then never beats
             held.write_text("1 rival fedcba987654")
+            rival_mtime = held.stat().st_mtime
             time.sleep(0.2)
+            self.assertEqual(held.read_text(), "1 rival fedcba987654", "the rival's stamp changed")
             self.assertEqual(
-                held.read_text(), "1 rival fedcba987654", "the rival's lease was refreshed"
+                held.stat().st_mtime,
+                rival_mtime,
+                "the rival's lease was refreshed by the holder that lost the slot",
             )
         messages = " ".join(str(c.args[0]) for c in error.call_args_list)
         self.assertIn("Another encoder took the slot", messages)

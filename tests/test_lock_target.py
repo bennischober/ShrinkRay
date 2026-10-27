@@ -51,17 +51,39 @@ class TestInPlaceSlotKeying(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_two_in_place_writers_of_one_library_conflict(self) -> None:
-        """A second in-place writer takes the slot on the SAME library root.
+    def test_two_writers_of_one_movie_directory_conflict(self) -> None:
+        """Two encoders of the SAME movie directory exclude each other, across
+        threads, which is how the watcher and the job collide in one process.
 
         The old shape locked each writer's own staging directory: two `mkdtemp`
         paths never collide, so both writers believed they were exclusive and
-        both encoded the same movie. Distinct staging paths are not the
-        contended resource - the library directory is (issue #230).
+        both encoded the same movie. The contended resource is the movie's own
+        folder - where the staging copy and the swap's renames happen (#230, #379).
+
+        A nested-call test proved only that the context manager re-enters; this one
+        holds the slot on a second thread, as the resident app does (round-3
+        finding 12).
         """
-        with guard_encodes(self.root, holder="one"), self.assertRaises(EncodeBusyError):
-            guard_encodes(self.root, holder="two").__enter__()
-        self.assertFalse(_lock_path(self.root).exists())
+        import threading
+
+        held = threading.Event()
+        release = threading.Event()
+
+        def first_writer() -> None:
+            with guard_encodes(self.source.parent, holder="one"):
+                held.set()
+                release.wait(timeout=5)
+
+        thread = threading.Thread(target=first_writer)
+        thread.start()
+        try:
+            self.assertTrue(held.wait(timeout=5), "the first writer never took the slot")
+            with self.assertRaises(EncodeBusyError):
+                guard_encodes(self.source.parent, holder="two").__enter__()
+        finally:
+            release.set()
+            thread.join(timeout=5)
+        self.assertFalse(_lock_path(self.source.parent).exists())
 
     def test_the_cli_parks_the_slot_on_the_movies_directory_in_place(self) -> None:
         """`_record_encodes` keys the slot on each MOVIE's own directory.
