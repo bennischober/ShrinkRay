@@ -401,6 +401,7 @@ def encode(
                 sample_every,
                 sample_count,
                 output_dir is None or replace,
+                in_place=output_dir is None,
                 cancel=cancel,
             )
     finally:
@@ -506,6 +507,7 @@ def _record_encodes(
     sample_every: float | None = None,
     sample_count: int | None = None,
     replace: bool = False,
+    in_place: bool = False,
     cancel: "threading.Event | None" = None,
 ) -> None:
     """Runs the encoding and records the results in the database.
@@ -528,6 +530,9 @@ def _record_encodes(
             handler (issue #326): the engine checks it between steps and
             terminates the running child tree, so the CLI unwinds and the
             TemporaryDirectory cleanup runs.
+        in_place (bool): True when no output directory was given, so the
+            directory the run writes into is its own private staging directory:
+            nothing else ever locks it, and only each movie's folder is contended.
     """
     # the config values are the defaults: a flag not given falls back to
     # quality.sample_every / quality.sample_count (issue #236 part 2 - the
@@ -599,12 +604,17 @@ def _record_encodes(
                         # (#379); two-directory mode keys on the output directory.
                         # `--output-dir X --replace` writes into X and swaps into the
                         # movie's folder, so BOTH are contended and both are taken
-                        # (outermost first, never nested per directory).
+                        # (in sorted path order, never nested per directory).
                         # one lock order, so two CLI runs cannot deadlock; the
                         # paths are RESOLVED before deduping, or two spellings of one
                         # directory (relative, a symlink) would take the same lock
                         # twice and the run would refuse itself
-                        if replace:
+                        if in_place:
+                            # the staging directory is this run's own private
+                            # temp dir: nothing else ever locks it, so guarding it
+                            # excludes no one - only the movie's folder is contended
+                            targets = [movie.parent.resolve()]
+                        elif replace:
                             targets = sorted({movie.parent.resolve(), output_dir.resolve()})
                         else:
                             targets = [output_dir]

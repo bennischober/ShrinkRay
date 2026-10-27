@@ -69,7 +69,8 @@ _OWNED: dict[Path, list[str]] = {}
 
 
 class EncodeBusyError(RuntimeError):
-    """Raised when another encoder already owns the output directory.
+    """Raised when another encoder already owns the directory, or when this one
+    cannot use it.
 
     The message names the holder so the user (or the job outcome) can say
     who is encoding and since when.
@@ -195,8 +196,9 @@ def _claim(lock: Path, holder: str) -> str | None:
         with os.fdopen(fd, "w", encoding="ascii") as handle:
             handle.write(f"{os.getpid()} {holder} {token}")
     except OSError as e:
-        # a full disk left an empty lock, which would read as a live claim for the
-        # whole stale window: remove it and report the real cause
+        # fdopen failed before taking ownership of the descriptor
+        with contextlib.suppress(OSError):
+            os.close(fd)
         with contextlib.suppress(OSError):
             lock.unlink()
         raise EncodeBusyError(f"could not write the encode lock '{lock}' ({e})") from e
@@ -302,7 +304,9 @@ def _steal(lock: Path) -> str:
         log_error(f"Could not inspect the stale encode lock '{lock}' ({e}).")
         return "error"
     if silence is not None and silence < _LOCK_STALE_SECONDS:
-        # the holder beat between the judgement and the rename: put it back
+        # the holder beat between the judgement and the rename: put it back. A
+        # restore that fails leaves no lock at this path to name a holder from, so
+        # the claimant reports the failure rather than a phantom busy (invariant 5).
         if not _restore(taken, lock):
             return "error"
         return "live"
@@ -315,8 +319,9 @@ def _restore(taken: Path, lock: Path) -> bool:
     """Puts a renamed-aside lock back at its path, if the path is free.
 
     `os.link` is exclusive, so a rival that claimed the path in the meantime is
-    never replaced. The caller turns a failure into an error naming the cause, never
-    into "another encoder" - that would name a phantom holder (invariant 5).
+    never replaced. A failed restore is logged and reported to the caller as an error
+    naming the cause, never as "another encoder" - that would name a phantom holder
+    (invariant 5).
 
     Args:
         taken (Path): The renamed-aside lock file.

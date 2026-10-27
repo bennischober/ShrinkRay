@@ -85,13 +85,13 @@ class TestInPlaceSlotKeying(unittest.TestCase):
             thread.join(timeout=5)
         self.assertFalse(_lock_path(self.source.parent).exists())
 
-    def test_the_cli_parks_the_slot_on_the_movies_directory_in_place(self) -> None:
-        """`_record_encodes` keys the slot on each MOVIE's own directory.
+    def test_the_cli_parks_the_slot_only_on_the_movies_directory_in_place(self) -> None:
+        """An in-place run (`in_place=True`) keys the slot on the MOVIE's folder ONLY.
 
         That is where the staging copy and the swap's two renames happen, so it is
-        the one key the job and the watcher can agree on (#379). Asserted at the
-        seam: the guard receives the movie's folder, never the staging directory
-        or the scanned root.
+        the one key the job and the watcher can agree on (#379). The directory the
+        run writes into is its own private temp dir, which nothing else ever locks:
+        guarding it would exclude no one, so it is not taken (round-6 M1).
         """
         from shrinkray import __main__ as cli
 
@@ -122,12 +122,9 @@ class TestInPlaceSlotKeying(unittest.TestCase):
                 threads=None,
                 db_file=None,
                 replace=True,
+                in_place=True,
             )
-        # both contended directories: the staging path the run writes into, and
-        # the movie's folder the swap renames inside (sorted, one lock order)
-        self.assertEqual(
-            captured["dirs"], sorted([self.source.parent, self.root / ".shrinkray-stage"])
-        )
+        self.assertEqual(captured["dirs"], [self.source.parent])
         self.assertEqual(captured["holder"], "encode-cli")
 
     def test_the_cli_guards_the_output_dir_too_when_replacing(self) -> None:

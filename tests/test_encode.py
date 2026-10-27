@@ -1061,7 +1061,6 @@ class TestEncodeLock(unittest.TestCase):
         self.assertNotIn("Another encoder took the slot", errors)
         self.assertIn("Could not read the encode lock", warnings)
         self.assertTrue(held.exists())
-        self.assertTrue(held.exists())
 
     def test_a_failed_heartbeat_is_reported(self):
         """A beat that cannot write is logged, never swallowed: the holder must
