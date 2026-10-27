@@ -18,7 +18,10 @@ Usage (from the repository root, with the pinned tools on PATH):
     uv run scripts/vmaf_parity.py --pair ref.mkv dis.mkv --hdr
 
 Each pair measures ShrinkRay's score and ab-av1's score on the same two files and
-prints the delta. The tolerance is |delta| <= 0.1 VMAF (issue #306); an HDR pair is
+prints the delta. Before scoring, both sides' video frame counts are compared: a
+pair whose counts differ is not comparing the same frames, so it is reported as
+unmeasured and fails the run instead of printing a meaningless number (issue #408).
+The tolerance is |delta| <= 0.1 VMAF (issue #306); an HDR pair is
 measured TWICE - with tone-mapping on (the shipped ShrinkRay path, REPORTED against
 ab-av1's PQ-direct score as the documented deviation in docs/encode-decision.md)
 and with tone-mapping off (the like-for-like comparison, HELD). Results append to
@@ -126,6 +129,113 @@ def ab_av1_vmaf(reference: Path, distorted: Path, crop: tuple[int, int, int, int
     return float(lines[-1])
 
 
+def video_frame_count(path: Path) -> int | None:
+    """Counts a file's video frames, the check that catches a misaligned pair.
+
+    A pair whose sides have different frame counts is not comparing the same
+    frames, so its score is meaningless however closely the two tools agree
+    (issue #408). Counting decodes the file, which is why it belongs to this
+    harness and not to every measurement the product runs.
+
+    Args:
+        path (Path): The media file.
+
+    Returns:
+        int | None: The video frame count, or None when ffprobe could not report
+            one (missing binary, unreadable file, no video stream).
+    """
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-count_frames",
+        "-show_entries",
+        "stream=nb_read_frames",
+        "-of",
+        "default=nw=1:nk=1",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=7200)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"ffprobe could not count '{path}': {error}")
+        return None
+    if proc.returncode != 0:
+        print(f"ffprobe could not count '{path}': {proc.stderr.strip()[-200:]}")
+        return None
+    try:
+        return int(proc.stdout.strip())
+    except ValueError:
+        print(f"ffprobe reported no frame count for '{path}': {proc.stdout.strip()!r}")
+        return None
+
+
+def pair_dimensions(reference: Path, distorted: Path) -> tuple[int | None, int | None, int | None]:
+    """Reads the geometry and bit depth the recipe is derived from.
+
+    The model and scale follow the geometry being scored (issue #309), and the analysis
+    pixel format follows the SOURCE's bit depth, which is what `engine/pipeline.py`
+    passes as `source_bit_depth`. Taking the bit depth from the distorted file instead
+    scores a 10-bit source's 8-bit encode at 8-bit, where ab-av1 scores it at 10-bit -
+    measured as a 0.1736 VMAF gap on the 2160p pair.
+
+    Args:
+        reference (Path): The pristine source, whose bit depth sets the pixel format.
+        distorted (Path): The encoded file, whose dimensions select model and scale.
+
+    Returns:
+        tuple: (width, height, bit_depth), each None when ffprobe cannot report it.
+    """
+    width, height = _video_dimensions(distorted)
+    return width, height, _video_bit_depth(reference)
+
+
+def _video_dimensions(path: Path) -> tuple[int | None, int | None]:
+    """Reads a file's video frame width and height."""
+    values = _probe_video_stream(path, "width,height")
+    try:
+        return int(values["width"]), int(values["height"])
+    except (KeyError, ValueError):
+        return None, None
+
+
+def _video_bit_depth(path: Path) -> int | None:
+    """Reads a file's video bit depth from its pixel format."""
+    values = _probe_video_stream(path, "pix_fmt")
+    pix_fmt = values.get("pix_fmt")
+    if not pix_fmt:
+        return None
+    return 10 if "10" in pix_fmt else 8
+
+
+def _probe_video_stream(path: Path, entries: str) -> dict[str, str]:
+    """Reads selected fields of a file's first video stream via ffprobe."""
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        f"stream={entries}",
+        "-of",
+        "default=nw=1",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    values: dict[str, str] = {}
+    for line in proc.stdout.strip().splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            values[key] = value
+    return values
+
+
 def measure_ours(
     reference: Path,
     distorted: Path,
@@ -145,7 +255,8 @@ def measure_ours(
             recipe is what the caches key on, so recording it keeps the result
             comparable with a later run).
     """
-    recipe = vmaf_recipe(crop=crop, hdr=hdr)
+    width, height, bit_depth = pair_dimensions(reference, distorted)
+    recipe = vmaf_recipe(crop=crop, hdr=hdr, width=width, height=height, bit_depth=bit_depth)
     with tempfile.TemporaryDirectory(prefix="shrinkray_parity_") as tmp:
         score = measure_vmaf(
             distorted,
@@ -196,13 +307,43 @@ def main() -> int:
                 print(f"MISSING: {path}")
                 return 1
 
-    rows: list[tuple[str, float, float, str, str]] = []
+    rows: list[tuple[str, float | None, float | None, str, str]] = []
     failures = 0
     for index, (reference, distorted) in enumerate(pairs):
         label = labels[index]
         crop = crops[index]
         hdr = hdrs[index]
         print(f"\n=== {label} ===")
+        reference_frames = video_frame_count(reference)
+        distorted_frames = video_frame_count(distorted)
+        print(f"frames: reference {reference_frames}, distorted {distorted_frames}")
+        if reference_frames is None or distorted_frames is None:
+            print(
+                f"{label}: UNMEASURABLE - the frame counts could not be read, "
+                "so frame alignment cannot be established"
+            )
+            failures += 1
+            rows.append((f"{label} [frame counts unreadable]", None, None, "unmeasured", ""))
+            continue
+        if reference_frames != distorted_frames:
+            # A count mismatch means the two sides are not comparing the same
+            # frames: the score would be meaningless even where both tools agree
+            # to four decimals (issue #408 measured 17.71 on a 1448/1445 pair).
+            print(
+                f"{label}: MISALIGNED - {reference_frames} vs {distorted_frames} frames "
+                f"(delta {reference_frames - distorted_frames:+d}); not scoring this pair"
+            )
+            failures += 1
+            rows.append(
+                (
+                    f"{label} [misaligned: {reference_frames} vs {distorted_frames} frames]",
+                    None,
+                    None,
+                    "unmeasured",
+                    "",
+                )
+            )
+            continue
         ours, recipe = measure_ours(reference, distorted, crop, hdr)
         theirs = ab_av1_vmaf(reference, distorted, crop)
         delta = abs(ours - theirs)
@@ -232,6 +373,9 @@ def main() -> int:
         fh.write("| pair | ShrinkRay | ab-av1 | delta | verdict | recipe |\n")
         fh.write("|---|---|---|---|---|---|\n")
         for label, ours, theirs, note, recipe in rows:
+            if note == "unmeasured" or ours is None or theirs is None:
+                fh.write(f"| {label} | — | — | — | unmeasured | — |\n")
+                continue
             delta = abs(ours - theirs)
             verdict = note or ("PASS" if delta <= TOLERANCE else "FAIL")
             fh.write(
@@ -240,8 +384,14 @@ def main() -> int:
         fh.write("\n")
 
     print(f"\nresults appended to {RESULT_FILE}")
+    unmeasured = sum(1 for row in rows if row[3] == "unmeasured")
     if failures:
-        print(f"{failures} comparison(s) outside the {TOLERANCE} tolerance")
+        # an unmeasured pair was never compared, so it is not "outside the
+        # tolerance": the two outcomes are counted apart
+        print(
+            f"{failures} pair(s) did not produce a usable comparison "
+            f"({unmeasured} unmeasured, {failures - unmeasured} outside the {TOLERANCE} tolerance)"
+        )
         return 1
     print(f"every held comparison is within {TOLERANCE}")
     return 0

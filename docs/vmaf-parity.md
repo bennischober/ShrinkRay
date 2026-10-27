@@ -15,10 +15,13 @@ HandBrake encode path, because every synthetic SDR pair is encoded with
 ffmpeg/libx264 (which preserves colour tags and frame counts) while production
 encodes with HandBrakeCLI (which does neither - see #258 and #408).
 
-That is not hypothetical. The first real run of this procedure measured a normal
-1080p HandBrake encode at VMAF 17.71 while the synthetic pairs all read 0.0000
-delta, because the delta is the *agreement* between two tools, not the correctness
-of either. Print the frame counts (step 7) before trusting any number.
+That is not hypothetical. The first real run of this procedure measured a pair at VMAF
+17.71 while the synthetic pairs all read 0.0000 delta, because the delta is the
+*agreement* between two tools, not the correctness of either. That pair was a harness
+artifact (a `-ss` copy-cut reference against a `--start-at` HandBrake segment, which cover
+different content windows) and its frame counts differed - 729 against 719 (issue #408). The
+script now counts frames before scoring and refuses a pair whose counts do not match; a
+production-shaped pair is aligned.
 
 The comparison is always the **measurement**, not the search: for the same
 (reference, distorted) pair, `measure_vmaf(distorted, reference)` against
@@ -118,6 +121,29 @@ The same command on a 2160p source. Above 2560x1440 both sides switch to
 threshold). A 4K scope film cropped below 1440 lines stays on the 1080p model at
 native size, exactly as ab-av1 scores it - pass `--crop` so both sides agree.
 
+**Check the recipe line, not just the delta.** The script derives the model and the
+analysis pixel format from the pair itself, and it prints them:
+
+    recipe: vmaf=2;model=vmaf_4k_v0.6.1.json;scale=none;fmt=yuv420p10le;hdr=no
+
+Two rules decide that line, and getting either wrong produces a plausible number that
+is not a parity result:
+
+- **Model and scale follow the DISTORTED file's dimensions** (post-crop), so a 2160p pair
+  uses `vmaf_4k_v0.6.1`. This is ab-av1's rule (#309) and what
+  `engine/pipeline.py` passes. Until #421 the harness called `vmaf_recipe()` with no
+  dimensions, so every pair - including 4K ones - was scored with the 1080p model, and
+  nothing noticed because every previously measured pair was 1080p.
+- **The analysis pixel format follows the SOURCE's bit depth**, because that is what
+  `engine/pipeline.py` passes as `source_bit_depth`. A 10-bit source whose encode came
+  out 8-bit is scored at 10-bit on both sides, as ab-av1 does. Scoring it at 8-bit
+  measured **97.9706 vs ab-av1's 98.1441 (delta 0.1736)** - outside the 0.1 tolerance -
+  on the 2160p pair.
+
+If the printed recipe does not match ab-av1's own `format=` and `model=` on the same
+pair, the run is measuring something else. Compare the two command lines (the script
+prints ab-av1's), do not read the delta.
+
 ### 5. An HDR10 pair
 
 ```sh
@@ -154,13 +180,12 @@ uv run scripts/vmaf_parity.py --pair /tmp/sample.mkv /tmp/sample_enc.mkv \
   --label "probe sample"
 ```
 
-### 7. The full-file pair (the one that found #408)
+### 7. The full-file pair
 
-The verification path compares a HandBrake output against the source **with audio**, and
-that is where frame alignment can break: HandBrake can drop leading frames when its
-input starts at a non-zero timestamp, which collapses the score (~92 to ~17 measured on
-real content) while both tools still agree with each other. **Always print the frame
-counts** before trusting a number:
+The verification path compares a HandBrake output against the source **with audio**, so
+this is the pair that exercises it. **Always print the frame counts** before trusting a
+number - the script now does this for every pair and refuses to score one whose counts
+differ:
 
 ```sh
 for f in ref.mkv dis.mkv; do
@@ -174,8 +199,17 @@ done
 ```
 
 A frame-count mismatch means the two sides are not comparing the same frames, and the
-score is meaningless whatever the delta says. Report it as a finding (issue #408), not as
-a parity failure.
+score is meaningless whatever the delta says. `scripts/vmaf_parity.py` reports such a pair
+as **unmeasured** and fails the run instead of printing a number for it.
+
+**Build this pair from whole files.** The one shape that reliably produces a mismatch is a
+reference cut with `-ss` (whose keyframe-accurate copy cut starts on an earlier keyframe, so it
+holds more content than the window asked for) measured against a HandBrake segment made with
+`--start-at`/`--stop-at` (which trims to the exact frame). The two sides then cover
+different content windows and their frame counts differ. Production produces neither shape:
+`build_encode_command` has no trim options, and the verification compares a whole output
+against a whole source. That shape is a harness artifact and its score must never be reported
+as a parity result (issue #408).
 
 ## Reporting the run
 
@@ -204,17 +238,24 @@ v0.11.7:
 | zero-based window, video-only | 92.6662 | 92.6662 | 0.0000 | 729 / 729 |
 | window with audio, HandBrake segment | **17.7090** | 17.7090 | 0.0000 | **729 / 719** |
 
-The second row is the point of this whole procedure: a perfect 0.0000 delta on a
-meaningless score. The frame counts are what caught it (issue #408).
+The second row is a perfect 0.0000 delta on a meaningless score: 729 frames measured
+against 719 compare different content, so neither number describes the encode. It is kept
+here as the reason the frame-count gate exists, **not** as a parity result - the pair was
+built with a `-ss` copy-cut reference and a `--start-at` HandBrake segment, a shape
+production never produces (issue #408). The script now reports such a pair as unmeasured
+and fails the run.
+
+A production-shaped full-file pair, measured the same way on the same source, is aligned
+and scores normally: 2882 / 2882 frames, VMAF 96.10.
 
 ## What this run cannot tell you
 
 - **Whether the two sides compare the same frames.** This is the caveat that matters
-  most, and it is measured, not theorised: on real content a HandBrake output with 719
+  most, and the script now checks it before scoring: a pair whose frame counts differ is
+  reported as unmeasured and fails the run. On real content a HandBrake output with 719
   frames against a 729-frame reference scored **17.71**, and both tools reported the
-  same wrong number. Check the frame counts (step 7) before reading any delta. Parity
-  between the tools says they measure the same thing, never that they measure the right
-  thing (issue #408).
+  same wrong number. Parity between the tools says they measure the same thing, never
+  that they measure the right thing (issue #408).
 - **Whether the encode itself is faithful.** It measures a file you already have
   against its source. If HandBrake converted the colours on the way out (untagged
   source, #258), both measurements agree with each other and both are low - parity
