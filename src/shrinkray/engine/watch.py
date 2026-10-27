@@ -9,10 +9,10 @@ logic as the encode/plan commands and encodes them (source stays untouched
 import contextlib
 import ctypes
 import os
+import sqlite3
 import struct
 import sys
 import tempfile
-import sqlite3
 import threading
 import time
 from collections.abc import Callable
