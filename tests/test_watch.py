@@ -689,6 +689,87 @@ class TestWatchInPlace(unittest.TestCase):
         loose = find_new_movies(self.inbox, [".mkv", RETAINED_SUFFIX], set())
         self.assertNotIn(retained, loose, "a loose extension list picked it up")
 
+    def test_a_filesystem_error_in_the_swap_ends_not_the_watcher(self) -> None:
+        """Issue #427: _swap's filesystem work (stage, the db writes, the
+        rename) raises OSError - a full disk, a permission change, a mount
+        dropping - and the exception escaped watch()'s handlers (they caught
+        only EncodeBusyError/Cancelled/RuntimeError), killing the watcher
+        thread while /api/status kept reporting it as running. The #260 rule
+        covers the filesystem too: the failure is logged with the file's
+        name and the loop continues to the next movie.
+        """
+        from shrinkray.engine import watch as watch_mod
+
+        inbox = self.inbox
+        # the in-place form: the swap runs (the two-directory form never
+        # reaches _swap - the first draft of this test passed vacuously there)
+        swap_fails = inbox / "swapfail.mkv"
+        swap_fails.write_bytes(b"x" * 100)
+        old = time.time() - 7200
+        for f in (self.movie, swap_fails):
+            os.utime(f, (old, old))  # stable
+        processed: list = []
+
+        staged_outputs: list[Path] = []
+
+        def fake_quality(m, o, **kwargs):
+            processed.append(m.name)
+            # the staged output must EXIST with content smaller than the
+            # source: the swap's size gate passes and the stage patch fires
+            o.write_bytes(b"e" * 50)
+            staged_outputs.append(o)
+            return engine_plan.QualityResult(
+                input=m,
+                output=o,
+                success=True,
+                target_vmaf=96.0,
+                chosen_crf=22,
+                achieved_vmaf=96.0,
+                probes=[],
+                input_size=1000,
+                output_size=50,
+                error=None,
+                input_bit_depth=8,
+            )
+
+        def failing_stage(*args, **kwargs):
+            raise OSError("No space left on device")
+
+        import time as _time
+
+        _t0 = _time.monotonic()
+        stack = ExitStack()
+        with (
+            mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
+            mock.patch("shrinkray.replace.stage", side_effect=failing_stage),
+            # the failed swaps churn the staging dir, whose mtime resets the
+            # watcher's startup quiet-window (60 s): the loop's survival is
+            # the test's subject, not the waiter's patience
+            mock.patch.object(
+                watch_mod,
+                "_FsWaiter",
+                lambda *a, **k: type(
+                    "W",
+                    (),
+                    {
+                        "wait": lambda self, *a, **k: None,
+                        "start": lambda self: None,
+                        "stop": lambda self: None,
+                    },
+                )(),
+            ),
+        ):
+            _isolated_lock(stack, self.tmp.name)
+            with stack:
+                watch_mod.watch([inbox], None, once=True)
+        print(f"PHASES: total={_time.monotonic() - _t0:.1f}s")
+        # BOTH processed in place: the swap's OSError did not end the loop
+        self.assertEqual(
+            sorted(processed),
+            ["one.mkv", "swapfail.mkv"],
+            "the loop died on the swap's OSError; the good one was never processed",
+        )
+
     def test_a_staging_copy_is_never_a_candidate(self) -> None:
         """A staging copy must not be encoded while the swap is in flight."""
         from shrinkray.engine.watch import find_new_movies

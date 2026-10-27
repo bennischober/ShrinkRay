@@ -12,6 +12,7 @@ import os
 import struct
 import sys
 import tempfile
+import sqlite3
 import threading
 import time
 from collections.abc import Callable
@@ -839,6 +840,17 @@ def watch(
                         # file is already in `known` (marked above), so it is
                         # not retried until it changes; whether it should be
                         # retried at all is #231's failure-memory decision.
+                        log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
+                        continue
+                    except (OSError, sqlite3.Error) as e:
+                        # the swap's filesystem/database work (issue #427): a
+                        # full disk during stage, a permission change, a mount
+                        # dropping mid-rename, a database write failing - is a
+                        # PER-FILE failure under the same #260 rule as the
+                        # RuntimeError branch above: logged with the file's
+                        # name and the watcher continues. Without this branch
+                        # the exception kills the watcher thread while
+                        # /api/status keeps reporting it as running.
                         log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
                         continue
 
