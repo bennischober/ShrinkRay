@@ -694,7 +694,7 @@ def watch(
                     for root in roots
                     for movie in find_new_movies(root, extensions, known)
                 ]
-                for movie_root, movie in candidates:
+                for _root, movie in candidates:
                     if stop_event is not None and stop_event.is_set():
                         log("Watch stopped (stop event set).")
                         return
@@ -738,22 +738,14 @@ def watch(
                     # no queue in play (a stateless/test run): the direct path
                     # below is the engine's own, and it records through `record`
                     try:
-                        # hold the encode slot: encode_with_quality does not
-                        # take it itself; a running CLI/job encode makes the
-                        # watcher retry this movie on the next pass. In place
-                        # the slot is keyed on the LIBRARY ROOT THIS MOVIE
-                        # came from (issue #230's contract: one lock identity
-                        # per library root, taken by all three writers - the
-                        # CLI locks the root it scanned, the job locks the root
-                        # it stages in; a per-movie key let a folder-form CLI
-                        # run and a job encode one file concurrently, both
-                        # staging to the same deterministic swap path). The
-                        # review on this PR (finding 2): roots[0] guarded a
-                        # root-B movie with a root-A lock, so a CLI scanning
-                        # root B found no lock - the key must be the movie's
-                        # own root. One slot at a time, never nested - the
-                        # pass walks roots sequentially.
-                        lock_target = movie_root if in_place_mode else target_dir
+                        # hold the encode slot on the MOVIE'S OWN DIRECTORY:
+                        # that is where the staging copy and the swap's two
+                        # renames happen, so it is the one key every writer can
+                        # agree on. A library root is not an identity - a
+                        # watcher on /media and a job on /media/Movies would
+                        # take two different locks for one file (#379). One
+                        # slot at a time, never nested: the pass is sequential.
+                        lock_target = movie.parent if in_place_mode else target_dir
                         with guard_encodes(lock_target, holder="watch"):
                             result = encode_with_quality(
                                 movie,

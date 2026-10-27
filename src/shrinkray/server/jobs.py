@@ -965,25 +965,6 @@ def _encode_measured(
 
     outcomes: list[dict] = []
     total = len(movies)
-    # the in-place lock identity (issue #230): the scanned root the staging
-    # directory sits in - the SAME root the CLI locks in folder form and the
-    # watcher locks per movie (its movie's own root), so all three writers
-    # contend on one identity. The review on this PR (finding 2): a
-    # multi-path payload's movies under the OTHER paths were guarded by the
-    # first path's lock - the key is the payload path that CONTAINS the
-    # movie, chosen per movie in the loop; resolved here so a symlinked or
-    # relative root cannot split one directory into two lock files
-    # (finding 3). execute_encode early-returns on an empty payload, so
-    # first is never empty here; the raise documents that instead of
-    # inventing a key.
-    payload_roots: list[Path] = []
-    if in_place:
-        first = payload_paths(payload)
-        if not first:
-            raise RuntimeError("no paths in payload")
-        payload_roots = [(p.resolve() if p.is_dir() else p.parent.resolve()) for p in first]
-    else:
-        lock_target = output_dir
     encoded_paths: set[str] = (
         set() if payload.get("overwrite") else finished_movies(connection, movies, output_dir)
     )
@@ -1013,25 +994,14 @@ def _encode_measured(
                 }
             )
         try:
-            # hold the encode slot: encode_with_quality does not take it
-            # itself, and this loop previously took NO slot at all - a CLI
-            # encode running beside the app encoded the same file
-            # concurrently (issue #230). Keyed on the payload root that
-            # CONTAINS this movie, resolved (see the payload_roots note
-            # above) - one lock identity per library root, taken by all
-            # three writers: the CLI locks the root it scanned, the
-            # watcher locks the movie's own root; the staging root is the
-            # contended resource (the swaps rename inside it).
-            if in_place:
-                movie_path = movie.resolve()
-                # the DEEPEST containing root: a payload naming a root and
-                # a subfolder of it must key the subfolder's movie on the
-                # SUBFOLDER (the identity the CLI scanning that subfolder
-                # would lock), never the shallower root
-                containing = [r for r in payload_roots if movie_path.is_relative_to(r)]
-                lock_target = (
-                    max(containing, key=lambda r: len(r.parts)) if containing else movie_path.parent
-                )
+            # hold the encode slot on the MOVIE'S OWN DIRECTORY (in place): that
+            # is where the staging copy and the swap's two renames happen, so it
+            # is the one key the CLI, the watcher and this job can all agree on.
+            # A library root is not an identity - a job on /media and a watcher
+            # on /media/Movies take two different locks for one file (#379).
+            # Two-directory mode keys on the output directory it writes into.
+            # Per movie, never nested.
+            lock_target = movie.parent if in_place else output_dir
             with guard_encodes(lock_target, holder="encode-job"):
                 result = encode_with_quality(
                     movie,
