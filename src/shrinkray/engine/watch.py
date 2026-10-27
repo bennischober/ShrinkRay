@@ -752,7 +752,17 @@ def watch(
                         # (e.g. the same file is already queued) and the file
                         # stays eligible for a later pass.
                         if _scan_into_db(movie, roots[0], db_file):
-                            if submit(movie):
+                            try:
+                                queued = submit(movie)
+                            except sqlite3.Error as e:
+                                # the enqueue's database write failed (a read-only
+                                # or full db, issue #427): a per-file failure -
+                                # the file stays eligible, retried next pass
+                                log_error(
+                                    f"Queuing '{movie.name}' failed: {e} => retried next pass."
+                                )
+                                continue
+                            if queued:
                                 log(f"Queued '{movie.name}' for the backlog.")
                             continue
                         # the scan failed (unreadable file): log and retry when
@@ -846,14 +856,23 @@ def watch(
                                 log_error(f"Encoding '{movie.name}' failed: {result.error}")
                     except EncodeBusyError as e:
                         log(f"Skipping '{movie.name}' for now: {e} => retry next pass.")
-                        known.discard(_identity(movie))  # eligible again next pass
+                        try:
+                            known.discard(_identity(movie))
+                        except OSError:
+                            # the file vanished mid-pass (issue #427): there is
+                            # nothing to retry - the next scan re-decides it
+                            pass
                         continue
                     except Cancelled as e:
                         # disk watchdog (free space hit the floor) or user cancel:
                         # partial output already removed by the engine; retry
                         # when space freed up (or the user re-ran watch)
                         log_error(f"Encoding '{movie.name}' cancelled: {e} => retry next pass.")
-                        known.discard(_identity(movie))
+                        try:
+                            known.discard(_identity(movie))
+                        except OSError:
+                            # the file vanished mid-pass (issue #427)
+                            pass
                         continue
                     except RuntimeError as e:
                         # a per-file failure (unreadable, unprobeable, encode
@@ -867,8 +886,9 @@ def watch(
                         continue
                     except (OSError, sqlite3.Error) as e:
                         # the DIRECT path's swap and encode filesystem work
-                        # (issue #427): a full disk during staging, a database
-                        # write failing - a PER-FILE failure under the same
+                        # (issue #427): the stat/rename/unlink and db-write
+                        # calls that are not SwapError-wrapped (stage/swap's
+                        # own causes convert) - a PER-FILE failure under the same
                         # #260 rule as the RuntimeError branch above: logged
                         # with the file's name and the watcher continues. This
                         # branch covers the stateless/direct form; the QUEUE

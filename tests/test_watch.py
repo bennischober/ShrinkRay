@@ -689,14 +689,117 @@ class TestWatchInPlace(unittest.TestCase):
         loose = find_new_movies(self.inbox, [".mkv", RETAINED_SUFFIX], set())
         self.assertNotIn(retained, loose, "a loose extension list picked it up")
 
+    def test_a_dangling_entry_is_skipped_not_fatal(self) -> None:
+        """Issue #427's discovery-class escape, on the RESIDENT shape
+        (submit set): a file listed by the directory scan that vanishes
+        before its identity stat (a rename/delete race) raised out of
+        find_new_movies and killed the watcher thread. The guard skips it;
+        the loop continues and the surviving movie is queued.
+        """
+        from shrinkray.engine import watch as watch_mod
+
+        inbox = self.inbox
+        good = inbox / "good.mkv"
+        good.write_bytes(b"x" * 100)
+        old = time.time() - 7200
+        os.utime(good, (old, old))
+
+        real_list = watch_mod.find_new_movies
+        queued: list[str] = []
+
+        def listing_with_dangling(root, extensions, known):
+            # the directory listing's shape: the entries exist at scan time,
+            # one of them vanishes before its identity stat
+            found = real_list(root, extensions, set())
+            found.append(inbox / "vanished.mkv")
+            return found
+
+        real_identity = watch_mod._identity
+
+        def fake_identity(path):
+            if path.name == "vanished.mkv":
+                raise FileNotFoundError(f"{path} vanished mid-listing")
+            return real_identity(path)
+
+        with (
+            mock.patch.object(watch_mod, "find_new_movies", side_effect=listing_with_dangling),
+            mock.patch.object(watch_mod, "_identity", side_effect=fake_identity),
+            mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
+            mock.patch.object(
+                watch_mod, "_scan_into_db", return_value=True
+            ) as scan_spy,
+            mock.patch("shrinkray.engine.watch.encode_with_quality"),
+        ) :
+            _isolated_lock(stack := ExitStack(), self.tmp.name)
+            with stack:
+                watch_mod.watch(
+                    [inbox],
+                    None,
+                    once=True,
+                    db_file=Path(self.tmp.name) / "test.db",
+                    submit=lambda p: (queued.append(p.name) or True),
+                )
+        # the dangling entry did not kill the loop: the good movie got
+        # scanned and queued
+        self.assertEqual(queued, ["good.mkv"], "the loop died on the dangling entry")
+        self.assertEqual(scan_spy.call_count, 1)
+
+    def test_a_scan_filesystem_error_keeps_the_file_eligible(self) -> None:
+        """Issue #427's scan-class escape, on the RESIDENT shape: the scan's
+        own filesystem reads (scan.py's getsize/stat) raise on a file that
+        vanished or a mount that dropped; the escape killed the watcher
+        thread. The guard returns False - the file stays eligible and the
+        loop continues; the queued movie proves the loop is alive.
+        """
+        from shrinkray.engine import watch as watch_mod
+
+        inbox = self.inbox
+        scanfail = inbox / "scanfail.mkv"
+        scanfail.write_bytes(b"x" * 100)
+        good = inbox / "good.mkv"
+        good.write_bytes(b"x" * 100)
+        old = time.time() - 7200
+        for f in (scanfail, good, self.movie):
+            os.utime(f, (old, old))
+
+        # the guard UNDER TEST is _scan_into_db's OSError handling: patch its
+        # INNER call (the scan's process_movie) - the failing file raises
+        # OSError (the guard's catch); the good file returns a scan result
+        # (a 100-byte junk file cannot run the real ffprobe scan)
+        queued: list[str] = []
+
+        def failing_scan(movie, root, config, db_file=None):
+            if movie.name == "scanfail.mkv":
+                raise OSError("Input/output error")
+            return {"path": str(movie)}, None
+
+        with (
+            mock.patch("shrinkray.engine.watch.process_movie", side_effect=failing_scan),
+            mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
+        ):
+            _isolated_lock(stack := ExitStack(), self.tmp.name)
+            with stack:
+                watch_mod.watch(
+                    [inbox],
+                    None,
+                    once=True,
+                    db_file=Path(self.tmp.name) / "test.db",
+                    submit=lambda p: (queued.append(p.name) or True),
+                )
+        # the scan-failing file's guard returned False (stayed eligible, no
+        # queue) and the OTHER movies were still queued: the loop is alive
+        self.assertNotIn("scanfail.mkv", queued, "the failed scan's file was queued")
+        self.assertIn("good.mkv", queued, "the loop died on the scan's OSError")
+
     def test_a_filesystem_error_in_the_swap_ends_not_the_watcher(self) -> None:
         """Issue #427: _swap's filesystem work (stage, the db writes, the
         rename) raises OSError - a full disk, a permission change, a mount
         dropping - and the exception escaped watch()'s handlers (they caught
         only EncodeBusyError/Cancelled/RuntimeError), killing the watcher
-        thread while /api/status kept reporting it as running. The #260 rule
-        covers the filesystem too: the failure is logged with the file's
-        name and the loop continues to the next movie.
+        thread while /api/status reported it stopped - the library silently
+        stopped being watched until a restart. The #260 rule covers the
+        filesystem too: the failure is logged with the file's name and the
+        loop continues to the next movie.
         """
         from shrinkray.engine import watch as watch_mod
 
@@ -708,7 +811,7 @@ class TestWatchInPlace(unittest.TestCase):
         old = time.time() - 7200
         for f in (self.movie, swap_fails):
             os.utime(f, (old, old))  # stable
-        processed: list = []
+        processed: list[str] = []
 
         def fake_quality(m, o, **kwargs):
             processed.append(m.name)
@@ -723,7 +826,7 @@ class TestWatchInPlace(unittest.TestCase):
                 chosen_crf=22,
                 achieved_vmaf=96.0,
                 probes=[],
-                input_size=1000,
+                input_size=100,
                 output_size=50,
                 error=None,
                 input_bit_depth=8,
