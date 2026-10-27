@@ -51,30 +51,54 @@ class TestInPlaceSlotKeying(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_two_in_place_writers_of_one_library_conflict(self) -> None:
-        """A second in-place writer takes the slot on the SAME library root.
+    def test_two_writers_of_one_movie_directory_conflict(self) -> None:
+        """Two encoders of the SAME movie directory exclude each other, across
+        threads, which is how the watcher and the job collide in one process.
 
         The old shape locked each writer's own staging directory: two `mkdtemp`
         paths never collide, so both writers believed they were exclusive and
-        both encoded the same movie. Distinct staging paths are not the
-        contended resource - the library directory is (issue #230).
+        both encoded the same movie. The contended resource is the movie's own
+        folder - where the staging copy and the swap's renames happen (#230, #379).
+
+        A nested-call test proved only that the context manager re-enters; this one
+        holds the slot on a second thread, as the resident app does (round-3
+        finding 12).
         """
-        with guard_encodes(self.root, holder="one"), self.assertRaises(EncodeBusyError):
-            guard_encodes(self.root, holder="two").__enter__()
-        self.assertFalse(_lock_path(self.root).exists())
+        import threading
 
-    def test_the_cli_parks_the_slot_on_the_library_root_in_place(self) -> None:
-        """`_record_encodes` keys the slot on the library root when in place.
+        held = threading.Event()
+        release = threading.Event()
 
-        Asserted at the seam: the guard receives the library root, never the
-        staging directory, when the run replaces sources in place.
+        def first_writer() -> None:
+            with guard_encodes(self.source.parent, holder="one"):
+                held.set()
+                release.wait(timeout=5)
+
+        thread = threading.Thread(target=first_writer)
+        thread.start()
+        try:
+            self.assertTrue(held.wait(timeout=5), "the first writer never took the slot")
+            with self.assertRaises(EncodeBusyError):
+                guard_encodes(self.source.parent, holder="two").__enter__()
+        finally:
+            release.set()
+            thread.join(timeout=5)
+        self.assertFalse(_lock_path(self.source.parent).exists())
+
+    def test_the_cli_parks_the_slot_only_on_the_movies_directory_in_place(self) -> None:
+        """An in-place run (`in_place=True`) keys the slot on the MOVIE's folder ONLY.
+
+        That is where the staging copy and the swap's two renames happen, so it is
+        the one key the job and the watcher can agree on (#379). The directory the
+        run writes into is its own private temp dir, which nothing else ever locks:
+        guarding it would exclude no one, so it is not taken (round-6 M1).
         """
         from shrinkray import __main__ as cli
 
         captured: dict = {}
 
         def fake_guard(directory, holder="encode"):
-            captured["dir"] = directory
+            captured.setdefault("dirs", []).append(directory)
             captured["holder"] = holder
             return _null_guard(directory)
 
@@ -98,10 +122,86 @@ class TestInPlaceSlotKeying(unittest.TestCase):
                 threads=None,
                 db_file=None,
                 replace=True,
-                library_root=self.root,
+                in_place=True,
             )
-        self.assertEqual(captured["dir"], self.root)
+        self.assertEqual(captured["dirs"], [self.source.parent])
         self.assertEqual(captured["holder"], "encode-cli")
+
+    def test_the_cli_guards_the_output_dir_too_when_replacing(self) -> None:
+        """`--output-dir X --replace` writes into X and swaps into the movie's
+        folder, so both are contended and both are guarded (PR #409's review
+        finding 4: main guarded X here, and keying only on movie.parent lost it)."""
+        from shrinkray import __main__ as cli
+
+        out = self.root / "out"
+        out.mkdir()
+        captured: dict = {}
+
+        def fake_guard(directory, holder="encode"):
+            captured.setdefault("dirs", []).append(directory)
+            return _null_guard(directory)
+
+        with (
+            mock.patch.object(cli, "guard_encodes", side_effect=fake_guard),
+            mock.patch.object(engine_pipeline, "encode_with_quality") as fake_encode,
+        ):
+            fake_encode.return_value = engine_pipeline.QualityResult(
+                input=self.source, output=out / "movie.mkv", success=False
+            )
+            cli._record_encodes(
+                None,
+                [self.source],
+                out,
+                _conf_stub(),
+                dry_run=False,
+                overwrite=False,
+                quality=True,
+                target_vmaf=96.0,
+                verify=False,
+                threads=None,
+                db_file=None,
+                replace=True,
+            )
+        self.assertEqual(captured["dirs"], sorted([out, self.source.parent]))
+
+    def test_a_second_spelling_of_one_directory_is_taken_once(self) -> None:
+        """`--output-dir X --replace` guards X and the movie's folder; when they
+        are the SAME directory spelled differently (a relative path, a symlink), the
+        set must dedupe them AFTER resolving, or the run takes one lock twice and
+        refuses itself (PR #409's review finding 1)."""
+        from shrinkray import __main__ as cli
+
+        captured: dict = {}
+
+        def fake_guard(directory, holder="encode"):
+            captured.setdefault("dirs", []).append(directory)
+            return _null_guard(directory)
+
+        # a second spelling of the movie's own folder
+        alias = self.root / "." / ".." / self.root.name
+        with (
+            mock.patch.object(cli, "guard_encodes", side_effect=fake_guard),
+            mock.patch.object(engine_pipeline, "encode_with_quality") as fake_encode,
+        ):
+            fake_encode.return_value = engine_pipeline.QualityResult(
+                input=self.source, output=self.source, success=False
+            )
+            cli._record_encodes(
+                None,
+                [self.source],
+                alias,
+                _conf_stub(),
+                dry_run=False,
+                overwrite=False,
+                quality=True,
+                target_vmaf=96.0,
+                verify=False,
+                threads=None,
+                db_file=None,
+                replace=True,
+            )
+        self.assertEqual(len(captured["dirs"]), 1, f"took the slot twice: {captured['dirs']}")
+        self.assertEqual(captured["dirs"][0], self.source.parent)
 
     def test_the_cli_parks_the_slot_on_the_output_dir_when_given(self) -> None:
         """A two-directory run keeps the output directory as the slot's target."""
@@ -134,15 +234,15 @@ class TestInPlaceSlotKeying(unittest.TestCase):
                 threads=None,
                 db_file=None,
                 replace=False,
-                library_root=None,
             )
         self.assertEqual(captured["dir"], out)
 
     def test_the_watcher_parks_the_slot_on_the_movies_directory_in_place(self) -> None:
         """The watcher's in-place slot is keyed on the movie's own directory.
 
-        The swaps rename inside it, and one slot at a time keeps the pass
-        nesting-free across multiple roots.
+        The movie sits in a NESTED folder, so its directory differs from the
+        watched root: a key on the root (the #389 shape) fails this test. The
+        swaps rename inside the movie's folder, so that is what must be guarded.
         """
         from shrinkray.engine import watch as watch_mod
 
@@ -160,6 +260,10 @@ class TestInPlaceSlotKeying(unittest.TestCase):
                 skipped_reason="no size gain",
             )
 
+        nested = self.root / "Title (2020)"
+        nested.mkdir()
+        (nested / "movie.mkv").write_bytes(b"x" * 8)
+        self.source.unlink()
         with (
             mock.patch.object(watch_mod, "WATCH_LOCK_FILE", self.root / "watch.lock"),
             mock.patch.object(watch_mod, "_wait_or_stop", lambda *a, **k: None),
@@ -170,7 +274,7 @@ class TestInPlaceSlotKeying(unittest.TestCase):
             mock.patch.object(watch_mod, "disk_free_bytes", return_value=None),
         ):
             watch_mod.watch([self.root], None, once=True, poll_interval=0.0)
-        self.assertEqual(captured["dirs"], [self.root])
+        self.assertEqual(captured["dirs"], [nested])
 
     def test_the_watcher_parks_the_slot_on_the_output_dir_when_given(self) -> None:
         """A two-directory watcher run keeps the output dir as the slot target.

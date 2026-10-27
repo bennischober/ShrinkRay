@@ -171,11 +171,15 @@ the claim, because `--verify` arrived in v0.11.7.
   output starts at zero; without the rebase the two sides pair frames one or two apart and every score drops
   silently.
   **This does not make the pairing correct**: the rebase normalises each stream's own origin, so it cannot remove a
-  *relative* offset between them. HandBrake drops leading frames when its input starts at a non-zero timestamp (and
-  the input carries audio), which leaves the two sides several frames apart; both tools then report the same wrong
-  number. Measured on real content: 17.71 where the frame-aligned pair scores 92.67 (issue **#408**, open). Until it
-  is fixed, a VMAF score is only trustworthy when the two sides' frame counts match - the manual procedure in
-  `docs/vmaf-parity.md` checks that.
+  *relative* offset between them. A pair built from a `-ss` copy-cut reference and a HandBrake `--start-at` segment
+  covers two different content windows - the copy cut starts on an earlier keyframe and holds more frames than the
+  window asked for - which leaves the two sides several frames apart; both tools then report the same wrong number.
+  Measured on that shape: 17.71 where the frame-aligned pair scores 92.67 (issue **#408**).
+  That shape is a property of the manual procedure, not of production: `build_encode_command` has no trim options,
+  the probe samples are video-only, and a production-shaped full-file pair (whole source against whole output) is
+  aligned - 2882/2882 frames, VMAF 96.10 measured on real content. The procedure in `docs/vmaf-parity.md`
+  therefore counts frames before scoring and reports a mismatched pair as unmeasured, and
+  `scripts/vmaf_parity.py` fails the run for it rather than printing a number.
 - The per-window score is libvmaf's **pooled mean** (`pooled_metrics.vmaf.mean`, `tools/vmaf.py:207`).
 - The per-CRF decision statistic is the **mean of the per-sample means** (`VMAF_STATISTIC = "mean",
   `engine/search.py:44`, issue #15) — the same aggregate ab-av1 reports.

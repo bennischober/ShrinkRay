@@ -754,6 +754,101 @@ class TestEncodeLock(unittest.TestCase):
         self.assertEqual(int(lock.read_text().split()[0]), os.getpid())
         lock.unlink()
 
+    def test_a_steal_the_filesystem_refuses_is_reported_not_called_busy(self):
+        """A rename the filesystem refuses (a read-only library, EBUSY) is not
+        "another encoder": reporting it as one names a phantom holder and hides
+        the real fault (PR #389's review finding 4, invariant 5)."""
+        from shrinkray.engine import lock as lock_mod
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = lock_mod._lock_path(self.out)
+        lock.write_text("999999999 encode 0123456789ab")
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+        with (
+            mock.patch.object(lock_mod.os, "rename", side_effect=OSError("read-only")),
+            mock.patch.object(lock_mod, "log_error") as error,
+            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertIn("could not take the stale encode lock", str(ctx.exception))
+        self.assertNotIn("another encoder is already using", str(ctx.exception))
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("read-only", messages)
+
+    def test_an_unusable_directory_raises_busy_not_oserror(self):
+        """A read-only or unmounted library must reach the caller as
+        EncodeBusyError: the watcher catches only that (plus Cancelled and
+        RuntimeError), so a raw OSError would end the unattended loop.
+
+        Three separate sites are covered, because each is a different call the
+        filesystem can refuse: mkdir, resolve, and the exclusive open. Patching only
+        mkdir certified a branch the code already wrapped and left the open
+        uncovered (PR #409's review round 5, finding 1).
+        """
+        from shrinkray.engine import lock as lock_mod
+
+        cases = {
+            "mkdir": mock.patch.object(Path, "mkdir", side_effect=OSError("EROFS")),
+            "resolve": mock.patch.object(Path, "resolve", side_effect=OSError("EACCES")),
+            "open": mock.patch.object(lock_mod.os, "open", side_effect=OSError("EROFS")),
+        }
+        for name, patcher in cases.items():
+            with self.subTest(site=name), patcher, self.assertRaises(lock_mod.EncodeBusyError):
+                lock_mod.acquire_encode_slot(self.out, holder="test")
+
+    def test_a_failed_stamp_write_removes_the_empty_lock(self):
+        """A stamp write that fails (a full disk) must not leave an empty lock that
+        reads as a live claim for the whole stale window (PR #409's review
+        finding 2)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod.os, "fdopen", side_effect=OSError("ENOSPC")),
+            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertIn("could not write the encode lock", str(ctx.exception))
+        self.assertFalse(lock_mod._lock_path(self.out).exists())
+
+    def test_a_second_acquisition_on_one_path_survives_the_first_release(self):
+        """_OWNED must be per acquisition, not per path: a holder that lost its slot
+        and re-acquired it holds two acquisitions in turn, and the first release
+        must not delete the second's live lock (PR #409's review finding 1). With a
+        path-keyed dict the second acquisition overwrote the first's token and this
+        release unlinked a live lock."""
+        from shrinkray.engine import lock as lock_mod
+
+        first = lock_mod.acquire_encode_slot(self.out, holder="first")
+        # the first holder stalls past the window and a rival steals the slot
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(first, (old, old))
+        rival = lock_mod.acquire_encode_slot(self.out, holder="rival")
+        self.assertEqual(rival, first)
+        # the first holder now finishes, naming its OWN acquisition: the rival's
+        # lock must survive
+        first_token = lock_mod._OWNED[first][0]
+        lock_mod.release_encode_slot(first, first_token)
+        self.assertTrue(rival.exists(), "the rival's live lock was deleted")
+        self.assertEqual(rival.read_text().split()[1], "rival")
+        lock_mod.release_encode_slot(rival)
+        self.assertFalse(rival.exists())
+
+    def test_a_failed_release_is_reported(self):
+        """A release that cannot unlink is logged, not swallowed: the next encode
+        of that directory would be refused for the whole stale window with no
+        explanation (PR #389's review finding 5)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(Path, "unlink", side_effect=OSError("busy")),
+            mock.patch.object(lock_mod, "log_error") as error,
+            lock_mod.guard_encodes(self.out, holder="test"),
+        ):
+            pass
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("Could not release the encode lock", messages)
+
     def test_a_live_holder_in_another_pid_namespace_keeps_the_lock(self):
         """Issue #383's acceptance criterion: two holders whose pids collide
         (the server and a one-shot container are both pid 1) must still
@@ -788,13 +883,16 @@ class TestEncodeLock(unittest.TestCase):
 
     def test_an_old_pid_only_lock_is_reclaimed_by_its_mtime(self):
         """Issue #383's upgrade criterion: a lock written before this change
-        (pid only, no label) is judged by its mtime like any other, so an
-        upgrade never keeps a dead run's lock for the old six-hour window."""
+        carries only a pid - and that pid may be ALIVE (the restarted server is
+        pid 1 again). It is judged by its mtime like any other, so an upgrade
+        never keeps a dead run's lock for the old six-hour window."""
         from shrinkray.engine.lock import _LOCK_STALE_SECONDS, _lock_path, acquire_encode_slot
 
         self.out.mkdir(parents=True, exist_ok=True)
         lock = _lock_path(self.out)
-        lock.write_text("999999999")
+        # a LIVE pid (ours) in the old, token-less format: pid-only locks must
+        # not be honoured on liveness alone
+        lock.write_text(str(os.getpid()))
         old = time.time() - _LOCK_STALE_SECONDS - 60
         os.utime(lock, (old, old))
         self.assertEqual(acquire_encode_slot(self.out, holder="test"), lock)
@@ -816,20 +914,196 @@ class TestEncodeLock(unittest.TestCase):
                 lock_mod.acquire_encode_slot(self.out, holder="rival")
         self.assertFalse(held.exists())
 
+    def test_a_stat_that_fails_is_not_read_as_stale(self):
+        """A stat that fails for any reason other than absence must not be read as
+        "stale": that unlinks a live holder's lock with no log (PR #409's review
+        finding 1)."""
+        from shrinkray.engine import lock as lock_mod
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = lock_mod._lock_path(self.out)
+        lock.write_text("1 encode-job 0123456789ab")
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+        real_stat = Path.stat
+
+        def lock_stat_fails(self_, *a, **k):
+            # only the LOCK's stat fails: mkdir/is_dir on the directory must work
+            if self_.name.startswith(lock.name):
+                raise OSError("EIO")
+            return real_stat(self_, *a, **k)
+
+        with (
+            mock.patch.object(Path, "stat", lock_stat_fails),
+            mock.patch.object(lock_mod, "log_error") as error,
+            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertIn("could not inspect the encode lock", str(ctx.exception))
+        self.assertNotIn("another encoder is already using", str(ctx.exception))
+        self.assertTrue(lock.exists(), "the live holder's lock was deleted")
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("EIO", messages)
+        lock.unlink()
+
+    def test_a_stat_failure_during_the_steal_restores_the_lock(self):
+        """The steal re-stats the renamed-aside file; if that stat fails it must
+        put the lock back and report an error, never discard it (finding 1)."""
+        from shrinkray.engine import lock as lock_mod
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = lock_mod._lock_path(self.out)
+        lock.write_text("1 encode-job 0123456789ab")
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+
+        real_stat = Path.stat
+
+        def stat_then_fail(self_, *a, **k):
+            # the first stat judges the lock stale; the second (on the renamed
+            # file) fails
+            if self_.name.startswith(lock.name):
+                if not hasattr(stat_then_fail, "n"):
+                    stat_then_fail.n = 0
+                stat_then_fail.n += 1
+                if stat_then_fail.n > 1:
+                    raise OSError("EIO")
+            return real_stat(self_, *a, **k)
+
+        with (
+            mock.patch.object(Path, "stat", stat_then_fail),
+            mock.patch.object(lock_mod, "log_error") as error,
+            self.assertRaises(lock_mod.EncodeBusyError),
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertTrue(lock.exists(), "the lock was discarded on a failed stat")
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("Could not inspect the stale encode lock", messages)
+        lock.unlink()
+
+    def test_a_non_ascii_lock_does_not_crash_the_beat(self):
+        """A corrupt lock with a non-ASCII byte raises UnicodeDecodeError from
+        read_text, which is not an OSError: unhandled it killed the heartbeat
+        thread and escaped into the watcher (PR #409's review finding 3)."""
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
+            mock.patch.object(lock_mod, "log_warning") as warning,
+            lock_mod.guard_encodes(self.out, holder="test") as held,
+        ):
+            held.write_bytes(b"\xff\xfe\x00not-a-stamp")
+            time.sleep(0.15)  # the beat must survive this without raising
+        messages = " ".join(str(c.args[0]) for c in warning.call_args_list)
+        self.assertIn("Could not read the encode lock", messages)
+        # an unreadable lock is left alone: ownership is unknown, so neither
+        # releasing nor stealing it is safe
+        self.assertTrue(held.exists())
+
+    def test_a_refused_restore_is_reported_as_itself(self):
+        """A restore the filesystem refuses must not be reported as another
+        encoder: that names a phantom holder (finding 5)."""
+        from shrinkray.engine import lock as lock_mod
+
+        self.out.mkdir(parents=True, exist_ok=True)
+        lock = lock_mod._lock_path(self.out)
+        lock.write_text("1 encode-job 0123456789ab")
+        old = time.time() - lock_mod._LOCK_STALE_SECONDS - 60
+        os.utime(lock, (old, old))
+
+        real_stat = Path.stat
+        calls = {"n": 0}
+
+        def stale_then_beat(self_, *a, **k):
+            if self_.name.startswith(lock.name):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    # the holder beat before this stat reads the mtime (the file
+                    # being inspected is the renamed-aside one)
+                    os.utime(self_, None)
+            return real_stat(self_, *a, **k)
+
+        with (
+            mock.patch.object(Path, "stat", stale_then_beat),
+            mock.patch.object(lock_mod.os, "link", side_effect=OSError("EPERM")),
+            mock.patch.object(lock_mod, "log_error") as error,
+            self.assertRaises(lock_mod.EncodeBusyError) as ctx,
+        ):
+            lock_mod.acquire_encode_slot(self.out, holder="test")
+        self.assertIn("could not take the stale encode lock", str(ctx.exception))
+        self.assertNotIn("another encoder is already using", str(ctx.exception))
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("Could not restore", messages)
+
+    def test_a_read_error_is_not_a_takeover(self):
+        """A lock that cannot be READ (an EIO or EACCES on a NAS mount) must not
+        be reported as a rival taking the slot: the beat says "failed", warns,
+        and keeps beating, so the holder's own lease is not abandoned on a
+        transient filesystem error (PR #409's review finding 1).
+
+        The real read path is exercised (a lock file the process cannot decode),
+        not a patched private helper: patching _read_fields left the conflation in
+        _read_fields itself unpinned (round-3 finding 5).
+        """
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
+            mock.patch.object(lock_mod, "log_error") as error,
+            mock.patch.object(lock_mod, "log_warning") as warning,
+            lock_mod.guard_encodes(self.out, holder="test") as held,
+        ):
+            # a corrupt stamp: read_text raises UnicodeDecodeError, not OSError
+            held.write_bytes(b"\xff\xfe\x00not-a-stamp")
+            time.sleep(0.2)
+        errors = " ".join(str(c.args[0]) for c in error.call_args_list)
+        warnings = " ".join(str(c.args[0]) for c in warning.call_args_list)
+        self.assertNotIn("Another encoder took the slot", errors)
+        self.assertIn("Could not read the encode lock", warnings)
+        self.assertTrue(held.exists())
+
     def test_a_failed_heartbeat_is_reported(self):
-        """A touch that fails is logged, never swallowed: the holder must
+        """A beat that cannot write is logged, never swallowed: the holder must
         learn its slot is on a timer (invariant 5)."""
         from shrinkray.engine import lock as lock_mod
 
         with (
             mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
             mock.patch.object(lock_mod, "log_warning") as warning,
-            mock.patch.object(Path, "touch", side_effect=OSError("read-only")),
+            mock.patch.object(lock_mod.os, "utime", side_effect=OSError("read-only")),
             lock_mod.guard_encodes(self.out, holder="test"),
         ):
             time.sleep(0.2)
         messages = " ".join(str(c.args[0]) for c in warning.call_args_list)
         self.assertIn("Could not refresh the encode lock", messages)
+
+    def test_a_beat_never_refreshes_a_lock_that_is_no_longer_ours(self):
+        """A holder that lost its slot must not keep the rival's lease alive: the
+        beat compares the token BEFORE touching the file, reports the loss as an
+        error, and stops (PR #389's review finding 2).
+
+        The rival's mtime is asserted too: asserting only the content left
+        "utime before the token check" passing green (round-3 finding 4).
+        """
+        from shrinkray.engine import lock as lock_mod
+
+        with (
+            mock.patch.object(lock_mod, "_HEARTBEAT_SECONDS", 0.01),
+            mock.patch.object(lock_mod, "log_error") as error,
+            lock_mod.guard_encodes(self.out, holder="test") as held,
+        ):
+            # a rival steals the slot and writes its own stamp, then never beats
+            held.write_text("1 rival fedcba987654")
+            rival_mtime = held.stat().st_mtime
+            time.sleep(0.2)
+            self.assertEqual(held.read_text(), "1 rival fedcba987654", "the rival's stamp changed")
+            self.assertEqual(
+                held.stat().st_mtime,
+                rival_mtime,
+                "the rival's lease was refreshed by the holder that lost the slot",
+            )
+        messages = " ".join(str(c.args[0]) for c in error.call_args_list)
+        self.assertIn("Another encoder took the slot", messages)
 
     def test_garbage_lock_content_is_busy_until_it_goes_silent(self):
         """Unreadable content is not evidence of a dead holder: the mtime is
@@ -917,16 +1191,19 @@ class TestEncodeLock(unittest.TestCase):
         """A holder that stalled past the window must not delete the new
         holder's lock when it finally exits (issue #383). The pid cannot tell
         them apart - the server and a one-shot container are both pid 1 - so
-        the token written at acquisition decides."""
-        from shrinkray.engine.lock import _lock_path, release_encode_slot
+        the token written at acquisition decides.
 
-        self.out.mkdir(parents=True, exist_ok=True)
-        lock = _lock_path(self.out)
-        # a lock another holder wrote (pid 1, like us in the container)
-        lock.write_text("1 encode-job 0123456789ab")
-        release_encode_slot(lock)
-        self.assertTrue(lock.exists(), "another holder's lock was deleted")
-        lock.unlink()
+        This acquires through the API first, so the token comparison is reached:
+        the missing-_OWNED early return is a different path."""
+        from shrinkray.engine.lock import acquire_encode_slot, release_encode_slot
+
+        acquired = acquire_encode_slot(self.out, holder="test")
+        # a rival in another namespace takes the slot and writes its own stamp
+        acquired.write_text("1 encode-job 0123456789ab")
+        release_encode_slot(acquired)
+        self.assertTrue(acquired.exists(), "the rival's lock was deleted")
+        self.assertEqual(acquired.read_text(), "1 encode-job 0123456789ab")
+        acquired.unlink()
 
     def test_a_holder_whose_lock_was_stolen_does_not_delete_the_new_one(self):
         """This process acquires, a rival steals the silent lock and writes its
