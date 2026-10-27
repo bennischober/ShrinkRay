@@ -159,6 +159,10 @@ def _busy_message(output_dir: Path, lock: Path, silence: float) -> str:
     who = f"pid {pid}" if pid else "an unknown process"
     if label:
         who = f"{label}, {who}"
+    if silence <= 0:
+        # the age could not be measured; saying "0 min ago" would be a number
+        # the code does not have
+        return f"another encoder is already using '{output_dir}' ({who})"
     return (
         f"another encoder is already using '{output_dir}' "
         f"({who}; last heartbeat {silence / 60:.0f} min ago)"
@@ -419,7 +423,8 @@ def guard_encodes(output_dir: Path, holder: str = "encode") -> Iterator[Path]:
     Keeps the slot alive for the run's whole duration by beating every
     `_HEARTBEAT_SECONDS`, so the stale window measures silence (issue #383).
     A beat that finds the lock taken over, or that cannot write, is reported
-    once and stops: the run is then unguarded and the operator has to know.
+    once and the run continues UNGUARDED: this context manager cannot stop an
+    encode already in progress, so the operator has to act on that message.
 
     Args:
         output_dir (Path): The directory the run writes into.

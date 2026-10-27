@@ -167,6 +167,45 @@ class TestInPlaceSlotKeying(unittest.TestCase):
             )
         self.assertEqual(captured["dirs"], sorted([out, self.source.parent]))
 
+    def test_a_second_spelling_of_one_directory_is_taken_once(self) -> None:
+        """`--output-dir X --replace` guards X and the movie's folder; when they
+        are the SAME directory spelled differently (a relative path, a symlink), the
+        set must dedupe them AFTER resolving, or the run takes one lock twice and
+        refuses itself (PR #409's review finding 1)."""
+        from shrinkray import __main__ as cli
+
+        captured: dict = {}
+
+        def fake_guard(directory, holder="encode"):
+            captured.setdefault("dirs", []).append(directory)
+            return _null_guard(directory)
+
+        # a second spelling of the movie's own folder
+        alias = self.root / "." / ".." / self.root.name
+        with (
+            mock.patch.object(cli, "guard_encodes", side_effect=fake_guard),
+            mock.patch.object(engine_pipeline, "encode_with_quality") as fake_encode,
+        ):
+            fake_encode.return_value = engine_pipeline.QualityResult(
+                input=self.source, output=self.source, success=False
+            )
+            cli._record_encodes(
+                None,
+                [self.source],
+                alias,
+                _conf_stub(),
+                dry_run=False,
+                overwrite=False,
+                quality=True,
+                target_vmaf=96.0,
+                verify=False,
+                threads=None,
+                db_file=None,
+                replace=True,
+            )
+        self.assertEqual(len(captured["dirs"]), 1, f"took the slot twice: {captured['dirs']}")
+        self.assertEqual(captured["dirs"][0], self.source.parent)
+
     def test_the_cli_parks_the_slot_on_the_output_dir_when_given(self) -> None:
         """A two-directory run keeps the output directory as the slot's target."""
         from shrinkray import __main__ as cli

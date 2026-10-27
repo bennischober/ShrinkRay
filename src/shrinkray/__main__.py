@@ -600,8 +600,14 @@ def _record_encodes(
                         # `--output-dir X --replace` writes into X and swaps into the
                         # movie's folder, so BOTH are contended and both are taken
                         # (outermost first, never nested per directory).
-                        # one lock order, so two CLI runs cannot deadlock
-                        targets = sorted({movie.parent, output_dir}) if replace else [output_dir]
+                        # one lock order, so two CLI runs cannot deadlock; the
+                        # paths are RESOLVED before deduping, or two spellings of one
+                        # directory (relative, a symlink) would take the same lock
+                        # twice and the run would refuse itself
+                        if replace:
+                            targets = sorted({movie.parent.resolve(), output_dir.resolve()})
+                        else:
+                            targets = [output_dir]
                         with contextlib.ExitStack() as slots:
                             for target in targets:
                                 slots.enter_context(guard_encodes(target, holder="encode-cli"))
