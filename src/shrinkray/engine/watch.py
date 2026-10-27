@@ -760,7 +760,8 @@ def watch(
                                 # or full db, issue #427): a per-file failure -
                                 # the file stays eligible, retried next pass
                                 log_error(
-                                    f"Queuing '{movie.name}' failed: {e} => retried next pass."
+                                    f"Queuing '{movie.name}' failed: {e}"
+                                    " => retried when the file changes."
                                 )
                                 continue
                             if queued:
@@ -889,8 +890,9 @@ def watch(
                         # #260 rule as the RuntimeError branch above: logged
                         # with the file's name and the watcher continues. This
                         # branch covers the stateless/direct form; the QUEUE
-                        # path's discovery and scan escapes are guarded in
-                        # find_new_movies and _scan_into_db.
+                        # path's escapes are guarded in find_new_movies (the
+                        # identity stat), _scan_into_db (the scan's reads) and
+                        # the submit/enqueue call (its sqlite write).
                         log_error(f"Encoding '{movie.name}' failed: {e} => the watcher continues.")
                         continue
 
