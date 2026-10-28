@@ -277,8 +277,10 @@ def wait_for_stable(
         # the interval sleep lives HERE, not inside the witness's early-False
         # paths: a young or unreadable file returns False without sleeping,
         # and without this sleep the loop busy-spins on stat pairs until the
-        # limit. One sleep per turn, bounded by the deadline - never two
-        # intervals per check (the round-1 shape), never zero (this round's).
+        # limit. One sleep per turn on TOP of the witness's own internal one
+        # (its size-changed path sleeps inside, the early-False paths do not):
+        # a file checked every ~60 s in the worst case, the limit overshot by
+        # at most one interval - bounded either way.
         time.sleep(STABLE_CHECK_INTERVAL)
 
 
