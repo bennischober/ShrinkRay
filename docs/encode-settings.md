@@ -146,7 +146,7 @@ were a measured no-op (they set the tags the encode sets anyway). On a source
 with a set component the measured behaviour is the same fill: `--color-matrix
 bt709` on a `smpte170m`-tagged 1080p clip leaves the space tag alone and fills
 the unset transfer/primaries with the flag's value (measured with HandBrake
-1.11.2; record in the PR's review thread comment `6461940399`) — it does not
+1.11.2; record in PR #441's review thread comment `6461940399`) — it does not
 rewrite a set tag.
 
 ## Open decisions

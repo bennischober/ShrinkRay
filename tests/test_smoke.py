@@ -227,8 +227,10 @@ class TestSmokeColourRetag(unittest.TestCase):
         tags here, and the setup verifies the premise (fail loudly if ffmpeg
         starts tagging its output - the test's premise would be gone). The
         fixture is 1080p-class because HandBrake's assumed colour profile is
-        resolution-dependent (an SD source comes out bt601-family; measured directly and recorded
-        in the PR's review thread comment `6460170853` (tag triples per size)), and ShrinkRay only encodes 1080p+."""
+        resolution-dependent (at SD sizes the matrix and primaries come out
+        bt601-family while the transfer tag is bt709 at every measured size;
+        PR #441's review thread comment `6460170853` posts the tag triple per
+        size), and ShrinkRay only encodes 1080p+."""
         subprocess.run(
             [
                 "ffmpeg",
@@ -287,14 +289,14 @@ class TestSmokeColourRetag(unittest.TestCase):
     def test_set_components_pass_through(self):
         """The doc's other claim: already-set components survive the encode.
 
-        The acceptance run's second row is the shape. The set value here is
-        smpte170m - a value HandBrake would NOT write itself (the unset-fill
-        uses bt709): survival of THAT value proves pass-through; a forced
-        rewrite would produce bt709."""
+        All three components are set to values HandBrake would NOT write itself
+        (smpte170m/smpte170m/bt470bg; the unset-fill uses bt709): survival of
+        THOSE values proves pass-through for every component; a forced rewrite
+        would produce bt709."""
         from shrinkray.tools.handbrake import build_encode_command, find_handbrake
 
-        # a clip tagged for space only: the base clip carries no colour tags,
-        # so a stream copy with an explicit -colorspace writes ONLY that tag
+        # all three components set to non-bt709 values: a stream copy from the
+        # untagged fixture with explicit tags writes exactly those
         partial = self.root / "partial.mkv"
         subprocess.run(
             [
@@ -308,6 +310,10 @@ class TestSmokeColourRetag(unittest.TestCase):
                 "copy",
                 "-colorspace",
                 "smpte170m",
+                "-color_trc",
+                "smpte170m",
+                "-color_primaries",
+                "bt470bg",
                 str(partial),
             ],
             check=True,
@@ -316,8 +322,12 @@ class TestSmokeColourRetag(unittest.TestCase):
         )
         tags = self._probe_tags(partial)
         self.assertEqual(tags.get("color_space"), "smpte170m", "premise: space tagged smpte170m")
-        self.assertIn(tags.get("color_transfer"), (None, "unknown"), "premise: transfer unset")
-        self.assertIn(tags.get("color_primaries"), (None, "unknown"), "premise: primaries unset")
+        self.assertEqual(
+            tags.get("color_transfer"), "smpte170m", "premise: transfer tagged smpte170m"
+        )
+        self.assertEqual(
+            tags.get("color_primaries"), "bt470bg", "premise: primaries tagged bt470bg"
+        )
 
         handbrake = find_handbrake()
         self.assertIsNotNone(handbrake)
@@ -326,13 +336,14 @@ class TestSmokeColourRetag(unittest.TestCase):
         subprocess.run(command, check=True, capture_output=True, timeout=300)
 
         out = self._probe_tags(enc)
-        self.assertEqual(
-            out.get("color_space"),
-            "smpte170m",
-            "the set component must SURVIVE (a rewrite would emit bt709)",
-        )
-        for key in ("color_transfer", "color_primaries"):
-            self.assertEqual(out.get(key), "bt709", f"the unset '{key}' must be filled as bt709")
+        for key, val in (
+            ("color_space", "smpte170m"),
+            ("color_transfer", "smpte170m"),
+            ("color_primaries", "bt470bg"),
+        ):
+            self.assertEqual(
+                out.get(key), val, f"the set '{key}' must SURVIVE (a rewrite would emit bt709)"
+            )
 
 
 if __name__ == "__main__":
