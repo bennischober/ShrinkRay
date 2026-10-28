@@ -107,13 +107,16 @@ source (`encavcodecaudio.c` maps it to `AV_SAMPLE_FMT_S16`), and the bare name
 
 ## Colour tags on the way out
 
-A source with unset colour components comes out of HandBrake with them **written as
-BT.709**: a fully untagged `yuv420p,tv,unknown` source is written as
+For 1080p-class sources — the only ones ShrinkRay encodes (the resolution floor,
+issue #233) — a source with unset colour components comes out of HandBrake with them
+**written as BT.709**: a fully untagged `yuv420p,tv,unknown` source is written as
 `yuv420p,tv,bt709`, and a source tagged for space only (`yuv420p,tv,bt709` with
 transfer/primaries `unknown`) comes out with the two unset components filled in as
-`bt709` too. HandBrake assumes profile 1-1-1 at scan and carries it through —
-measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27). Already-set
-components pass through unchanged (the tagged row's space tag survives).
+`bt709` too. HandBrake assumes profile 1-1-1 at scan and carries it through for the HD sample —
+measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27); below the
+1080p class the assumed profile differs (an SD source comes out bt601-family), which
+is out of ShrinkRay's encode scope. Already-set components pass through unchanged
+(the tagged row's space tag survives).
 
 This is signalling, not conversion. The measurement run that settled #258 found no
 conversion filter in HandBrake's verbose log, and `--color-matrix`/`--color-range`
@@ -126,7 +129,8 @@ One residual stays open: the seed-pinned synthetic gradients clip still measures
 2.31 VMAF apart between its untagged and tagged rows, unexplained, on that clip
 only — the mechanism the issue suspected is refuted, that number is not.
 
-Consequence for operators: a source's unset components claim BT.709 on the way out.
+Consequence for operators: on a 1080p-class source, its unset components claim
+BT.709 on the way out.
 Whether players resolve an untagged HD source to BT.709 is player behaviour this
 repo did not measure; the tags themselves are what this section documents. No flags
 are added to `build_encode_command` for this — they would change the tags the

@@ -32,7 +32,11 @@ from shrinkray import db, service
 from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine.pipeline import encode_with_quality, plan_quality
 
-BINARIES_OK = shutil.which("HandBrakeCLI") is not None and shutil.which("ffmpeg") is not None
+BINARIES_OK = (
+    shutil.which("HandBrakeCLI") is not None
+    and shutil.which("ffmpeg") is not None
+    and shutil.which("ffprobe") is not None
+)
 
 
 @unittest.skipUnless(os.environ.get("SHRINKRAY_SMOKE"), "smoke: opt-in (SHRINKRAY_SMOKE=1)")
@@ -217,12 +221,14 @@ class TestSmokeColourRetag(unittest.TestCase):
 
     @staticmethod
     def _make_untagged_clip(path: Path) -> None:
-        """A real 10 s clip with NO colour tags: strip them from the encode.
+        """A real 10 s 1080p-class clip with NO colour tags.
 
-        lavfi's testsrc encodes without colour tags by default, but the
-        '-color_primaries/-color_trc/-colorspace' unset assertion is what the
-        test relies on, so the setup verifies it (fail loudly if ffmpeg starts
-        tagging its output - the test's premise would be gone)."""
+        lavfi's testsrc encodes without colour tags by default - nothing strips
+        tags here, and the setup verifies the premise (fail loudly if ffmpeg
+        starts tagging its output - the test's premise would be gone). The
+        fixture is 1080p-class because HandBrake's assumed colour profile is
+        resolution-dependent (an SD source comes out bt601-family; measured in
+        the round-3 review's experiments), and ShrinkRay only encodes 1080p+."""
         subprocess.run(
             [
                 "ffmpeg",
@@ -232,7 +238,7 @@ class TestSmokeColourRetag(unittest.TestCase):
                 "-f",
                 "lavfi",
                 "-i",
-                "testsrc=duration=10:size=320x240:rate=25",
+                "testsrc=duration=10:size=1920x1080:rate=25",
                 "-c:v",
                 "libx264",
                 "-preset",

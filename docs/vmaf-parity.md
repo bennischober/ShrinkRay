@@ -259,7 +259,7 @@ and scores normally: 2882 / 2882 frames, VMAF 96.10.
 - **Whether the encode itself is faithful.** It measures a file you already have
   against its source; parity says the two tools measure the same thing, not that the
   artifact is right. Colour is settled, not a live question: #258's acceptance run
-  found no conversion on the way out (the re-tagging of unset components to BT.709
+  found no conversion on the way out (the re-tagging of unset components to BT.709 on 1080p-class sources
   is signalling only - `docs/encode-settings.md`), so a low score on untagged
   content is not evidence of colour damage.
 - **Whether the tone-map is the best available chain.** #340 owns that, and this
