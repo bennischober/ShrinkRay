@@ -11,3 +11,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # CodeQL refuses to run when the steps of one workflow disagree on the
+      # action version ("Loaded a configuration file for version X, but running
+      # version Y"), so init, autobuild and analyze must always move together.
+      # Dependabot tracks them as three separate dependencies; grouping them
+      # into one PR is what keeps the workflow runnable (#448, #449).
+      codeql-action:
+        patterns: ["github/codeql-action/*"]
