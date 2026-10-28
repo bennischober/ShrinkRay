@@ -482,6 +482,12 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
             lib.mkdir()
             movie = lib / "movie.mkv"
             movie.write_bytes(b"x" * 64)
+            # the file reads as COMPLETE (issue #437): the CLI now waits for
+            # the stability witness before encoding, and a just-written file
+            # is younger than STABLE_MIN_AGE - age it past the floor so this
+            # test's subject (signal cancellation) is what is under test
+            old = time_mod.time() - 120
+            os.utime(movie, (old, old))
             stubs = self._stubs(root)
 
             env = dict(os.environ)

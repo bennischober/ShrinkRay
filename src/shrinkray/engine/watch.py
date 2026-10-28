@@ -44,6 +44,10 @@ from shrinkray.tools.process import Cancelled
 STABLE_CHECK_INTERVAL = 30.0
 # ... and it is at least this old (grace period after the last modification)
 STABLE_MIN_AGE = 60.0
+# the bounded wait's ceiling for the one-shot CLI (issue #437): the watcher
+# has no ceiling (it reconsiders on its next pass); a one-shot run reports
+# and skips instead of waiting forever on a file that never settles
+STABLE_WAIT_LIMIT = 600.0
 POLL_INTERVAL = 60.0
 # adaptive polling: while the inbox stays idle the sleep between polls grows
 # up to this multiple of POLL_INTERVAL (any new candidate resets it back)
@@ -225,6 +229,40 @@ def is_stable(path: Path) -> bool:
     except OSError:
         return False
     return size_1 == size_2
+
+
+def wait_for_stable(
+    path: Path,
+    limit: float = STABLE_WAIT_LIMIT,
+    sleep: float = STABLE_CHECK_INTERVAL,
+) -> bool:
+    """Waits until the file settles, bounded; the one seam for both entries
+    (issue #437).
+
+    Calls the same witness the watcher uses (`is_stable`: size unchanged
+    across a STABLE_CHECK_INTERVAL sleep, last change at least
+    STABLE_MIN_AGE ago) in a loop until it says stable or `limit` seconds
+    have passed. The watcher's loop needs no bound (it reconsiders on its
+    next pass) and keeps its single is_stable check - an extraction, not a
+    policy change; the one-shot CLI has no next pass, so it waits here and
+    gives up loudly at the limit.
+
+    Args:
+        path (Path): The file to wait for.
+        limit (float): Total seconds to wait before giving up.
+        sleep (float): Seconds between two witness checks.
+
+    Returns:
+        bool: True when the file settled, False when the limit expired
+            (the caller reports and skips; the file stays eligible).
+    """
+    deadline = time.monotonic() + limit
+    while True:
+        if is_stable(path):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(sleep)
 
 
 def decide(movie: Path, target_vmaf: float, encoder: str) -> str:
