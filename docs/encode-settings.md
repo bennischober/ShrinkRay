@@ -113,17 +113,21 @@ primaries all set). HandBrake assumes profile 1-1-1 at scan and carries it throu
 measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27).
 
 This is signalling, not conversion. The measurement run that settled #258 found no
-conversion filter in HandBrake's verbose log, the output's luma/chroma statistics
-match the source's to two decimals, and `--color-matrix`/`--color-range` change the
-output's tags without changing a pixel (byte-identical VMAF with and without). On
-real untagged content the HandBrake encode scored within 0.1 VMAF of a direct
-ffmpeg libsvtav1 encode of the same window — the pipeline loses nothing to colour.
+conversion filter in HandBrake's verbose log, the output's chroma statistics match
+the source's (VAVG within 0.01 on both paths), and `--color-matrix`/`--color-range`
+change the output's tags without changing a pixel (byte-identical VMAF with and
+without). On real untagged content the HandBrake encode scored 95.9739 against a
+direct ffmpeg libsvtav1 encode of the same window at 95.8941 — the pipeline loses
+nothing to colour. (VMAF reads luma only, so these statistics say nothing about the
+VMAF score itself; the like-for-like encode comparison is what settles it.)
 
 Consequence for operators: an untagged source's output claims BT.709 where the
-source claimed nothing. Every player resolves `unknown` to BT.709 for HD content
-anyway, so playback is unaffected; the difference is only visible in a tool that
-compares tags. No flags are added to `build_encode_command` for this — they would
-change the tags the encode would set anyway, and nothing else.
+source claimed nothing. Playback is unaffected in practice — players must assume
+something for an untagged HD source and BT.709 is the universal default (BT.601
+for SD) — but that assumption is player behaviour, not something this repo measured;
+the difference is visible in a tool that compares tags. No flags are added to
+`build_encode_command` for this — they would change the tags the encode would set
+anyway, and nothing else.
 
 ## Open decisions
 
