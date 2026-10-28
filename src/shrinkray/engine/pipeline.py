@@ -1613,11 +1613,10 @@ def encode_with_quality(
         probes=probes,
         verified_vmaf=verified_vmaf,
         verified_subsample=verified_subsample,
-        # the encode succeeded against the CURRENT bytes (the encode-start
-        # recheck passed and the child ran to completion): the input size is
-        # re-read here because the artifact replaced nothing yet, and the
-        # identity carries the run-start capture for the record path
-        input_size=input_file.stat().st_size,
+        # the encode succeeded against the bytes the run-start recheck
+        # verified (issue #436): the input facts are the capture's, one
+        # identity, not a post-encode size beside a run-start mtime
+        input_size=identity.size,
         output_size=output_file.stat().st_size,
         input_mtime=identity.mtime,
         encoder_preset=encoder_preset,

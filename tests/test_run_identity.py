@@ -350,6 +350,53 @@ class TestEngineSkipPathGuard(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             record_plan(self.connection, self.movie, result, _config())
 
+    def test_a_record_gate_error_is_one_error_row_never_an_aborted_plan(self) -> None:
+        """The round-2 review's finding 5: the record call sits inside the
+        per-movie error handling on both entry points - one changed file is
+        one error row/entry, the plan run continues to the next movie.
+        """
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie_a = root / "a.mkv"
+            movie_b = root / "b.mkv"
+            movie_a.write_bytes(b"x" * 16)
+            movie_b.write_bytes(b"x" * 16)
+            calls: list[Path] = []
+
+            def fake_plan(movie_in, *args, **kwargs):
+                calls.append(movie_in)
+                if len(calls) == 2:
+                    # the second movie's record will raise (its file changed
+                    # after the run decided it)
+                    movie_b.write_bytes(b"y" * 32)
+                return QualityResult(
+                    input=movie_in,
+                    output=movie_in,
+                    success=True,
+                    target_vmaf=96.0,
+                    chosen_crf=20,
+                    achieved_vmaf=96.5,
+                    probes=[],
+                    input_size=16,
+                    output_size=8,
+                    input_mtime=movie_in.stat().st_mtime,
+                    crf_range=(14, 45),
+                    sample_count=3,
+                    sample_seconds=10.0,
+                )
+
+            with (
+                patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
+                patch("shrinkray.service.all_problems", return_value=[]),
+            ):
+                result = CliRunner().invoke(app, ["plan", str(root), "--no-table"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(len(calls), 2, "the second movie must still be planned")
+
 
 def _config():
     from shrinkray.config import load_config
