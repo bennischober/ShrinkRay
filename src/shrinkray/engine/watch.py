@@ -242,8 +242,11 @@ def wait_for_stable(
     Calls the same witness the watcher uses (`is_stable`: size unchanged
     across a STABLE_CHECK_INTERVAL sleep, last change at least
     STABLE_MIN_AGE ago) in a loop until it says stable or `limit` seconds
-    have passed - the witness's own interval IS the wait between checks (a
-    second sleep here would double every interval). The watcher's loop
+    have passed. The witness's early-False paths (file too young, unreadable)
+    return WITHOUT sleeping, so the loop sleeps the interval itself between
+    checks - otherwise a young file (exactly the still-copying case this
+    seam exists for) busy-loops on stat pairs for the whole limit (the
+    round-2 review measured ~370k stat pairs/second). The watcher's loop
     needs no bound (it reconsiders on its next pass) and keeps its single
     is_stable check - an extraction, not a policy change; the one-shot CLI
     has no next pass, so it waits here and gives up loudly at the limit. A
@@ -271,9 +274,12 @@ def wait_for_stable(
             return True
         if time.monotonic() >= deadline:
             return False
-        # no extra sleep here: is_stable's own size-check interval IS the
-        # wait between two witness checks (a second sleep would double every
-        # interval and overrun the limit by up to one more)
+        # the interval sleep lives HERE, not inside the witness's early-False
+        # paths: a young or unreadable file returns False without sleeping,
+        # and without this sleep the loop busy-spins on stat pairs until the
+        # limit. One sleep per turn, bounded by the deadline - never two
+        # intervals per check (the round-1 shape), never zero (this round's).
+        time.sleep(STABLE_CHECK_INTERVAL)
 
 
 def decide(movie: Path, target_vmaf: float, encoder: str) -> str:

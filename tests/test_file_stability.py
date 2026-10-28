@@ -47,6 +47,22 @@ class TestWaitForStable(unittest.TestCase):
         ):
             self.assertFalse(watch.wait_for_stable(self.movie, limit=600.0))
 
+    def test_the_loop_sleeps_between_checks_on_the_early_false_paths(self) -> None:
+        """The round-2 review's busy-loop finding: the witness's early-False
+        paths (too young, unreadable) return WITHOUT its internal sleep, so
+        the LOOP sleeps the interval between checks - a young file (the exact
+        still-copying case this seam exists for) must not busy-spin on stat
+        pairs for the whole limit.
+        """
+        # a REAL young file exercises the early-False path (age < MIN_AGE);
+        # is_stable is NOT patched here
+        with (
+            patch("shrinkray.engine.watch.time.monotonic", side_effect=[0.0, 100.0, 700.0]),
+            patch("shrinkray.engine.watch.time.sleep") as sleep,
+        ):
+            self.assertFalse(watch.wait_for_stable(self.movie, limit=600.0))
+        sleep.assert_called_once_with(watch.STABLE_CHECK_INTERVAL)
+
     def test_a_set_cancel_event_raises_cancelled(self) -> None:
         """The #326 contract holds inside the wait: a signal cancels it, it
         never absorbs the terminal's close for minutes.
