@@ -105,6 +105,26 @@ same channel layout up to 7.1, no bitrate, no DRC. `flac16` would truncate a 24-
 source (`encavcodecaudio.c` maps it to `AV_SAMPLE_FMT_S16`), and the bare name
 `flac` is not an encoder id at all — an invalid fallback fails job initialisation.
 
+## Colour tags on the way out
+
+A source with no colour tags comes out of HandBrake **re-tagged BT.709**: a
+`yuv420p,tv,unknown` source is written as `yuv420p,tv,bt709` (space, transfer and
+primaries all set). HandBrake assumes profile 1-1-1 at scan and carries it through —
+measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27).
+
+This is signalling, not conversion. The measurement run that settled #258 found no
+conversion filter in HandBrake's verbose log, the output's luma/chroma statistics
+match the source's to two decimals, and `--color-matrix`/`--color-range` change the
+output's tags without changing a pixel (byte-identical VMAF with and without). On
+real untagged content the HandBrake encode scored within 0.1 VMAF of a direct
+ffmpeg libsvtav1 encode of the same window — the pipeline loses nothing to colour.
+
+Consequence for operators: an untagged source's output claims BT.709 where the
+source claimed nothing. Every player resolves `unknown` to BT.709 for HD content
+anyway, so playback is unaffected; the difference is only visible in a tool that
+compares tags. No flags are added to `build_encode_command` for this — they would
+change the tags the encode would set anyway, and nothing else.
+
 ## Open decisions
 
 **Language filtering defaults — DECIDED (issue #297, 2026-10-25).** The two keys
