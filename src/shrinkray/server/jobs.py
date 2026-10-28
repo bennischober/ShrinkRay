@@ -813,10 +813,18 @@ def execute_plan(
         # persist the decision for later encodes ("quicksave"): chosen CRF
         # AND skip verdicts short-circuit a future encode's probing when
         # the fingerprint matches. Best-effort: an unscanned movie has no
-        # file row, the plan is simply not reusable then.
+        # file row, the plan is simply not reusable then. The record call
+        # sits INSIDE the per-movie error handling (issue #436's round-2
+        # review): its identity gate raises when the file changed while the
+        # run was deciding it, and one changed file is one error entry,
+        # never an aborted plan job.
         from shrinkray.service import record_plan
 
-        record_plan(connection, movie, result, config)
+        try:
+            record_plan(connection, movie, result, config)
+        except (RuntimeError, FileNotFoundError) as e:
+            plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+            continue
         entry = {
             "movie": movie.name,
             "state": "skip" if result.skipped_reason else "encode",
