@@ -234,35 +234,46 @@ def is_stable(path: Path) -> bool:
 def wait_for_stable(
     path: Path,
     limit: float = STABLE_WAIT_LIMIT,
-    sleep: float = STABLE_CHECK_INTERVAL,
+    cancel: threading.Event | None = None,
 ) -> bool:
-    """Waits until the file settles, bounded; the one seam for both entries
-    (issue #437).
+    """Waits until the file settles, bounded and cancel-aware; the one seam
+    for both entries (issue #437).
 
     Calls the same witness the watcher uses (`is_stable`: size unchanged
     across a STABLE_CHECK_INTERVAL sleep, last change at least
     STABLE_MIN_AGE ago) in a loop until it says stable or `limit` seconds
-    have passed. The watcher's loop needs no bound (it reconsiders on its
-    next pass) and keeps its single is_stable check - an extraction, not a
-    policy change; the one-shot CLI has no next pass, so it waits here and
-    gives up loudly at the limit.
+    have passed - the witness's own interval IS the wait between checks (a
+    second sleep here would double every interval). The watcher's loop
+    needs no bound (it reconsiders on its next pass) and keeps its single
+    is_stable check - an extraction, not a policy change; the one-shot CLI
+    has no next pass, so it waits here and gives up loudly at the limit. A
+    set cancel event raises Cancelled (the #326 contract: closing the
+    terminal cancels the wait too, it never absorbs a signal for minutes).
 
     Args:
         path (Path): The file to wait for.
         limit (float): Total seconds to wait before giving up.
-        sleep (float): Seconds between two witness checks.
+        cancel (threading.Event | None): Cooperative cancellation; when set,
+            the wait raises instead of returning.
 
     Returns:
         bool: True when the file settled, False when the limit expired
             (the caller reports and skips; the file stays eligible).
+
+    Raises:
+        Cancelled: When the cancel event fires during the wait.
     """
     deadline = time.monotonic() + limit
     while True:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("cancelled while waiting for the file to settle")
         if is_stable(path):
             return True
         if time.monotonic() >= deadline:
             return False
-        time.sleep(sleep)
+        # no extra sleep here: is_stable's own size-check interval IS the
+        # wait between two witness checks (a second sleep would double every
+        # interval and overrun the limit by up to one more)
 
 
 def decide(movie: Path, target_vmaf: float, encoder: str) -> str:

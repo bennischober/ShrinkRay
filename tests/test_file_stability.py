@@ -5,10 +5,12 @@ still writing: the stability witness (`is_stable`: size unchanged across a
 STABLE_CHECK_INTERVAL sleep, last change at least STABLE_MIN_AGE ago) lived
 only in the watcher's loop. The seam (`wait_for_stable`) exposes the same
 witness with a bounded wait; the watcher keeps its single unbounded check.
-Every test here is timing-free: the witness is patched, never the clock.
+Every test here is timing-free: the witness is patched, never the clock -
+is_stable's own 30 s interval sleep is behind the patch.
 """
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -27,21 +29,53 @@ class TestWaitForStable(unittest.TestCase):
 
     def test_a_stable_file_returns_immediately(self) -> None:
         with patch.object(watch, "is_stable", return_value=True) as witness:
-            self.assertTrue(watch.wait_for_stable(self.movie, limit=60.0, sleep=0.0))
+            self.assertTrue(watch.wait_for_stable(self.movie, limit=60.0))
         self.assertEqual(witness.call_count, 1)
 
     def test_an_unstable_file_becomes_stable_within_the_limit(self) -> None:
         answers = iter([False, False, True])
-        with patch.object(watch, "is_stable", side_effect=lambda _: next(answers)):
-            self.assertTrue(watch.wait_for_stable(self.movie, limit=600.0, sleep=0.0))
+        with (
+            patch.object(watch, "is_stable", side_effect=lambda _: next(answers)),
+            patch("shrinkray.engine.watch.time.monotonic", side_effect=[0.0, 10.0, 20.0, 30.0]),
+        ):
+            self.assertTrue(watch.wait_for_stable(self.movie, limit=600.0))
 
     def test_a_file_that_never_settles_expires_at_the_limit(self) -> None:
         with (
             patch.object(watch, "is_stable", return_value=False),
             patch("shrinkray.engine.watch.time.monotonic", side_effect=[0.0, 100.0, 700.0]),
-            patch("shrinkray.engine.watch.time.sleep"),
         ):
-            self.assertFalse(watch.wait_for_stable(self.movie, limit=600.0, sleep=30.0))
+            self.assertFalse(watch.wait_for_stable(self.movie, limit=600.0))
+
+    def test_a_set_cancel_event_raises_cancelled(self) -> None:
+        """The #326 contract holds inside the wait: a signal cancels it, it
+        never absorbs the terminal's close for minutes.
+        """
+        cancel = threading.Event()
+        cancel.set()
+        with (
+            patch.object(watch, "is_stable", return_value=False) as witness,
+            self.assertRaises(watch.Cancelled),
+        ):
+            watch.wait_for_stable(self.movie, limit=600.0, cancel=cancel)
+        witness.assert_not_called()
+
+    def test_the_cancel_is_checked_between_witness_calls(self) -> None:
+        """A signal that lands DURING the wait ends it at the next check."""
+        cancel = threading.Event()
+        answers = iter([False, False, True])
+
+        def unstable_then_cancel(_):
+            if next(answers, True):
+                cancel.set()
+            return False
+
+        with (
+            patch.object(watch, "is_stable", side_effect=unstable_then_cancel),
+            patch("shrinkray.engine.watch.time.monotonic", side_effect=[0.0, 10.0, 20.0, 30.0]),
+            self.assertRaises(watch.Cancelled),
+        ):
+            watch.wait_for_stable(self.movie, limit=600.0, cancel=cancel)
 
     def test_the_default_limit_is_the_module_constant(self) -> None:
         with patch.object(watch, "is_stable", return_value=True) as witness:
@@ -103,22 +137,80 @@ class TestCliCallsTheSeam(unittest.TestCase):
             CliRunner().invoke(app, ["encode", str(self.movie), str(self.root / "out")])
         engine.assert_called_once()
 
+    def test_a_cancel_during_the_wait_exits_nonzero(self) -> None:
+        """The #326 contract through the CLI: a signal while the seam waits
+        unwinds through the CLI's cancel handler (exit 1, honest message).
+        """
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+        from shrinkray.tools.process import Cancelled
+
+        with (
+            patch(
+                "shrinkray.engine.watch.wait_for_stable",
+                side_effect=Cancelled("cancelled while waiting for the file to settle"),
+            ),
+            patch("shrinkray.service.all_problems", return_value=[]),
+            patch("shrinkray.engine.pipeline.encode_with_quality") as engine,
+            patch("shrinkray.__main__.log_error") as log_error,
+        ):
+            result = CliRunner().invoke(app, ["encode", str(self.movie), str(self.root / "out")])
+        engine.assert_not_called()
+        self.assertNotEqual(result.exit_code, 0)
+        log_error.assert_called_once()
+
 
 class TestWatcherUnchanged(unittest.TestCase):
     """Criterion 2: the watcher's behavior is unchanged - its loop keeps the
-    single is_stable check (the seam adds nothing to its pass).
+    single is_stable check (the seam adds nothing to its pass). Proven
+    behaviourally: one real watch pass (once=True, the test_watch.py
+    pattern) consults is_stable and never the bounded seam.
     """
 
-    def test_the_watcher_loop_still_uses_the_bare_witness(self) -> None:
-        import inspect
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self.tmp.name)
+        self.inbox = self.tmp_path / "inbox"
+        self.inbox.mkdir()
+        self.out = self.tmp_path / "out"
+        self.out.mkdir()
+        self.movie = self.inbox / "w.mkv"
+        self.movie.write_bytes(b"x" * 16)
 
-        source = inspect.getsource(watch)
-        self.assertIn("if not is_stable(movie):", source)
-        # the watcher never calls the bounded seam (an extraction, not a
-        # policy change)
-        self.assertIn("wait_for_stable(", source)
-        loop_region = source[source.index("for _root, movie in candidates") :]
-        self.assertNotIn("wait_for_stable(", loop_region)
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_the_watcher_loop_still_uses_the_bare_witness(self) -> None:
+        """The watcher's loop keeps its unbounded bare check: one real pass
+        (once=True, the test_watch.py pattern) consults is_stable, never the
+        bounded seam, and encodes as before - behaviourally, not by source
+        inspection.
+        """
+        from contextlib import ExitStack
+
+        from shrinkray.engine import watch as watch_mod
+        from shrinkray.engine.plan import QualityResult
+
+        def fake_encode(*args, **kwargs):
+            return QualityResult(input=Path("x"), output=Path("x"), success=True)
+
+        with (
+            patch.object(watch_mod, "is_stable", return_value=True) as witness,
+            patch.object(watch_mod, "wait_for_stable") as seam,
+            patch(
+                "shrinkray.engine.watch.encode_with_quality",
+                side_effect=fake_encode,
+            ) as encode,
+            patch.object(watch_mod, "WATCH_LOCK_FILE", self.tmp_path / "watch.lock"),
+            patch.object(watch_mod, "disk_free_bytes", return_value=1 << 40),
+        ):
+            stack = ExitStack()
+            with stack:
+                watch_mod.watch([self.inbox], self.out, once=True)
+        witness.assert_called()
+        seam.assert_not_called()
+        encode.assert_called_once()
 
 
 if __name__ == "__main__":

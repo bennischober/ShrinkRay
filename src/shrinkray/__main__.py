@@ -603,7 +603,7 @@ def _record_encodes(
                         # are the cost. The wait is bounded and logged; a file
                         # that never settles is reported and skipped (NOT
                         # marked encoded - a later run re-decides it).
-                        if not wait_for_stable(movie):
+                        if not wait_for_stable(movie, cancel=cancel):
                             log_error(
                                 f"'{movie.name}' did not settle within "
                                 f"{int(STABLE_WAIT_LIMIT)}s (still copying?) - "

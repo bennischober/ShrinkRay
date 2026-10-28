@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -849,6 +850,11 @@ class TestStatelessModeA(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.movie = self.root / "one.mkv"
         self.movie.write_bytes(b"x" * 8)
+        # the file reads as COMPLETE (issue #437): these tests' subject is the
+        # database-free one-shot form, not stability - age the fixture past
+        # STABLE_MIN_AGE so the real seam does not hold the run
+        old = time.time() - 120
+        os.utime(self.movie, (old, old))
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -945,6 +951,11 @@ class TestEncodeInPlace(unittest.TestCase):
         self.library.mkdir()
         self.movie = self.library / "one.mkv"
         self.movie.write_bytes(b"x" * 100)
+        # the file reads as COMPLETE (issue #437): these tests' subject is the
+        # in-place encode, not stability - age the fixture past STABLE_MIN_AGE
+        # so the real seam does not hold the run
+        old = time.time() - 120
+        os.utime(self.movie, (old, old))
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
