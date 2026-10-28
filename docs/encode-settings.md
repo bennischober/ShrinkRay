@@ -105,6 +105,51 @@ same channel layout up to 7.1, no bitrate, no DRC. `flac16` would truncate a 24-
 source (`encavcodecaudio.c` maps it to `AV_SAMPLE_FMT_S16`), and the bare name
 `flac` is not an encoder id at all — an invalid fallback fails job initialisation.
 
+## Colour tags on the way out
+
+For 1080p-class 8-bit 4:2:0 SDR sources — the shape the measurements below used
+(10-bit sources are encoded too, and their fill behaviour is unmeasured) — a source
+with unset colour components comes out of HandBrake with them **written as BT.709**: a fully untagged `yuv420p,tv,unknown` source is written as
+`yuv420p,tv,bt709`, and a source tagged for space only (`yuv420p,tv,bt709` with
+transfer/primaries `unknown`) comes out with the two unset components filled in as
+`bt709` too. HandBrake assumes profile 1-1-1 at scan and carries it through for the HD sample —
+measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27); at SD-sized
+resolutions the assumed profile differs (320x240-1024x576 come out with matrix
+and primaries bt601-family - `smpte170m`/`bt470bg` - while the transfer tag is
+bt709 at every measured size; 1280x720 measured all-bt709, so the boundary is not
+the class line; the tag triple per size is recorded in PR #441's review thread
+comment `6460170853`), and all of it is out of ShrinkRay's encode scope. Already-set components pass through unchanged —
+pinned by `TestSmokeColourRetag.test_set_components_pass_through` (all three
+components set to values the unset-fill would never write — `smpte170m`,
+`smpte170m`, `bt470bg` — survive the encode), not inferable from the acceptance
+run's tagged row, whose set value equals the fill value.
+
+This is signalling, not conversion. The measurement run that settled #258 found no
+conversion filter in HandBrake's verbose log, and `--color-matrix`/`--color-range`
+are output-signalling options: the run measured VMAF byte-identical with and
+without them, which shows the flags add nothing (not that no pixel changed — VMAF
+reads luma only and cannot see colour). On real untagged content the HandBrake
+encode scored 95.9739 against a direct ffmpeg libsvtav1 encode of the same window
+at 95.8941 - a same-window luma comparison (different SVT presets, same CRF)
+showing no colour-driven deficit.
+Two residuals stay open: the seed-pinned synthetic gradients clip still measures
+2.31 VMAF apart between its untagged and tagged rows, unexplained, on that clip
+only; and the real-title low readings that opened #258 (title B ~87 vs ab-av1's
+~97 at CRF 14) are tracked as issue #443, unexplained. The mechanism the issue
+suspected is refuted; those numbers are not.
+
+Consequence for operators: on a 1080p-class 8-bit 4:2:0 SDR source (the measured
+shape), its unset components claim BT.709 on the way out.
+Whether players resolve an untagged HD source to BT.709 is player behaviour this
+repo did not measure; the tags themselves are what this section documents. No flags
+are added to `build_encode_command` for this. On the untagged sample the flags
+were a measured no-op (they set the tags the encode sets anyway). On a source
+with a set component the measured behaviour is the same fill: `--color-matrix
+bt709` on a `smpte170m`-tagged 1080p clip leaves the space tag alone and fills
+the unset transfer/primaries with the flag's value (measured with HandBrake
+1.11.2; record in PR #441's review thread comment `6461940399`) — it does not
+rewrite a set tag.
+
 ## Open decisions
 
 **Language filtering defaults — DECIDED (issue #297, 2026-10-25).** The two keys

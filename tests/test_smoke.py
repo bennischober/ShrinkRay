@@ -32,11 +32,15 @@ from shrinkray import db, service
 from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine.pipeline import encode_with_quality, plan_quality
 
-BINARIES_OK = shutil.which("HandBrakeCLI") is not None and shutil.which("ffmpeg") is not None
+BINARIES_OK = (
+    shutil.which("HandBrakeCLI") is not None
+    and shutil.which("ffmpeg") is not None
+    and shutil.which("ffprobe") is not None
+)
 
 
 @unittest.skipUnless(os.environ.get("SHRINKRAY_SMOKE"), "smoke: opt-in (SHRINKRAY_SMOKE=1)")
-@unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI required on PATH")
+@unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI + ffprobe required on PATH")
 class TestSmokePlanReuse(unittest.TestCase):
     """plan -> record -> encode reuses the plan (real binaries end-to-end)."""
 
@@ -170,6 +174,176 @@ class TestSmokePlanReuse(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(row["crf_source"], "probe")
+
+
+@unittest.skipUnless(os.environ.get("SHRINKRAY_SMOKE"), "smoke: opt-in (SHRINKRAY_SMOKE=1)")
+@unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI + ffprobe required on PATH")
+class TestSmokeColourRetag(unittest.TestCase):
+    """An untagged source's unset colour components come out tagged BT.709 (issue #258).
+
+    Pins the documented re-tagging: what HandBrake writes for tags is a binary
+    behaviour, so a stub cannot catch a HandBrake change - this test can."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.clip = self.root / "untagged.mkv"
+        self._make_untagged_clip(self.clip)
+        self.enc = self.root / "untagged-enc.mkv"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _probe_tags(path: Path) -> dict:
+        """Reads the video stream's colour tags with ffprobe."""
+        import json as _json
+
+        out = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=pix_fmt,color_range,color_space,color_transfer,color_primaries",
+                "-of",
+                "json",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return _json.loads(out.stdout)["streams"][0]
+
+    @staticmethod
+    def _make_untagged_clip(path: Path) -> None:
+        """A real 10 s 1080p-class clip with NO colour tags.
+
+        lavfi's testsrc encodes without colour tags by default - nothing strips
+        tags here, and the setup verifies the premise (fail loudly if ffmpeg
+        starts tagging its output - the test's premise would be gone). The
+        fixture is 1080p-class because HandBrake's assumed colour profile is
+        resolution-dependent (at SD sizes the matrix and primaries come out
+        bt601-family while the transfer tag is bt709 at every measured size;
+        PR #441's review thread comment `6460170853` posts the tag triple per
+        size), and ShrinkRay only encodes 1080p+."""
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=10:size=1920x1080:rate=25",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "18",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                str(path),
+            ],
+            check=True,
+            timeout=120,
+        )
+        tags = TestSmokeColourRetag._probe_tags(path)
+        unset = [
+            k
+            for k in ("color_space", "color_transfer", "color_primaries")
+            if tags.get(k) in (None, "unknown")
+        ]
+        if len(unset) != 3:
+            raise AssertionError(f"premise: the generated clip must be fully untagged, got {tags}")
+
+    def test_unset_components_come_out_bt709(self):
+        """The re-tagging (issue #258): unset in -> bt709 out.
+
+        The set-components case is the sibling test below; this fixture is fully
+        untagged by construction and cannot observe it."""
+        from shrinkray.tools.handbrake import build_encode_command, find_handbrake
+
+        handbrake = find_handbrake()
+        self.assertIsNotNone(handbrake, "HandBrakeCLI not found")
+        command = build_encode_command(handbrake, self.clip, self.enc, 28, "svt_av1", "10")
+        subprocess.run(command, check=True, capture_output=True, timeout=300)
+
+        src = self._probe_tags(self.clip)
+        out = self._probe_tags(self.enc)
+        self.assertEqual(out["pix_fmt"], "yuv420p")
+        for key in ("color_space", "color_transfer", "color_primaries"):
+            self.assertEqual(
+                out.get(key),
+                "bt709",
+                f"the unset '{key}' must come out as bt709 (source had {src.get(key)})",
+            )
+
+    def test_set_components_pass_through(self):
+        """The doc's other claim: already-set components survive the encode.
+
+        All three components are set to values HandBrake would NOT write itself
+        (smpte170m/smpte170m/bt470bg; the unset-fill uses bt709): survival of
+        THOSE values proves pass-through for every component; a forced rewrite
+        would produce bt709."""
+        from shrinkray.tools.handbrake import build_encode_command, find_handbrake
+
+        # all three components set to non-bt709 values: a stream copy from the
+        # untagged fixture with explicit tags writes exactly those
+        partial = self.root / "partial.mkv"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-v",
+                "error",
+                "-i",
+                str(self.clip),
+                "-c:v",
+                "copy",
+                "-colorspace",
+                "smpte170m",
+                "-color_trc",
+                "smpte170m",
+                "-color_primaries",
+                "bt470bg",
+                str(partial),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        tags = self._probe_tags(partial)
+        self.assertEqual(tags.get("color_space"), "smpte170m", "premise: space tagged smpte170m")
+        self.assertEqual(
+            tags.get("color_transfer"), "smpte170m", "premise: transfer tagged smpte170m"
+        )
+        self.assertEqual(
+            tags.get("color_primaries"), "bt470bg", "premise: primaries tagged bt470bg"
+        )
+
+        handbrake = find_handbrake()
+        self.assertIsNotNone(handbrake)
+        enc = self.root / "partial-enc.mkv"
+        command = build_encode_command(handbrake, partial, enc, 28, "svt_av1", "10")
+        subprocess.run(command, check=True, capture_output=True, timeout=300)
+
+        out = self._probe_tags(enc)
+        for key, val in (
+            ("color_space", "smpte170m"),
+            ("color_transfer", "smpte170m"),
+            ("color_primaries", "bt470bg"),
+        ):
+            self.assertEqual(
+                out.get(key), val, f"the set '{key}' must SURVIVE (a rewrite would emit bt709)"
+            )
 
 
 if __name__ == "__main__":
