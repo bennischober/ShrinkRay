@@ -365,6 +365,26 @@ class TestEngineSkipPathGuard(unittest.TestCase):
             movie_b = root / "b.mkv"
             movie_a.write_bytes(b"x" * 16)
             movie_b.write_bytes(b"x" * 16)
+            # the record path needs a database: without --db the connection is
+            # None and the record call (the code under test) never runs
+            db_file = root / "metadata.db"
+            conn = db.connect(db_file)
+            stat = movie_b.stat()
+            db.upsert_file(
+                conn,
+                db.MovieRecord(
+                    path=movie_b,
+                    mtime=stat.st_mtime,
+                    size=stat.st_size,
+                    name=movie_b.name,
+                    category="movies",
+                    crop=0,
+                    hdr=0,
+                    other_codecs="",
+                    audio_languages="",
+                ),
+            )
+            conn.close()
             calls: list[Path] = []
 
             def fake_plan(movie_in, *args, **kwargs):
@@ -393,9 +413,13 @@ class TestEngineSkipPathGuard(unittest.TestCase):
                 patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
                 patch("shrinkray.service.all_problems", return_value=[]),
             ):
-                result = CliRunner().invoke(app, ["plan", str(root), "--no-table"])
+                result = CliRunner().invoke(app, ["plan", str(root), "--db", str(db_file)])
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(len(calls), 2, "the second movie must still be planned")
+        # both halves of the pin: the error row renders (the run did not
+        # abort before the table printed) and the run continued
+        self.assertIn("b.mkv", result.output)
+        self.assertIn("error", result.output)
 
 
 def _config():
