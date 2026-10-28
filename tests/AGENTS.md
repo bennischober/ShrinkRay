@@ -23,6 +23,7 @@ Flat by design: `tests/fixtures/` is the only subdirectory, and no `tests/engine
 | `test_pause` | `engine.pause` (operator flag, manual-encode markers, dead/reused pid, no-/proc age fallback), the watcher holding files back, a plan job waiting and reporting, `paused` on `/api/status`, the CLI encode's marker (issue #250) |
 | `test_config_reload` | the config on `/data` (issue #247): `config.seed_config_file`/`seed_config_from_env` and the CLI callback, `refresh_config` (reload, invalid edit kept out, error once), the watcher's `WatchSettings` provider, per-movie refresh in `server.jobs`, `config_error` on `/api/status` |
 | `test_container`, `test_container_config`, `test_release_notes` | repo artifacts, not the package: cgroup CPU plan, `container-config.json` + `Dockerfile` + `.dockerignore`, `tools/healthcheck.py`, `tools/console_banner.py` (every named command exists), `tools/container-shrinkray.sh` + `tools/container-console.sh` (syntax and rules; behaviour is the release smoke test's), `tools/release_notes.py` (via `sys.path.insert`) |
+| `test_workflows` | `.github/workflows/codeql-analysis.yml` + `dependabot.yml`: all three `github/codeql-action` steps pin one commit, and Dependabot groups `github/codeql-action/*` so the next bump stays uniform (#448, #449) |
 
 ## CONVENTIONS
 
