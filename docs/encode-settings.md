@@ -117,11 +117,12 @@ measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27); at SD-si
 resolutions the assumed profile differs (320x240-1024x576 come out with matrix
 and primaries bt601-family - `smpte170m`/`bt470bg` - while the transfer tag is
 bt709 at every measured size; 1280x720 measured all-bt709, so the boundary is not
-the class line; the tag triple per size is recorded in the PR's review thread
+the class line; the tag triple per size is recorded in PR #441's review thread
 comment `6460170853`), and all of it is out of ShrinkRay's encode scope. Already-set components pass through unchanged —
-pinned by `TestSmokeColourRetag.test_set_components_pass_through` (`smpte170m`, a
-value the unset-fill would never write, survives the encode), not inferable from
-the acceptance run's tagged row, whose set value equals the fill value.
+pinned by `TestSmokeColourRetag.test_set_components_pass_through` (all three
+components set to values the unset-fill would never write — `smpte170m`,
+`smpte170m`, `bt470bg` — survive the encode), not inferable from the acceptance
+run's tagged row, whose set value equals the fill value.
 
 This is signalling, not conversion. The measurement run that settled #258 found no
 conversion filter in HandBrake's verbose log, and `--color-matrix`/`--color-range`
