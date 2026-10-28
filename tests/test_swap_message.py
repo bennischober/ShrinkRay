@@ -33,8 +33,9 @@ class TestReplacedSentenceSize(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_the_sentence_reports_the_originals_size(self) -> None:
-        """The GB number in the Replaced sentence is the retained ORIGINAL's
-        (size_before), not the new file's (size_before != size_after here).
+        """A real swap's Replaced sentence prints and names the retained
+        original file. (The GB number itself is pinned by the faked-outcome
+        test below: at 800 vs 300 bytes both candidates round to 0.00 GB.)
         """
         with patch("shrinkray.__main__.console") as fake_console:
             _swap_into_place(self.connection, self.source, self.output)
