@@ -898,6 +898,10 @@ def execute_encode(
     )
     with staging as staging_str:
         write_dir = Path(staging_str)
+        # one payload scan per encode job (issue #374): _encode_measured
+        # resolves the movies itself; the exclusion is the directory the
+        # job writes into - the user's output_dir in two-directory mode,
+        # the per-run staging directory in place.
         outcomes = _encode_measured(
             job,
             connection,
@@ -905,13 +909,6 @@ def execute_encode(
             progress,
             config,
             payload,
-            movies=resolve_movies(
-                payload,
-                config,
-                connection=connection,
-                exclude=output_dir,
-                db_file=_db_file_of(connection),
-            ),
             output_dir=write_dir,
             in_place=output_dir is None,
         )
@@ -925,11 +922,13 @@ def _encode_measured(
     progress: ProgressCallback | None,
     config: "Conf",
     payload: dict,
-    movies: list[Path],
     output_dir: Path,
     in_place: bool,
 ) -> dict:
     """Runs one encode job's body (the measured quality path) against write_dir.
+
+    Resolves the payload's movies itself (issue #374): one scan per encode
+    job, excluding the directory the job writes into.
 
     Args:
         job (Job): The job being executed.
@@ -938,7 +937,6 @@ def _encode_measured(
         progress: Callback progress(dict) for live updates.
         config: The config to encode with (refreshed per file inside).
         payload (dict): The job's payload.
-        movies (list[Path]): The movies to encode.
         output_dir (Path): Where encoded files are written (a per-run staging
             directory when the job encodes in place).
         in_place (bool): True when the payload named no output directory: a
@@ -956,8 +954,14 @@ def _encode_measured(
         swap_encode_into_place,
     )
 
-    # resolve_movies (not a bare scan_movies): a payload path may be a
-    # single movie FILE (per-movie action from the UI) — scanning it as a
+    # The job's ONE payload scan (issue #374): execute_encode passes no
+    # movies, so the walk the caller used to throw away is gone and the one
+    # that remains is the call that consumes it. The exclusion is the
+    # directory the job writes into (output_dir): the user's output
+    # directory in two-directory mode - its outputs must never re-enter a
+    # payload scanning the same root - and the per-run staging directory in
+    # place. resolve_movies (not a bare scan_movies): a payload path may be
+    # a single movie FILE (per-movie action from the UI) — scanning it as a
     # directory finds nothing and the job reported done with 0 outcomes
     movies = resolve_movies(
         payload, config, connection=connection, exclude=output_dir, db_file=_db_file_of(connection)
