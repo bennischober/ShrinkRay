@@ -272,6 +272,19 @@ def record_plan(
         # planning): storing the plan would pin the NEW fingerprint to the
         # OLD probes - fail safe, the next plan run re-records it
         return None
+    if getattr(result, "input_mtime", None) is not None and stat.st_mtime != result.input_mtime:
+        # the size gate above catches a grown/shrunk replacement; this
+        # recheck catches the SAME-SIZE one (issue #436): result.input_mtime
+        # is the run-start capture, a commit-time mtime here would bless
+        # probes from other bytes (the lookup's ±1.0 s tolerance would then
+        # reuse them on every later run). Fail safe like the size branch.
+        return None
+    # the run-start mtime the fingerprint commits under (issue #436); the
+    # getattr keeps the duck-typed results the tests build (no field) on
+    # today's behavior
+    run_mtime = getattr(result, "input_mtime", None)
+    if run_mtime is None:
+        run_mtime = stat.st_mtime
     # the fingerprint stores the EFFECTIVE decision inputs: for HDR the
     # engine overrides target/range and switches to the 10-bit encoder,
     # so a plan of an HDR movie must be recorded under those values. The
@@ -295,7 +308,10 @@ def record_plan(
         # on a plan result, output_size IS the size estimate (a plan never
         # writes a file); the estimate is the UI's prediction number
         result.output_size if result.success else None,
-        stat.st_mtime,
+        # the fingerprint's identity is the RUN-START capture (issue #436):
+        # the commit-time stat is only the size-gate comparison above, never
+        # what the row claims the probes were taken from
+        run_mtime,
         stat.st_size,
         encoder,
         probe_preset,
@@ -570,6 +586,25 @@ def record_quality_results(
         save_verification(connection, encode_id, result)
         return EncodeOutcome(movie=str(movie), encoded=True, encode_id=encode_id)
     if result.skipped_reason is not None:
+        # the record-time recheck (issue #436): the skip verdict rides the
+        # plans row (skipped_reason beside the fingerprint) and is trusted
+        # without re-probing later, so a verdict derived from bytes-A must
+        # not commit under bytes-B's identity. Compared against the result's
+        # run-start facts (the same pattern as record_plan): a changed size
+        # or mtime fails safe - no row, the file is left alone and re-decided
+        # on the next run (the watcher's per-file failure path continues).
+        stat = movie.stat()
+        if (result.input_size and stat.st_size != result.input_size) or (
+            getattr(result, "input_mtime", None) is not None and stat.st_mtime != result.input_mtime
+        ):
+            # loud abort, not log-and-continue (issue #436, invariant 5): a
+            # verdict about bytes that no longer exist is not recordable; the
+            # entry points catch RuntimeError and report it per file
+            raise RuntimeError(
+                f"Not recording the skip verdict for '{movie.name}': the file "
+                "changed while the run was deciding it - the verdict is about "
+                "bytes that no longer exist; the file is re-decided on the next run"
+            )
         save_skip(
             connection,
             movie,

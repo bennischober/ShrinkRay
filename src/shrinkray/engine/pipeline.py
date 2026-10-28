@@ -50,6 +50,12 @@ from shrinkray.engine.encoders import (
 from shrinkray.engine.encoders import (
     encoder_for as encoder_for,
 )
+from shrinkray.engine.identity import (
+    capture_run_identity as capture_run_identity,
+)
+from shrinkray.engine.identity import (
+    ensure_unchanged as ensure_unchanged,
+)
 from shrinkray.engine.plan import (
     CANDIDATE_CODECS as CANDIDATE_CODECS,
 )
@@ -1168,6 +1174,10 @@ def encode_with_quality(
     import time as _time
 
     run_started = _time.perf_counter()
+    # the run's identity, captured ONCE before any gate or sample (issue
+    # #436): the encode-start recheck below compares against THIS capture,
+    # so a CRF chosen from bytes-A is never encoded against bytes-B
+    identity = capture_run_identity(input_file)
     snapshot = _source_snapshot(input_file)
     from shrinkray.engine.plan import is_hdr_file as _is_hdr_file
 
@@ -1336,8 +1346,8 @@ def encode_with_quality(
                 chosen_crf=plan["chosen_crf"],
                 achieved_vmaf=plan["achieved_vmaf"],
                 probes=_plan_probes(plan),
-                input_size=input_file.stat().st_size,
-                output_size=input_file.stat().st_size,
+                input_size=identity.size,
+                output_size=identity.size,
                 error=f"skipped: {reason}",
                 skipped_reason=reason,
                 encoder_preset=encoder_preset,
@@ -1394,6 +1404,11 @@ def encode_with_quality(
                 source_bit_depth=(snapshot or {}).get("bit_depth"),
             )
         except SkipEncode as e:
+            # the record-time recheck (issue #436): the skip verdict rides
+            # the plans row and is trusted without re-probing later, so it
+            # must not commit for bytes the run no longer sees. Loud abort,
+            # the caller reports it (the entry points catch RuntimeError).
+            ensure_unchanged(input_file, identity, "encode")
             return QualityResult(
                 input=input_file,
                 output=output_file,
@@ -1403,8 +1418,8 @@ def encode_with_quality(
                 chosen_crf=e.chosen_crf,
                 achieved_vmaf=e.achieved_vmaf,
                 probes=[],
-                input_size=input_file.stat().st_size,
-                output_size=input_file.stat().st_size,
+                input_size=identity.size,
+                output_size=identity.size,
                 skipped_reason=(
                     "target unreachable" if "unreachable" in str(e) else "no size gain"
                 ),
@@ -1421,6 +1436,12 @@ def encode_with_quality(
         probe_seconds = _time.perf_counter() - run_started
 
     log(f"Chosen CRF {crf} (VMAF {achieved})")
+    # the encode-start recheck (issue #436): a CRF chosen from bytes-A and
+    # applied to bytes-B is an UNMEASURED decision for bytes-B (no fixed
+    # preset path to fall into, #202) and costs hours - one stat is the
+    # cheapest insurance in the repo. Loud abort: the entry points catch
+    # RuntimeError and report it per file.
+    ensure_unchanged(input_file, identity, "encode")
     handbrake = find_handbrake()
     if handbrake is None:  # already checked in _probe_movie, for mypy
         raise RuntimeError(f"'{HANDBRAKE_BINARY}' not found!")

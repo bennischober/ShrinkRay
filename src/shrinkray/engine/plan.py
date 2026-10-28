@@ -25,6 +25,7 @@ from shrinkray.engine.encoders import (
     DEFAULT_HDR_TARGET_VMAF,
     encoder_for,
 )
+from shrinkray.engine.identity import capture_run_identity, ensure_unchanged
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_COUNT,
     DEFAULT_SAMPLE_EVERY,
@@ -304,6 +305,10 @@ class QualityResult:
         output_size (int): Size of the output file in bytes.
         error (str | None): The error message if the encode failed.
         input_bit_depth (int | None): The source's bit depth (issue #234).
+        input_mtime (float | None): The run-start st_mtime (issue #436): the
+            plan fingerprint commits from the stat the run DECIDED about,
+            not a commit-time re-read; None when the caller carries none
+            (a result built outside the engine's capture).
     """
 
     input: Path
@@ -325,6 +330,7 @@ class QualityResult:
     verified_subsample: int | None = None
     hdr: bool = False
     tool_versions: str | None = None
+    input_mtime: float | None = None
     input_width: int | None = None
     input_height: int | None = None
     input_codec: str | None = None
@@ -447,6 +453,12 @@ def plan_quality(
     """
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
+
+    # the run's identity, captured ONCE before any gate or sample (issue
+    # #436): every decision this run makes is about THESE bytes, and the
+    # record-time rechecks below compare against this capture - not against
+    # an ad hoc stat per stage
+    identity = capture_run_identity(input_file)
 
     hdr = is_hdr_file(input_file)
     # the effective decision inputs: for HDR the engine overrides the
@@ -626,7 +638,6 @@ def plan_quality(
             samples=samples,
         )
 
-        input_size = input_file.stat().st_size
         factor = estimate_size_factor(
             samples,
             workdir,
@@ -645,6 +656,11 @@ def plan_quality(
         )
 
         if skip:
+            # the record-time recheck (issue #436): the skip verdict rides the
+            # plans row and is trusted without re-probing later, so it must
+            # not commit for bytes the run no longer sees. Loud abort, the
+            # caller reports it (the entry points catch RuntimeError).
+            ensure_unchanged(input_file, identity, "plan")
             return QualityResult(
                 input=input_file,
                 output=input_file,
@@ -653,8 +669,8 @@ def plan_quality(
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probes=probes,
-                input_size=input_size,
-                output_size=input_size,
+                input_size=identity.size,
+                output_size=identity.size,
                 error="skipped: re-encode would not shrink the file",
                 skipped_reason="no size gain",
                 encoder_preset=encoder_preset,
@@ -668,6 +684,9 @@ def plan_quality(
                 vmaf_recipe=recipe.fingerprint(),
             )
         if achieved < target_vmaf and crf == crf_range[0]:
+            # the unreachable verdict is recorded like a skip (issue #436):
+            # the same record-time recheck applies
+            ensure_unchanged(input_file, identity, "plan")
             return QualityResult(
                 input=input_file,
                 output=input_file,
@@ -676,8 +695,8 @@ def plan_quality(
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probes=probes,
-                input_size=input_size,
-                output_size=input_size,
+                input_size=identity.size,
+                output_size=identity.size,
                 error=(
                     f"skipped: target VMAF {target_vmaf} unreachable "
                     f"(best {achieved} at CRF {crf_range[0]})"
@@ -694,6 +713,10 @@ def plan_quality(
                 vmaf_recipe=recipe.fingerprint(),
             )
 
+        # the record-time recheck on the SUCCESS path too (issue #436): the
+        # chosen CRF and the size estimate are decisions about these bytes,
+        # and the fingerprint they commit under must be the run-start stat
+        ensure_unchanged(input_file, identity, "plan")
         return QualityResult(
             input=input_file,
             output=input_file,
@@ -702,8 +725,9 @@ def plan_quality(
             chosen_crf=crf,
             achieved_vmaf=achieved,
             probes=probes,
-            input_size=input_size,
-            output_size=int(input_size * factor),
+            input_size=identity.size,
+            output_size=int(identity.size * factor),
+            input_mtime=identity.mtime,
             error=None,
             encoder_preset=encoder_preset,
             probe_encoder_preset=probe_encoder_preset,
