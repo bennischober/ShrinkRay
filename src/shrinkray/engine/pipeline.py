@@ -1204,6 +1204,8 @@ def encode_with_quality(
             target_vmaf=target_vmaf,
             error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
             skipped_reason="too short",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             hdr=hdr,
             encoder=effective_encoder,
         )
@@ -1236,6 +1238,8 @@ def encode_with_quality(
                 "(a lower-resolution source saves too little to be worth the probe)"
             ),
             skipped_reason="resolution too low",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             hdr=hdr,
             encoder=effective_encoder,
         )
@@ -1252,6 +1256,8 @@ def encode_with_quality(
                 "minimum (too little to save for the probe cost)"
             ),
             skipped_reason="below min size",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             hdr=hdr,
             encoder=effective_encoder,
         )
@@ -1273,6 +1279,8 @@ def encode_with_quality(
                 "never re-encoded"
             ),
             skipped_reason="source codec not a candidate",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             hdr=hdr,
             encoder=effective_encoder,
         )
@@ -1289,6 +1297,8 @@ def encode_with_quality(
             success=False,
             target_vmaf=target_vmaf,
             error=space_message,
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             hdr=hdr,
             encoder=effective_encoder,
         )
@@ -1350,6 +1360,7 @@ def encode_with_quality(
                 output_size=identity.size,
                 error=f"skipped: {reason}",
                 skipped_reason=reason,
+                input_mtime=identity.mtime,
                 encoder_preset=encoder_preset,
                 probe_encoder_preset=probe_encoder_preset,
                 crop=None,
@@ -1423,6 +1434,7 @@ def encode_with_quality(
                 skipped_reason=(
                     "target unreachable" if "unreachable" in str(e) else "no size gain"
                 ),
+                input_mtime=identity.mtime,
                 encoder_preset=encoder_preset,
                 probe_encoder_preset=probe_encoder_preset,
                 crf_range=crf_range,
@@ -1484,6 +1496,8 @@ def encode_with_quality(
             achieved_vmaf=achieved,
             probes=probes,
             error=encode_result.error,
+            input_size=identity.size,
+            input_mtime=identity.mtime,
         )
 
     # the size gate that matters: the probe estimate is a prediction from a few
@@ -1509,6 +1523,8 @@ def encode_with_quality(
                 f"({final_input_size} -> {final_output_size} bytes)"
             ),
             skipped_reason="output not smaller",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             encoder_preset=encoder_preset,
             probe_encoder_preset=probe_encoder_preset,
             crop=crop,
@@ -1597,8 +1613,13 @@ def encode_with_quality(
         probes=probes,
         verified_vmaf=verified_vmaf,
         verified_subsample=verified_subsample,
+        # the encode succeeded against the CURRENT bytes (the encode-start
+        # recheck passed and the child ran to completion): the input size is
+        # re-read here because the artifact replaced nothing yet, and the
+        # identity carries the run-start capture for the record path
         input_size=input_file.stat().st_size,
         output_size=output_file.stat().st_size,
+        input_mtime=identity.mtime,
         encoder_preset=encoder_preset,
         probe_encoder_preset=probe_encoder_preset,
         encode_seconds=_time.perf_counter() - run_started,

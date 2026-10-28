@@ -476,6 +476,9 @@ def plan_quality(
     duration = probe_duration_seconds(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
     if duration is not None and duration < MIN_ENCODE_SECONDS:
+        # every return carries the run's identity (issue #436): a row that
+        # commits a verdict must commit the facts of the bytes it decided
+        # about, never a commit-time stat
         return QualityResult(
             input=input_file,
             output=input_file,
@@ -483,6 +486,8 @@ def plan_quality(
             target_vmaf=target_vmaf,
             error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
             skipped_reason="too short",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
@@ -517,6 +522,8 @@ def plan_quality(
                 "(a lower-resolution source saves too little to be worth the probe)"
             ),
             skipped_reason="resolution too low",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
@@ -539,6 +546,8 @@ def plan_quality(
                 "minimum (too little to save for the probe cost)"
             ),
             skipped_reason="below min size",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
@@ -567,6 +576,8 @@ def plan_quality(
                 "never re-encoded"
             ),
             skipped_reason="source codec not a candidate",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
@@ -673,6 +684,7 @@ def plan_quality(
                 output_size=identity.size,
                 error="skipped: re-encode would not shrink the file",
                 skipped_reason="no size gain",
+                input_mtime=identity.mtime,
                 encoder_preset=encoder_preset,
                 probe_encoder_preset=probe_encoder_preset,
                 crop=crop,
@@ -702,6 +714,7 @@ def plan_quality(
                     f"(best {achieved} at CRF {crf_range[0]})"
                 ),
                 skipped_reason="target unreachable",
+                input_mtime=identity.mtime,
                 encoder_preset=encoder_preset,
                 probe_encoder_preset=probe_encoder_preset,
                 crop=crop,

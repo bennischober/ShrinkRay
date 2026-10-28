@@ -267,24 +267,25 @@ def record_plan(
     if row is None:
         return None
     stat = movie.stat()
-    if result.input_size and stat.st_size != result.input_size:
-        # the file changed between probing and recording (replace while
-        # planning): storing the plan would pin the NEW fingerprint to the
-        # OLD probes - fail safe, the next plan run re-records it
-        return None
-    if getattr(result, "input_mtime", None) is not None and stat.st_mtime != result.input_mtime:
-        # the size gate above catches a grown/shrunk replacement; this
-        # recheck catches the SAME-SIZE one (issue #436): result.input_mtime
-        # is the run-start capture, a commit-time mtime here would bless
-        # probes from other bytes (the lookup's ±1.0 s tolerance would then
-        # reuse them on every later run). Fail safe like the size branch.
-        return None
-    # the run-start mtime the fingerprint commits under (issue #436); the
-    # getattr keeps the duck-typed results the tests build (no field) on
-    # today's behavior
     run_mtime = getattr(result, "input_mtime", None)
-    if run_mtime is None:
-        run_mtime = stat.st_mtime
+    if (result.input_size and stat.st_size != result.input_size) or (
+        run_mtime is not None and stat.st_mtime != run_mtime
+    ):
+        # the file changed between deciding and recording (replace while
+        # planning): storing the plan would pin the NEW fingerprint to the
+        # OLD probes - a verdict about bytes that no longer exist. Loud
+        # abort (issue #436, criterion 3; the pre-#436 size branch returned
+        # None silently - a silent None reads as "nothing to record", and
+        # the callers already report a RuntimeError per file). The getattr
+        # keeps the duck-typed results the tests build (no field) on that
+        # older behavior.
+        if run_mtime is not None:
+            raise RuntimeError(
+                f"Not recording the plan for '{movie.name}': the file changed "
+                "while the run was deciding it - the verdict is about bytes "
+                "that no longer exist; the file is re-decided on the next run"
+            )
+        return None
     # the fingerprint stores the EFFECTIVE decision inputs: for HDR the
     # engine overrides target/range and switches to the 10-bit encoder,
     # so a plan of an HDR movie must be recorded under those values. The
@@ -297,6 +298,10 @@ def record_plan(
     probe_preset = (
         result.probe_encoder_preset or result.encoder_preset or DEFAULT_PROBE_ENCODER_PRESET
     )
+    if run_mtime is None:
+        # a duck-typed result without the #436 field (the tests' SimpleNamespace
+        # fakes): the commit-time stat is the only identity available
+        run_mtime = stat.st_mtime
     return db.save_plan(
         connection,
         row["id"],
@@ -309,7 +314,7 @@ def record_plan(
         # writes a file); the estimate is the UI's prediction number
         result.output_size if result.success else None,
         # the fingerprint's identity is the RUN-START capture (issue #436):
-        # the commit-time stat is only the size-gate comparison above, never
+        # the commit-time stat is only the change-gate comparison above, never
         # what the row claims the probes were taken from
         run_mtime,
         stat.st_size,

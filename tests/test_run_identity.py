@@ -237,6 +237,120 @@ class TestEncodeStartRecheck(unittest.TestCase):
         self.assertTrue(result.success)
 
 
+class TestEngineSkipPathGuard(unittest.TestCase):
+    """The reviewer's finding 1: the guards must hold for the shape the
+    ENGINE emits - a skip produced by plan_quality/encode_with_quality
+    carries the run-start mtime, so a same-size replacement before the
+    record call aborts instead of committing a poisoned fingerprint.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.movie = _movie(self.root, b"ORIGINAL" * 100)
+        self.connection = db.connect(self.root / "metadata.db")
+        db.upsert_file(self.connection, _file_row(self.movie))
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def _plan_with_engine_skip(self):
+        """Runs plan_quality with the mocked search returning skip=True and
+        the same-size rewrite inside it (the call-shaped seam)."""
+
+        def fake_search(*args, **kwargs):
+            self.movie.write_bytes(b"REPLACED" * 100)
+            return 20, 96.5, [], True
+
+        with (
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.plan.detect_crop_summary_cached", return_value=None),
+            patch("shrinkray.engine.plan.detect_crop_rect", return_value=None),
+            patch("shrinkray.engine.plan.source_codec", return_value="h264"),
+            patch("shrinkray.engine.plan.source_bit_depth", return_value=None),
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=3600.0),
+            patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+            patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
+            patch("shrinkray.engine.plan.find_optimal_crf_and_skip", side_effect=fake_search),
+            self.assertRaises(RuntimeError),
+        ):
+            plan_quality(self.movie, db_file=None)
+
+    def test_an_engine_skip_result_aborts_on_a_same_size_replacement(self) -> None:
+        """The engine's own recheck fires first (the rewrite happens inside
+        the search); no plan row may exist afterwards.
+        """
+        self._plan_with_engine_skip()
+        self.assertIsNone(
+            db.get_valid_plan(
+                self.connection,
+                self.movie,
+                encoder="svt_av1",
+                encoder_preset="5",
+                target_vmaf=96.0,
+                crf_range=(14, 45),
+                sample_count=6,
+                sample_seconds=10.0,
+                crop_sample_count=10,
+                vmaf_statistic="mean",
+                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+            )
+        )
+
+    def test_the_engine_skip_result_carries_the_run_mtime_for_the_record_guard(
+        self,
+    ) -> None:
+        """The guard's second half: even when the engine's recheck is outside
+        the window (a replacement AFTER plan_quality returned), the skip
+        result carries input_mtime, so record_plan's own gate fires.
+        """
+        from shrinkray.service import record_plan
+
+        def fake_search(*args, **kwargs):
+            return 20, 96.5, [], True
+
+        with (
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.plan.detect_crop_summary_cached", return_value=None),
+            patch("shrinkray.engine.plan.detect_crop_rect", return_value=None),
+            patch("shrinkray.engine.plan.source_codec", return_value="h264"),
+            patch("shrinkray.engine.plan.source_bit_depth", return_value=None),
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=3600.0),
+            patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+            patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
+            patch("shrinkray.engine.plan.find_optimal_crf_and_skip", side_effect=fake_search),
+        ):
+            result = plan_quality(self.movie, db_file=None)
+        self.assertIsNotNone(result.input_mtime)
+        # the replacement happens AFTER the engine returned (a caller-side
+        # window the engine's recheck cannot cover)
+        self.movie.write_bytes(b"REPLACED" * 100)
+        with self.assertRaises(RuntimeError):
+            record_plan(self.connection, self.movie, result, _config())
+
+    def test_a_gate_skip_result_stops_the_record_when_the_file_grew(self) -> None:
+        """The reviewer's finding 2: a gate-skip result (below min size) now
+        carries the run facts, so a replacement that grew the file between
+        the gate and the record cannot commit the new identity with the old
+        verdict.
+        """
+        from shrinkray.service import record_plan
+
+        with (
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=3600.0),
+            patch("shrinkray.engine.plan.source_codec", return_value="h264"),
+            patch("shrinkray.engine.plan.source_bit_depth", return_value=None),
+        ):
+            result = plan_quality(self.movie, db_file=None, min_source_size_gb=0.001)
+        self.assertEqual(result.skipped_reason, "below min size")
+        self.assertIsNotNone(result.input_mtime)
+        # the file grew after the gate decided (the replacement window)
+        self.movie.write_bytes(b"X" * 100_000)
+        with self.assertRaises(RuntimeError):
+            record_plan(self.connection, self.movie, result, _config())
+
+
 def _config():
     from shrinkray.config import load_config
 

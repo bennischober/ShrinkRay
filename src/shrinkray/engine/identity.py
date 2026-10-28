@@ -16,8 +16,6 @@ same-size, mtime-preserved case is #438's boundary.
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.logger import log_error
-
 
 @dataclass(frozen=True)
 class RunIdentity:
@@ -72,14 +70,3 @@ def ensure_unchanged(movie: Path, identity: RunIdentity, stage: str) -> None:
             "record a decision about bytes it never measured; the file is "
             "left alone and re-decided on the next run"
         )
-
-
-def report_identity_abort(movie: Path, error: RuntimeError) -> None:
-    """Logs an identity abort the way the engine reports per-file failures.
-
-    Args:
-        movie (Path): The file the run gave up on.
-        error (RuntimeError): The abort's RuntimeError (its message is the
-            user-visible report).
-    """
-    log_error(str(error))
