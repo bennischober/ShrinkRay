@@ -4,8 +4,10 @@ On a host where ffmpeg is missing from PATH or cannot spawn (EMFILE/ENOMEM),
 a plan or encode must report the problem honestly and leave the file alone -
 never a FileNotFoundError traceback out of the probe step. The timeline pass
 got its guard in #398/#384; the sampled fallback (detect_crop_rect) is this
-issue's fix, and it is the first ffmpeg spawn of every plan/encode flow, so
-its defined outcome (RuntimeError) is what the entry points catch.
+issue's fix. It raises instead of degrading: the timeline pass spawns first
+and already degrades there, so a second degrade would report an unmeasured
+file as "no bars" (invariant 8), and the RuntimeError it raises is the shape
+the entry points catch.
 """
 
 import tempfile
