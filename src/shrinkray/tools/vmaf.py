@@ -538,10 +538,15 @@ def measure_vmaf(
     command = build_vmaf_command(
         distorted, reference, threads, crop=crop, hdr=hdr, subsample=subsample, recipe=recipe
     )
+    # watchdog=False (issue #431): libvmaf is silent by design until the whole
+    # file is scored - a full-precision measurement of a large movie produces
+    # no output for its entire run, so the stall watchdog kills a healthy
+    # measurement as hung. The cancel event remains the kill path.
     code, err = _run(
         command,
         cwd=workdir,
         cancel=cancel,
+        watchdog=False,
     )
     if code == -1:
         raise Cancelled("cancelled during vmaf measurement")
