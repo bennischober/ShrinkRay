@@ -59,6 +59,7 @@ class TestSampledFallbackMissingBinary(unittest.TestCase):
         pass and must keep reaching detect_crop_rect).
         """
         with (
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=3600.0),
             patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
             patch(
                 "shrinkray.engine.crop._run",

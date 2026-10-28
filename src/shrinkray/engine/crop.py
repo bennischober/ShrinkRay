@@ -612,10 +612,11 @@ def detect_crop_rect(
             # ffmpeg missing from PATH or not spawnable (EMFILE/ENOMEM): the
             # probe step fails with the documented shape instead of a
             # traceback (issue #401). The timeline pass has its own #398
-            # guard and DEGRADES here would misreport an unmeasured file as
-            # "no bars" - and the run cannot proceed anyway, this being the
-            # first ffmpeg spawn of every plan/encode flow. The entry points
-            # (CLI, job worker, watcher) catch RuntimeError and report it.
+            # guard: DEGRADING here would misreport an unmeasured file as
+            # "no bars" (invariant 8) - the run cannot proceed anyway, and
+            # the entry points (CLI encode/plan, job worker, watcher) catch
+            # RuntimeError and report it (the CLI encode aborts the batch:
+            # the binary is gone for the rest of it too).
             raise RuntimeError(
                 f"the sampled crop pass could not start ffmpeg for '{movie.name}': {e}"
             ) from e
