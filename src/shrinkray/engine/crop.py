@@ -568,6 +568,11 @@ def detect_crop_rect(
     Returns:
         tuple | None: The (top, bottom, left, right) bars to crop, or None
             if no stable bars were detected.
+
+    Raises:
+        RuntimeError: When ffmpeg cannot start (missing from PATH, EMFILE,
+            ENOMEM): an unmeasured file must never read as "no bars"
+            (issue #401).
     """
     from shrinkray.tools.ffprobe import probe_duration_seconds
 
@@ -587,26 +592,39 @@ def detect_crop_rect(
     for offset in sample_offsets(duration, count):
         if cancel is not None and cancel.is_set():
             return None
-        code, err = _run(
-            [
-                FFMPEG_BINARY,
-                "-y",
-                "-v",
-                "info",
-                "-ss",
-                f"{offset:.3f}",
-                "-t",
-                "2",
-                "-i",
-                str(movie),
-                "-vf",
-                f"cropdetect=limit={CROP_DETECT_LIMIT}:round=2:reset=0",
-                "-f",
-                "null",
-                "-",
-            ],
-            cancel=cancel,
-        )
+        try:
+            code, err = _run(
+                [
+                    FFMPEG_BINARY,
+                    "-y",
+                    "-v",
+                    "info",
+                    "-ss",
+                    f"{offset:.3f}",
+                    "-t",
+                    "2",
+                    "-i",
+                    str(movie),
+                    "-vf",
+                    f"cropdetect=limit={CROP_DETECT_LIMIT}:round=2:reset=0",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                cancel=cancel,
+            )
+        except OSError as e:
+            # ffmpeg missing from PATH or not spawnable (EMFILE/ENOMEM): the
+            # probe step fails with the documented shape instead of a
+            # traceback (issue #401). The timeline pass has its own #398
+            # guard: DEGRADING here would misreport an unmeasured file as
+            # "no bars" (invariant 8) - the run cannot proceed anyway, and
+            # the entry points (CLI encode/plan, job worker, watcher) catch
+            # RuntimeError and report it (the CLI encode aborts the batch:
+            # the binary is gone for the rest of it too).
+            raise RuntimeError(
+                f"the sampled crop pass could not start ffmpeg for '{movie.name}': {e}"
+            ) from e
         if code == -1 and cancel is not None and cancel.is_set():
             # cancelled (issue #384): the sampled pass measures nothing
             return None

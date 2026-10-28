@@ -30,7 +30,10 @@ buffer would otherwise deadlock a poll-only loop. `timeout` is for bounded reads
 only (the crop timeline pass's duration-derived ceiling, #384). With neither a
 cancel event, a timeout nor a stall watchdog, it falls back to a plain blocking
 `subprocess.run` and deliberately sets NO timeout (`process.py`): "watchdog off"
-means no protection, and a fixed timeout would kill healthy minutes-long probes.
+means no protection, and a fixed timeout would kill healthy minutes-long probes. A
+spawn failure (the binary missing from PATH, EMFILE/ENOMEM) raises `OSError` through
+to the caller: the return codes mean the child RAN, so the runner adds no sentinel —
+the call site converts the failure into its step's documented shape (issue #401).
 
 ## CONVENTIONS
 
