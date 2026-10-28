@@ -477,6 +477,44 @@ def ui_asset(asset_path: str) -> Response:
     )
 
 
+@app.get("/favicon.ico")
+@app.get("/favicon.svg")
+@app.get("/apple-touch-icon.png")
+def ui_root_static(request: Request) -> Response:
+    """Serves the built UI's root favicon files.
+
+    ui/index.html references these from the dist root; without this route
+    the tab icon 404s in every served instance (only the Vite dev server
+    resolves public/ itself). The filenames are fixed by the route
+    declarations and never user-controlled, so containment is by
+    construction; the resolved file must exist inside the build output.
+    The media type is declared, not guessed: mimetypes varies by platform
+    (a system mime.types or the Windows registry overrides the builtin),
+    and a served file's type is a contract, not a coin flip.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        FileResponse: The requested file. Cached no-cache like the entry
+        page: a favicon is fetched once per browser session, so
+        revalidation is cheap and a rebuilt UI needs no cache purge.
+
+    Raises:
+        HTTPException: 404 when the UI is not built or the file is absent.
+    """
+    media_types = {
+        "favicon.ico": "image/x-icon",
+        "favicon.svg": "image/svg+xml",
+        "apple-touch-icon.png": "image/png",
+    }
+    name = request.url.path.lstrip("/")
+    path = _ui_dist() / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="asset not found")
+    return FileResponse(path, media_type=media_types[name], headers={"Cache-Control": "no-cache"})
+
+
 def get_config() -> dict:
     """Returns the current configuration (as stored in config.json).
 
