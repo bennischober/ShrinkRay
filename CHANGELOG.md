@@ -4,6 +4,10 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-10-28
+
 ### Removed
 
 - **The bare-metal systemd unit is removed; the container is the deployment path** : `deploy/shrinkray.service` (and the `deploy/` folder with it) assumed a uv-from-source install on a user's home directory — a path nothing documents as supported anymore now that the ghcr image is the NAS shape. The README's headless section points at the container run, and docs/docker.md records the decision. Nothing consumed the unit file (no CI, test or build reference).
@@ -332,5 +336,6 @@ The MetaDataScrapper era ends with this release: the tool is renamed to **Shrink
 - Supply-chain hardening: uv malware-check gate, 7-day new-package cooldown with security-fix exemption, CodeQL-recognized path sanitization.
 - No secrets in tracked files: integration tokens live in environment variables by construction.
 
+[0.5.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.5.0
 [0.4.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.4.0
 [0.3.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.3.0
