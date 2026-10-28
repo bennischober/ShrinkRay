@@ -147,6 +147,7 @@ class TestJobs(unittest.TestCase):
             vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
             hdr=False,
             encoder="svt_av1",
+            input_mtime=None,  # a duck-typed result without the #436 field
         )
         with (
             patch("shrinkray.engine.plan.plan_quality", return_value=fake_result),

@@ -167,6 +167,7 @@ class TestRecordPlan(unittest.TestCase):
             probe_encoder_preset="5",
             hdr=False,
             encoder="x265",
+            input_mtime=None,  # a duck-typed result without the #436 field
         )
         config = type("Conf", (), {"handbrake_encoder": "x265"})()
         plan_id = service.record_plan(self.connection, movie, result, config)

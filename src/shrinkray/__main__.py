@@ -900,9 +900,18 @@ def plan(
                 errors += 1
                 continue
             # quicksave: persist the decision (CRF or skip verdict) so a
-            # later encode of this movie skips probing when unchanged
+            # later encode of this movie skips probing when unchanged. The
+            # record call sits INSIDE the per-movie error handling (issue
+            # #436's round-2 review): its identity gate raises when the file
+            # changed while the run was deciding it, and one changed file
+            # must end as one error row, never an aborted library plan.
             if connection is not None:
-                record_plan(connection, movie, result, config)
+                try:
+                    record_plan(connection, movie, result, config)
+                except (RuntimeError, FileNotFoundError) as e:
+                    table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
+                    errors += 1
+                    continue
             plans.append(result)
 
             if result.skipped_reason is not None:
