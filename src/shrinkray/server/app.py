@@ -488,6 +488,9 @@ def ui_root_static(request: Request) -> Response:
     resolves public/ itself). The filenames are fixed by the route
     declarations and never user-controlled, so containment is by
     construction; the resolved file must exist inside the build output.
+    The media type is declared, not guessed: mimetypes varies by platform
+    (a system mime.types or the Windows registry overrides the builtin),
+    and a served file's type is a contract, not a coin flip.
 
     Args:
         request: The incoming request.
@@ -500,11 +503,16 @@ def ui_root_static(request: Request) -> Response:
     Raises:
         HTTPException: 404 when the UI is not built or the file is absent.
     """
+    media_types = {
+        "favicon.ico": "image/x-icon",
+        "favicon.svg": "image/svg+xml",
+        "apple-touch-icon.png": "image/png",
+    }
     name = request.url.path.lstrip("/")
     path = _ui_dist() / name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="asset not found")
-    return FileResponse(path, headers={"Cache-Control": "no-cache"})
+    return FileResponse(path, media_type=media_types[name], headers={"Cache-Control": "no-cache"})
 
 
 def get_config() -> dict:

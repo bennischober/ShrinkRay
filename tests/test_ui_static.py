@@ -44,19 +44,23 @@ class TestRootStaticFiles(unittest.TestCase):
         client = TestClient(fast_app)
         response = client.get("/favicon.svg")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("svg", response.headers["content-type"])
+        # the media type is declared in the route, not guessed from the
+        # platform's mimetypes table (which varies)
+        self.assertEqual(response.headers["content-type"], "image/svg+xml")
         self.assertEqual(response.headers["cache-control"], "no-cache")
 
     def test_the_ico_favicon_is_served(self) -> None:
         client = TestClient(fast_app)
         response = client.get("/favicon.ico")
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/x-icon")
         self.assertEqual(response.content, b"fake-ico")
 
     def test_the_apple_touch_icon_is_served(self) -> None:
         client = TestClient(fast_app)
         response = client.get("/apple-touch-icon.png")
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
         self.assertEqual(response.content, b"fake-png")
 
     def test_an_undeclared_root_file_is_not_served(self) -> None:
