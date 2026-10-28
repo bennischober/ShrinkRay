@@ -140,10 +140,11 @@ BT.709 on the way out.
 Whether players resolve an untagged HD source to BT.709 is player behaviour this
 repo did not measure; the tags themselves are what this section documents. No flags
 are added to `build_encode_command` for this. On the untagged sample the flags
-were a measured no-op (they would set the tags the encode sets anyway); on a
-source with a set component they are NOT a no-op — `--color-matrix bt709` would
-rewrite a surviving tag, which is exactly what the pass-through test below rules
-out.
+were a measured no-op (they set the tags the encode sets anyway). On a source
+with a set component the measured behaviour is the same fill: `--color-matrix
+bt709` on a `smpte170m`-tagged 1080p clip leaves the space tag alone and fills
+the unset transfer/primaries with the flag's value (measured in this PR's round
+-8 review fixes) — it does not rewrite a set tag.
 
 ## Open decisions
 
