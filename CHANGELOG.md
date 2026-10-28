@@ -4,6 +4,10 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-10-28
+
 ### Removed
 
 - **The bare-metal systemd unit is removed; the container is the deployment path** : `deploy/shrinkray.service` (and the `deploy/` folder with it) assumed a uv-from-source install on a user's home directory — a path nothing documents as supported anymore now that the ghcr image is the NAS shape. The README's headless section points at the container run, and docs/docker.md records the decision. Nothing consumed the unit file (no CI, test or build reference).
@@ -44,10 +48,6 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **On 1080p-class 8-bit SDR sources, unset colour components come out of the encode tagged BT.709** (issue #258): the acceptance run settled the mechanism - no colour conversion happens (no filter in HandBrake's log, the colour flags changed nothing on the untagged sample, real untagged content encodes within 0.1 VMAF of a direct ffmpeg encode of the same window), and the re-tagging is signalling only; documented in docs/encode-settings.md. No colour flags were added to the command builder (a measured no-op on the untagged sample; on a set component the flags fill the unset components and leave the set tag alone (measured; the smoke test pins the builder's own no-flag behaviour)).
 - **A PR is owned from birth, and ownership is read from the issue's claim thread** (issue #420): nothing marked an open PR as someone's work-in-progress, so a scanning agent could read an unassigned PR as free and start committing to its branch — and step 1's "fix in that PR any mistake an earlier commit of it left" read alone as exactly that license. PRs are now created self-assigned (`gh pr create --label review-open --assignee @me`; a contributor without push access opens the PR unassigned and unlabelled and asks, and a maintainer adds both): the assignee is a boolean ("someone owns this"), never an identity under the shared login, and nothing in the process removes it. Ownership is read only from the issue's claim thread — you may commit to a PR's branch only while that thread currently names you as owner (live claim, hand-off, or maintainer instruction, through the claim ritual); any other open PR is never work you may start: no commits, no competing PR, the review is spawned by the owning session or not at all, and the only permitted action is one claim-nothing comment on its issue — never on the PR. Silence is never evidence of death; there is no recency threshold and no takeover. A PR parked on `needs-human-review` is owned-but-waiting, never abandoned; an owner that cannot be determined goes to the maintainer, never to another agent.
-
-### Changed
-
-- **CHANGELOG bullets end in a linked issue+PR reference** ([#461](https://github.com/bennischober/ShrinkRay/issues/461), [#462](https://github.com/bennischober/ShrinkRay/pull/462)): the prescribed trailing form was plain text — unlinked in the rendered file, the surface the changelog lives on — and the carrying PR was never named; AGENTS.md and CONTRIBUTING.md now prescribe a markdown link to the closed issue plus the carrying PR (each omitted when it does not exist), and older bullets keep their plain-text form.
 
 ### Fixed
 
@@ -156,6 +156,7 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 - **The gate, the container config and the release notes each live in one place** : the five gate commands are now `tools/gate.sh`, called unchanged by ci.yml, release.yml, the dev image's CMD and documented in AGENTS.md (four copies of one contract become one); the container's config.json is a tracked `container-config.json` COPYed into the image instead of JSON smuggled through shell escapes in a `printf` (the old form had to be parsed back out of the Dockerfile to be tested); docker-compose.yml drops its byte-identical healthcheck block (compose inherits the image's token-authenticated HEALTHCHECK); and the release job extracts the release notes with tested `tools/release_notes.py` instead of inline awk/sed pattern matching on CHANGELOG.md (same section extraction, same fallback for a mis-tagged release, now unit-tested).
 
 - **The helpers grab bag is dissolved** : `helpers.py` (190 lines, seven functions) is gone — the #63 decision record's dissolution is complete. Two functions were already dead since the CLI rework (the `movies.txt`/`output.csv` formatters), and the remaining five moved verbatim to their single consumer modules (`engine/scan.py` owns the size/time/progress helpers, `__main__.py` owns `calc_time`); the dead `print_table`/`print_summary` went with them. One module fewer, no behavior change.
+- **CHANGELOG bullets end in a linked issue+PR reference** ([#461](https://github.com/bennischober/ShrinkRay/issues/461), [#462](https://github.com/bennischober/ShrinkRay/pull/462)): the prescribed trailing form was plain text — unlinked in the rendered file, the surface the changelog lives on — and the carrying PR was never named; AGENTS.md and CONTRIBUTING.md now prescribe a markdown link to the closed issue plus the carrying PR (each omitted when it does not exist), and older bullets keep their plain-text form.
 
 ## [0.4.0] - 2026-10-25
 
@@ -340,5 +341,6 @@ The MetaDataScrapper era ends with this release: the tool is renamed to **Shrink
 - Supply-chain hardening: uv malware-check gate, 7-day new-package cooldown with security-fix exemption, CodeQL-recognized path sanitization.
 - No secrets in tracked files: integration tokens live in environment variables by construction.
 
+[0.5.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.5.0
 [0.4.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.4.0
 [0.3.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.3.0
