@@ -40,7 +40,7 @@ BINARIES_OK = (
 
 
 @unittest.skipUnless(os.environ.get("SHRINKRAY_SMOKE"), "smoke: opt-in (SHRINKRAY_SMOKE=1)")
-@unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI required on PATH")
+@unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI + ffprobe required on PATH")
 class TestSmokePlanReuse(unittest.TestCase):
     """plan -> record -> encode reuses the plan (real binaries end-to-end)."""
 
@@ -177,7 +177,7 @@ class TestSmokePlanReuse(unittest.TestCase):
 
 
 @unittest.skipUnless(os.environ.get("SHRINKRAY_SMOKE"), "smoke: opt-in (SHRINKRAY_SMOKE=1)")
-@unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI required on PATH")
+@unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI + ffprobe required on PATH")
 class TestSmokeColourRetag(unittest.TestCase):
     """An untagged source's unset colour components come out tagged BT.709 (issue #258).
 
@@ -284,9 +284,10 @@ class TestSmokeColourRetag(unittest.TestCase):
     def test_set_components_pass_through(self):
         """The doc's other claim: already-set components survive the encode.
 
-        The acceptance run's second row is the shape: space tagged bt709,
-        transfer/primaries unset -> output fills the unset ones as bt709 and
-        keeps the set one."""
+        The acceptance run's second row is the shape. The set value here is
+        smpte170m - a value HandBrake would NOT write itself (the unset-fill
+        uses bt709): survival of THAT value proves pass-through; a forced
+        rewrite would produce bt709."""
         from shrinkray.tools.handbrake import build_encode_command, find_handbrake
 
         # a clip tagged for space only: the base clip carries no colour tags,
@@ -303,7 +304,7 @@ class TestSmokeColourRetag(unittest.TestCase):
                 "-c:v",
                 "copy",
                 "-colorspace",
-                "bt709",
+                "smpte170m",
                 str(partial),
             ],
             check=True,
@@ -311,7 +312,7 @@ class TestSmokeColourRetag(unittest.TestCase):
             timeout=120,
         )
         tags = self._probe_tags(partial)
-        self.assertEqual(tags.get("color_space"), "bt709", "premise: space stays tagged")
+        self.assertEqual(tags.get("color_space"), "smpte170m", "premise: space tagged smpte170m")
         self.assertIn(tags.get("color_transfer"), (None, "unknown"), "premise: transfer unset")
         self.assertIn(tags.get("color_primaries"), (None, "unknown"), "premise: primaries unset")
 
@@ -322,7 +323,11 @@ class TestSmokeColourRetag(unittest.TestCase):
         subprocess.run(command, check=True, capture_output=True, timeout=300)
 
         out = self._probe_tags(enc)
-        self.assertEqual(out.get("color_space"), "bt709", "the set component must survive")
+        self.assertEqual(
+            out.get("color_space"),
+            "smpte170m",
+            "the set component must SURVIVE (a rewrite would emit bt709)",
+        )
         for key in ("color_transfer", "color_primaries"):
             self.assertEqual(out.get(key), "bt709", f"the unset '{key}' must be filled as bt709")
 

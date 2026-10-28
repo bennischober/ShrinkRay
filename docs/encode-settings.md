@@ -127,9 +127,11 @@ reads luma only and cannot see colour). On real untagged content the HandBrake
 encode scored 95.9739 against a direct ffmpeg libsvtav1 encode of the same window
 at 95.8941 - a same-window luma comparison (different SVT presets, same CRF)
 showing no colour-driven deficit.
-One residual stays open: the seed-pinned synthetic gradients clip still measures
+Two residuals stay open: the seed-pinned synthetic gradients clip still measures
 2.31 VMAF apart between its untagged and tagged rows, unexplained, on that clip
-only — the mechanism the issue suspected is refuted, that number is not.
+only; and the real-title low readings that opened #258 (title B ~87 vs ab-av1's
+~97 at CRF 14) are tracked as issue #443, unexplained. The mechanism the issue
+suspected is refuted; those numbers are not.
 
 Consequence for operators: on a 1080p-class source, its unset components claim
 BT.709 on the way out.
