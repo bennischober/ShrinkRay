@@ -568,6 +568,11 @@ def detect_crop_rect(
     Returns:
         tuple | None: The (top, bottom, left, right) bars to crop, or None
             if no stable bars were detected.
+
+    Raises:
+        RuntimeError: When ffmpeg cannot start (missing from PATH, EMFILE,
+            ENOMEM): an unmeasured file must never read as "no bars"
+            (issue #401).
     """
     from shrinkray.tools.ffprobe import probe_duration_seconds
 
