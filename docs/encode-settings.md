@@ -107,27 +107,30 @@ source (`encavcodecaudio.c` maps it to `AV_SAMPLE_FMT_S16`), and the bare name
 
 ## Colour tags on the way out
 
-A source with no colour tags comes out of HandBrake **re-tagged BT.709**: a
-`yuv420p,tv,unknown` source is written as `yuv420p,tv,bt709` (space, transfer and
-primaries all set). HandBrake assumes profile 1-1-1 at scan and carries it through —
-measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27).
+A source with unset colour components comes out of HandBrake with them **written as
+BT.709**: a fully untagged `yuv420p,tv,unknown` source is written as
+`yuv420p,tv,bt709`, and a source tagged for space only (`yuv420p,tv,bt709` with
+transfer/primaries `unknown`) comes out with the two unset components filled in as
+`bt709` too. HandBrake assumes profile 1-1-1 at scan and carries it through —
+measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27). Already-set
+components pass through unchanged (the tagged row's space tag survives).
 
 This is signalling, not conversion. The measurement run that settled #258 found no
-conversion filter in HandBrake's verbose log, the output's chroma statistics match
-the source's (VAVG within 0.01 on both paths), and `--color-matrix`/`--color-range`
-change the output's tags without changing a pixel (byte-identical VMAF with and
-without). On real untagged content the HandBrake encode scored 95.9739 against a
-direct ffmpeg libsvtav1 encode of the same window at 95.8941 — the pipeline loses
-nothing to colour. (VMAF reads luma only, so these statistics say nothing about the
-VMAF score itself; the like-for-like encode comparison is what settles it.)
+conversion filter in HandBrake's verbose log, and `--color-matrix`/`--color-range`
+are output-signalling options: the run measured VMAF byte-identical with and
+without them, which shows the flags add nothing (not that no pixel changed — VMAF
+reads luma only and cannot see colour). On real untagged content the HandBrake
+encode scored 95.9739 against a direct ffmpeg libsvtav1 encode of the same window
+at 95.8941, a like-for-like luma comparison showing no colour-driven deficit.
+One residual stays open: the seed-pinned synthetic gradients clip still measures
+2.31 VMAF apart between its untagged and tagged rows, unexplained, on that clip
+only — the mechanism the issue suspected is refuted, that number is not.
 
-Consequence for operators: an untagged source's output claims BT.709 where the
-source claimed nothing. Playback is unaffected in practice — players must assume
-something for an untagged HD source and BT.709 is the universal default (BT.601
-for SD) — but that assumption is player behaviour, not something this repo measured;
-the difference is visible in a tool that compares tags. No flags are added to
-`build_encode_command` for this — they would change the tags the encode would set
-anyway, and nothing else.
+Consequence for operators: a source's unset components claim BT.709 on the way out.
+Whether players resolve an untagged HD source to BT.709 is player behaviour this
+repo did not measure; the tags themselves are what this section documents. No flags
+are added to `build_encode_command` for this — they would change the tags the
+encode would set anyway, and nothing else.
 
 ## Open decisions
 

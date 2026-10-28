@@ -172,5 +172,109 @@ class TestSmokePlanReuse(unittest.TestCase):
         self.assertEqual(row["crf_source"], "probe")
 
 
+@unittest.skipUnless(os.environ.get("SHRINKRAY_SMOKE"), "smoke: opt-in (SHRINKRAY_SMOKE=1)")
+@unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI required on PATH")
+class TestSmokeColourRetag(unittest.TestCase):
+    """An untagged source's unset colour components come out tagged BT.709 (issue #258).
+
+    Pins the documented re-tagging: what HandBrake writes for tags is a binary
+    behaviour, so a stub cannot catch a HandBrake change - this test can."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.clip = self.root / "untagged.mkv"
+        self._make_untagged_clip(self.clip)
+        self.enc = self.root / "untagged-enc.mkv"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _probe_tags(path: Path) -> dict:
+        """Reads the video stream's colour tags with ffprobe."""
+        import json as _json
+
+        out = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=pix_fmt,color_range,color_space,color_transfer,color_primaries",
+                "-of",
+                "json",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return _json.loads(out.stdout)["streams"][0]
+
+    @staticmethod
+    def _make_untagged_clip(path: Path) -> None:
+        """A real 10 s clip with NO colour tags: strip them from the encode.
+
+        lavfi's testsrc encodes without colour tags by default, but the
+        '-color_primaries/-color_trc/-colorspace' unset assertion is what the
+        test relies on, so the setup verifies it (fail loudly if ffmpeg starts
+        tagging its output - the test's premise would be gone)."""
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=10:size=320x240:rate=25",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "18",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                str(path),
+            ],
+            check=True,
+            timeout=120,
+        )
+        tags = TestSmokeColourRetag._probe_tags(path)
+        unset = [
+            k
+            for k in ("color_space", "color_transfer", "color_primaries")
+            if tags.get(k) in (None, "unknown")
+        ]
+        if len(unset) != 3:
+            raise AssertionError(f"premise: the generated clip must be fully untagged, got {tags}")
+
+    def test_unset_components_come_out_bt709(self):
+        """The re-tagging (issue #258): unset in -> bt709 out, set stays set."""
+        from shrinkray.tools.handbrake import build_encode_command, find_handbrake
+
+        handbrake = find_handbrake()
+        self.assertIsNotNone(handbrake, "HandBrakeCLI not found")
+        command = build_encode_command(handbrake, self.clip, self.enc, 28, "svt_av1", "10")
+        subprocess.run(command, check=True, capture_output=True, timeout=300)
+
+        src = self._probe_tags(self.clip)
+        out = self._probe_tags(self.enc)
+        self.assertEqual(out["pix_fmt"], "yuv420p")
+        for key in ("color_space", "color_transfer", "color_primaries"):
+            self.assertEqual(
+                out.get(key),
+                "bt709",
+                f"the unset '{key}' must come out as bt709 (source had {src.get(key)})",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
