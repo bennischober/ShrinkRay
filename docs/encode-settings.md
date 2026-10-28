@@ -116,8 +116,10 @@ transfer/primaries `unknown`) comes out with the two unset components filled in 
 measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27); below the
 1080p class the assumed profile differs (an SD source comes out bt601-family,
 measured directly in PR #441's round-3 review experiments, not by that run), which
-is out of ShrinkRay's encode scope. Already-set components pass through unchanged
-(the tagged row's space tag survives).
+is out of ShrinkRay's encode scope. Already-set components pass through unchanged —
+pinned by `TestSmokeColourRetag.test_set_components_pass_through` (`smpte170m`, a
+value the unset-fill would never write, survives the encode), not inferable from
+the acceptance run's tagged row, whose set value equals the fill value.
 
 This is signalling, not conversion. The measurement run that settled #258 found no
 conversion filter in HandBrake's verbose log, and `--color-matrix`/`--color-range`
@@ -137,8 +139,11 @@ Consequence for operators: on a 1080p-class source, its unset components claim
 BT.709 on the way out.
 Whether players resolve an untagged HD source to BT.709 is player behaviour this
 repo did not measure; the tags themselves are what this section documents. No flags
-are added to `build_encode_command` for this — they would change the tags the
-encode would set anyway, and nothing else.
+are added to `build_encode_command` for this. On the untagged sample the flags
+were a measured no-op (they would set the tags the encode sets anyway); on a
+source with a set component they are NOT a no-op — `--color-matrix bt709` would
+rewrite a surviving tag, which is exactly what the pass-through test below rules
+out.
 
 ## Open decisions
 
