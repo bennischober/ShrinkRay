@@ -587,26 +587,38 @@ def detect_crop_rect(
     for offset in sample_offsets(duration, count):
         if cancel is not None and cancel.is_set():
             return None
-        code, err = _run(
-            [
-                FFMPEG_BINARY,
-                "-y",
-                "-v",
-                "info",
-                "-ss",
-                f"{offset:.3f}",
-                "-t",
-                "2",
-                "-i",
-                str(movie),
-                "-vf",
-                f"cropdetect=limit={CROP_DETECT_LIMIT}:round=2:reset=0",
-                "-f",
-                "null",
-                "-",
-            ],
-            cancel=cancel,
-        )
+        try:
+            code, err = _run(
+                [
+                    FFMPEG_BINARY,
+                    "-y",
+                    "-v",
+                    "info",
+                    "-ss",
+                    f"{offset:.3f}",
+                    "-t",
+                    "2",
+                    "-i",
+                    str(movie),
+                    "-vf",
+                    f"cropdetect=limit={CROP_DETECT_LIMIT}:round=2:reset=0",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                cancel=cancel,
+            )
+        except OSError as e:
+            # ffmpeg missing from PATH or not spawnable (EMFILE/ENOMEM): the
+            # probe step fails with the documented shape instead of a
+            # traceback (issue #401). The timeline pass has its own #398
+            # guard and DEGRADES here would misreport an unmeasured file as
+            # "no bars" - and the run cannot proceed anyway, this being the
+            # first ffmpeg spawn of every plan/encode flow. The entry points
+            # (CLI, job worker, watcher) catch RuntimeError and report it.
+            raise RuntimeError(
+                f"the sampled crop pass could not start ffmpeg for '{movie.name}': {e}"
+            ) from e
         if code == -1 and cancel is not None and cancel.is_set():
             # cancelled (issue #384): the sampled pass measures nothing
             return None
