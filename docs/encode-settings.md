@@ -114,7 +114,8 @@ issue #233) — a source with unset colour components comes out of HandBrake wit
 transfer/primaries `unknown`) comes out with the two unset components filled in as
 `bt709` too. HandBrake assumes profile 1-1-1 at scan and carries it through for the HD sample —
 measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27); below the
-1080p class the assumed profile differs (an SD source comes out bt601-family), which
+1080p class the assumed profile differs (an SD source comes out bt601-family,
+measured directly in PR #441's round-3 review experiments, not by that run), which
 is out of ShrinkRay's encode scope. Already-set components pass through unchanged
 (the tagged row's space tag survives).
 
@@ -124,7 +125,8 @@ are output-signalling options: the run measured VMAF byte-identical with and
 without them, which shows the flags add nothing (not that no pixel changed — VMAF
 reads luma only and cannot see colour). On real untagged content the HandBrake
 encode scored 95.9739 against a direct ffmpeg libsvtav1 encode of the same window
-at 95.8941, a like-for-like luma comparison showing no colour-driven deficit.
+at 95.8941 - a same-window luma comparison (different SVT presets, same CRF)
+showing no colour-driven deficit.
 One residual stays open: the seed-pinned synthetic gradients clip still measures
 2.31 VMAF apart between its untagged and tagged rows, unexplained, on that clip
 only — the mechanism the issue suspected is refuted, that number is not.

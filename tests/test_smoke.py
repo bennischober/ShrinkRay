@@ -281,6 +281,51 @@ class TestSmokeColourRetag(unittest.TestCase):
                 f"the unset '{key}' must come out as bt709 (source had {src.get(key)})",
             )
 
+    def test_set_components_pass_through(self):
+        """The doc's other claim: already-set components survive the encode.
+
+        The acceptance run's second row is the shape: space tagged bt709,
+        transfer/primaries unset -> output fills the unset ones as bt709 and
+        keeps the set one."""
+        from shrinkray.tools.handbrake import build_encode_command, find_handbrake
+
+        # a clip tagged for space only: the base clip carries no colour tags,
+        # so a stream copy with an explicit -colorspace writes ONLY that tag
+        partial = self.root / "partial.mkv"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-v",
+                "error",
+                "-i",
+                str(self.clip),
+                "-c:v",
+                "copy",
+                "-colorspace",
+                "bt709",
+                str(partial),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        tags = self._probe_tags(partial)
+        self.assertEqual(tags.get("color_space"), "bt709", "premise: space stays tagged")
+        self.assertIn(tags.get("color_transfer"), (None, "unknown"), "premise: transfer unset")
+        self.assertIn(tags.get("color_primaries"), (None, "unknown"), "premise: primaries unset")
+
+        handbrake = find_handbrake()
+        self.assertIsNotNone(handbrake)
+        enc = self.root / "partial-enc.mkv"
+        command = build_encode_command(handbrake, partial, enc, 28, "svt_av1", "10")
+        subprocess.run(command, check=True, capture_output=True, timeout=300)
+
+        out = self._probe_tags(enc)
+        self.assertEqual(out.get("color_space"), "bt709", "the set component must survive")
+        for key in ("color_transfer", "color_primaries"):
+            self.assertEqual(out.get(key), "bt709", f"the unset '{key}' must be filled as bt709")
+
 
 if __name__ == "__main__":
     unittest.main()
