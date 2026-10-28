@@ -113,10 +113,11 @@ with unset colour components comes out of HandBrake with them **written as BT.70
 `yuv420p,tv,bt709`, and a source tagged for space only (`yuv420p,tv,bt709` with
 transfer/primaries `unknown`) comes out with the two unset components filled in as
 `bt709` too. HandBrake assumes profile 1-1-1 at scan and carries it through for the HD sample —
-measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27); below the
-1080p class the assumed profile differs (an SD source comes out bt601-family,
-measured directly and recorded in PR #441's review thread), which is out of
-ShrinkRay's encode scope. Already-set components pass through unchanged —
+measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27); at SD-sized
+resolutions the assumed profile differs (320x240-1024x576 come out bt601-family;
+1280x720 measured bt709, so the boundary is not the class line — measured directly
+and recorded in the round-3 review comment), and all of it is out of ShrinkRay's
+encode scope. Already-set components pass through unchanged —
 pinned by `TestSmokeColourRetag.test_set_components_pass_through` (`smpte170m`, a
 value the unset-fill would never write, survives the encode), not inferable from
 the acceptance run's tagged row, whose set value equals the fill value.
@@ -135,8 +136,8 @@ only; and the real-title low readings that opened #258 (title B ~87 vs ab-av1's
 ~97 at CRF 14) are tracked as issue #443, unexplained. The mechanism the issue
 suspected is refuted; those numbers are not.
 
-Consequence for operators: on a 1080p-class source, its unset components claim
-BT.709 on the way out.
+Consequence for operators: on a 1080p-class 8-bit 4:2:0 SDR source (the measured
+shape), its unset components claim BT.709 on the way out.
 Whether players resolve an untagged HD source to BT.709 is player behaviour this
 repo did not measure; the tags themselves are what this section documents. No flags
 are added to `build_encode_command` for this. On the untagged sample the flags
@@ -144,8 +145,7 @@ were a measured no-op (they set the tags the encode sets anyway). On a source
 with a set component the measured behaviour is the same fill: `--color-matrix
 bt709` on a `smpte170m`-tagged 1080p clip leaves the space tag alone and fills
 the unset transfer/primaries with the flag's value (measured with HandBrake
-1.11.2; record in PR #441's review thread, round-8 answers) — it does not
-rewrite a set tag.
+1.11.2, record in the PR's thread) — it does not rewrite a set tag.
 
 ## Open decisions
 

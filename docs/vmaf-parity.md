@@ -259,7 +259,7 @@ and scores normally: 2882 / 2882 frames, VMAF 96.10.
 - **Whether the encode itself is faithful.** It measures a file you already have
   against its source; parity says the two tools measure the same thing, not that the
   artifact is right. Colour is settled, not a live question: #258's acceptance run
-  found no conversion on the way out (the re-tagging of unset components to BT.709 on 1080p-class sources
+  found no conversion on the way out (the re-tagging of unset components to BT.709 on 1080p-class 8-bit SDR sources
   is signalling only - `docs/encode-settings.md`); a low score on untagged
   content is therefore not evidence of colour damage, but the real-title low
   readings that opened #258 are tracked as issue #443 and remain unexplained.

@@ -227,8 +227,8 @@ class TestSmokeColourRetag(unittest.TestCase):
         tags here, and the setup verifies the premise (fail loudly if ffmpeg
         starts tagging its output - the test's premise would be gone). The
         fixture is 1080p-class because HandBrake's assumed colour profile is
-        resolution-dependent (an SD source comes out bt601-family; measured in
-        the round-3 review's experiments), and ShrinkRay only encodes 1080p+."""
+        resolution-dependent (an SD source comes out bt601-family; measured directly
+        and recorded in the PR's review thread), and ShrinkRay only encodes 1080p+."""
         subprocess.run(
             [
                 "ffmpeg",
