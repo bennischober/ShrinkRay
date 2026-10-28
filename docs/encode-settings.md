@@ -114,10 +114,11 @@ with unset colour components comes out of HandBrake with them **written as BT.70
 transfer/primaries `unknown`) comes out with the two unset components filled in as
 `bt709` too. HandBrake assumes profile 1-1-1 at scan and carries it through for the HD sample —
 measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27); at SD-sized
-resolutions the assumed profile differs (320x240-1024x576 come out bt601-family;
-1280x720 measured bt709, so the boundary is not the class line — measured directly
-and recorded in the round-3 review comment), and all of it is out of ShrinkRay's
-encode scope. Already-set components pass through unchanged —
+resolutions the assumed profile differs (320x240-1024x576 come out with matrix
+and primaries bt601-family - `smpte170m`/`bt470bg` - while the transfer tag is
+bt709 at every measured size; 1280x720 measured all-bt709, so the boundary is not
+the class line; the tag triple per size is recorded in the PR's review thread
+comment `6460170853`), and all of it is out of ShrinkRay's encode scope. Already-set components pass through unchanged —
 pinned by `TestSmokeColourRetag.test_set_components_pass_through` (`smpte170m`, a
 value the unset-fill would never write, survives the encode), not inferable from
 the acceptance run's tagged row, whose set value equals the fill value.
@@ -145,7 +146,8 @@ were a measured no-op (they set the tags the encode sets anyway). On a source
 with a set component the measured behaviour is the same fill: `--color-matrix
 bt709` on a `smpte170m`-tagged 1080p clip leaves the space tag alone and fills
 the unset transfer/primaries with the flag's value (measured with HandBrake
-1.11.2, record in the PR's thread) — it does not rewrite a set tag.
+1.11.2; record in the PR's review thread comment `6461940399`) — it does not
+rewrite a set tag.
 
 ## Open decisions
 
