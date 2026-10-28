@@ -107,16 +107,16 @@ source (`encavcodecaudio.c` maps it to `AV_SAMPLE_FMT_S16`), and the bare name
 
 ## Colour tags on the way out
 
-For 1080p-class sources — the only ones ShrinkRay encodes (the resolution floor,
-issue #233) — a source with unset colour components comes out of HandBrake with them
-**written as BT.709**: a fully untagged `yuv420p,tv,unknown` source is written as
+For 1080p-class 8-bit 4:2:0 SDR sources — the shape the measurements below used
+(10-bit sources are encoded too, and their fill behaviour is unmeasured) — a source
+with unset colour components comes out of HandBrake with them **written as BT.709**: a fully untagged `yuv420p,tv,unknown` source is written as
 `yuv420p,tv,bt709`, and a source tagged for space only (`yuv420p,tv,bt709` with
 transfer/primaries `unknown`) comes out with the two unset components filled in as
 `bt709` too. HandBrake assumes profile 1-1-1 at scan and carries it through for the HD sample —
 measured on HandBrake 1.11.2, issue #258's acceptance run (2026-10-27); below the
 1080p class the assumed profile differs (an SD source comes out bt601-family,
-measured directly in PR #441's round-3 review experiments, not by that run), which
-is out of ShrinkRay's encode scope. Already-set components pass through unchanged —
+measured directly and recorded in PR #441's review thread), which is out of
+ShrinkRay's encode scope. Already-set components pass through unchanged —
 pinned by `TestSmokeColourRetag.test_set_components_pass_through` (`smpte170m`, a
 value the unset-fill would never write, survives the encode), not inferable from
 the acceptance run's tagged row, whose set value equals the fill value.
@@ -143,8 +143,9 @@ are added to `build_encode_command` for this. On the untagged sample the flags
 were a measured no-op (they set the tags the encode sets anyway). On a source
 with a set component the measured behaviour is the same fill: `--color-matrix
 bt709` on a `smpte170m`-tagged 1080p clip leaves the space tag alone and fills
-the unset transfer/primaries with the flag's value (measured in this PR's round
--8 review fixes) — it does not rewrite a set tag.
+the unset transfer/primaries with the flag's value (measured with HandBrake
+1.11.2; record in PR #441's review thread, round-8 answers) — it does not
+rewrite a set tag.
 
 ## Open decisions
 

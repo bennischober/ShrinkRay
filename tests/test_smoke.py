@@ -263,7 +263,10 @@ class TestSmokeColourRetag(unittest.TestCase):
             raise AssertionError(f"premise: the generated clip must be fully untagged, got {tags}")
 
     def test_unset_components_come_out_bt709(self):
-        """The re-tagging (issue #258): unset in -> bt709 out, set stays set."""
+        """The re-tagging (issue #258): unset in -> bt709 out.
+
+        The set-components case is the sibling test below; this fixture is fully
+        untagged by construction and cannot observe it."""
         from shrinkray.tools.handbrake import build_encode_command, find_handbrake
 
         handbrake = find_handbrake()
