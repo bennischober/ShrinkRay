@@ -1394,23 +1394,47 @@ def _serve_forever(host: str, port: int) -> None:
             """Wraps uvicorn's capture_signals with one swap (review round 7,
             finding 2): after restoring the handlers, uvicorn re-raises every
             captured signal, and SIGTERM's default disposition kills the
-            process before run() returns - so run_app's finally (the armed
-            teardown) never ran on a non-container stop; only the container's
-            PID-1 exec survived it. SIGTERM is ignored for the re-raise window
-            (SIGINT keeps its default so a KeyboardInterrupt still unwinds);
-            the teardown runs in run_app's finally as armed."""
-            previous = signal.getsignal(signal.SIGTERM)
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
-            try:
-                with super().capture_signals():
-                    yield
-            finally:
-                signal.signal(signal.SIGTERM, previous)
+            process before run() returns. The SIG_IGN swap is held across the
+            capture window AND the teardown that follows it (see
+            _stop_signal_umbrella); this override only delegates.
+            """
+            with (
+                _stop_signal_umbrella(),
+                super().capture_signals(),
+            ):
+                yield
 
     config = uvicorn.Config(
         app, host=host, port=port, log_level="info", timeout_graceful_shutdown=15
     )
     _ServerWithAppShutdown(config).run()
+
+
+@contextmanager
+def _stop_signal_umbrella() -> Iterator[None]:
+    """Ignores the stop signals for everything the app must survive.
+
+    The window spans uvicorn's capture (its post-serve re-raise of a captured
+    SIGTERM would otherwise hit the default disposition and kill the process
+    before the armed teardown runs - review round 7, finding 2) AND run_app's
+    finally (the teardown itself: without the umbrella staying in force, a
+    second SIGTERM during the 60 s of joins kills the process mid-unwind -
+    review round 8, finding 1). SIGBREAK rides along on Windows (uvicorn
+    captures it there and re-raises it the same way; review round 8,
+    finding 3). SIGINT keeps its default so a KeyboardInterrupt still
+    unwinds; the umbrella is restored after the teardown.
+    """
+    stops = [signal.SIGTERM]
+    if sys.platform == "win32":
+        stops.append(signal.SIGBREAK)
+    previous = {sig: signal.getsignal(sig) for sig in stops}
+    for sig in stops:
+        signal.signal(sig, signal.SIG_IGN)
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def run_app(
@@ -1509,7 +1533,8 @@ def run_app(
     monitor.start()
 
     try:
-        _serve_forever(host, port)
+        with _stop_signal_umbrella():
+            _serve_forever(host, port)
     finally:
         state.shutdown()
         log("app stopped")

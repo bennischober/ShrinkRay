@@ -22,8 +22,9 @@ recovered as failed (`interrupted by app restart`) on the next boot (the
 fallback, not the contract). Outside the container the same teardown depends
 on the stop signal being delivered while uvicorn still owns the process: a
 bare-metal `kill -TERM` reaches it (uvicorn's re-raise of the captured SIGTERM
-is neutralized so the process survives to run the teardown), and a hard kill
-(`-9`, OOM) leaves the job to the boot-time recovery instead.
+is neutralized — SIGBREAK too on Windows — for the capture AND the teardown
+window, so the process survives to run it), and a hard kill (`-9`, OOM) leaves
+the job to the boot-time recovery instead.
 
 > **Direction (issue #244).** The deployment target is an **Unraid Community App**
 > (PRODUCT.md "Deployment target"): the WebUI button opens the read-only dashboard,

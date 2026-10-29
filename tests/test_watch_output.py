@@ -219,39 +219,109 @@ class TestServeForever(unittest.TestCase):
             app_module.state.shutdown()
             app_module.state = None
 
-    def test_capture_signals_neutralizes_the_sigterm_reraise(self) -> None:
-        """Issue #431 (review round 7, finding 2): uvicorn re-raises every
-        captured signal after restoring the original handlers, and SIGTERM's
-        default disposition kills the process before run() returns - so
-        run_app's finally never ran and the teardown was lost on every
-        non-container stop. The override swaps SIGTERM to SIG_IGN before
-        uvicorn captures: the restore + re-raise find an ignored signal and
-        the process survives to run the teardown. A captured SIGTERM here
-        must not raise; surviving this test IS the assertion (on the pre-fix
-        tree the re-raise killed the test process)."""
-        import signal
+    def test_run_app_holds_the_stop_signal_umbrella_across_the_teardown(self) -> None:
+        """Issue #431 (review round 8, finding 1): the SIGTERM protection must
+        span capture AND teardown - uvicorn restores the handlers when serve
+        returns, so a second SIGTERM during run_app's finally (the 60 s of
+        joins) would hit the default disposition and kill the process
+        mid-teardown. run_app must hold SIG_IGN from before serve until after
+        state.shutdown(), then restore what was there."""
+        import signal as signal_module
 
-        from shrinkray.server.app import AppState
+        observed: dict = {}
+        pre = signal_module.getsignal(signal_module.SIGTERM)
 
-        app_module.state = AppState(Path(self.tmp.name) / "sigterm.db")
-        try:
-            with (
-                patch("uvicorn.Config"),
-                patch("uvicorn.Server", FakeHookServer),
-            ):
-                app_module._serve_forever("127.0.0.2", 9999)
-            server = FakeHookServer.last_instance
-            with server.capture_signals():
-                # pre-init: _captured_signals does not exist yet, which is
-                # itself part of the shape under test - append after capture
-                server._captured_signals = getattr(server, "_captured_signals", [])
-                server._captured_signals.append(signal.SIGTERM)
-            # surviving the restore + re-raise IS the assertion (on the
-            # pre-fix tree the re-raise killed this process with exit 143);
-            # the armed flag is the hook test's business, not this one's
-        finally:
-            app_module.state.shutdown()
-            app_module.state = None
+        def recording_serve(host, port):
+            observed["during"] = signal_module.getsignal(signal_module.SIGTERM)
+
+        with (
+            patch.object(app_module, "allow_roots"),
+            patch.object(app_module, "AppState"),
+            patch.object(app_module, "auto_backlog"),
+            patch.object(app_module, "_recover_interrupted_swaps"),
+            patch.object(app_module, "start_watch"),
+            patch.object(app_module, "_serve_forever", recording_serve),
+            patch("shrinkray.service.all_problems", return_value=[]),
+        ):
+            app_module.run_app(Path(self.tmp.name) / "umbrella.db")
+        self.assertIs(
+            observed.get("during"),
+            signal_module.SIG_IGN,
+            "SIGTERM was not ignored while the server ran",
+        )
+        self.assertIs(
+            signal_module.getsignal(signal_module.SIGTERM),
+            pre,
+            "run_app did not restore the previous SIGTERM handler",
+        )
+
+    def test_a_sigterm_reraise_cannot_kill_the_teardown_window(self) -> None:
+        """Issue #431 (review round 8, finding 4): the survival check runs in
+        a SUBPROCESS - on the pre-fix tree the re-raised SIGTERM killed the
+        test process itself (exit 143, no named failure). The harness boots
+        run_app with a fake serve that replays uvicorn's real signal cycle:
+        capture, a SIGTERM arrives, restore, re-raise. Surviving to print
+        SURVIVED is the assertion."""
+        import subprocess
+        import sys
+
+        harness = """
+import signal, sys, tempfile
+from pathlib import Path
+from unittest import mock
+
+import uvicorn
+
+import shrinkray.server.app as A
+
+
+class FakeServer(uvicorn.Server):
+    def __init__(self, config):
+        self.config = config
+        self._captured_signals = []
+        self.should_exit = False
+        self.force_exit = False
+
+    def run(self, sockets=None):
+        # uvicorn.Server.run's real signal cycle (server.py:85-113, 332-349):
+        # capture, serve, restore, re-raise every captured signal
+        with self.capture_signals():
+            self.handle_exit(signal.SIGTERM, None)
+        for s in reversed(self._captured_signals):
+            signal.raise_signal(s)
+
+
+def fake_serve(host, port):
+    FakeServer(uvicorn.Config(A.app, host=host, port=port)).run()
+
+
+tmp = tempfile.mkdtemp()
+with (
+    mock.patch("shrinkray.service.all_problems", return_value=[]),
+    mock.patch.object(A, "allow_roots"),
+    mock.patch.object(A, "auto_backlog"),
+    mock.patch.object(A, "_recover_interrupted_swaps"),
+    mock.patch.object(A, "start_watch"),
+    mock.patch.object(A, "_serve_forever", fake_serve),
+):
+    A.run_app(Path(tmp) / "harness.db")
+print("SURVIVED")
+"""
+        repo_root = Path(__file__).resolve().parents[1]
+        r = subprocess.run(
+            [sys.executable, "-c", harness],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"the teardown window did not survive the re-raised SIGTERM "
+            f"(rc={r.returncode}); stderr: {r.stderr[-400:]}",
+        )
+        self.assertIn("SURVIVED", r.stdout)
 
 
 if __name__ == "__main__":
