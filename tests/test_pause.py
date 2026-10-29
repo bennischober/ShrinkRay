@@ -312,6 +312,9 @@ class TestStatusAndCli(unittest.TestCase):
 
         movie = self.root / "film.mkv"
         movie.write_bytes(b"x" * 8)
+        # the floor AND the interval constants are patched to 0: the real seam
+        # runs its full shape instantly (this test's subject is the
+        # manual-encode marker, not stability) - no test sleeps
         during: list[list[int]] = []
 
         def fake_encode(source, output, **kwargs):
@@ -319,6 +322,8 @@ class TestStatusAndCli(unittest.TestCase):
             return _skip(source, output)
 
         with (
+            mock.patch.object(watch_mod, "STABLE_MIN_AGE", 0.0),
+            mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
             mock.patch("shrinkray.service.shutil.which", return_value="ffprobe"),
             mock.patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
             mock.patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),

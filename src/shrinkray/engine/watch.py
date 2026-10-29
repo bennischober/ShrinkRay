@@ -44,6 +44,10 @@ from shrinkray.tools.process import Cancelled
 STABLE_CHECK_INTERVAL = 30.0
 # ... and it is at least this old (grace period after the last modification)
 STABLE_MIN_AGE = 60.0
+# the bounded wait's ceiling for the one-shot CLI (issue #437): the watcher
+# has no ceiling (it reconsiders on its next pass); a one-shot run reports
+# and skips instead of waiting forever on a file that never settles
+STABLE_WAIT_LIMIT = 600.0
 POLL_INTERVAL = 60.0
 # adaptive polling: while the inbox stays idle the sleep between polls grows
 # up to this multiple of POLL_INTERVAL (any new candidate resets it back)
@@ -225,6 +229,100 @@ def is_stable(path: Path) -> bool:
     except OSError:
         return False
     return size_1 == size_2
+
+
+def wait_for_stable(
+    path: Path,
+    limit: float = STABLE_WAIT_LIMIT,
+    cancel: threading.Event | None = None,
+) -> bool:
+    """Waits until the file settles, bounded and cancel-aware; the one seam
+    for both entries (issue #437).
+
+    The witness is the watcher's `is_stable` (size unchanged across a
+    STABLE_CHECK_INTERVAL sleep, last change at least STABLE_MIN_AGE ago).
+    The seam's cost for a COMPLETE fresh file is the floor + one interval
+    (~90 s at the defaults): it sleeps the REMAINING age once, then does
+    the size check DIRECTLY (one interval, here - calling is_stable on
+    this path would stack its own interval sleep on the age sleep, the
+    measured 90 s chunking shape, and the two sleeps are both the witness
+    definition requires). A file already past the floor asks the witness
+    directly (its size-check sleep runs inside it). Overlapping the
+    unchanged-window with the age wait could reach ~60 s, but that changes
+    what the witness measures - the watcher keeps is_stable untouched. The watcher's loop
+    needs no bound (it reconsiders on its next pass) and keeps its single
+    is_stable check - an extraction, not a policy change; the one-shot CLI
+    has no next pass, so it waits here and gives up loudly at the limit. A
+    set cancel event raises Cancelled (the #326 contract: closing the
+    terminal cancels the wait too, it never absorbs a signal for minutes).
+
+    Args:
+        path (Path): The file to wait for.
+        limit (float): Total seconds to wait before giving up.
+        cancel (threading.Event | None): Cooperative cancellation; when set,
+            the wait raises instead of returning.
+
+    Returns:
+        bool: True when the file settled, False when the limit expired
+            (the caller reports and skips; the file stays eligible).
+
+    Raises:
+        Cancelled: When the cancel event fires during the wait.
+    """
+    deadline = time.monotonic() + limit
+    while True:
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("cancelled while waiting for the file to settle")
+        if time.monotonic() >= deadline:
+            return False
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            # unreadable/vanished: same answer the witness would give, and
+            # the bounded wait reports it as never-settled at the limit
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(STABLE_CHECK_INTERVAL)
+            continue
+        if age >= STABLE_MIN_AGE:
+            # old enough for the age gate: the witness's size check (one
+            # interval, inside it) is the only remaining question
+            if is_stable(path):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            # the witness slept one interval for the size check and returned
+            # False (the size changed): sleep nothing extra, the next turn's
+            # witness call re-checks at the new size
+            continue
+        # too young: sleep the REMAINING age, then the size check DIRECTLY
+        # (one interval, here). The complete fresh file's total cost is the
+        # floor + one interval (~90 s at the defaults) - the witness's own
+        # definition requires both waits; only the CHUNKED 30-s polling of
+        # the first shape was waste.
+        remaining = STABLE_MIN_AGE - age
+        if time.monotonic() + remaining + STABLE_CHECK_INTERVAL >= deadline:
+            return False
+        time.sleep(remaining)
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("cancelled while waiting for the file to settle")
+        try:
+            size_1 = path.stat().st_size
+        except OSError:
+            # vanished during the age sleep: the next turn re-reads
+            continue
+        time.sleep(STABLE_CHECK_INTERVAL)
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("cancelled while waiting for the file to settle")
+        try:
+            size_2 = path.stat().st_size
+        except OSError:
+            continue
+        if size_1 == size_2:
+            return True
+        # the size changed during the interval: still growing, the next
+        # turn re-derives the age from the NEW mtime
+        continue
 
 
 def decide(movie: Path, target_vmaf: float, encoder: str) -> str:

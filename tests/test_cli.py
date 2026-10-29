@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -288,7 +289,16 @@ class TestPresetConfigFallback(unittest.TestCase):
 
     @contextmanager
     def _toolchain_ok(self):
-        with patch("shrinkray.service.all_problems", return_value=[]):
+        # the stability constants are patched to 0 (issue #437): these tests
+        # run the real CLI on fresh fixtures, and their subject is the preset
+        # fallback, not stability - the real seam runs instantly, no test sleeps
+        from shrinkray.engine import watch as watch_mod
+
+        with (
+            patch("shrinkray.service.all_problems", return_value=[]),
+            patch.object(watch_mod, "STABLE_MIN_AGE", 0.0),
+            patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
+        ):
             yield
 
     def test_encode_without_flags_uses_the_config_presets(self):
@@ -482,6 +492,12 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
             lib.mkdir()
             movie = lib / "movie.mkv"
             movie.write_bytes(b"x" * 64)
+            # the file reads as COMPLETE (issue #437): the CLI now waits for
+            # the stability witness before encoding, and a just-written file
+            # is younger than STABLE_MIN_AGE - age it past the floor so this
+            # test's subject (signal cancellation) is what is under test
+            old = time_mod.time() - 120
+            os.utime(movie, (old, old))
             stubs = self._stubs(root)
 
             env = dict(os.environ)
@@ -659,11 +675,17 @@ class TestCancelOnTerminalClose(unittest.TestCase):
                     output_size=50,
                 )
 
+            from shrinkray.engine import watch as watch_mod
+
             with (
                 patch("shrinkray.service.all_problems", return_value=[]),
                 patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
                 patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode),
                 patch("shrinkray.__main__.log_error") as log_error,
+                # the stability constants (issue #437): the subject is the
+                # signal-after-the-last-check, not stability - no test sleeps
+                patch.object(watch_mod, "STABLE_MIN_AGE", 0.0),
+                patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
             ):
                 result = CliRunner().invoke(app, ["encode", str(lib)])
             self.assertEqual(result.exit_code, 1, result.output)
@@ -843,6 +865,11 @@ class TestStatelessModeA(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.movie = self.root / "one.mkv"
         self.movie.write_bytes(b"x" * 8)
+        # the file reads as COMPLETE (issue #437): these tests' subject is the
+        # database-free one-shot form, not stability - age the fixture past
+        # STABLE_MIN_AGE so the real seam does not hold the run
+        old = time.time() - 120
+        os.utime(self.movie, (old, old))
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -939,6 +966,9 @@ class TestEncodeInPlace(unittest.TestCase):
         self.library.mkdir()
         self.movie = self.library / "one.mkv"
         self.movie.write_bytes(b"x" * 100)
+        # the stability constants are patched to 0 in _encode (issue #437):
+        # these tests' subject is the in-place encode, not stability - the real
+        # seam runs instantly, no test sleeps
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -966,6 +996,8 @@ class TestEncodeInPlace(unittest.TestCase):
         previous = os.getcwd()
         os.chdir(self.root)
         try:
+            from shrinkray.engine import watch as watch_mod
+
             with (
                 patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode),
                 patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
@@ -973,6 +1005,10 @@ class TestEncodeInPlace(unittest.TestCase):
                 patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
                 # CI has no ffprobe; the encode preflight (#194) must pass
                 patch("shrinkray.service.shutil.which", return_value="ffprobe"),
+                # the stability constants (issue #437): the real seam runs
+                # instantly - no test sleeps
+                patch.object(watch_mod, "STABLE_MIN_AGE", 0.0),
+                patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
             ):
                 return runner.invoke(app, list(argv))
         finally:
