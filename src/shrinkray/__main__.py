@@ -557,6 +557,7 @@ def _record_encodes(
             # renames happen, so it is the key the job and the watcher agree on.
             # A library root is not an identity - roots nest.
             from shrinkray.engine.pause import manual_encode, state_dir_for_cli
+            from shrinkray.engine.watch import STABLE_WAIT_LIMIT, wait_for_stable
 
             if sys.stdin.isatty() and sys.stdout.isatty():
                 # the single-file case runs in a console (issue #250): say
@@ -594,6 +595,20 @@ def _record_encodes(
                     for movie in movies:
                         if str(movie) in encoded_paths:
                             log(f"Skipping '{movie.name}': already encoded (use --overwrite).")
+                            continue
+                        # the stability witness the watcher uses, before any
+                        # gate or sample (issue #437): a one-shot CLI run on a
+                        # file a mover is still writing must not decide on it
+                        # - torn probes and a cache entry under a torn identity
+                        # are the cost. The wait is bounded and logged; a file
+                        # that never settles is reported and skipped (NOT
+                        # marked encoded - a later run re-decides it).
+                        if not wait_for_stable(movie, cancel=cancel):
+                            log_error(
+                                f"'{movie.name}' did not settle within "
+                                f"{int(STABLE_WAIT_LIMIT)}s (still copying?) - "
+                                "skipped; run the encode again once the file is complete"
+                            )
                             continue
                         progress.update(
                             progress_task, description=f"Probing '{movie.name}'...", completed=0

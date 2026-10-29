@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from shrinkray.engine import pipeline as engine_pipeline
+from shrinkray.engine import watch as engine_watch
 from shrinkray.engine.lock import EncodeBusyError, _lock_path, guard_encodes
 
 
@@ -47,6 +48,18 @@ class TestInPlaceSlotKeying(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.source = self.root / "movie.mkv"
         self.source.write_bytes(b"x" * 8)
+        # the CLI tests here run the REAL _record_encodes loop on this fresh
+        # fixture: its #437 stability wait would hold every test for the age
+        # floor (~60 s each). Their subject is the slot keying, not stability,
+        # so the floor and the interval are patched to 0 - the real seam still
+        # runs, instantly.
+        self.stability_patch = (
+            mock.patch.object(engine_watch, "STABLE_MIN_AGE", 0.0),
+            mock.patch.object(engine_watch, "STABLE_CHECK_INTERVAL", 0.0),
+        )
+        for p in self.stability_patch:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in self.stability_patch])
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
