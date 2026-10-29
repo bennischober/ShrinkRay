@@ -131,12 +131,22 @@ class TestProbeScratchAttribution(unittest.TestCase):
         """Every scratch mkdtemp site derives its prefix from the one helper
         (no second implementation of the grammar)."""
         prefixes: list[str] = []
+        self._plan_with_patched_scratch(prefixes)
+        self._encode_with_patched_scratch(prefixes)
+        for prefix in prefixes:
+            self.assertTrue(
+                prefix.startswith("shrinkray-probe-movie-"),
+                f"anonymous scratch prefix survived: {prefix!r}",
+            )
+
+    def _plan_with_patched_scratch(self, prefixes: list[str]) -> None:
+        """Runs plan_quality with every external seam mocked and the scratch
+        mkdtemp captured. (The plan path's patches stay in their own helper:
+        Python 3.10 compiles each context manager of a with-statement as one
+        nested block with a limit of 20 - a combined with would exceed it.)"""
         real_mkdtemp = tempfile.mkdtemp
 
         def fake_mkdtemp(prefix: str = "", **kwargs):
-            # the real function, captured BEFORE the patch (patching
-            # tempfile.mkdtemp is global - calling it through the module
-            # here would recurse into this fake)
             prefixes.append(prefix)
             return real_mkdtemp(prefix=prefix, **kwargs)
 
@@ -154,13 +164,24 @@ class TestProbeScratchAttribution(unittest.TestCase):
                 return_value=(20, 96.5, [], False),
             ),
             patch("shrinkray.engine.plan.tempfile.mkdtemp", side_effect=fake_mkdtemp),
-            patch("shrinkray.engine.pipeline.tempfile.mkdtemp", side_effect=fake_mkdtemp),
+        ):
+            plan_quality(self.movie, db_file=None)
+
+    def _encode_with_patched_scratch(self, prefixes: list[str]) -> None:
+        """Runs encode_with_quality (verify=True, so the verification workdir
+        is created too) with every external seam mocked and the scratch
+        mkdtemp captured."""
+        real_mkdtemp = tempfile.mkdtemp
+
+        def fake_mkdtemp(prefix: str = "", **kwargs):
+            prefixes.append(prefix)
+            return real_mkdtemp(prefix=prefix, **kwargs)
+
+        with (
             patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
             patch(
                 "shrinkray.engine.pipeline.durations_match", return_value=True
             ),  # the stub output is not a real video; the 1:1 check must not gate it
-            # the encode path runs the same gates and probe steps through the
-            # pipeline's own import homes
             patch("shrinkray.engine.pipeline.detect_crop_summary_cached", return_value=None),
             patch("shrinkray.engine.pipeline.detect_crop_rect", return_value=None),
             patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=3600.0),
@@ -171,21 +192,16 @@ class TestProbeScratchAttribution(unittest.TestCase):
                 "shrinkray.engine.pipeline.find_optimal_crf_and_skip",
                 return_value=(20, 96.5, [], False),
             ),
+            patch("shrinkray.engine.pipeline.tempfile.mkdtemp", side_effect=fake_mkdtemp),
             patch(
                 "shrinkray.engine.pipeline._encode_with_command",
                 return_value=SimpleNamespace(success=True, cancelled=False, error=None),
             ),
         ):
-            plan_quality(self.movie, db_file=None)
             out = self.root / "out" / "movie.mkv"
             out.parent.mkdir()
             out.write_bytes(b"NEW" * 50)
             encode_with_quality(self.movie, out, db_file=None, verify=True)
-        for prefix in prefixes:
-            self.assertTrue(
-                prefix.startswith("shrinkray-probe-movie-"),
-                f"anonymous scratch prefix survived: {prefix!r}",
-            )
 
     def test_scratch_name_is_decoration_for_the_probe_cache(self) -> None:
         """The cache is keyed only from its supplied identity inputs: two
