@@ -1477,8 +1477,16 @@ class TestDb(unittest.TestCase):
             (verify_debris / "vmaf.json").write_bytes(b"{}")
             # the debris must be STALE: age every workdir past the floor
             # (a fresh workdir is a LIVE probe's, never reported)
-            old = time.time() - 2 * service.SCRATCH_STALE_SECONDS
-            for debris in (workdir, old_debris, verify_debris):
+            # probe debris: past the 1 h probe floor. verify debris: past
+            # its own 6 h floor (its floor differs - the measurement is
+            # silent for its whole run)
+            probe_old = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            verify_old = time.time() - 2 * service.SCRATCH_VERIFY_STALE_SECONDS
+            for debris, old in (
+                (workdir, probe_old),
+                (old_debris, probe_old),
+                (verify_debris, verify_old),
+            ):
                 os.utime(debris, (old, old))
                 for child in debris.iterdir():
                     os.utime(child, (old, old))
@@ -1596,6 +1604,37 @@ class TestDb(unittest.TestCase):
                 self.assertNotIn("do not read", debris_findings[0].detail or "")
                 self.assertTrue((outside / "secret.txt").exists())
 
+    def test_a_running_verification_is_not_debris_despite_its_silence(self):
+        """A verification workdir writes nothing during the measurement (the
+        model goes in up front, vmaf.json at the end), so its floor is 6 h:
+        a workdir older than the probe floor but younger than the verify
+        floor is a RUNNING verification, never debris (round-3 finding 1).
+        """
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            live_verify = scratch / "shrinkray_verify_0b130ea"
+            live_verify.mkdir()
+            (live_verify / "vmaf_model.json").write_bytes(b"{}")
+            # older than the probe floor, younger than the verify floor
+            aged = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            os.utime(live_verify, (aged, aged))
+            os.utime(live_verify / "vmaf_model.json", (aged, aged))
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                findings = service.doctor(self.connection)
+                self.assertEqual(
+                    [f for f in findings if f.issue == "stale probe scratch (crash debris?)"],
+                    [],
+                )
+                self.assertTrue(live_verify.is_dir())
+
     def test_doctor_scratch_check_skips_without_a_configured_root(self):
         """A stateless CLI run has no configured scratch (no TMPDIR): the
         check is skipped, never a walk of the OS temp (issue #440)."""
@@ -1632,11 +1671,18 @@ class TestDb(unittest.TestCase):
             verify_debris.mkdir()
             (scratch / "metadata_quality_1").mkdir()
             (scratch / "not_a_dir_shrinkray-probe-y").write_bytes(b"f")
-            # age the three workdirs past the staleness floor (a fresh one is
-            # a LIVE probe's workdir, correctly not reported)
-            old = time.time() - 2 * service.SCRATCH_STALE_SECONDS
-            for debris_dir in (probe_debris, verify_debris, scratch / "metadata_quality_1"):
+            # age the workdirs past THEIR floors (a fresh one is a LIVE
+            # run's workdir, correctly not reported; the verify floor is 6 h)
+            probe_old = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            verify_old = time.time() - 2 * service.SCRATCH_VERIFY_STALE_SECONDS
+            for debris_dir, old in (
+                (probe_debris, probe_old),
+                (verify_debris, verify_old),
+                (scratch / "metadata_quality_1", probe_old),
+            ):
                 os.utime(debris_dir, (old, old))
+                for child in debris_dir.iterdir():
+                    os.utime(child, (old, old))
             with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
                 findings = service.doctor(self.connection)
                 debris = [f for f in findings if f.issue == "stale probe scratch (crash debris?)"]

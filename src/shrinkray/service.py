@@ -644,11 +644,20 @@ class DoctorFinding:
 # pre-#435 anonymous one - existing debris stays attributable; issue #440):
 SCRATCH_WORKDIR_PREFIXES = ("shrinkray-probe-", "shrinkray_verify_", "metadata_quality_")
 
-# a workdir younger than this is a LIVE probe's workdir (a bisect on a large
-# file runs for minutes), not crash debris: reporting it would exit 1 on a
-# healthy host. One hour of silence is the conservative "nobody is coming
-# back" line (lock.py's silence-window shape, scaled to probe runs).
+# a workdir younger than its floor is a LIVE run's workdir, not crash debris:
+# reporting it would exit 1 on a healthy host. The floors differ by workdir kind
+# because they write differently (the issue's review rounds 2-3):
+# - probe dirs (a bisect): minutes of work, new dirs appear as the queue moves,
+#   so one hour of silence is the conservative "nobody is coming back" line
+#   (lock.py's silence-window shape).
+# - verify dirs: the measurement copies the model in up front and writes
+#   vmaf.json only at the END - nothing is touched in between (tools/vmaf.py),
+#   so a full-file measurement of a large movie is silent for its whole run
+#   (tens of minutes). Its floor is 6 h: an 18x margin over the longest
+#   supported measurement, while overnight debris (the case this check exists
+#   for) still reports.
 SCRATCH_STALE_SECONDS = 3600.0
+SCRATCH_VERIFY_STALE_SECONDS = 6 * 3600.0
 
 
 def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[DoctorFinding]:
@@ -784,7 +793,14 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
             if item.is_file():
                 total += item_stat.st_size
         age_hours = max((now - newest) / 3600.0, 0.0)
-        if now - newest < SCRATCH_STALE_SECONDS:
+        # the floor follows the workdir kind (see the constants' comment):
+        # a verification's silence is the measurement running, not a death
+        floor = (
+            SCRATCH_VERIFY_STALE_SECONDS
+            if entry.name.startswith("shrinkray_verify_")
+            else SCRATCH_STALE_SECONDS
+        )
+        if now - newest < floor:
             # a live run's workdir: the verification writes its one direct
             # child up front and nothing during a long measurement, so the
             # DIRECTORY's own mtime would report a still-running run as
