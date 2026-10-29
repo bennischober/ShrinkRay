@@ -1141,12 +1141,16 @@ class JobWorker:
         self._thread = threading.Thread(target=self._run, name="job-worker", daemon=True)
         self._thread.start()
 
-    def stop(self, join_timeout: float = 5.0) -> None:
+    def stop(self, join_timeout: float = 30.0) -> None:
         """Signals the worker to stop and joins it.
 
         The running job's cancel event is set too (issue #431): a shutdown
         must terminate the running encode/verify child, not wait out a
-        multi-hour measurement the watchdog no longer bounds.
+        multi-hour measurement the watchdog no longer bounds. The default
+        join covers the child's kill window (terminate_tree's 5 s SIGTERM +
+        5 s SIGKILL and the pipe drainers' joins) plus the job's unwinding,
+        so the caller closing the database afterwards does not race the
+        CANCELLED write (review round 3, finding 2).
 
         Args:
             join_timeout (float): Seconds to wait for the thread to finish.
@@ -1161,22 +1165,32 @@ class JobWorker:
     def _run(self) -> None:
         """Consumes jobs until stopped."""
         while not self._stop.is_set():
+            # the cancel event exists before the job is taken (review round 3,
+            # finding 3): a stop landing between take_next and _execute's
+            # publish would otherwise miss a multi-hour job entirely
+            cancel = threading.Event()
+            self._running_cancel = cancel
             job = self.queue.take_next()
             if job is None:
+                self._running_cancel = None
                 self.queue.wait_for_work(timeout=1.0)
                 continue
-            self._execute(job)
+            self._execute(job, cancel)
 
-    def _execute(self, job: Job) -> None:
+    def _execute(self, job: Job, cancel: threading.Event | None = None) -> None:
         """Runs one job and records its outcome.
 
         Args:
             job (Job): The job to execute.
+            cancel (threading.Event | None): The runner's cancel event for
+                this job (issue #431); None creates one (direct _execute
+                callers in tests).
         """
         if job.id is None:  # not persisted => programming error
             self.queue.fail(job, "job has no id")
             return
-        cancel = threading.Event()
+        if cancel is None:
+            cancel = threading.Event()
         self._running_cancel = cancel
         self.queue.register_cancel_event(job.id, cancel)
 

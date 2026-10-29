@@ -529,9 +529,10 @@ def watch(
 ) -> None:
     """Watches the inbox and encodes newly arrived movies.
 
-    This function blocks (unless once=True); stop it with Ctrl+C - the
-    running encode finishes first, then the state is written and the
-    process exits cleanly.
+    This function blocks (unless once=True); stop it with Ctrl+C - the stop
+    event is checked between passes AND terminates the running encode/verify
+    child (issue #431), then the state is written and the process exits
+    cleanly.
 
     Args:
         roots (list[Path]): The folders to watch, each walked recursively

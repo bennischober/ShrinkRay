@@ -251,13 +251,37 @@ def _signal_default_during():
     """
     old_int = signal.getsignal(signal.SIGINT)
     old_term = signal.getsignal(signal.SIGTERM)
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
         yield
     finally:
         signal.signal(signal.SIGINT, old_int)
         signal.signal(signal.SIGTERM, old_term)
+
+
+def _append_result_row(
+    result_file: Path,
+    row: tuple[str, float | None, float | None, str, str],
+) -> None:
+    """Appends one pair's table row as soon as it is measured.
+
+    Args:
+        result_file (Path): The results markdown file (appended, never
+            truncated).
+        row (tuple): (label, ours, theirs, note, recipe) - a None score is
+            written as the unmeasured row.
+    """
+    label, ours, theirs, note, recipe = row
+    with result_file.open("a", encoding="utf-8") as fh:
+        if note == "unmeasured" or ours is None or theirs is None:
+            fh.write(f"| {label} | — | — | — | unmeasured | — |\n")
+            return
+        delta = abs(ours - theirs)
+        verdict = note or ("PASS" if delta <= TOLERANCE else "FAIL")
+        fh.write(
+            f"| {label} | {ours:.4f} | {theirs:.4f} | {delta:.4f} | {verdict} | `{recipe}` |\n"
+        )
 
 
 def measure_ours(
@@ -280,7 +304,8 @@ def measure_ours(
             recipe is what the caches key on, so recording it keeps the result
             comparable with a later run).
     """
-    width, height, bit_depth = pair_dimensions(reference, distorted)
+    with _signal_default_during():
+        width, height, bit_depth = pair_dimensions(reference, distorted)
     recipe = vmaf_recipe(crop=crop, hdr=hdr, width=width, height=height, bit_depth=bit_depth)
     with tempfile.TemporaryDirectory(prefix="shrinkray_parity_") as tmp:
         score = measure_vmaf(
@@ -341,13 +366,27 @@ def main() -> int:
 
     rows: list[tuple[str, float | None, float | None, str, str]] = []
     failures = 0
+    # the table shell is written before the loop and each pair's row is appended
+    # as soon as it is measured: a Ctrl+C mid-run keeps everything already
+    # measured (issue #431 review round 3, finding 1 - the post-loop-only write
+    # lost every row measured before the interrupt)
+    RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with RESULT_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(f"## {', '.join(labels)}\n\n")
+        fh.write("| pair | ShrinkRay | ab-av1 | delta | verdict | recipe |\n")
+        fh.write("|---|---|---|---|---|---|\n")
     for index, (reference, distorted) in enumerate(pairs):
         label = labels[index]
         crop = crops[index]
         hdr = hdrs[index]
         print(f"\n=== {label} ===")
-        reference_frames = video_frame_count(reference)
-        distorted_frames = video_frame_count(distorted)
+        # the ffprobe children are not cancel-event aware (a plain
+        # subprocess.run) and can run for minutes on a large pair: under
+        # default signal handling a Ctrl+C ends the script instead of being
+        # swallowed until the next measurement leg (review round 3, finding 6)
+        with _signal_default_during():
+            reference_frames = video_frame_count(reference)
+            distorted_frames = video_frame_count(distorted)
         print(f"frames: reference {reference_frames}, distorted {distorted_frames}")
         if reference_frames is None or distorted_frames is None:
             print(
@@ -356,6 +395,7 @@ def main() -> int:
             )
             failures += 1
             rows.append((f"{label} [frame counts unreadable]", None, None, "unmeasured", ""))
+            _append_result_row(RESULT_FILE, rows[-1])
             continue
         if reference_frames != distorted_frames:
             # A count mismatch means the two sides are not comparing the same
@@ -379,9 +419,9 @@ def main() -> int:
         try:
             ours, recipe = measure_ours(reference, distorted, crop, hdr, cancel=cancel)
         except Cancelled:
-            # Ctrl+C during the measurement: the tree is terminated, the
-            # partial results already written stay (issue #431)
-            print("cancelled; results so far are in the results file")
+            # Ctrl+C during the measurement: the tree is terminated; every
+            # earlier pair's row is already appended (issue #431)
+            print("cancelled; measured pairs are in the results file")
             raise SystemExit(130) from None
         # the ab-av1 leg's child is NOT in its own session (a plain
         # subprocess.run), so the terminal's SIGINT reaches both: restore the
@@ -395,11 +435,12 @@ def main() -> int:
         if hdr:
             # the tone-map is #310's documented deviation: REPORTED, not held
             rows.append((f"{label} [tone-mapped, reported]", ours, theirs, "reported", recipe))
+            _append_result_row(RESULT_FILE, rows[-1])
             # the like-for-like comparison: both sides score the PQ signal directly
             try:
                 ours_pq, recipe_pq = measure_ours(reference, distorted, crop, False, cancel=cancel)
             except Cancelled:
-                print("cancelled; results so far are in the results file")
+                print("cancelled; measured pairs are in the results file")
                 raise SystemExit(130) from None
             delta_pq = abs(ours_pq - theirs)
             print(
@@ -407,27 +448,16 @@ def main() -> int:
                 f"(delta {delta_pq:.4f})"
             )
             rows.append((f"{label} [PQ-direct]", ours_pq, theirs, "", recipe_pq))
+            _append_result_row(RESULT_FILE, rows[-1])
             if delta_pq > TOLERANCE:
                 failures += 1
             continue
         rows.append((label, ours, theirs, "", recipe))
+        _append_result_row(RESULT_FILE, rows[-1])
         if delta > TOLERANCE:
             failures += 1
 
-    RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
     with RESULT_FILE.open("a", encoding="utf-8") as fh:
-        fh.write(f"## {', '.join(labels)}\n\n")
-        fh.write("| pair | ShrinkRay | ab-av1 | delta | verdict | recipe |\n")
-        fh.write("|---|---|---|---|---|---|\n")
-        for label, ours, theirs, note, recipe in rows:
-            if note == "unmeasured" or ours is None or theirs is None:
-                fh.write(f"| {label} | — | — | — | unmeasured | — |\n")
-                continue
-            delta = abs(ours - theirs)
-            verdict = note or ("PASS" if delta <= TOLERANCE else "FAIL")
-            fh.write(
-                f"| {label} | {ours:.4f} | {theirs:.4f} | {delta:.4f} | {verdict} | `{recipe}` |\n"
-            )
         fh.write("\n")
 
     print(f"\nresults appended to {RESULT_FILE}")
