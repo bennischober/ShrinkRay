@@ -126,7 +126,8 @@ class TestProbeScratchAttribution(unittest.TestCase):
         self.assertLessEqual(len(stem_part.encode("utf-8")), PROBE_SCRATCH_STEM_BYTES)
         stem_part.encode("utf-8")  # a cut that broke a character would fail here
         # the whole name stays far under the filesystem's 255-byte limit
-        self.assertLess(len(prefix) + 8, 255)
+        # (bytes, not code points - the limit is on the encoded name)
+        self.assertLess(len(prefix.encode("utf-8")) + 8, 255)
 
     def test_all_three_scratch_sites_use_the_grammar(self) -> None:
         """Every scratch mkdtemp site derives its prefix from the one helper
@@ -143,6 +144,7 @@ class TestProbeScratchAttribution(unittest.TestCase):
                 f"anonymous scratch prefix survived: {prefix!r}",
             )
 
+    @unittest.skipIf(os.name == "nt", "Windows filenames cannot hold these bytes")
     def test_a_non_utf8_filename_hashes_instead_of_raising(self) -> None:
         """POSIX filenames arrive surrogate-escaped (os.fsdecode of the raw
         bytes); the digest input is the filename's on-disk bytes
