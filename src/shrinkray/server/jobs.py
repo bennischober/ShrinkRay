@@ -1130,6 +1130,11 @@ class JobWorker:
         self.queue = queue
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        # the running job's cancel event: a shutdown must terminate the
+        # encode/verify child, not leave it running unattended (issue #431
+        # review, round 2 finding 1 - the measurement path has opted out of
+        # the stall watchdog, so the cancel event is its only kill path)
+        self._running_cancel: threading.Event | None = None
 
     def start(self) -> None:
         """Starts the worker thread."""
@@ -1137,12 +1142,18 @@ class JobWorker:
         self._thread.start()
 
     def stop(self, join_timeout: float = 5.0) -> None:
-        """Signals the worker to stop after the current job and joins it.
+        """Signals the worker to stop and joins it.
+
+        The running job's cancel event is set too (issue #431): a shutdown
+        must terminate the running encode/verify child, not wait out a
+        multi-hour measurement the watchdog no longer bounds.
 
         Args:
             join_timeout (float): Seconds to wait for the thread to finish.
         """
         self._stop.set()
+        if self._running_cancel is not None:
+            self._running_cancel.set()
         self.queue._wake.set()
         if self._thread is not None:
             self._thread.join(timeout=join_timeout)
@@ -1166,6 +1177,7 @@ class JobWorker:
             self.queue.fail(job, "job has no id")
             return
         cancel = threading.Event()
+        self._running_cancel = cancel
         self.queue.register_cancel_event(job.id, cancel)
 
         def progress(data: dict) -> None:
@@ -1203,4 +1215,5 @@ class JobWorker:
             )
             self.queue.fail(job, f"{type(e).__name__}: {e}")
         finally:
+            self._running_cancel = None
             self.queue.unregister_cancel_event(job.id)

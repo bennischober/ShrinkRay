@@ -28,7 +28,9 @@ caller's `timeout` ceiling) with `-2` and a message saying which. `watchdog=Fals
 opts one child out of the stall watchdog (issue #431): libvmaf is silent by design
 until the whole file is scored, so the measurement path (`vmaf.measure_vmaf`) passes
 False and keeps the cancel event as its kill path — a silent-by-design child must
-not be killed as hung. Both pipes are
+not be killed as hung. The kill path is the caller's cancel event, and every
+production caller wires one (the worker's stop sets the running job's event;
+the scripts translate signals). Both pipes are
 drained by daemon threads (`process.py`) — a child writing more than the ~64 K pipe
 buffer would otherwise deadlock a poll-only loop. `timeout` is for bounded reads
 only (the crop timeline pass's duration-derived ceiling, #384). With neither a

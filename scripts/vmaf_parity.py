@@ -40,6 +40,7 @@ timestamps (ab-av1's default would re-time both inputs to 25 fps).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import shutil
 import signal
 import subprocess
@@ -50,6 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from shrinkray.tools.process import Cancelled
 from shrinkray.tools.vmaf import measure_vmaf, vmaf_recipe
 
 REPO = Path(__file__).resolve().parent.parent
@@ -238,6 +240,26 @@ def _probe_video_stream(path: Path, entries: str) -> dict[str, str]:
     return values
 
 
+@contextlib.contextmanager
+def _signal_default_during():
+    """Restores the default SIGINT handling for the enclosed block.
+
+    The cancel handlers above swallow SIGINT for the script's lifetime; the
+    ab-av1 leg's child is not in its own session, so the terminal's SIGINT
+    reaches both the child and the script, and the default behaviour (die on
+    KeyboardInterrupt) is the correct one there.
+    """
+    old_int = signal.getsignal(signal.SIGINT)
+    old_term = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, old_int)
+        signal.signal(signal.SIGTERM, old_term)
+
+
 def measure_ours(
     reference: Path,
     distorted: Path,
@@ -354,8 +376,19 @@ def main() -> int:
                 )
             )
             continue
-        ours, recipe = measure_ours(reference, distorted, crop, hdr, cancel=cancel)
-        theirs = ab_av1_vmaf(reference, distorted, crop)
+        try:
+            ours, recipe = measure_ours(reference, distorted, crop, hdr, cancel=cancel)
+        except Cancelled:
+            # Ctrl+C during the measurement: the tree is terminated, the
+            # partial results already written stay (issue #431)
+            print("cancelled; results so far are in the results file")
+            raise SystemExit(130) from None
+        # the ab-av1 leg's child is NOT in its own session (a plain
+        # subprocess.run), so the terminal's SIGINT reaches both: restore the
+        # default handler for the leg so Ctrl+C ends the script normally
+        # instead of being swallowed by the cancel handler (issue #431 review)
+        with _signal_default_during():
+            theirs = ab_av1_vmaf(reference, distorted, crop)
         delta = abs(ours - theirs)
         print(f"{label}: ShrinkRay {ours:.4f} vs ab-av1 {theirs:.4f} (delta {delta:.4f})")
         print(f"  recipe: {recipe}")
@@ -363,7 +396,11 @@ def main() -> int:
             # the tone-map is #310's documented deviation: REPORTED, not held
             rows.append((f"{label} [tone-mapped, reported]", ours, theirs, "reported", recipe))
             # the like-for-like comparison: both sides score the PQ signal directly
-            ours_pq, recipe_pq = measure_ours(reference, distorted, crop, False, cancel=cancel)
+            try:
+                ours_pq, recipe_pq = measure_ours(reference, distorted, crop, False, cancel=cancel)
+            except Cancelled:
+                print("cancelled; results so far are in the results file")
+                raise SystemExit(130) from None
             delta_pq = abs(ours_pq - theirs)
             print(
                 f"{label} [PQ-direct]: ShrinkRay {ours_pq:.4f} vs ab-av1 {theirs:.4f} "

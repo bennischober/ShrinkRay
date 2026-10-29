@@ -33,8 +33,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from shrinkray.telemetry import logs_dir
-from shrinkray.tools.vmaf import measure_vmaf
 from shrinkray.tools.process import Cancelled
+from shrinkray.tools.vmaf import measure_vmaf
 
 REPO = Path(__file__).resolve().parent.parent
 RESULT_FILE = REPO / "test_media" / "scratch" / "verify_results.md"

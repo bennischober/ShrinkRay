@@ -550,7 +550,9 @@ def watch(
         once (bool): One pass and return (for tests).
         max_threads (int | None): Per-encode thread cap (None/0 = all cores).
         stop_event (threading.Event | None): Cooperative stop for the resident
-            app (checked between passes; the running encode finishes first).
+            app: checked between passes AND passed to encode_with_quality as
+            its cancel event, so a stop terminates the running encode/verify
+            child (issue #431) instead of waiting it out.
         db_file (Path | None): The sqlite database file - enables the stall
             watchdog's failure-bundle telemetry (None: no telemetry; the
             CLI one-shot watch prints the reason instead).

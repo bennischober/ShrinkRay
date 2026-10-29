@@ -3,6 +3,7 @@
 import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -554,6 +555,57 @@ class TestJobs(unittest.TestCase):
         reloaded = self.queue.get(job.id)
         self.assertEqual(reloaded.state, jobs.JobState.FAILED)
         self.assertIn("RuntimeError: engine exploded", reloaded.error)
+
+    def test_worker_stop_terminates_the_running_job_s_child(self):
+        """Issue #431 (review round 2, finding 1): the measurement children run
+        with the stall watchdog opted out, so a shutdown must set the running
+        job's cancel event - the only kill path they have. stop() sets it
+        while the job is executing, and _execute clears it in its finally."""
+        root = Path(self.tmp.name)
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "path": str(root / "movies"),
+                    "output_dir": str(root / "out"),
+                    "quality": True,
+                },
+            )
+        )
+        from shrinkray.tools.process import Cancelled
+
+        worker = jobs.JobWorker(self.connection, self.queue)
+        started = threading.Event()
+        observed: dict = {}
+
+        def slow_encode(job, connection, cancel, progress=None):
+            started.set()
+            # the worker is mid-job: a concurrent stop() must set THIS event
+            observed["cancel_set_by_stop"] = None
+            if not started.wait(timeout=5.0):
+                observed["cancel_set_by_stop"] = "never-started"
+                return {"cancelled": False}
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if cancel is not None and cancel.is_set():
+                    observed["cancel_set_by_stop"] = True
+                    raise Cancelled("cancelled by stop")
+                time.sleep(0.05)
+            observed["cancel_set_by_stop"] = False
+            return {"cancelled": False}
+
+        with mock.patch("shrinkray.server.jobs.execute_encode", side_effect=slow_encode):
+            thread = threading.Thread(target=worker._execute, args=(job,))
+            thread.start()
+            self.assertTrue(started.wait(timeout=5.0), "the job never started")
+            worker.stop(join_timeout=10.0)
+            thread.join(timeout=10.0)
+        self.assertTrue(
+            observed["cancel_set_by_stop"], "stop() did not terminate the running child"
+        )
+        self.assertIsNone(worker._running_cancel, "the finally must clear the running event")
+        reloaded = self.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
 
     def test_next_poll_interval_helper_exists(self):
         # guard the cross-module dependency used by watch mode
