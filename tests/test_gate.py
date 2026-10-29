@@ -39,6 +39,9 @@ class TestGateMypyFallback(unittest.TestCase):
         # .venv (review round 1, finding 2)
         self.assertIn("--isolated", gate)
         self.assertIn("UV_PYTHON_DOWNLOADS=never", gate)
+        # the isolated env's package sync stays cache-served too (review
+        # round 3, finding 2): downloads-never governs interpreters only
+        self.assertIn("UV_OFFLINE=1", gate)
         # the retry captures its own rc too: a candidate's non-139 verdict is
         # returned, not silently advanced past (review round 1, finding 1)
         self.assertIn(
