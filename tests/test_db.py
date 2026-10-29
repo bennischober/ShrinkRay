@@ -1639,6 +1639,23 @@ class TestDb(unittest.TestCase):
                 )
                 self.assertTrue(live_verify.is_dir())
 
+    def test_the_verify_site_passes_its_kind_to_the_grammar_owner(self):
+        """The producer pin: the pipeline's verification workdir must ask the
+        grammar owner for the verify kind - deleting the argument keeps every
+        behavioral test green (their fixtures pass it themselves) while the
+        6 h floor silently stops applying to real runs (round-3's defect,
+        closed only when THIS pin exists)."""
+
+        import inspect
+
+        from shrinkray.engine import pipeline as pipeline_mod
+
+        source = inspect.getsource(pipeline_mod)
+        # the verify site's call carries the kind argument
+        self.assertIn('probe_scratch_prefix(input_file, kind="verify")', source)
+        # ...exactly once (the probe sites pass no kind)
+        self.assertEqual(source.count('kind="verify"'), 1)
+
     def test_the_historical_verify_grammar_keeps_its_floor(self):
         """The short-lived shrinkray_verify_ name (#435's first shape) still
         carries the verification floor: existing debris from an upgraded
@@ -1677,7 +1694,7 @@ class TestDb(unittest.TestCase):
             movie = root / "movie.mkv"
             movie.write_bytes(b"x")
             db.upsert_file(self.connection, self._record(str(movie)))
-            env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
+            env = {k: v for k, v in os.environ.items() if k not in ("TMPDIR", "TEMP", "TMP")}
             with patch.dict(os.environ, env, clear=True):
                 findings = service.doctor(self.connection)
         self.assertEqual(findings, [])

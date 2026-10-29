@@ -776,8 +776,9 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         return []
     for entry in entries:
         if entry.is_symlink():
-            # never followed: a symlinked entry would make rglob walk OUT of
-            # the scratch root (rglob follows directory symlinks), and this
+            # never followed: rglob follows directory symlinks on every
+            # Python this project supports (measured on 3.10-3.15), so a
+            # symlinked entry would walk OUT of the scratch root - and this
             # report-only check reads only the configured scratch itself
             continue
         if not entry.name.startswith(SCRATCH_WORKDIR_PREFIXES) or not entry.is_dir():
@@ -792,9 +793,10 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         total = 0
         for item in items:
             if item.is_symlink():
-                # never followed: a symlinked member would walk OUT of the
-                # scratch root (pre-3.13 rglob follows directory symlinks),
-                # and this report-only check reads only the workdir itself
+                # never followed: rglob follows directory symlinks on every
+                # Python this project supports (measured on 3.10-3.15), so a
+                # symlinked member would walk OUT of the scratch root - and
+                # this report-only check reads only the workdir itself
                 continue
             try:
                 item_stat = item.stat()
@@ -811,8 +813,12 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         # The kind is read from the grammar's verify marker - the CURRENT
         # builds' name (identity.probe_scratch_prefix(kind="verify")) and the
         # short-lived shrinkray_verify_ name both carry it
-        is_verify = SCRATCH_VERIFY_MARKER in entry.name or entry.name.startswith(
-            "shrinkray_verify_"
+        is_verify = (
+            # the marker is part of the WORKDIR KIND, not any substring: the
+            # head before the marker must itself be a probe-grammar name, so
+            # a movie named "...-verify-..." gets the probe floor
+            ("shrinkray-probe-" in entry.name and SCRATCH_VERIFY_MARKER in entry.name)
+            or entry.name.startswith("shrinkray_verify_")
         )
         floor = SCRATCH_VERIFY_STALE_SECONDS if is_verify else SCRATCH_STALE_SECONDS
         if now - newest < floor:
