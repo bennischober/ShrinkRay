@@ -78,6 +78,12 @@ def ensure_unchanged(movie: Path, identity: RunIdentity, stage: str) -> None:
 # 255-byte filename limit even for a stem of multibyte characters
 PROBE_SCRATCH_STEM_BYTES = 48
 
+# the one home of the name's pieces (service.py's doctor parses names back
+# with these; re-spelling the literals there is how the verify floor once
+# keyed on a name no build wrote):
+PROBE_GRAMMAR_PREFIX = "shrinkray-probe-"
+PROBE_VERIFY_MARKER = "-verify-"
+
 
 def probe_scratch_prefix(movie: Path, kind: str = "probe") -> str:
     """Builds the attributable scratch-directory prefix for one engine run.
@@ -119,4 +125,4 @@ def probe_scratch_prefix(movie: Path, kind: str = "probe") -> str:
     stem = movie.stem.encode("utf-8", "ignore")[:PROBE_SCRATCH_STEM_BYTES].decode("utf-8", "ignore")
     digest = hashlib.sha256(os.fsencode(str(movie.resolve()))).hexdigest()[:8]
     marker = "verify-" if kind == "verify" else ""
-    return f"shrinkray-probe-{stem}-{digest}-{marker}"
+    return f"{PROBE_GRAMMAR_PREFIX}{stem}-{digest}-{marker}"

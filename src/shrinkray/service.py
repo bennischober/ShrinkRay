@@ -8,6 +8,7 @@ presentation logic — the CLI prints, this module decides and records.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import time
@@ -18,6 +19,12 @@ from typing import TYPE_CHECKING
 from shrinkray import db
 from shrinkray.config import DEFAULT_PROBE_ENCODER_PRESET
 from shrinkray.db import MovieRecord
+from shrinkray.engine.identity import (
+    PROBE_GRAMMAR_PREFIX as _PROBE_GRAMMAR_PREFIX,
+)
+from shrinkray.engine.identity import (
+    PROBE_VERIFY_MARKER as _PROBE_VERIFY_MARKER,
+)
 from shrinkray.logger import log_error
 from shrinkray.replace import SwapError
 from shrinkray.replace import stage as stage_for_swap
@@ -644,9 +651,19 @@ class DoctorFinding:
 # verify marker #440 added when the verification workdir needed its own floor)
 # and the two historical ones (the anonymous pre-#435 name and the short-lived
 # shrinkray_verify_ prefix that #435 replaced) - existing debris stays
-# attributable:
-SCRATCH_WORKDIR_PREFIXES = ("shrinkray-probe-", "shrinkray_verify_", "metadata_quality_")
-SCRATCH_VERIFY_MARKER = "-verify-"
+# attributable. The grammar pieces come from the OWNER (identity.py) so the
+# producer's names and the doctor's parser cannot drift apart:
+SCRATCH_WORKDIR_PREFIXES = (
+    _PROBE_GRAMMAR_PREFIX,
+    "shrinkray_verify_",
+    "metadata_quality_",
+)
+
+# the verify kind's name shape: <grammar prefix><stem>-<8 hex>-verify-<suffix>,
+# anchored at both ends so only a grammar name's KIND slot matches
+_VERIFY_NAME_RE = re.compile(
+    re.escape(_PROBE_GRAMMAR_PREFIX) + r".+-[0-9a-f]{8}" + re.escape(_PROBE_VERIFY_MARKER)
+)
 
 # a workdir younger than its floor is a LIVE run's workdir, not crash debris:
 # reporting it would exit 1 on a healthy host. The floors differ by workdir kind
@@ -813,12 +830,12 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         # The kind is read from the grammar's verify marker - the CURRENT
         # builds' name (identity.probe_scratch_prefix(kind="verify")) and the
         # short-lived shrinkray_verify_ name both carry it
-        is_verify = (
-            # the marker is part of the WORKDIR KIND, not any substring: the
-            # head before the marker must itself be a probe-grammar name, so
-            # a movie named "...-verify-..." gets the probe floor
-            ("shrinkray-probe-" in entry.name and SCRATCH_VERIFY_MARKER in entry.name)
-            or entry.name.startswith("shrinkray_verify_")
+        # the marker is the workdir KIND, anchored to the grammar: it must
+        # be the LAST element before mkdtemp's random suffix (i.e. the name
+        # ends "<digest>-verify-<8 chars>") - a movie whose STEM contains
+        # "-verify-" is a probe workdir and gets the probe floor
+        is_verify = _VERIFY_NAME_RE.match(entry.name) is not None or entry.name.startswith(
+            "shrinkray_verify_"
         )
         floor = SCRATCH_VERIFY_STALE_SECONDS if is_verify else SCRATCH_STALE_SECONDS
         if now - newest < floor:

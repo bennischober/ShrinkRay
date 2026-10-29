@@ -1683,6 +1683,36 @@ class TestDb(unittest.TestCase):
                     [],
                 )
 
+    def test_a_stem_containing_verify_keeps_the_probe_floor(self):
+        """The marker is the KIND slot of the grammar, anchored: a movie
+        whose STEM contains '-verify-' is a probe workdir and gets the
+        probe floor - its debris reports after 1 h, not 6 h (round-5
+        finding 3, measured defect)."""
+
+        from shrinkray import service
+        from shrinkray.engine.identity import probe_scratch_prefix
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "my-verify-movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            debris = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            debris.mkdir()
+            (debris / "sample_0.mkv").write_bytes(b"m" * 16)
+            aged = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            os.utime(debris, (aged, aged))
+            os.utime(debris / "sample_0.mkv", (aged, aged))
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                findings = service.doctor(self.connection)
+                debris_findings = [
+                    f for f in findings if f.issue == "stale probe scratch (crash debris?)"
+                ]
+                self.assertEqual(len(debris_findings), 1, "probe debris reports at 1 h")
+                self.assertRegex(debris_findings[0].detail or "", r"[0-9.]+ h ago")
+
     def test_doctor_scratch_check_skips_without_a_configured_root(self):
         """A stateless CLI run has no configured scratch (no TMPDIR): the
         check is skipped, never a walk of the OS temp (issue #440)."""
