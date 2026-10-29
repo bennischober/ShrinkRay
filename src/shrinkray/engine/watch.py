@@ -241,11 +241,11 @@ def wait_for_stable(
 
     The witness is the watcher's `is_stable` (size unchanged across a
     STABLE_CHECK_INTERVAL sleep, last change at least STABLE_MIN_AGE ago);
-    the seam paces its calls so a settling file costs ONE interval, not
-    one per check stacked on the witness's own internal sleep: while the
-    file is too young (age < STABLE_MIN_AGE), the seam sleeps the REMAINING
-    age once and then asks the witness (whose size-check sleep is the one
-    interval that decides); while it is old enough, the witness's verdict
+    the seam paces its calls so a settling file costs ONE interval TOTAL,
+    not one per stage stacked: while the file is too young, the seam sleeps
+    the REMAINING age once and then does the size check DIRECTLY (one
+    interval, here - calling is_stable would sleep the interval a second
+    time, the measured 90 s); while it is old enough, the witness's verdict
     IS the answer (its size-check sleep runs inside it). The watcher's loop
     needs no bound (it reconsiders on its next pass) and keeps its single
     is_stable check - an extraction, not a policy change; the one-shot CLI
@@ -292,13 +292,34 @@ def wait_for_stable(
             # False (the size changed): sleep nothing extra, the next turn's
             # witness call re-checks at the new size
             continue
-        # too young: sleep the REMAINING age (once, not interval-chunks) and
-        # let the next turn's witness call decide - a complete fresh file
-        # settles at age >= STABLE_MIN_AGE with ONE witness call, ~60 s total
+        # too young: sleep the REMAINING age, then the size check DIRECTLY
+        # (one interval, here) - calling is_stable would sleep the interval a
+        # SECOND time (the measured 90 s: 60 age + 30 interval on a file at
+        # age ~0, identical to the old chunking). One age sleep + one size
+        # interval is the whole cost of a complete fresh file.
         remaining = STABLE_MIN_AGE - age
-        if time.monotonic() + remaining >= deadline:
+        if time.monotonic() + remaining + STABLE_CHECK_INTERVAL >= deadline:
             return False
         time.sleep(remaining)
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("cancelled while waiting for the file to settle")
+        try:
+            size_1 = path.stat().st_size
+        except OSError:
+            # vanished during the age sleep: the next turn re-reads
+            continue
+        time.sleep(STABLE_CHECK_INTERVAL)
+        if cancel is not None and cancel.is_set():
+            raise Cancelled("cancelled while waiting for the file to settle")
+        try:
+            size_2 = path.stat().st_size
+        except OSError:
+            continue
+        if size_1 == size_2:
+            return True
+        # the size changed during the interval: still growing, the next
+        # turn re-derives the age from the NEW mtime
+        continue
 
 
 def decide(movie: Path, target_vmaf: float, encoder: str) -> str:

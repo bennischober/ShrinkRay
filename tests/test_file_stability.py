@@ -14,6 +14,7 @@ asserted for WHAT it would sleep. The CLI call-through tests patch
 fresh-vs-aged distinction is the unit tests' above, mocked, never waited.
 """
 
+import os
 import tempfile
 import threading
 import unittest
@@ -33,6 +34,7 @@ class TestWaitForStable(unittest.TestCase):
         # side_effect sequences then drive the deadline deterministically
         self.mtime = self.movie.stat().st_mtime
         self.age_s = 5.0
+        self._slept = 0
 
     def _clock(self, age_s: float | None = None):
         """Patches time.time to read age_s seconds past the real mtime."""
@@ -66,43 +68,76 @@ class TestWaitForStable(unittest.TestCase):
         witness.assert_called_once()
         sleep.assert_not_called()
 
-    def test_a_young_file_sleeps_the_remaining_age_once_then_settles(self) -> None:
+    def test_a_young_file_sleeps_the_remaining_age_once_then_checks_the_size_directly(
+        self,
+    ) -> None:
         """The measured CI defect (a 90 s test, 6-minute suite gaps on CI):
         a COMPLETE fresh file used to pay 30-s chunk sleeps until it aged
-        past the floor (~90 s). The seam sleeps the REMAINING age once and
-        lets ONE witness call decide - the fresh complete file's cost is the
-        floor itself, once. The clock mock ADVANCES past the floor with the
-        sleep (as the real clock does): age 5 -> 65.
+        past the floor (~90 s), then the rework still stacked the witness's
+        own interval sleep on the age sleep (90.01 s, measured by the
+        round-7 review). The seam now sleeps the REMAINING age once, then
+        the size check DIRECTLY (one interval, in the seam) - the fresh
+        complete file's cost is exactly age-floor + one interval, and the
+        witness function is not called on this path at all.
         """
         with (
-            self._clock_sequence([5.0, 65.0]),
-            patch("shrinkray.engine.watch.time.monotonic", side_effect=[0.0, 1.0, 61.0, 62.0]),
+            self._clock_sequence([5.0, 65.0, 65.0]),
+            patch(
+                "shrinkray.engine.watch.time.monotonic", side_effect=[0.0, 1.0, 61.0, 62.0, 63.0]
+            ),
             patch("shrinkray.engine.watch.time.sleep") as sleep,
             patch.object(watch, "STABLE_MIN_AGE", 60.0),
-            patch.object(watch, "is_stable", return_value=True) as witness,
+            patch.object(watch, "is_stable") as witness,
         ):
             self.assertTrue(watch.wait_for_stable(self.movie, limit=600.0))
-        sleep.assert_called_once_with(55.0)
-        witness.assert_called_once()
+        sleep.assert_has_calls([unittest.mock.call(55.0), unittest.mock.call(30.0)])
+        witness.assert_not_called()
 
-    def test_a_young_growing_file_is_still_caught_by_the_witness(self) -> None:
-        """The young-file fast path must not weaken the witness: a file that
-        keeps growing settles only when the witness's size check passes -
-        here it never does, the limit expires. The clock advances with each
-        sleep (as the real one does).
+    def test_a_young_growing_file_is_still_caught_by_the_size_check(self) -> None:
+        """The young-file fast path must not weaken the witness: a producer
+        writing DURING the interval sleep updates the file's size and mtime,
+        so the direct size check fails and the loop re-derives a fresh age
+        from the new mtime - a still-growing file never reads as settled. The
+        mock clock advances with the write (mtime = the clock's next value),
+        as a real producer's write stamps mtime=now.
         """
+        clock_state = {"value": 5.0}
+
+        def now():
+            # the mock clock always reads 30 s AHEAD of the file's current
+            # mtime (the producer's write stamps mtime = clock - 30), so the
+            # age the loop derives is always exactly 30 s - young forever,
+            # which is what a continuously-growing file looks like
+            return self.mtime + clock_state["value"]
+
+        writes = []
+
+        def grow(seconds):
+            # the producer appends DURING the interval sleep (between the two
+            # size reads), never during the age sleep (before the first read):
+            # a write before size_1 would just shift both reads equally, and
+            # a same-size write would read as settled - a real producer adds
+            # data, so every write is bigger than the last
+            if seconds != 30.0:
+                return
+            writes.append(len(writes) + 1)
+            self.movie.write_bytes(b"x" * (16 + 16 * len(writes)))
+            clock_state["value"] += 90.0
+            stamp = self.mtime + clock_state["value"] - 30.0
+            os.utime(self.movie, (stamp, stamp))
+
         with (
-            self._clock_sequence([5.0, 65.0, 125.0]),
+            patch("shrinkray.engine.watch.time.time", side_effect=now),
             patch(
                 "shrinkray.engine.watch.time.monotonic",
-                side_effect=[0.0, 1.0, 61.0, 62.0, 121.0, 122.0, 123.0, 700.0],
+                side_effect=[0.0, 1.0, 61.0, 62.0, 63.0, 64.0, 700.0],
             ),
-            patch("shrinkray.engine.watch.time.sleep"),
+            patch("shrinkray.engine.watch.time.sleep", side_effect=grow),
             patch.object(watch, "STABLE_MIN_AGE", 60.0),
-            patch.object(watch, "is_stable", return_value=False) as witness,
+            patch.object(watch, "is_stable") as witness,
         ):
             self.assertFalse(watch.wait_for_stable(self.movie, limit=600.0))
-        witness.assert_called()
+        witness.assert_not_called()
 
     def test_an_unstable_file_becomes_stable_within_the_limit(self) -> None:
         """A file past the floor whose size keeps changing: the witness is
