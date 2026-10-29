@@ -48,12 +48,31 @@ run_mypy() {
     echo "WARNING: mypy segfaulted (exit 139) under $(uv run python --version 2>/dev/null || echo 'the default interpreter')." >&2
     for candidate in 3.14 3.13 3.12; do
         echo "==> mypy ($platform platform, retry under CPython $candidate)"
-        if UV_PYTHON="$candidate" uv run mypy --platform "$platform"; then
+        # --isolated: a plain UV_PYTHON retry re-points the project's shared
+        # .venv at the candidate (the rest of the gate would then run under a
+        # substituted interpreter, and the developer's venv stays switched);
+        # the retry must leave the environment as it found it (review round 1,
+        # finding 2). UV_PYTHON_DOWNLOADS=never keeps the retry offline - the
+        # gate's contract - and makes a missing candidate a clean skip instead
+        # of a network stall (review round 1, finding 3).
+        local retry_rc=0
+        observed="$(UV_PYTHON="$candidate" UV_PYTHON_DOWNLOADS=never uv run --isolated --python "$candidate" mypy --platform "$platform")" || retry_rc=$?
+        if [ "$retry_rc" -eq 0 ]; then
+            echo "$observed"
             echo "WARNING: the $platform mypy pass above ran under CPython $candidate, not the project's .python-version interpreter (issue #407)." >&2
             return 0
         fi
+        if [ "$retry_rc" -ne 139 ]; then
+            # a real failure (type error, uv error): the candidate's verdict
+            # IS the gate's verdict - print mypy's diagnostics (they went to
+            # the captured variable) and return its code, never a false
+            # "no interpreter installed" (review round 1, finding 1)
+            echo "$observed"
+            return "$retry_rc"
+        fi
+        echo "WARNING: CPython $candidate also segfaulted; trying the next candidate." >&2
     done
-    echo "ERROR: mypy segfaulted and no stable fallback interpreter (3.14/3.13/3.12) is installed; install one or run the gate under a stable Python." >&2
+    echo "ERROR: mypy segfaulted under the default interpreter and every stable fallback candidate (3.14/3.13/3.12) segfaulted too or none is installed (offline, python-downloads disabled); run the gate under a stable Python." >&2
     return 139
 }
 run_mypy linux
