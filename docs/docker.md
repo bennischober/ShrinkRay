@@ -10,13 +10,17 @@ source build is the development path. The trade-offs recorded below are the
 ones the build actually had to respect; where a decision was made, it is
 stated with the reason.
 
-Shutdown (`docker stop`, compose down): the app's stop sets the running
-encode/verify job's cancel event and waits out the child's kill window
-(terminate_tree's SIGTERM/SIGKILL plus the pipe drains) before recording the
-job CANCELLED and closing the database - `docker-compose.yml` sets
-`stop_grace_period: 45s` to cover it (issue #431); a raw `docker stop -t`
-below that kills the container mid-unwind, and the job is recovered as
-interrupted on the next boot (the fallback, not the contract).
+Shutdown (`docker stop`, compose down): the app's exit hook arms the shutdown
+inside the signal handler (non-blocking - a join there would defer the second
+Ctrl+C, uvicorn's force-quit escape), setting the SSE flag and the running
+job's cancel event; the teardown itself runs once `serve` returns, and the
+worker's stop joins (2 x 30s, see below), the child's kill window
+(terminate_tree's SIGTERM/SIGKILL plus the pipe drains), the watcher's join
+(10s) and uvicorn's graceful wait for an open SSE stream (15s) all fit inside
+it - `docker-compose.yml` sets `stop_grace_period: 120s` to cover the
+worst-case sum (issue #431); a raw `docker stop -t` below that kills the
+container mid-unwind, and the job is recovered as failed (`interrupted by app
+restart`) on the next boot (the fallback, not the contract).
 
 > **Direction (issue #244).** The deployment target is an **Unraid Community App**
 > (PRODUCT.md "Deployment target"): the WebUI button opens the read-only dashboard,

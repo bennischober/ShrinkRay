@@ -29,8 +29,10 @@ opts one child out of the stall watchdog (issue #431): libvmaf is silent by desi
 until the whole file is scored, so the measurement path (`vmaf.measure_vmaf`) passes
 False and keeps the cancel event as its kill path — a silent-by-design child must
 not be killed as hung. The kill path is the caller's cancel event, and every
-production caller wires one (the worker's stop sets the running job's event;
-the direct-encode route passes the watcher's stop event; the scripts translate
+production caller wires one (the worker's stop sets the running job's event; the
+watcher's own direct path passes its stop event — reachable only outside the
+resident app, where `watch()` runs without a queue; the resident app always goes
+through the queue's submit seam and the worker owns the event; the scripts translate
 signals). Both pipes are
 drained by daemon threads (`process.py`) — a child writing more than the ~64 K pipe
 buffer would otherwise deadlock a poll-only loop. `timeout` is for bounded reads

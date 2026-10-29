@@ -622,6 +622,55 @@ class TestJobs(unittest.TestCase):
         reloaded = self.queue.get(job.id)
         self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
 
+    def test_worker_request_stop_is_non_blocking_and_reaches_the_child(self):
+        """Issue #431 (review round 6, finding 2): the server's exit hook runs
+        inside a signal handler, so it must arm the shutdown without joining -
+        request_stop sets the flags and returns; the worker ends itself and the
+        running job's child terminates on its cancel event."""
+        root = Path(self.tmp.name)
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "path": str(root / "movies"),
+                    "output_dir": str(root / "out"),
+                    "quality": True,
+                },
+            )
+        )
+        from shrinkray.tools.process import Cancelled
+
+        worker = jobs.JobWorker(self.connection, self.queue)
+        worker._thread = threading.Thread(target=worker._run, name="job-worker", daemon=True)
+        started = threading.Event()
+        observed: dict = {}
+
+        def slow_encode(job, connection, cancel, progress=None):
+            started.set()
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                if cancel is not None and cancel.is_set():
+                    observed["cancel_reached_job"] = True
+                    raise Cancelled("cancelled by request_stop")
+                time.sleep(0.05)
+            observed["cancel_reached_job"] = False
+            return {"cancelled": False}
+
+        with mock.patch("shrinkray.server.jobs.execute_encode", side_effect=slow_encode):
+            worker._thread.start()
+            self.assertTrue(started.wait(timeout=5.0), "the job never started")
+            t0 = time.monotonic()
+            worker.request_stop()
+            self.assertLess(time.monotonic() - t0, 2.0, "request_stop must not join")
+            worker._thread.join(timeout=15.0)
+        self.assertTrue(
+            observed.get("cancel_reached_job"), "the cancel event did not reach the child"
+        )
+        self.assertFalse(worker._thread.is_alive(), "the worker did not end itself")
+        self.assertIsNone(worker._running_cancel, "the finally must clear the running event")
+        reloaded = self.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+
     def test_next_poll_interval_helper_exists(self):
         # guard the cross-module dependency used by watch mode
         self.assertTrue(callable(jobs.JobQueue.wait_for_work))

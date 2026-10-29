@@ -19,6 +19,7 @@ import sys
 import threading
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
+from types import FrameType
 from typing import Any, TypeVar, cast
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
@@ -342,6 +343,10 @@ class AppState:
         # set first in shutdown(): the SSE generator observes it and exits, so
         # uvicorn's graceful wait completes promptly (issue #431)
         self.app_shutdown = threading.Event()
+        # armed vs torn down: the signal handler may only ARM the shutdown
+        # (it must not join inside the handler), and run_app's finally runs
+        # the real teardown afterwards (issue #431, review round 6)
+        self.app_torn_down = threading.Event()
 
     def with_lock(self, fn: Callable[[sqlite3.Connection], _T]) -> _T:
         """Runs fn(connection) under the database lock.
@@ -375,17 +380,35 @@ class AppState:
     def shutdown(self) -> None:
         """Stops the worker and closes the database.
 
-        Idempotent: the server's exit hook calls it first (issue #431) and
-        run_app's finally calls it again on the way out.
+        Idempotent: the signal handler arms this (the flag the SSE generator
+        observes) and run_app's finally runs the teardown; both paths call
+        this once - the first caller to get past the armed guard does the
+        work (issue #431).
         """
-        if self.app_shutdown.is_set():
+        if self.app_shutdown.is_set() and self.app_torn_down.is_set():
             return
         self.app_shutdown.set()
+        if self.app_torn_down.is_set():
+            return
+        self.app_torn_down.set()
         self.worker.stop()
         self.watch_stop.set()
         if self.watch_thread is not None:
             self.watch_thread.join(timeout=10)
         self.connection.close()
+
+    def request_shutdown(self) -> None:
+        """Arms the shutdown without joining (the signal handler's move).
+
+        Runs inside uvicorn's handle_exit, on the main thread, in signal
+        context: joining here (the worker's stop alone can block 60 s) would
+        defer the second Ctrl+C - uvicorn's force-quit escape - behind the
+        whole teardown (review round 6, finding 2). It sets the SSE flag and
+        the running job's cancel event, then returns; the teardown itself
+        runs from run_app's finally, after serve() returns.
+        """
+        self.app_shutdown.set()
+        self.worker.request_stop()
 
 
 state: AppState | None = None
@@ -945,8 +968,12 @@ def _sse_stream(
         seed (list): The latest event per job at subscribe time.
         ping_after (float): Mailbox wait before emitting a ping comment.
         shutdown_requested (Callable[[], bool]): Checked after every mailbox
-            wait; True ends the stream so uvicorn's graceful shutdown does
-            not wait out an open dashboard (issue #431).
+            wait; True ends the stream at the next loop-top check (each wait
+            is bounded by ping_after, so the end lands within one ping
+            period). The exit is the generator returning - subscriber
+            unregistered - rather than uvicorn cancelling the task;
+            timeout_graceful_shutdown stays the hard bound either way
+            (issue #431).
 
     Yields:
         str: SSE frames (retry, hello, data, ping comments).
@@ -1306,19 +1333,18 @@ def _serve_forever(host: str, port: int) -> None:
     """
     import uvicorn
 
-    # timeout_graceful_shutdown + the shutdown hook (issue #431 review round 5,
-    # finding 1): with the dashboard's SSE stream open (an infinite generator),
-    # uvicorn's graceful wait is UNBOUNDED by default, and the finally's
-    # state.shutdown() runs only AFTER Server.run() returns - i.e. after the
-    # wait. The subclass runs the app's own shutdown FIRST on the exit signal:
-    # it sets the flag the SSE generator observes (the streams end, the
-    # connection set empties) and terminates the running job's child, so the
-    # graceful wait finds nothing to wait for. The bounded
-    # timeout_graceful_shutdown covers anything left.
+    # The exit hook ARMS the shutdown only (issue #431 review round 6,
+    # finding 2): uvicorn's handle_exit runs on the main thread inside signal
+    # handling, so a join here - the worker's stop alone can block 60 s -
+    # would defer the second Ctrl+C, uvicorn's force-quit escape, behind the
+    # whole teardown. It sets the flag the SSE generator observes (the
+    # streams end on their next tick) and the running job's cancel event
+    # (the child terminates); the real teardown runs from run_app's finally,
+    # after serve() returns, bounded by timeout_graceful_shutdown.
     class _ServerWithAppShutdown(uvicorn.Server):
-        def handle_exit(self, sig, frame):
-            if state is not None and not state.app_shutdown.is_set():
-                state.shutdown()
+        def handle_exit(self, sig: int, frame: FrameType | None) -> None:
+            if state is not None:
+                state.request_shutdown()
             super().handle_exit(sig, frame)
 
     config = uvicorn.Config(

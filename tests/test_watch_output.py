@@ -16,8 +16,29 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import uvicorn
+
 from shrinkray.server import app as app_module
 from shrinkray.server.app import WATCH_OUTPUT_ENV
+
+
+class FakeHookServer(uvicorn.Server):
+    """Records the hook's behaviour for the exit-hook test (module-level so
+    the class statement itself keeps exercising the real subclassing)."""
+
+    last_instance = None
+
+    def __init__(self, config):
+        self.config = config
+        self.run_called = False
+        self.super_called = False
+        FakeHookServer.last_instance = self
+
+    def run(self, sockets=None):
+        self.run_called = True
+
+    def handle_exit(self, sig, frame):
+        self.super_called = True
 
 
 class TestWatchOutputEnv(unittest.TestCase):
@@ -120,19 +141,64 @@ class TestServeForever(unittest.TestCase):
     four output-knob tests before this class existed).
     """
 
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
     def test_it_builds_the_config_from_its_arguments_and_runs_the_server(self) -> None:
         # a non-wildcard host on purpose: the assertion is about the arguments being
         # threaded through, and bandit flags a hardcoded bind-all address (S104)
+        # FakeServer subclasses uvicorn.Server like the seam does, so the
+        # subclassing itself is exercised on every run.
+        class FakeServer(uvicorn.Server):
+            def __init__(self, config):
+                self.config = config
+                self.run_called = False
+
+            def run(self, sockets=None):
+                self.run_called = True
+
         with (
             patch("uvicorn.Config") as config,
-            patch("uvicorn.Server") as server,
+            patch("uvicorn.Server", FakeServer),
         ):
             app_module._serve_forever("127.0.0.2", 9999)
         config.assert_called_once_with(
-            app_module.app, host="127.0.0.2", port=9999, log_level="info"
+            app_module.app,
+            host="127.0.0.2",
+            port=9999,
+            log_level="info",
+            # the SSE stream's graceful-wait bound (issue #431)
+            timeout_graceful_shutdown=15,
         )
-        server.assert_called_once_with(config.return_value)
-        server.return_value.run.assert_called_once_with()
+        self.assertTrue(config.return_value.run_called)
+
+    def test_the_exit_hook_arms_without_teardown(self) -> None:
+        """Issue #431 (review round 6, finding 2): handle_exit runs in signal
+        context - it must arm the shutdown (the SSE flag + the running job's
+        cancel event) and call super(), and must NOT run the joining teardown
+        there."""
+        from shrinkray.server.app import AppState
+
+        app_module.state = AppState(Path(self.tmp.name) / "hook.db")
+        try:
+            with (
+                patch("uvicorn.Config"),
+                patch("uvicorn.Server", FakeHookServer),
+            ):
+                app_module._serve_forever("127.0.0.2", 9999)
+            server = FakeHookServer.last_instance
+            # the signal arrives while uvicorn serves: drive the handler
+            # directly, the way the signal dispatch does
+            server.handle_exit(2, None)
+            self.assertTrue(app_module.state.app_shutdown.is_set(), "the hook did not arm the flag")
+            self.assertFalse(
+                app_module.state.app_torn_down.is_set(),
+                "the hook ran the joining teardown in signal context",
+            )
+            self.assertTrue(server.super_called, "super().handle_exit was skipped")
+        finally:
+            app_module.state = None
 
 
 if __name__ == "__main__":

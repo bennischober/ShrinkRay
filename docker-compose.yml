@@ -61,13 +61,15 @@ services:
     # terminates the running encode/verify child and records the job
     # CANCELLED before closing the database. The worst-case budget: the
     # worker's stop join (30s, covering a stop that lands before the job's
-    # event was published) + the child's kill window (terminate_tree's 5s
-    # SIGTERM + 5s SIGKILL and the pipe drains, <=20s) + the watcher's
-    # join (10s) = ~60s; 90s covers it with margin. The documented default
-    # would SIGKILL the container mid-unwind and lose the CANCELLED write
-    # (it is recovered as 'interrupted' on the next boot, but the graceful
-    # record is the contract)
-    stop_grace_period: 90s
+    # event was published) + a second join on the same budget when the first
+    # expires (review round 5, finding 3) + the child's kill window
+    # (terminate_tree's 5s SIGTERM + 5s SIGKILL and the pipe drains, <=20s)
+    # + the watcher's join (10s) + uvicorn's graceful wait for an open SSE
+    # stream (15s, timeout_graceful_shutdown) = a ceiling above 100s; 120s
+    # covers it with margin. The documented default would SIGKILL the
+    # container mid-unwind and lose the CANCELLED write (it is recovered as
+    # a failed job on the next boot, but the graceful record is the contract)
+    stop_grace_period: 120s
     # no healthcheck block here: the image carries its own HEALTHCHECK (token
     # authenticated, issue #36) and compose inherits it when none is declared
     # — a second copy was one more place to drift.

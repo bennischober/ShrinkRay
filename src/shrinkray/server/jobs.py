@@ -1155,10 +1155,7 @@ class JobWorker:
         Args:
             join_timeout (float): Seconds to wait for the thread to finish.
         """
-        self._stop.set()
-        if self._running_cancel is not None:
-            self._running_cancel.set()
-        self.queue._wake.set()
+        self.request_stop()
         if self._thread is not None:
             self._thread.join(timeout=join_timeout)
         if (
@@ -1173,6 +1170,22 @@ class JobWorker:
             # race it (review round 5, finding 3)
             self._running_cancel.set()
             self._thread.join(timeout=join_timeout)
+
+    def request_stop(self) -> None:
+        """Signals the worker to stop without joining it.
+
+        The non-blocking half of stop() (issue #431, review round 6,
+        finding 2): the server's exit hook runs in signal context, where a
+        join may not run at all, so arming and joining must be separate
+        moves. Sets the same flags stop() sets - the stop event, the running
+        job's cancel event (the only kill path the watchdog-opted-out
+        measurement child has) and the queue's wake - and returns; the
+        worker ends itself and its child on those flags.
+        """
+        self._stop.set()
+        if self._running_cancel is not None:
+            self._running_cancel.set()
+        self.queue._wake.set()
 
     def _run(self) -> None:
         """Consumes jobs until stopped."""
