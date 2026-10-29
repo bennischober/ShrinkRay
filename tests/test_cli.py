@@ -199,9 +199,19 @@ class TestDoctorCli(unittest.TestCase):
             )
             scratch = root / "scratch"
             scratch.mkdir()
-            workdir = scratch / "shrinkray-probe-movie-abcdef12-x7y8z9a1"
+            from shrinkray.engine.identity import probe_scratch_prefix
+
+            workdir = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
             workdir.mkdir()
             (workdir / "sample_0.mkv").write_bytes(b"m" * 64)
+            # stale past the floor: a fresh workdir is a LIVE probe's workdir,
+            # which doctor must never report
+            import time as time_mod
+
+            from shrinkray import service as service_mod
+
+            old = time_mod.time() - 2 * service_mod.SCRATCH_STALE_SECONDS
+            os.utime(workdir, (old, old))
             runner = CliRunner()
             with (
                 patch("shrinkray.service.all_problems", return_value=[]),
@@ -213,7 +223,7 @@ class TestDoctorCli(unittest.TestCase):
             # the table folds the long path; assert the parts that survive
             # the fold (the grammar is the operator's attribution)
             self.assertIn("shrinkray-probe", result.output)
-            self.assertIn("abcdef12", result.output)
+            self.assertIn("movie", result.output)
             # report-only: the debris still exists after the report
             self.assertTrue(workdir.is_dir())
             self.assertTrue((workdir / "sample_0.mkv").exists())

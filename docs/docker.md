@@ -333,6 +333,10 @@ stateless CLI as a native install. Things to know:
   `/media/...`.
 - **Mount scratch for anything film-sized.** Probes and verification write to
   `/tmp/shrinkray`; without a volume that lands in the container's writable layer.
+  A run killed hard (SIGKILL, power loss) leaves its workdir there; `shrinkray
+  doctor` lists stale probe-scratch directories with their age and size
+  (report-only - it never deletes anything), so the operator can decide about
+  the debris (issue #440).
 - **The library must be writable by `PUID`/`PGID`** (default 1000/1000) for an in-place
   encode; pass `-e PUID=... -e PGID=...` for the user that owns it (see *Running as
   your user*).

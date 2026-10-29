@@ -642,7 +642,13 @@ class DoctorFinding:
 
 # scratch workdir name grammars doctor recognizes (the current one and the
 # pre-#435 anonymous one - existing debris stays attributable; issue #440):
-SCRATCH_WORKDIR_PREFIXES = ("shrinkray-probe-", "metadata_quality_")
+SCRATCH_WORKDIR_PREFIXES = ("shrinkray-probe-", "shrinkray_verify_", "metadata_quality_")
+
+# a workdir younger than this is a LIVE probe's workdir (a bisect on a large
+# file runs for minutes), not crash debris: reporting it would exit 1 on a
+# healthy host. One hour of silence is the conservative "nobody is coming
+# back" line (lock.py's silence-window shape, scaled to probe runs).
+SCRATCH_STALE_SECONDS = 3600.0
 
 
 def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[DoctorFinding]:
@@ -744,8 +750,23 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         return []
     findings: list[DoctorFinding] = []
     now = time.time()
-    for entry in sorted(root.iterdir()):
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        # the scratch volume vanished between the is_dir check and the walk
+        return []
+    for entry in entries:
         if not entry.name.startswith(SCRATCH_WORKDIR_PREFIXES) or not entry.is_dir():
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            # the workdir vanished mid-report: gone is healthy, report nothing
+            continue
+        age_hours = max((now - mtime) / 3600.0, 0.0)
+        if now - mtime < SCRATCH_STALE_SECONDS:
+            # a live probe's workdir (the run is minutes old, a bisect takes
+            # minutes): reporting it would cry wolf on a healthy host
             continue
         total = 0
         for item in entry.rglob("*"):
@@ -756,7 +777,6 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
                 # a file vanishing mid-walk is reported as-is: the size is
                 # decoration for the operator, never a decision input
                 continue
-        age_hours = max((now - entry.stat().st_mtime) / 3600.0, 0.0)
         findings.append(
             DoctorFinding(
                 movie=str(entry),

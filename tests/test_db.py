@@ -3,6 +3,7 @@
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1402,6 +1403,7 @@ class TestDb(unittest.TestCase):
         """
 
         from shrinkray import service
+        from shrinkray.engine.identity import probe_scratch_prefix
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1422,30 +1424,74 @@ class TestDb(unittest.TestCase):
                 60.0,
                 output_file=str(output),
             )
-            # the crash debris: a killed run's workdir on the configured
-            # scratch, with content (both grammars: current + pre-#435)
+            # the crash debris: killed runs' workdirs on the configured
+            # scratch, with content. The names derive from the GRAMMAR OWNER
+            # (identity.probe_scratch_prefix) - no literal re-spelled here -
+            # plus the two older grammars: the anonymous pre-#435 name and
+            # the verification workdir's own prefix.
             scratch = root / "scratch"
             scratch.mkdir()
-            workdir = scratch / "shrinkray-probe-Movie-2024-abcdef12-x7y8z9a1"
+            workdir = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
             workdir.mkdir()
             (workdir / "sample_0.mkv").write_bytes(b"m" * 128)
             old_debris = scratch / "metadata_quality_deadbeef"
             old_debris.mkdir()
             (old_debris / "vmaf.json").write_bytes(b"{}")
+            verify_debris = scratch / "shrinkray_verify_0b130ea"
+            verify_debris.mkdir()
+            (verify_debris / "vmaf.json").write_bytes(b"{}")
+            # the debris must be STALE: age every workdir past the floor
+            # (a fresh workdir is a LIVE probe's, never reported)
+            old = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            for debris in (workdir, old_debris, verify_debris):
+                os.utime(debris, (old, old))
             with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
                 findings = service.doctor(self.connection)
                 issues = [f.issue for f in findings]
-                self.assertEqual(issues.count("stale probe scratch (crash debris?)"), 2)
+                self.assertEqual(issues.count("stale probe scratch (crash debris?)"), 3)
                 for finding in findings:
                     if finding.issue == "stale probe scratch (crash debris?)":
                         self.assertRegex(finding.detail or "", r"[0-9]+ bytes")
-                        self.assertIn("h ago", finding.detail or "")
+                        self.assertRegex(finding.detail or "", r"[0-9.]+ h ago")
+                        self.assertGreaterEqual(
+                            float((finding.detail or "0 h").split(" h")[0].split(", mtime ")[-1]),
+                            1.0,
+                        )
                 # report-only: the debris and its content still exist after
                 # the run (inside the fixture - the tempdir cleanup would
                 # otherwise be the thing deleting them)
                 self.assertTrue(workdir.is_dir())
                 self.assertTrue((workdir / "sample_0.mkv").exists())
                 self.assertTrue(old_debris.is_dir())
+                self.assertTrue(verify_debris.is_dir())
+
+    def test_doctor_ignores_a_live_probes_workdir(self):
+        """A workdir younger than the staleness floor is a running probe's,
+        not debris: it is never reported (reporting it would exit 1 on a
+        healthy host mid-encode, issue #440's review finding 2)."""
+
+        from shrinkray import service
+        from shrinkray.engine.identity import probe_scratch_prefix
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            live = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            live.mkdir()
+            (live / "sample_0.mkv").write_bytes(b"m" * 128)
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                findings = service.doctor(self.connection)
+                self.assertEqual(
+                    [f for f in findings if f.issue == "stale probe scratch (crash debris?)"],
+                    [],
+                )
+                # report-only (inside the fixture: the tempdir cleanup is the
+                # only thing that may remove it)
+                self.assertTrue(live.is_dir(), "a live workdir is untouched")
 
     def test_doctor_scratch_check_skips_without_a_configured_root(self):
         """A stateless CLI run has no configured scratch (no TMPDIR): the
@@ -1477,15 +1523,29 @@ class TestDb(unittest.TestCase):
             scratch = root / "scratch"
             scratch.mkdir()
             (scratch / "my-own-notes").mkdir()
-            (scratch / "shrinkray-probe-x-abcdef12-x7y8z9a1").mkdir()
+            probe_debris = scratch / "shrinkray-probe-x-abcdef12-x7y8z9a1"
+            probe_debris.mkdir()
+            verify_debris = scratch / "shrinkray_verify_abc12345"
+            verify_debris.mkdir()
             (scratch / "metadata_quality_1").mkdir()
             (scratch / "not_a_dir_shrinkray-probe-y").write_bytes(b"f")
+            # age the three workdirs past the staleness floor (a fresh one is
+            # a LIVE probe's workdir, correctly not reported)
+            old = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            for debris_dir in (probe_debris, verify_debris, scratch / "metadata_quality_1"):
+                os.utime(debris_dir, (old, old))
             with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
                 findings = service.doctor(self.connection)
-        debris = [f for f in findings if f.issue == "stale probe scratch (crash debris?)"]
-        self.assertEqual(len(debris), 2)
-        self.assertTrue(all("my-own-notes" not in f.movie for f in debris))
-        self.assertTrue(all("not_a_dir" not in f.movie for f in debris))
+                debris = [f for f in findings if f.issue == "stale probe scratch (crash debris?)"]
+                self.assertEqual(len(debris), 3)
+                self.assertTrue(all("my-own-notes" not in f.movie for f in debris))
+                self.assertTrue(all("not_a_dir" not in f.movie for f in debris))
+                # the non-directory prefix match is not listed...
+                self.assertFalse(
+                    any(f.movie.endswith("not_a_dir_shrinkray-probe-y") for f in debris)
+                )
+                # ...and still exists (nothing was touched)
+                self.assertTrue((scratch / "not_a_dir_shrinkray-probe-y").exists())
 
     def test_doctor_reports_vanished_outputs(self):
         """An encode row whose output_file no longer exists is a finding."""
