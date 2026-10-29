@@ -9,6 +9,7 @@ seams, a same-size rewrite at a call-shaped seam) - none races a
 stat:commit window.
 """
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -70,6 +71,213 @@ class TestRunIdentityCapture(unittest.TestCase):
 
         stat = self.movie.stat()
         ensure_unchanged(self.movie, RunIdentity(size=stat.st_size, mtime=stat.st_mtime), "plan")
+
+
+class TestProbeScratchAttribution(unittest.TestCase):
+    """Issue #435: the probe scratch directories carry the source's name.
+
+    One grammar, three mkdtemp sites (plan's probe workdir, the pipeline's
+    probe workdir, the verification measurement's workdir); the name is
+    decoration - the engine never reads it back.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.movie = _movie(self.root, b"x" * 16)
+        self.sample = self.root / "sample.mkv"
+        self.sample.write_bytes(b"y" * 8)
+        self.db_file = self.root / "metadata.db"
+        self.connection = db.connect(self.db_file)
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def test_prefix_carries_stem_and_identity(self) -> None:
+        from shrinkray.engine.identity import probe_scratch_prefix
+
+        prefix = probe_scratch_prefix(self.movie)
+        self.assertTrue(prefix.startswith("shrinkray-probe-movie-"))
+        digest = prefix.split("-")[-2]
+        self.assertEqual(len(digest), 8)
+        int(digest, 16)  # parses as hex
+        # same movie, same digest; different movie, different digest
+        other = self.root / "other.mkv"
+        other.write_bytes(b"x" * 16)
+        self.assertEqual(probe_scratch_prefix(self.movie), prefix)
+        self.assertNotEqual(probe_scratch_prefix(other), prefix)
+        # a stem containing hyphens keeps its name readable: the digest
+        # separator survives
+        dashed = self.root / "my-movie-2024.mkv"
+        dashed.write_bytes(b"x" * 16)
+        self.assertTrue(probe_scratch_prefix(dashed).startswith("shrinkray-probe-my-movie-2024-"))
+
+    def test_prefix_caps_the_stem_utf8_safely(self) -> None:
+        from shrinkray.engine.identity import PROBE_SCRATCH_STEM_BYTES, probe_scratch_prefix
+
+        # a 40-char CJK stem: each char is 3 bytes, so the byte cap cuts
+        # mid-name but never mid-character
+        movie = self.root / ("\u65b0" * 40 + ".mkv")
+        movie.write_bytes(b"x" * 16)
+        prefix = probe_scratch_prefix(movie)
+        # strip the fixed-width tail ("-<8 hex>-") and the grammar prefix
+        stem_part = prefix[len("shrinkray-probe-") :][:-10]
+        self.assertLessEqual(len(stem_part.encode("utf-8")), PROBE_SCRATCH_STEM_BYTES)
+        stem_part.encode("utf-8")  # a cut that broke a character would fail here
+        # the whole name stays far under the filesystem's 255-byte limit
+        # (bytes, not code points - the limit is on the encoded name)
+        self.assertLess(len(prefix.encode("utf-8")) + 8, 255)
+
+    def test_all_three_scratch_sites_use_the_grammar(self) -> None:
+        """Every scratch mkdtemp site derives its prefix from the one helper
+        (no second implementation of the grammar)."""
+        prefixes: list[str] = []
+        self._plan_with_patched_scratch(prefixes)
+        self._encode_with_patched_scratch(prefixes)
+        # three sites created three scratch dirs (an empty list would pass
+        # the loop above vacuously)
+        self.assertEqual(len(prefixes), 3)
+        for prefix in prefixes:
+            self.assertTrue(
+                prefix.startswith("shrinkray-probe-movie-"),
+                f"anonymous scratch prefix survived: {prefix!r}",
+            )
+
+    @unittest.skipIf(os.name == "nt", "Windows filenames cannot hold these bytes")
+    def test_a_non_utf8_filename_hashes_instead_of_raising(self) -> None:
+        """POSIX filenames arrive surrogate-escaped (os.fsdecode of the raw
+        bytes); the digest input is the filename's on-disk bytes
+        (os.fsencode), so such a source gets a stable, attributable prefix
+        instead of a UnicodeEncodeError on the plan path (review finding 1).
+        """
+        from shrinkray.engine.identity import probe_scratch_prefix
+
+        movie = self.root / os.fsdecode(b"\xff\xfe-movie.mkv")
+        movie.write_bytes(b"x" * 16)
+        first = probe_scratch_prefix(movie)
+        second = probe_scratch_prefix(movie)
+        self.assertEqual(first, second, "the digest must be stable per filename")
+        self.assertTrue(first.startswith("shrinkray-probe-"))
+
+    def _plan_with_patched_scratch(self, prefixes: list[str]) -> None:
+        """Runs plan_quality with every external seam mocked and the scratch
+        mkdtemp captured. (The plan path's patches stay in their own helper:
+        Python 3.10 compiles each context manager of a with-statement as one
+        nested block with a limit of 20 - a combined with would exceed it.)"""
+        real_mkdtemp = tempfile.mkdtemp
+
+        def fake_mkdtemp(prefix: str = "", **kwargs):
+            prefixes.append(prefix)
+            return real_mkdtemp(prefix=prefix, **kwargs)
+
+        with (
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.plan.detect_crop_summary_cached", return_value=None),
+            patch("shrinkray.engine.plan.detect_crop_rect", return_value=None),
+            patch("shrinkray.engine.plan.source_codec", return_value="h264"),
+            patch("shrinkray.engine.plan.source_bit_depth", return_value=None),
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=3600.0),
+            patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+            patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
+            patch(
+                "shrinkray.engine.plan.find_optimal_crf_and_skip",
+                return_value=(20, 96.5, [], False),
+            ),
+            patch("shrinkray.engine.plan.tempfile.mkdtemp", side_effect=fake_mkdtemp),
+        ):
+            plan_quality(self.movie, db_file=None)
+
+    def _encode_with_patched_scratch(self, prefixes: list[str]) -> None:
+        """Runs encode_with_quality (verify=True, so the verification workdir
+        is created too) with every external seam mocked and the scratch
+        mkdtemp captured."""
+        real_mkdtemp = tempfile.mkdtemp
+
+        def fake_encode(input_file, output_file, command, **kwargs):
+            output_file.write_bytes(b"out" * 4)  # smaller than the 16-byte source
+            return SimpleNamespace(success=True, cancelled=False, error=None)
+
+        def fake_mkdtemp(prefix: str = "", **kwargs):
+            prefixes.append(prefix)
+            return real_mkdtemp(prefix=prefix, **kwargs)
+
+        with (
+            patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+            patch(
+                "shrinkray.engine.pipeline.durations_match", return_value=True
+            ),  # the stub output is not a real video; the 1:1 check must not gate it
+            patch("shrinkray.engine.pipeline.detect_crop_summary_cached", return_value=None),
+            patch("shrinkray.engine.pipeline.detect_crop_rect", return_value=None),
+            patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=3600.0),
+            patch("shrinkray.engine.pipeline.source_codec", return_value="h264"),
+            patch("shrinkray.engine.pipeline.source_bit_depth", return_value=None),
+            patch("shrinkray.engine.pipeline.extract_samples", return_value=[]),
+            patch(
+                "shrinkray.engine.pipeline.find_optimal_crf_and_skip",
+                return_value=(20, 96.5, [], False),
+            ),
+            patch("shrinkray.engine.pipeline.tempfile.mkdtemp", side_effect=fake_mkdtemp),
+            # the verification measurement is a real binary seam; this test's
+            # subject is the scratch grammar, not VMAF (review finding 3)
+            patch("shrinkray.engine.pipeline.measure_vmaf", return_value=94.5),
+            patch("shrinkray.engine.pipeline._encode_with_command", side_effect=fake_encode),
+        ):
+            out = self.root / "out" / "movie.mkv"
+            out.parent.mkdir()
+            # the mocked encode writes a SMALLER output: the product's size
+            # gate ("a re-encode happens only when the file gets smaller")
+            # returns before the verification block otherwise, and the third
+            # scratch site (the verify workdir) is never created
+            encode_with_quality(self.movie, out, db_file=None, verify=True)
+
+    def test_scratch_name_is_decoration_for_the_probe_cache(self) -> None:
+        """The cache is keyed only from its supplied identity inputs: two
+        probe runs of the same movie whose scratch directory carries a
+        DIFFERENT name still share one cache row - the name is never an
+        identity input.
+        """
+        import inspect
+
+        from shrinkray.engine import search as engine_search
+
+        # the compile-time pin: probe_cache_key has no workdir/name input
+        params = inspect.signature(engine_search.probe_cache_key).parameters
+        self.assertNotIn("workdir", params)
+        self.assertNotIn("prefix", params)
+
+        # the runtime pin: probe_crf into two differently named workdirs over
+        # one database - the second run reuses the first run's measurement
+        encodes: list = []
+
+        def fake_run(command, cancel=None):
+            encodes.append(command)
+            Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+            return 0, ""
+
+        with (
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(engine_search, "_run", side_effect=fake_run),
+            patch.object(engine_search, "measure_vmaf", return_value=95.5),
+            tempfile.TemporaryDirectory() as scratch,
+        ):
+            first = Path(scratch) / "shrinkray-probe-movie-aaaaaaaa-1"
+            second = Path(scratch) / "shrinkray-probe-movie-bbbbbbbb-1"
+            first.mkdir()
+            second.mkdir()
+            common = {
+                "samples": [(self.sample, 10.0)],
+                "crf": 20,
+                "handbrake": "hb",
+                "movie": self.movie,
+                "sample_seconds": 10.0,
+                "encoder": "svt_av1",
+                "probe_encoder_preset": "medium",
+                "db_file": self.db_file,
+            }
+            engine_search.probe_crf(workdir=first, **common)
+            engine_search.probe_crf(workdir=second, **common)
+        self.assertEqual(len(encodes), 1, "the differently named scratch must not re-measure")
 
 
 class TestPlanPathGuard(unittest.TestCase):
