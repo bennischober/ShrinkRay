@@ -212,6 +212,8 @@ class TestDoctorCli(unittest.TestCase):
 
             old = time_mod.time() - 2 * service_mod.SCRATCH_STALE_SECONDS
             os.utime(workdir, (old, old))
+            for child in workdir.iterdir():
+                os.utime(child, (old, old))
             runner = CliRunner()
             with (
                 patch("shrinkray.service.all_problems", return_value=[]),
