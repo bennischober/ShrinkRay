@@ -52,11 +52,18 @@ run_mypy() {
         # .venv at the candidate (the rest of the gate would then run under a
         # substituted interpreter, and the developer's venv stays switched);
         # the retry must leave the environment as it found it (review round 1,
-        # finding 2). UV_PYTHON_DOWNLOADS=never keeps the retry offline - the
-        # gate's contract - and makes a missing candidate a clean skip instead
-        # of a network stall (review round 1, finding 3).
+        # finding 2). UV_PYTHON_DOWNLOADS=never keeps the retry from DOWNLOADING
+        # an interpreter (the gate's offline contract); UV_OFFLINE=1 extends
+        # that to the isolated env's package sync (cache-served only) - review
+        # round 2, finding 4. A candidate that is not installed must SKIP, not
+        # abort: probe it first (review round 2, finding 1) so the ladder
+        # advances and the exhausted-list outcome stays reachable.
+        if ! UV_PYTHON_DOWNLOADS=never uv python find "$candidate" >/dev/null 2>&1; then
+            echo "WARNING: CPython $candidate is not installed; trying the next candidate." >&2
+            continue
+        fi
         local retry_rc=0
-        observed="$(UV_PYTHON="$candidate" UV_PYTHON_DOWNLOADS=never uv run --isolated --python "$candidate" mypy --platform "$platform")" || retry_rc=$?
+        observed="$(UV_PYTHON="$candidate" UV_PYTHON_DOWNLOADS=never UV_OFFLINE=1 uv run --isolated --python "$candidate" mypy --platform "$platform")" || retry_rc=$?
         if [ "$retry_rc" -eq 0 ]; then
             echo "$observed"
             echo "WARNING: the $platform mypy pass above ran under CPython $candidate, not the project's .python-version interpreter (issue #407)." >&2

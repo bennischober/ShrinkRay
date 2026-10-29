@@ -46,6 +46,11 @@ class TestGateMypyFallback(unittest.TestCase):
             gate,
         )
         self.assertIn('return "$retry_rc"', gate)
+        # a candidate that is not installed is SKIPPED, not returned as a
+        # verdict (review round 2, finding 1): the probe advances the ladder
+        # so the exhausted-list outcome stays reachable
+        self.assertIn('uv python find "$candidate"', gate)
+        self.assertIn("is not installed; trying the next candidate", gate)
         # the exhausted-list error names the real conditions (candidates
         # segfaulted too, or none installed offline) - not "not installed"
         # alone (review round 1, finding 3)
