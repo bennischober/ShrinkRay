@@ -13,12 +13,15 @@ import os
 import os.path
 import queue
 import secrets
+import signal
 import sqlite3
 import subprocess
 import sys
 import threading
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import FrameType
 from typing import Any, TypeVar, cast
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
@@ -339,6 +342,13 @@ class AppState:
             self._recover_stale_jobs()
         self.watch_thread: threading.Thread | None = None
         self.watch_stop = threading.Event()
+        # set first in shutdown(): the SSE generator observes it and exits, so
+        # uvicorn's graceful wait completes promptly (issue #431)
+        self.app_shutdown = threading.Event()
+        # armed vs torn down: the signal handler may only ARM the shutdown
+        # (it must not join inside the handler), and run_app's finally runs
+        # the real teardown afterwards (issue #431, review round 6)
+        self.app_torn_down = threading.Event()
 
     def with_lock(self, fn: Callable[[sqlite3.Connection], _T]) -> _T:
         """Runs fn(connection) under the database lock.
@@ -370,12 +380,38 @@ class AppState:
         self.connection.commit()
 
     def shutdown(self) -> None:
-        """Stops the worker and closes the database."""
+        """Stops the worker and closes the database.
+
+        Called once from run_app's finally, after serve() returns; idempotent
+        through the armed/torn-down pair of guards, so a caller that arrives
+        after a teardown does nothing (issue #431). The signal handler arms
+        this via request_shutdown() and does NOT call it - joining in signal
+        context would defer the second Ctrl+C (review round 6, finding 2).
+        """
+        if self.app_shutdown.is_set() and self.app_torn_down.is_set():
+            return
+        self.app_shutdown.set()
+        if self.app_torn_down.is_set():
+            return
+        self.app_torn_down.set()
         self.worker.stop()
         self.watch_stop.set()
         if self.watch_thread is not None:
             self.watch_thread.join(timeout=10)
         self.connection.close()
+
+    def request_shutdown(self) -> None:
+        """Arms the shutdown without joining (the signal handler's move).
+
+        Runs inside uvicorn's handle_exit, on the main thread, in signal
+        context: joining here (the worker's stop alone can block 60 s) would
+        defer the second Ctrl+C - uvicorn's force-quit escape - behind the
+        whole teardown (review round 6, finding 2). It sets the SSE flag and
+        the running job's cancel event, then returns; the teardown itself
+        runs from run_app's finally, after serve() returns.
+        """
+        self.app_shutdown.set()
+        self.worker.request_stop()
 
 
 state: AppState | None = None
@@ -941,8 +977,9 @@ def events() -> StreamingResponse:
     sid, box, seed = s.bus.subscribe()
 
     def stream() -> Iterator[str]:
-        """Drains the mailbox into SSE frames until the client leaves."""
-        yield from _sse_stream(s.bus, sid, box, seed)
+        """Drains the mailbox into SSE frames until the client leaves or the
+        app shuts down (issue #431)."""
+        yield from _sse_stream(s.bus, sid, box, seed, shutdown_requested=s.app_shutdown.is_set)
 
     return StreamingResponse(
         stream(),
@@ -952,7 +989,12 @@ def events() -> StreamingResponse:
 
 
 def _sse_stream(
-    bus: ProgressBus, sid: int, box: "queue.Queue[dict]", seed: list, ping_after: float = 15.0
+    bus: ProgressBus,
+    sid: int,
+    box: "queue.Queue[dict]",
+    seed: list,
+    ping_after: float = 15.0,
+    shutdown_requested: "Callable[[], bool]" = lambda: False,
 ) -> Iterator[str]:
     """Builds the SSE frame generator for one subscriber.
 
@@ -966,6 +1008,14 @@ def _sse_stream(
         box (queue.Queue): The subscriber's mailbox.
         seed (list): The latest event per job at subscribe time.
         ping_after (float): Mailbox wait before emitting a ping comment.
+        shutdown_requested (Callable[[], bool]): Checked at the top of every
+            loop iteration; True returns the generator (subscriber
+            unregistered in the finally) within one ping period IF the
+            generator is still being advanced. A live stream is actually
+            ended by whichever lands first - uvicorn closing the connection
+            during its shutdown, or timeout_graceful_shutdown cancelling the
+            task; both paths reach the finally, so the unsubscribe holds
+            either way (issue #431, review round 7, finding 4).
 
     Yields:
         str: SSE frames (retry, hello, data, ping comments).
@@ -977,7 +1027,7 @@ def _sse_stream(
         # quiet stretch, which resets the client's map correctly)
         yield "event: hello\n"
         yield "data: " + json.dumps({"jobs": {str(jid): d for jid, d in seed}}) + "\n\n"
-        while True:
+        while not shutdown_requested():
             try:
                 job_id, data = box.get(timeout=ping_after)
                 yield "data: " + json.dumps({"job_id": job_id, **data}) + "\n\n"
@@ -1325,8 +1375,59 @@ def _serve_forever(host: str, port: int) -> None:
     """
     import uvicorn
 
-    config = uvicorn.Config(app, host=host, port=port, log_level="info")
-    uvicorn.Server(config).run()
+    # The exit hook ARMS the shutdown only (issue #431 review round 6,
+    # finding 2): uvicorn's handle_exit runs on the main thread inside signal
+    # handling, so a join here - the worker's stop alone can block 60 s -
+    # would defer the second Ctrl+C, uvicorn's force-quit escape, behind the
+    # whole teardown. It sets the flag the SSE generator observes (the
+    # streams end on their next tick) and the running job's cancel event
+    # (the child terminates); the real teardown runs from run_app's finally,
+    # after serve() returns, bounded by timeout_graceful_shutdown.
+    class _ServerWithAppShutdown(uvicorn.Server):
+        def handle_exit(self, sig: int, frame: FrameType | None) -> None:
+            if state is not None:
+                state.request_shutdown()
+            super().handle_exit(sig, frame)
+
+    config = uvicorn.Config(
+        app, host=host, port=port, log_level="info", timeout_graceful_shutdown=15
+    )
+    _ServerWithAppShutdown(config).run()
+
+
+@contextmanager
+def _stop_signal_umbrella() -> Iterator[None]:
+    """Ignores the stop signals for everything the app must survive.
+
+    The window spans uvicorn's capture (its post-serve re-raise of a captured
+    SIGTERM would otherwise hit the default disposition and kill the process
+    before the armed teardown runs - review round 7, finding 2) AND
+    run_app's finally (the teardown itself: without the umbrella staying in
+    force, a second SIGTERM during the joins - a ceiling above 100 s, see
+    docker-compose.yml's budget comment - kills the process mid-unwind;
+    review round 8, finding 1). SIGBREAK rides along on Windows (uvicorn
+    captures it there and re-raises it the same way; review round 8,
+    finding 3 - the win32 path is verified by reading uvicorn and typeshed,
+    not by a Windows run). SIGINT keeps its default so a KeyboardInterrupt
+    still unwinds; the umbrella is restored after the teardown.
+    """
+    stops = [signal.SIGTERM]
+    if sys.platform == "win32":
+        stops.append(signal.SIGBREAK)
+    # mirror uvicorn's main-thread guard (server.py:334): the umbrella is
+    # opened in run_app, which an embedder may call off the main thread;
+    # signal.signal would raise there where uvicorn would simply not capture
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = {sig: signal.getsignal(sig) for sig in stops}
+    for sig in stops:
+        signal.signal(sig, signal.SIG_IGN)
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def run_app(
@@ -1424,11 +1525,12 @@ def run_app(
     monitor = threading.Thread(target=monitor_memory, name="memory-monitor", daemon=True)
     monitor.start()
 
-    try:
-        _serve_forever(host, port)
-    finally:
-        state.shutdown()
-        log("app stopped")
+    with _stop_signal_umbrella():
+        try:
+            _serve_forever(host, port)
+        finally:
+            state.shutdown()
+            log("app stopped")
 
 
 def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -> None:

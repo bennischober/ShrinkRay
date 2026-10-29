@@ -12,12 +12,34 @@ mode).
 
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import uvicorn
+
 from shrinkray.server import app as app_module
 from shrinkray.server.app import WATCH_OUTPUT_ENV
+
+
+class FakeHookServer(uvicorn.Server):
+    """Records the hook's behaviour for the exit-hook test (module-level so
+    the class statement itself keeps exercising the real subclassing)."""
+
+    last_instance = None
+
+    def __init__(self, config):
+        self.config = config
+        self.run_called = False
+        self.super_called = False
+        FakeHookServer.last_instance = self
+
+    def run(self, sockets=None):
+        self.run_called = True
+
+    def handle_exit(self, sig, frame):
+        self.super_called = True
 
 
 class TestWatchOutputEnv(unittest.TestCase):
@@ -120,19 +142,209 @@ class TestServeForever(unittest.TestCase):
     four output-knob tests before this class existed).
     """
 
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
     def test_it_builds_the_config_from_its_arguments_and_runs_the_server(self) -> None:
         # a non-wildcard host on purpose: the assertion is about the arguments being
         # threaded through, and bandit flags a hardcoded bind-all address (S104)
+        # FakeServer subclasses uvicorn.Server like the seam does, so the
+        # subclassing itself is exercised on every run.
+        class FakeServer(uvicorn.Server):
+            def __init__(self, config):
+                self.config = config
+                self.run_called = False
+
+            def run(self, sockets=None):
+                self.run_called = True
+
         with (
             patch("uvicorn.Config") as config,
-            patch("uvicorn.Server") as server,
+            patch("uvicorn.Server", FakeServer),
         ):
             app_module._serve_forever("127.0.0.2", 9999)
         config.assert_called_once_with(
-            app_module.app, host="127.0.0.2", port=9999, log_level="info"
+            app_module.app,
+            host="127.0.0.2",
+            port=9999,
+            log_level="info",
+            # the SSE stream's graceful-wait bound (issue #431)
+            timeout_graceful_shutdown=15,
         )
-        server.assert_called_once_with(config.return_value)
-        server.return_value.run.assert_called_once_with()
+        self.assertTrue(config.return_value.run_called)
+
+    def test_the_exit_hook_arms_without_teardown(self) -> None:
+        """Issue #431 (review round 6, finding 2; round 7, finding 6): the hook
+        runs in signal context - it must arm the shutdown (the SSE flag AND
+        the running job's cancel event) and call super(), and must NOT run the
+        joining teardown there."""
+        import shrinkray.server.jobs as jobs_module
+        from shrinkray.server.app import AppState
+
+        app_module.state = AppState(Path(self.tmp.name) / "hook.db")
+        try:
+            # a running job with a real cancel event: the hook must reach it
+            job = app_module.state.queue.enqueue(
+                jobs_module.Job(
+                    kind=jobs_module.JobKind.ENCODE,
+                    payload={
+                        "path": str(Path(self.tmp.name) / "movies"),
+                        "output_dir": str(Path(self.tmp.name) / "out"),
+                        "quality": True,
+                    },
+                )
+            )
+            cancel = threading.Event()
+            app_module.state.queue.register_cancel_event(job.id, cancel)
+            app_module.state.worker._running_cancel = cancel
+            with (
+                patch("uvicorn.Config"),
+                patch("uvicorn.Server", FakeHookServer),
+            ):
+                app_module._serve_forever("127.0.0.2", 9999)
+            server = FakeHookServer.last_instance
+            # the signal arrives while uvicorn serves: drive the handler
+            # directly, the way the signal dispatch does
+            server.handle_exit(2, None)
+            self.assertTrue(app_module.state.app_shutdown.is_set(), "the hook did not arm the flag")
+            self.assertTrue(cancel.is_set(), "the hook did not set the running job's cancel event")
+            self.assertFalse(
+                app_module.state.app_torn_down.is_set(),
+                "the hook ran the joining teardown in signal context",
+            )
+            self.assertTrue(server.super_called, "super().handle_exit was skipped")
+        finally:
+            app_module.state.worker._running_cancel = None
+            app_module.state.shutdown()
+            app_module.state = None
+
+    def test_run_app_holds_the_stop_signal_umbrella_across_the_teardown(self) -> None:
+        """Issue #431 (review rounds 8-9): the SIGTERM protection must span
+        capture AND teardown - uvicorn restores the handlers when serve
+        returns, so a SIGTERM during run_app's teardown (the joins) would hit
+        the default disposition and kill the process mid-unwind. run_app must
+        hold SIG_IGN from before serve until after state.shutdown(), then
+        restore what was there."""
+        import signal as signal_module
+
+        observed: dict = {}
+        pre = signal_module.getsignal(signal_module.SIGTERM)
+
+        def recording_serve(host, port):
+            observed["during"] = signal_module.getsignal(signal_module.SIGTERM)
+
+        with (
+            patch.object(app_module, "allow_roots"),
+            patch.object(app_module, "AppState"),
+            patch.object(app_module, "auto_backlog"),
+            patch.object(app_module, "_recover_interrupted_swaps"),
+            patch.object(app_module, "start_watch"),
+            patch.object(app_module, "_serve_forever", recording_serve),
+            patch("shrinkray.service.all_problems", return_value=[]),
+        ):
+            app_module.run_app(Path(self.tmp.name) / "umbrella.db")
+        self.assertIs(
+            observed.get("during"),
+            signal_module.SIG_IGN,
+            "SIGTERM was not ignored while the server ran",
+        )
+        self.assertIs(
+            signal_module.getsignal(signal_module.SIGTERM),
+            pre,
+            "run_app did not restore the previous SIGTERM handler",
+        )
+
+    def test_a_sigterm_reraise_cannot_kill_the_teardown_window(self) -> None:
+        """Issue #431 (review round 8, finding 4): the survival check runs in
+        a SUBPROCESS - on the pre-fix tree the re-raised SIGTERM killed the
+        test process itself (exit 143, no named failure). The harness boots
+        run_app with a fake serve that replays uvicorn's real signal cycle:
+        capture, a SIGTERM arrives, restore, re-raise. Surviving to print
+        SURVIVED is the assertion."""
+        import subprocess
+        import sys
+
+        harness = """
+import signal, sys, tempfile
+from pathlib import Path
+from unittest import mock
+
+import uvicorn
+
+import shrinkray.server.app as A
+
+
+class FakeServer(uvicorn.Server):
+    def __init__(self, config):
+        self.config = config
+        self._captured_signals = []
+        self.should_exit = False
+        self.force_exit = False
+
+    def run(self, sockets=None):
+        # uvicorn.Server.run's real signal cycle (server.py:85-113, 332-349):
+        # capture, serve, restore, re-raise every captured signal
+        with self.capture_signals():
+            self.handle_exit(signal.SIGTERM, None)
+        for s in reversed(self._captured_signals):
+            signal.raise_signal(s)
+
+
+def fake_serve(host, port):
+    FakeServer(uvicorn.Config(A.app, host=host, port=port)).run()
+
+
+class SlowShutdown:
+    # a state stub whose shutdown() raises SIGTERM at itself: the teardown
+    # window is exactly where the review's finding said the process dies
+
+    def __init__(self):
+        self.shutdown_calls = 0
+        self.worker = mock.Mock()
+        self.watch_thread = None
+        self.watch_stop = mock.Mock()
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+        signal.raise_signal(signal.SIGTERM)
+
+
+tmp = tempfile.mkdtemp()
+state = SlowShutdown()
+with (
+    mock.patch("shrinkray.service.all_problems", return_value=[]),
+    mock.patch.object(A, "allow_roots"),
+    mock.patch.object(A, "auto_backlog"),
+    mock.patch.object(A, "_recover_interrupted_swaps"),
+    mock.patch.object(A, "start_watch"),
+    mock.patch.object(A, "_serve_forever", fake_serve),
+    mock.patch.object(A, "AppState", lambda *a, **k: state),
+):
+    A.run_app(Path(tmp) / "harness.db")
+assert state.shutdown_calls == 1, "shutdown did not run exactly once"
+print("SURVIVED")
+"""
+        repo_root = Path(__file__).resolve().parents[1]
+        r = subprocess.run(
+            [sys.executable, "-c", harness],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={
+                **os.environ,
+                "VIRTUAL_ENV": str(repo_root / ".venv"),
+                "PATH": str(repo_root / ".venv" / "bin") + os.pathsep + os.environ["PATH"],
+            },
+        )
+        self.assertEqual(
+            r.returncode,
+            0,
+            f"the teardown window did not survive the re-raised SIGTERM "
+            f"(rc={r.returncode}); stderr: {r.stderr[-400:]}",
+        )
+        self.assertIn("SURVIVED", r.stdout)
 
 
 if __name__ == "__main__":
