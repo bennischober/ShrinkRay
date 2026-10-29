@@ -63,6 +63,9 @@ class TestAuthEnabled(unittest.TestCase):
         """A route added without auth must fail this test, not the deployment."""
         for method, path in (
             ("GET", "/"),
+            ("GET", "/favicon.ico"),
+            ("GET", "/favicon.svg"),
+            ("GET", "/apple-touch-icon.png"),
             ("GET", "/api/status"),
             ("GET", "/api/library"),
             ("GET", "/api/jobs"),
