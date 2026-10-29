@@ -41,9 +41,11 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -241,6 +243,7 @@ def measure_ours(
     distorted: Path,
     crop: tuple[int, int, int, int] | None,
     hdr: bool,
+    cancel: threading.Event | None = None,
 ) -> tuple[float, str]:
     """Measures the pair with ShrinkRay's own measurement boundary.
 
@@ -265,11 +268,18 @@ def measure_ours(
             crop=crop,
             hdr=hdr,
             recipe=recipe,
+            cancel=cancel,
         )
     return score, recipe.identifier()
 
 
 def main() -> int:
+    # the measurement child runs in its own session (tools/process.py), so a
+    # Ctrl+C/SIGTERM would not reach it: the handler converts the signal into
+    # the cancel event, and measure_vmaf terminates the tree (issue #431)
+    cancel = threading.Event()
+    signal.signal(signal.SIGINT, lambda *_: cancel.set())
+    signal.signal(signal.SIGTERM, lambda *_: cancel.set())
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--pair",
@@ -344,7 +354,7 @@ def main() -> int:
                 )
             )
             continue
-        ours, recipe = measure_ours(reference, distorted, crop, hdr)
+        ours, recipe = measure_ours(reference, distorted, crop, hdr, cancel=cancel)
         theirs = ab_av1_vmaf(reference, distorted, crop)
         delta = abs(ours - theirs)
         print(f"{label}: ShrinkRay {ours:.4f} vs ab-av1 {theirs:.4f} (delta {delta:.4f})")
@@ -353,7 +363,7 @@ def main() -> int:
             # the tone-map is #310's documented deviation: REPORTED, not held
             rows.append((f"{label} [tone-mapped, reported]", ours, theirs, "reported", recipe))
             # the like-for-like comparison: both sides score the PQ signal directly
-            ours_pq, recipe_pq = measure_ours(reference, distorted, crop, False)
+            ours_pq, recipe_pq = measure_ours(reference, distorted, crop, False, cancel=cancel)
             delta_pq = abs(ours_pq - theirs)
             print(
                 f"{label} [PQ-direct]: ShrinkRay {ours_pq:.4f} vs ab-av1 {theirs:.4f} "

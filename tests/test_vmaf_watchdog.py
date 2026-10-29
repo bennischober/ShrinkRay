@@ -48,7 +48,7 @@ class TestVmafMeasurementOutlivesTheWatchdog(unittest.TestCase):
         from shrinkray.tools import process as process_mod
         from shrinkray.tools import vmaf as vmaf_mod
 
-        old_stall = process_mod.stall_timeout_seconds()
+        old_stall = process_mod._stall_minutes
         try:
             process_mod.configure_stall(watchdog_seconds / 60.0)
             with (
@@ -69,7 +69,7 @@ class TestVmafMeasurementOutlivesTheWatchdog(unittest.TestCase):
                 except RuntimeError as e:
                     return None, str(e)
         finally:
-            process_mod.configure_stall((old_stall or 600.0) / 60.0)
+            process_mod._stall_minutes = old_stall
 
     def test_silent_measurement_completes_under_a_short_watchdog(self):
         """The issue's acceptance criterion: a full-precision measure_vmaf on a
@@ -100,9 +100,11 @@ class TestVmafMeasurementOutlivesTheWatchdog(unittest.TestCase):
             cancel = threading.Event()
             result_holder: list = []
 
+            old_stall = process_mod._stall_minutes
+
             def runner():
                 try:
-                    process_mod.configure_stall(1.0 / 60.0)  # 1s watchdog: would fire first
+                    process_mod.configure_stall(1.0 / 60.0)
                     with (
                         mock.patch.object(vmaf_mod, "FFMPEG_BINARY", str(stub)),
                         mock.patch.object(
@@ -118,8 +120,12 @@ class TestVmafMeasurementOutlivesTheWatchdog(unittest.TestCase):
                             cancel=cancel,
                         )
                     result_holder.append("completed")
-                except Exception as e:  # Cancelled or RuntimeError
+                except process_mod.Cancelled as e:
                     result_holder.append(e)
+                except Exception as e:
+                    result_holder.append(("WRONG-TYPE", e))
+                finally:
+                    process_mod._stall_minutes = old_stall
 
             thread = threading.Thread(target=runner)
             thread.start()
@@ -128,7 +134,9 @@ class TestVmafMeasurementOutlivesTheWatchdog(unittest.TestCase):
             cancel.set()
             thread.join(timeout=10.0)
             self.assertFalse(thread.is_alive(), "cancel did not terminate the child")
-            self.assertIsInstance(result_holder[0], Exception, "cancel must raise, not complete")
+            self.assertIsInstance(
+                result_holder[0], process_mod.Cancelled, "cancel must raise Cancelled"
+            )
 
 
 if __name__ == "__main__":

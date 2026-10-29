@@ -786,6 +786,12 @@ def watch(
                             result = encode_with_quality(
                                 movie,
                                 target_dir / movie.name,
+                                # the measurement child opts out of the stall
+                                # watchdog (issue #431): without this event a
+                                # hung verify pass is unbounded until the
+                                # container stops - the shutdown event is the
+                                # kill path (review on PR #468, finding 1)
+                                cancel=stop_event,
                                 target_vmaf=current.target_vmaf,
                                 encoder=encoder,
                                 probe_encoder_preset=probe_encoder_preset,
