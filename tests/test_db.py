@@ -1472,7 +1472,9 @@ class TestDb(unittest.TestCase):
             old_debris = scratch / "metadata_quality_deadbeef"
             old_debris.mkdir()
             (old_debris / "vmaf.json").write_bytes(b"{}")
-            verify_debris = scratch / "shrinkray_verify_0b130ea"
+            from shrinkray.engine.identity import probe_scratch_prefix
+
+            verify_debris = scratch / (probe_scratch_prefix(movie, kind="verify") + "x7y8z9a1")
             verify_debris.mkdir()
             (verify_debris / "vmaf.json").write_bytes(b"{}")
             # the debris must be STALE: age every workdir past the floor
@@ -1620,7 +1622,9 @@ class TestDb(unittest.TestCase):
             db.upsert_file(self.connection, self._record(str(movie)))
             scratch = root / "scratch"
             scratch.mkdir()
-            live_verify = scratch / "shrinkray_verify_0b130ea"
+            from shrinkray.engine.identity import probe_scratch_prefix
+
+            live_verify = scratch / (probe_scratch_prefix(movie, kind="verify") + "x7y8z9a1")
             live_verify.mkdir()
             (live_verify / "vmaf_model.json").write_bytes(b"{}")
             # older than the probe floor, younger than the verify floor
@@ -1634,6 +1638,33 @@ class TestDb(unittest.TestCase):
                     [],
                 )
                 self.assertTrue(live_verify.is_dir())
+
+    def test_the_historical_verify_grammar_keeps_its_floor(self):
+        """The short-lived shrinkray_verify_ name (#435's first shape) still
+        carries the verification floor: existing debris from an upgraded
+        install stays floored like the current grammar's."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            historical = scratch / "shrinkray_verify_0b130ea"
+            historical.mkdir()
+            (historical / "vmaf.json").write_bytes(b"{}")
+            aged = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            os.utime(historical, (aged, aged))
+            os.utime(historical / "vmaf.json", (aged, aged))
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                findings = service.doctor(self.connection)
+                self.assertEqual(
+                    [f for f in findings if f.issue == "stale probe scratch (crash debris?)"],
+                    [],
+                )
 
     def test_doctor_scratch_check_skips_without_a_configured_root(self):
         """A stateless CLI run has no configured scratch (no TMPDIR): the
@@ -1667,7 +1698,9 @@ class TestDb(unittest.TestCase):
             (scratch / "my-own-notes").mkdir()
             probe_debris = scratch / "shrinkray-probe-x-abcdef12-x7y8z9a1"
             probe_debris.mkdir()
-            verify_debris = scratch / "shrinkray_verify_abc12345"
+            from shrinkray.engine.identity import probe_scratch_prefix
+
+            verify_debris = scratch / (probe_scratch_prefix(movie, kind="verify") + "x7y8z9a1")
             verify_debris.mkdir()
             (scratch / "metadata_quality_1").mkdir()
             (scratch / "not_a_dir_shrinkray-probe-y").write_bytes(b"f")

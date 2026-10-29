@@ -640,9 +640,13 @@ class DoctorFinding:
     detail: str | None = None
 
 
-# scratch workdir name grammars doctor recognizes (the current one and the
-# pre-#435 anonymous one - existing debris stays attributable; issue #440):
+# scratch workdir name grammars doctor recognizes: the current one (with the
+# verify marker #440 added when the verification workdir needed its own floor)
+# and the two historical ones (the anonymous pre-#435 name and the short-lived
+# shrinkray_verify_ prefix that #435 replaced) - existing debris stays
+# attributable:
 SCRATCH_WORKDIR_PREFIXES = ("shrinkray-probe-", "shrinkray_verify_", "metadata_quality_")
+SCRATCH_VERIFY_MARKER = "-verify-"
 
 # a workdir younger than its floor is a LIVE run's workdir, not crash debris:
 # reporting it would exit 1 on a healthy host. The floors differ by workdir kind
@@ -722,17 +726,21 @@ def scratch_root() -> Path | None:
     """Returns the scratch root the probe workdirs live under, when known.
 
     The probe scratch is wherever ``tempfile.mkdtemp`` puts its workdirs:
-    the container's ``$TMPDIR`` (shipped: ``/tmp/shrinkray``), or the OS
-    temp when unset. A stateless CLI run on a developer host has no
-    configured scratch to speak of - doctor skips the check there rather
-    than scanning all of /tmp (issue #440's criterion 1).
+    the container's ``$TMPDIR`` (shipped: ``/tmp/shrinkray``). The same
+    variables tempfile consults are honored (``TMPDIR``, then ``TEMP``,
+    then ``TMP`` - Windows names TEMP); when none is set (a stateless CLI
+    run on a developer host) doctor skips the check rather than scanning
+    the OS temp root (issue #440's criterion 1).
 
     Returns:
         Path | None: The configured scratch root, or None when the
         environment does not name one.
     """
-    tmpdir = os.environ.get("TMPDIR")
-    return Path(tmpdir) if tmpdir else None
+    for var in ("TMPDIR", "TEMP", "TMP"):
+        value = os.environ.get(var)
+        if value:
+            return Path(value)
+    return None
 
 
 def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
@@ -767,6 +775,11 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         # the scratch volume vanished between the is_dir check and the walk
         return []
     for entry in entries:
+        if entry.is_symlink():
+            # never followed: a symlinked entry would make rglob walk OUT of
+            # the scratch root (rglob follows directory symlinks), and this
+            # report-only check reads only the configured scratch itself
+            continue
         if not entry.name.startswith(SCRATCH_WORKDIR_PREFIXES) or not entry.is_dir():
             continue
         try:
@@ -794,12 +807,14 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
                 total += item_stat.st_size
         age_hours = max((now - newest) / 3600.0, 0.0)
         # the floor follows the workdir kind (see the constants' comment):
-        # a verification's silence is the measurement running, not a death
-        floor = (
-            SCRATCH_VERIFY_STALE_SECONDS
-            if entry.name.startswith("shrinkray_verify_")
-            else SCRATCH_STALE_SECONDS
+        # a verification's silence is the measurement running, not a death.
+        # The kind is read from the grammar's verify marker - the CURRENT
+        # builds' name (identity.probe_scratch_prefix(kind="verify")) and the
+        # short-lived shrinkray_verify_ name both carry it
+        is_verify = SCRATCH_VERIFY_MARKER in entry.name or entry.name.startswith(
+            "shrinkray_verify_"
         )
+        floor = SCRATCH_VERIFY_STALE_SECONDS if is_verify else SCRATCH_STALE_SECONDS
         if now - newest < floor:
             # a live run's workdir: the verification writes its one direct
             # child up front and nothing during a long measurement, so the
