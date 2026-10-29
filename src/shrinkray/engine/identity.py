@@ -14,6 +14,7 @@ same-size, mtime-preserved case is #438's boundary.
 """
 
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,7 +87,9 @@ def probe_scratch_prefix(movie: Path) -> str:
     measurement's workdir) derives its name from this one grammar:
     ``shrinkray-probe-<truncated-source-stem>-<8-hex>-`` — the stem cut
     UTF-8-safely to :data:`PROBE_SCRATCH_STEM_BYTES`, the hash the first 8
-    hex digits of sha256 over the source's resolved path. A hard-killed
+    hex digits of sha256 over the source's resolved path (os.fsencode: the
+    filename's on-disk bytes, so a non-UTF-8 filename - POSIX names arrive
+    surrogate-escaped - hashes stably instead of raising). A hard-killed
     run's leftover directory in a shared scratch (``$TMPDIR=/tmp/shrinkray``
     in the container) is then attributable to its movie at a glance, which
     the anonymous ``metadata_quality_`` name could not offer (issue #435).
@@ -105,5 +108,5 @@ def probe_scratch_prefix(movie: Path) -> str:
         str: The ``mkdtemp`` prefix for that movie's scratch directories.
     """
     stem = movie.stem.encode("utf-8", "ignore")[:PROBE_SCRATCH_STEM_BYTES].decode("utf-8", "ignore")
-    digest = hashlib.sha256(str(movie.resolve()).encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha256(os.fsencode(str(movie.resolve()))).hexdigest()[:8]
     return f"shrinkray-probe-{stem}-{digest}-"

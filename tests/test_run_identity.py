@@ -9,6 +9,7 @@ seams, a same-size rewrite at a call-shaped seam) - none races a
 stat:commit window.
 """
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -133,11 +134,29 @@ class TestProbeScratchAttribution(unittest.TestCase):
         prefixes: list[str] = []
         self._plan_with_patched_scratch(prefixes)
         self._encode_with_patched_scratch(prefixes)
+        # three sites created three scratch dirs (an empty list would pass
+        # the loop above vacuously)
+        self.assertEqual(len(prefixes), 3)
         for prefix in prefixes:
             self.assertTrue(
                 prefix.startswith("shrinkray-probe-movie-"),
                 f"anonymous scratch prefix survived: {prefix!r}",
             )
+
+    def test_a_non_utf8_filename_hashes_instead_of_raising(self) -> None:
+        """POSIX filenames arrive surrogate-escaped (os.fsdecode of the raw
+        bytes); the digest input is the filename's on-disk bytes
+        (os.fsencode), so such a source gets a stable, attributable prefix
+        instead of a UnicodeEncodeError on the plan path (review finding 1).
+        """
+        from shrinkray.engine.identity import probe_scratch_prefix
+
+        movie = self.root / os.fsdecode(b"\xff\xfe-movie.mkv")
+        movie.write_bytes(b"x" * 16)
+        first = probe_scratch_prefix(movie)
+        second = probe_scratch_prefix(movie)
+        self.assertEqual(first, second, "the digest must be stable per filename")
+        self.assertTrue(first.startswith("shrinkray-probe-"))
 
     def _plan_with_patched_scratch(self, prefixes: list[str]) -> None:
         """Runs plan_quality with every external seam mocked and the scratch
@@ -173,6 +192,10 @@ class TestProbeScratchAttribution(unittest.TestCase):
         mkdtemp captured."""
         real_mkdtemp = tempfile.mkdtemp
 
+        def fake_encode(input_file, output_file, command, **kwargs):
+            output_file.write_bytes(b"out" * 4)  # smaller than the 16-byte source
+            return SimpleNamespace(success=True, cancelled=False, error=None)
+
         def fake_mkdtemp(prefix: str = "", **kwargs):
             prefixes.append(prefix)
             return real_mkdtemp(prefix=prefix, **kwargs)
@@ -193,14 +216,17 @@ class TestProbeScratchAttribution(unittest.TestCase):
                 return_value=(20, 96.5, [], False),
             ),
             patch("shrinkray.engine.pipeline.tempfile.mkdtemp", side_effect=fake_mkdtemp),
-            patch(
-                "shrinkray.engine.pipeline._encode_with_command",
-                return_value=SimpleNamespace(success=True, cancelled=False, error=None),
-            ),
+            # the verification measurement is a real binary seam; this test's
+            # subject is the scratch grammar, not VMAF (review finding 3)
+            patch("shrinkray.engine.pipeline.measure_vmaf", return_value=94.5),
+            patch("shrinkray.engine.pipeline._encode_with_command", side_effect=fake_encode),
         ):
             out = self.root / "out" / "movie.mkv"
             out.parent.mkdir()
-            out.write_bytes(b"NEW" * 50)
+            # the mocked encode writes a SMALLER output: the product's size
+            # gate ("a re-encode happens only when the file gets smaller")
+            # returns before the verification block otherwise, and the third
+            # scratch site (the verify workdir) is never created
             encode_with_quality(self.movie, out, db_file=None, verify=True)
 
     def test_scratch_name_is_decoration_for_the_probe_cache(self) -> None:
