@@ -93,6 +93,55 @@ class TestWaitForStable(unittest.TestCase):
         sleep.assert_has_calls([unittest.mock.call(55.0), unittest.mock.call(30.0)])
         witness.assert_not_called()
 
+    def test_a_cancel_landing_during_the_age_sleep_raises(self) -> None:
+        """The young path's first cancel check (after the remaining-age
+        sleep): a signal landing while the seam waits for the floor raises
+        instead of proceeding to the size check.
+        """
+        cancel = threading.Event()
+
+        def cancel_during_age_sleep(seconds):
+            cancel.set()
+
+        with (
+            self._clock(5.0),
+            patch("shrinkray.engine.watch.time.monotonic", side_effect=[0.0, 1.0, 61.0]),
+            patch("shrinkray.engine.watch.time.sleep", side_effect=cancel_during_age_sleep),
+            patch.object(watch, "STABLE_MIN_AGE", 60.0),
+            patch.object(watch, "is_stable") as witness,
+            self.assertRaises(watch.Cancelled),
+        ):
+            watch.wait_for_stable(self.movie, limit=600.0, cancel=cancel)
+        witness.assert_not_called()
+
+    def test_a_cancel_landing_during_the_interval_sleep_raises(self) -> None:
+        """The young path's second cancel check (after the size interval):
+        a signal landing while the size check's interval runs raises before
+        the second size read.
+        """
+        cancel = threading.Event()
+
+        def cancel_during_interval_sleep(seconds):
+            if seconds == 30.0:
+                cancel.set()
+
+        with (
+            self._clock(5.0),
+            patch(
+                "shrinkray.engine.watch.time.monotonic",
+                side_effect=[0.0, 1.0, 61.0, 62.0, 63.0],
+            ),
+            patch(
+                "shrinkray.engine.watch.time.sleep",
+                side_effect=cancel_during_interval_sleep,
+            ),
+            patch.object(watch, "STABLE_MIN_AGE", 60.0),
+            patch.object(watch, "is_stable") as witness,
+            self.assertRaises(watch.Cancelled),
+        ):
+            watch.wait_for_stable(self.movie, limit=600.0, cancel=cancel)
+        witness.assert_not_called()
+
     def test_a_young_growing_file_is_still_caught_by_the_size_check(self) -> None:
         """The young-file fast path must not weaken the witness: a producer
         writing DURING the interval sleep updates the file's size and mtime,

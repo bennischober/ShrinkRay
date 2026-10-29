@@ -240,13 +240,16 @@ def wait_for_stable(
     for both entries (issue #437).
 
     The witness is the watcher's `is_stable` (size unchanged across a
-    STABLE_CHECK_INTERVAL sleep, last change at least STABLE_MIN_AGE ago);
-    the seam paces its calls so a settling file costs ONE interval TOTAL,
-    not one per stage stacked: while the file is too young, the seam sleeps
-    the REMAINING age once and then does the size check DIRECTLY (one
-    interval, here - calling is_stable would sleep the interval a second
-    time, the measured 90 s); while it is old enough, the witness's verdict
-    IS the answer (its size-check sleep runs inside it). The watcher's loop
+    STABLE_CHECK_INTERVAL sleep, last change at least STABLE_MIN_AGE ago).
+    The seam's cost for a COMPLETE fresh file is the floor + one interval
+    (~90 s at the defaults): it sleeps the REMAINING age once, then does
+    the size check DIRECTLY (one interval, here - calling is_stable on
+    this path would stack its own interval sleep on the age sleep, the
+    measured 90 s chunking shape, and the two sleeps are both the witness
+    definition requires). A file already past the floor asks the witness
+    directly (its size-check sleep runs inside it). Overlapping the
+    unchanged-window with the age wait could reach ~60 s, but that changes
+    what the witness measures - the watcher keeps is_stable untouched. The watcher's loop
     needs no bound (it reconsiders on its next pass) and keeps its single
     is_stable check - an extraction, not a policy change; the one-shot CLI
     has no next pass, so it waits here and gives up loudly at the limit. A
@@ -293,10 +296,10 @@ def wait_for_stable(
             # witness call re-checks at the new size
             continue
         # too young: sleep the REMAINING age, then the size check DIRECTLY
-        # (one interval, here) - calling is_stable would sleep the interval a
-        # SECOND time (the measured 90 s: 60 age + 30 interval on a file at
-        # age ~0, identical to the old chunking). One age sleep + one size
-        # interval is the whole cost of a complete fresh file.
+        # (one interval, here). The complete fresh file's total cost is the
+        # floor + one interval (~90 s at the defaults) - the witness's own
+        # definition requires both waits; only the CHUNKED 30-s polling of
+        # the first shape was waste.
         remaining = STABLE_MIN_AGE - age
         if time.monotonic() + remaining + STABLE_CHECK_INTERVAL >= deadline:
             return False
