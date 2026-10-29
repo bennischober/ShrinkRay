@@ -56,6 +56,9 @@ from shrinkray.engine.identity import (
 from shrinkray.engine.identity import (
     ensure_unchanged as ensure_unchanged,
 )
+from shrinkray.engine.identity import (
+    probe_scratch_prefix as probe_scratch_prefix,
+)
 from shrinkray.engine.plan import (
     CANDIDATE_CODECS as CANDIDATE_CODECS,
 )
@@ -1006,7 +1009,7 @@ def _probe_movie(
             "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
         )
 
-    workdir = Path(tempfile.mkdtemp(prefix="metadata_quality_"))
+    workdir = Path(tempfile.mkdtemp(prefix=probe_scratch_prefix(input_file)))
     try:
         # bar detection is part of every re-encode, never a flag: the encoder
         # is already re-encoding every frame, so the crop is free here and a
@@ -1575,7 +1578,7 @@ def encode_with_quality(
         output_size = output_file.stat().st_size
         verified_subsample = 10 if output_size > VERIFY_SUBSAMPLE_THRESHOLD_BYTES else None
         try:
-            verify_workdir = Path(tempfile.mkdtemp(prefix="shrinkray_verify_"))
+            verify_workdir = Path(tempfile.mkdtemp(prefix=probe_scratch_prefix(input_file)))
             try:
                 verified_vmaf = measure_vmaf(
                     output_file,

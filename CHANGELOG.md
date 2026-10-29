@@ -4,7 +4,9 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **Probe scratch directories name their movie** ([#435](https://github.com/bennischober/ShrinkRay/issues/435), [#469](https://github.com/bennischober/ShrinkRay/pull/469)): every probe scratch `tempfile.mkdtemp` (the plan and encode probe workdirs, the verification measurement's workdir) now derives its name from one grammar — `shrinkray-probe-<truncated-source-stem>-<8-hex>-`, the stem cut UTF-8-safely and the hex derived from the source's resolved path — so a hard-killed run's leftover directory in a shared scratch (`$TMPDIR=/tmp/shrinkray`) is attributable to its movie at a glance instead of looking like every other run's anonymous `metadata_quality_*` debris. The names stay decoration: the probe cache's identity remains the content-addressed database key, and no invalidation reads the workdir name (pinned by test). Interior file names (`sample_0.mkv`, `probe_crf34_1.mkv`, `vmaf.json`) are unchanged.
 
 ## [0.5.0] - 2026-10-28
 

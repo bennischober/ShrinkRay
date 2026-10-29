@@ -25,7 +25,7 @@ from shrinkray.engine.encoders import (
     DEFAULT_HDR_TARGET_VMAF,
     encoder_for,
 )
-from shrinkray.engine.identity import capture_run_identity, ensure_unchanged
+from shrinkray.engine.identity import capture_run_identity, ensure_unchanged, probe_scratch_prefix
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_COUNT,
     DEFAULT_SAMPLE_EVERY,
@@ -592,7 +592,7 @@ def plan_quality(
             "(https://handbrake.fr/docs/en/latest/cli/cli-options.html)"
         )
 
-    workdir = Path(tempfile.mkdtemp(prefix="metadata_quality_"))
+    workdir = Path(tempfile.mkdtemp(prefix=probe_scratch_prefix(input_file)))
     try:
         # bar detection is part of every re-encode, never optional: a re-encode
         # is the only moment the picture can be corrected for free, and keeping

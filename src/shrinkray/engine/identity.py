@@ -13,6 +13,7 @@ Same-size replacements with a changed mtime are caught; the deeper
 same-size, mtime-preserved case is #438's boundary.
 """
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,3 +71,39 @@ def ensure_unchanged(movie: Path, identity: RunIdentity, stage: str) -> None:
             "record a decision about bytes it never measured; the file is "
             "left alone and re-decided on the next run"
         )
+
+
+# the stem cap keeps prefix + mkdtemp's 8-char random suffix inside the
+# 255-byte filename limit even for a stem of multibyte characters
+PROBE_SCRATCH_STEM_BYTES = 48
+
+
+def probe_scratch_prefix(movie: Path) -> str:
+    """Builds the attributable scratch-directory prefix for one probe run.
+
+    Every scratch ``tempfile.mkdtemp`` the probe paths create (``plan.py``'s
+    probe workdir, ``pipeline.py``'s probe workdir and the verification
+    measurement's workdir) derives its name from this one grammar:
+    ``shrinkray-probe-<truncated-source-stem>-<8-hex>-`` — the stem cut
+    UTF-8-safely to :data:`PROBE_SCRATCH_STEM_BYTES`, the hash the first 8
+    hex digits of sha256 over the source's resolved path. A hard-killed
+    run's leftover directory in a shared scratch (``$TMPDIR=/tmp/shrinkray``
+    in the container) is then attributable to its movie at a glance, which
+    the anonymous ``metadata_quality_`` name could not offer (issue #435).
+
+    The name is DECORATION: nothing in the engine reads it back — the probe
+    cache's identity is the content-addressed key in the database
+    (``search.probe_cache_key``), and no invalidation may ever key on the
+    workdir name. ``mkdtemp`` appends its own random suffix, so two
+    concurrent encodes of the same movie stay distinct; the shared prefix is
+    never a reason for lock code at the call sites.
+
+    Args:
+        movie (Path): The source file the probe run measures.
+
+    Returns:
+        str: The ``mkdtemp`` prefix for that movie's scratch directories.
+    """
+    stem = movie.stem.encode("utf-8", "ignore")[:PROBE_SCRATCH_STEM_BYTES].decode("utf-8", "ignore")
+    digest = hashlib.sha256(str(movie.resolve()).encode("utf-8")).hexdigest()[:8]
+    return f"shrinkray-probe-{stem}-{digest}-"
