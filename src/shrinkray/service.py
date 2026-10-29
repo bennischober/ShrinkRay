@@ -803,10 +803,12 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         return []
     for entry in entries:
         if entry.is_symlink():
-            # never followed: rglob follows directory symlinks on every
-            # Python this project supports (measured on 3.10-3.15), so a
-            # symlinked entry would walk OUT of the scratch root - and this
-            # report-only check reads only the configured scratch itself
+            # never read through: a link's stat() follows into its target
+            # (its bytes and mtime would enter the report), and this
+            # report-only check reads only the configured scratch itself.
+            # rglob does not descend link entries on any CPython tested
+            # (3.10-3.15, measured), but that is pathlib's behavior, not a
+            # contract this check may lean on
             continue
         if not entry.name.startswith(SCRATCH_WORKDIR_PREFIXES) or not entry.is_dir():
             continue
@@ -820,10 +822,11 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         total = 0
         for item in items:
             if item.is_symlink():
-                # never followed: rglob follows directory symlinks on every
-                # Python this project supports (measured on 3.10-3.15), so a
-                # symlinked member would walk OUT of the scratch root - and
-                # this report-only check reads only the workdir itself
+                # never read through: a link's stat() follows into its
+                # target's bytes and mtime, which must not enter the report;
+                # rglob does not descend link entries on any CPython tested
+                # (3.10-3.15, measured), but that is pathlib's behavior, not
+                # a contract this check may lean on
                 continue
             try:
                 item_stat = item.stat()
