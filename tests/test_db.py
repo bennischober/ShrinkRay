@@ -1571,9 +1571,11 @@ class TestDb(unittest.TestCase):
                 self.assertTrue(fresh_child.exists())
 
     def test_doctor_never_walks_out_of_the_workdir_through_a_symlink(self):
-        """A symlinked member inside a stale workdir is skipped, not
-        followed: the report-only check reads only the workdir itself
-        (pre-3.13 rglob follows directory symlinks out of the root)."""
+        """A symlinked member inside a stale workdir contributes neither a
+        walk outside the workdir nor its target's contents to the report:
+        the guard keeps the contain-me guarantee explicit for this
+        report-only check (rglob itself yields the link without descending
+        on every Python this project supports - measured 3.10-3.15)."""
 
         from shrinkray import service
         from shrinkray.engine.identity import probe_scratch_prefix
@@ -1600,10 +1602,11 @@ class TestDb(unittest.TestCase):
                 debris_findings = [
                     f for f in findings if f.issue == "stale probe scratch (crash debris?)"
                 ]
-                # exactly one finding: the symlink contributed neither a walk
-                # into "outside" nor its contents to the size
+                # exactly one finding, and its byte weight counts ONLY the
+                # workdir's real member (16 bytes) - the link's target
+                # (110 bytes outside) is not in it
                 self.assertEqual(len(debris_findings), 1)
-                self.assertNotIn("do not read", debris_findings[0].detail or "")
+                self.assertIn("16 bytes", debris_findings[0].detail or "")
                 self.assertTrue((outside / "secret.txt").exists())
 
     def test_a_running_verification_is_not_debris_despite_its_silence(self):
@@ -1756,6 +1759,37 @@ class TestDb(unittest.TestCase):
                 ]
                 self.assertEqual(len(debris_findings), 1, "probe debris reports at 1 h")
                 self.assertRegex(debris_findings[0].detail or "", r"[0-9.]+ h ago")
+
+    def test_a_set_but_missing_scratch_variable_falls_through(self):
+        """A SET tempfile variable naming a missing dir falls through to the
+        next variable (tempfile's own shape); none usable means the check is
+        skipped - never a silent nothing-report on a real scratch elsewhere
+        (round-8 finding 5)."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            real_scratch = root / "real-scratch"
+            real_scratch.mkdir()
+            debris = real_scratch / "shrinkray-probe-movie-1a2b3c4d-x7y8z9a1"
+            debris.mkdir()
+            (debris / "sample_0.mkv").write_bytes(b"m" * 16)
+            aged = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            os.utime(debris, (aged, aged))
+            os.utime(debris / "sample_0.mkv", (aged, aged))
+            env = {k: v for k, v in os.environ.items() if k not in ("TMPDIR", "TEMP", "TMP")}
+            env["TMPDIR"] = str(root / "does-not-exist")  # set, unusable
+            env["TEMP"] = str(real_scratch)  # usable - must win
+            with patch.dict(os.environ, env, clear=True):
+                findings = service.doctor(self.connection)
+                debris_findings = [
+                    f for f in findings if f.issue == "stale probe scratch (crash debris?)"
+                ]
+                self.assertEqual(len(debris_findings), 1, "the usable variable's scratch is read")
 
     def test_doctor_scratch_check_skips_without_a_configured_root(self):
         """A stateless CLI run has no configured scratch (no TMPDIR): the

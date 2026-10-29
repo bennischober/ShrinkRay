@@ -107,10 +107,13 @@ def probe_scratch_prefix(movie: Path, kind: str = "probe") -> str:
     cannot otherwise tell the two kinds apart. The marker rides in the one
     helper so the grammar never forks.
 
-    The name is DECORATION: nothing in the engine reads it back — the probe
-    cache's identity is the content-addressed key in the database
-    (``search.probe_cache_key``), and no invalidation may ever key on the
-    workdir name. ``mkdtemp`` appends its own random suffix, so two
+    The name stays DECORATION for every DECISION: the probe cache's
+    identity is the content-addressed key in the database
+    (``search.probe_cache_key``), and no invalidation, reuse or cleanup
+    decision may ever key on the workdir name. The one reader is the
+    operator-facing report (``service.stale_scratch_findings`` parses the
+    name's kind marker for its staleness floor) - a name-shaped label, not
+    an identity input. ``mkdtemp`` appends its own random suffix, so two
     concurrent encodes of the same movie stay distinct; the shared prefix is
     never a reason for lock code at the call sites.
 

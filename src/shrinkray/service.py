@@ -762,8 +762,11 @@ def scratch_root() -> Path | None:
     """
     for var in ("TMPDIR", "TEMP", "TMP"):
         value = os.environ.get(var)
-        if value:
+        if value and Path(value).is_dir():
             return Path(value)
+        # a SET variable naming a missing dir falls through to the next one,
+        # like tempfile does toward the OS temp; when nothing usable is
+        # named, the caller skips the check (never scans the OS temp)
     return None
 
 
