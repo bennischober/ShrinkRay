@@ -6,7 +6,7 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ### Added
 
-- **`doctor` reports stale probe-scratch debris** ([#440](https://github.com/bennischober/ShrinkRay/issues/440), [#470](https://github.com/bennischober/ShrinkRay/pull/470)): a run killed hard (SIGKILL, power loss) leaves its probe workdir on the scratch volume forever, and no database row ever pointed there — so the one health report could not see it. `shrinkray doctor` now lists stale probe-scratch directories on the configured scratch root (`$TMPDIR`; a stateless run without one skips the check rather than scanning the OS temp) with each directory's age and recursive byte weight, recognizing both the `shrinkray-probe-*` grammar and the pre-#435 `metadata_quality_*` debris. Report-only: nothing is deleted, and the check never walks beyond the configured scratch root.
+- **`doctor` reports stale probe-scratch debris** ([#440](https://github.com/bennischober/ShrinkRay/issues/440), [#470](https://github.com/bennischober/ShrinkRay/pull/470)): a run killed hard (SIGKILL, power loss) leaves its probe workdir on the scratch volume forever, and no database row ever pointed there — so the one health report could not see it. `shrinkray doctor` now lists stale probe-scratch directories on the configured scratch root (`$TMPDIR`; a stateless run without one skips the check rather than scanning the OS temp) with each directory's age and recursive byte weight, recognizing the `shrinkray-probe-*`, `shrinkray_verify_*` and pre-#435 `metadata_quality_*` grammars. Report-only: nothing is deleted, and the check never walks beyond the configured scratch root.
 
 ### Changed
 

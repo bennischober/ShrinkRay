@@ -656,9 +656,11 @@ def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[Doct
 
     Composes existing primitives into one report (B6): dead paths,
     soft-missing counters, encode rows whose output vanished, sources that
-    no longer probe cleanly, and orphaned outputs (an encode row's output
-    file whose source row is gone). Read-only: doctor never repairs,
-    delete-flagging stays the scan's job (grace period semantics).
+    no longer probe cleanly, orphaned outputs (an encode row's output
+    file whose source row is gone), and stale probe-scratch workdirs on
+    the configured scratch root (crash debris; ``stale_scratch_findings``).
+    Read-only: doctor never repairs, delete-flagging stays the scan's job
+    (grace period semantics).
 
     Args:
         connection: The database connection.
@@ -759,24 +761,30 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         if not entry.name.startswith(SCRATCH_WORKDIR_PREFIXES) or not entry.is_dir():
             continue
         try:
-            mtime = entry.stat().st_mtime
+            items = [entry, *entry.rglob("*")]
         except OSError:
-            # the workdir vanished mid-report: gone is healthy, report nothing
+            # the workdir vanished or is unreadable mid-report: skip it
+            # (gone or unreadable is healthy for this report-only check)
             continue
-        age_hours = max((now - mtime) / 3600.0, 0.0)
-        if now - mtime < SCRATCH_STALE_SECONDS:
-            # a live probe's workdir (the run is minutes old, a bisect takes
-            # minutes): reporting it would cry wolf on a healthy host
-            continue
+        newest = 0.0
         total = 0
-        for item in entry.rglob("*"):
+        for item in items:
             try:
-                if item.is_file():
-                    total += item.stat().st_size
+                item_stat = item.stat()
             except OSError:
-                # a file vanishing mid-walk is reported as-is: the size is
+                # a member vanishing mid-walk is skipped: the size is
                 # decoration for the operator, never a decision input
                 continue
+            newest = max(newest, item_stat.st_mtime)
+            if item.is_file():
+                total += item_stat.st_size
+        age_hours = max((now - newest) / 3600.0, 0.0)
+        if now - newest < SCRATCH_STALE_SECONDS:
+            # a live run's workdir: the verification writes its one direct
+            # child up front and nothing during a long measurement, so the
+            # DIRECTORY's own mtime would report a still-running run as
+            # debris - the age reads the NEWEST mtime under it instead
+            continue
         findings.append(
             DoctorFinding(
                 movie=str(entry),

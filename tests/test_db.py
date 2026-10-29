@@ -1445,6 +1445,8 @@ class TestDb(unittest.TestCase):
             old = time.time() - 2 * service.SCRATCH_STALE_SECONDS
             for debris in (workdir, old_debris, verify_debris):
                 os.utime(debris, (old, old))
+                for child in debris.iterdir():
+                    os.utime(child, (old, old))
             with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
                 findings = service.doctor(self.connection)
                 issues = [f.issue for f in findings]
@@ -1492,6 +1494,36 @@ class TestDb(unittest.TestCase):
                 # report-only (inside the fixture: the tempdir cleanup is the
                 # only thing that may remove it)
                 self.assertTrue(live.is_dir(), "a live workdir is untouched")
+
+    def test_doctor_ages_on_the_newest_member_not_the_directory(self):
+        """A verification workdir writes its one child up front and nothing
+        during a long measurement: a workdir whose own mtime has aged but
+        whose newest member is fresh is a LIVE run, never debris (issue
+        #440's review round 2)."""
+
+        from shrinkray import service
+        from shrinkray.engine.identity import probe_scratch_prefix
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            live = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            live.mkdir()
+            fresh_child = live / "vmaf.json"
+            fresh_child.write_bytes(b"{}")
+            aged = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            os.utime(live, (aged, aged))  # the DIRECTORY aged; the child did not
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                findings = service.doctor(self.connection)
+                self.assertEqual(
+                    [f for f in findings if f.issue == "stale probe scratch (crash debris?)"],
+                    [],
+                )
+                self.assertTrue(fresh_child.exists())
 
     def test_doctor_scratch_check_skips_without_a_configured_root(self):
         """A stateless CLI run has no configured scratch (no TMPDIR): the
