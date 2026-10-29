@@ -6,6 +6,7 @@ resolve_input_paths' file list through scan_movies' new `files` parameter.
 
 import os
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -18,12 +19,19 @@ from shrinkray.__main__ import app
 def _toolchain_present():
     """The plan/encode preflight (#194) checks the toolchain before any work;
     these tests mock the engine itself, so the check must see a working one
-    (CI runners have no ffprobe on PATH)."""
+    (CI runners have no ffprobe on PATH). The stability constants are patched
+    to 0 (issue #437): these tests run the REAL seam on fresh fixtures, and
+    their subject is the one-file scan scope, not stability - no test sleeps.
+    """
+    from shrinkray.engine import watch as watch_mod
+
     with (
         patch("shrinkray.service.shutil.which", return_value="ffprobe"),
         patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
         patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
         patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+        patch.object(watch_mod, "STABLE_MIN_AGE", 0.0),
+        patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
     ):
         yield
 
@@ -35,6 +43,13 @@ class TestSingleFileScope(unittest.TestCase):
         self.names = ["a.mkv", "b.mkv", "c.mkv"]
         for name in self.names:
             (self.root / name).write_bytes(b"x" * 8)
+        # the files read as COMPLETE (issue #437): these tests' subject is the
+        # one-file scan scope, not stability - age them past STABLE_MIN_AGE so
+        # the real seam does not hold every encode test for the age floor
+        old = time.time() - 120
+        for name in self.names:
+            path = self.root / name
+            os.utime(path, (old, old))
 
     def tearDown(self) -> None:
         self.tmp.cleanup()

@@ -239,14 +239,14 @@ def wait_for_stable(
     """Waits until the file settles, bounded and cancel-aware; the one seam
     for both entries (issue #437).
 
-    Calls the same witness the watcher uses (`is_stable`: size unchanged
-    across a STABLE_CHECK_INTERVAL sleep, last change at least
-    STABLE_MIN_AGE ago) in a loop until it says stable or `limit` seconds
-    have passed. The witness's early-False paths (file too young, unreadable)
-    return WITHOUT sleeping, so the loop sleeps the interval itself between
-    checks - otherwise a young file (exactly the still-copying case this
-    seam exists for) busy-loops on stat pairs for the whole limit (the
-    round-2 review measured ~370k stat pairs/second). The watcher's loop
+    The witness is the watcher's `is_stable` (size unchanged across a
+    STABLE_CHECK_INTERVAL sleep, last change at least STABLE_MIN_AGE ago);
+    the seam paces its calls so a settling file costs ONE interval, not
+    one per check stacked on the witness's own internal sleep: while the
+    file is too young (age < STABLE_MIN_AGE), the seam sleeps the REMAINING
+    age once and then asks the witness (whose size-check sleep is the one
+    interval that decides); while it is old enough, the witness's verdict
+    IS the answer (its size-check sleep runs inside it). The watcher's loop
     needs no bound (it reconsiders on its next pass) and keeps its single
     is_stable check - an extraction, not a policy change; the one-shot CLI
     has no next pass, so it waits here and gives up loudly at the limit. A
@@ -272,17 +272,33 @@ def wait_for_stable(
             raise Cancelled("cancelled while waiting for the file to settle")
         if time.monotonic() >= deadline:
             return False
-        if is_stable(path):
-            return True
-        # the interval sleep lives HERE, not inside the witness's early-False
-        # paths: a young or unreadable file returns False without sleeping,
-        # and without this sleep the loop busy-spins on stat pairs until the
-        # limit. One sleep per turn on TOP of the witness's own internal one
-        # (its size-changed path sleeps inside, the early-False paths do not):
-        # a turn is up to ~60 s on that path, so the limit can be overshot by
-        # up to two intervals - bounded, and the deadline check above still
-        # precedes the next witness call.
-        time.sleep(STABLE_CHECK_INTERVAL)
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            # unreadable/vanished: same answer the witness would give, and
+            # the bounded wait reports it as never-settled at the limit
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(STABLE_CHECK_INTERVAL)
+            continue
+        if age >= STABLE_MIN_AGE:
+            # old enough for the age gate: the witness's size check (one
+            # interval, inside it) is the only remaining question
+            if is_stable(path):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            # the witness slept one interval for the size check and returned
+            # False (the size changed): sleep nothing extra, the next turn's
+            # witness call re-checks at the new size
+            continue
+        # too young: sleep the REMAINING age (once, not interval-chunks) and
+        # let the next turn's witness call decide - a complete fresh file
+        # settles at age >= STABLE_MIN_AGE with ONE witness call, ~60 s total
+        remaining = STABLE_MIN_AGE - age
+        if time.monotonic() + remaining >= deadline:
+            return False
+        time.sleep(remaining)
 
 
 def decide(movie: Path, target_vmaf: float, encoder: str) -> str:
