@@ -279,8 +279,9 @@ def wait_for_stable(
         # and without this sleep the loop busy-spins on stat pairs until the
         # limit. One sleep per turn on TOP of the witness's own internal one
         # (its size-changed path sleeps inside, the early-False paths do not):
-        # a file checked every ~60 s in the worst case, the limit overshot by
-        # at most one interval - bounded either way.
+        # a turn is up to ~60 s on that path, so the limit can be overshot by
+        # up to two intervals - bounded, and the deadline check above still
+        # precedes the next witness call.
         time.sleep(STABLE_CHECK_INTERVAL)
 
 
