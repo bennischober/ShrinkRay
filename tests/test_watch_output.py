@@ -12,6 +12,7 @@ mode).
 
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -174,14 +175,29 @@ class TestServeForever(unittest.TestCase):
         self.assertTrue(config.return_value.run_called)
 
     def test_the_exit_hook_arms_without_teardown(self) -> None:
-        """Issue #431 (review round 6, finding 2): handle_exit runs in signal
-        context - it must arm the shutdown (the SSE flag + the running job's
-        cancel event) and call super(), and must NOT run the joining teardown
-        there."""
+        """Issue #431 (review round 6, finding 2; round 7, finding 6): the hook
+        runs in signal context - it must arm the shutdown (the SSE flag AND
+        the running job's cancel event) and call super(), and must NOT run the
+        joining teardown there."""
+        import shrinkray.server.jobs as jobs_module
         from shrinkray.server.app import AppState
 
         app_module.state = AppState(Path(self.tmp.name) / "hook.db")
         try:
+            # a running job with a real cancel event: the hook must reach it
+            job = app_module.state.queue.enqueue(
+                jobs_module.Job(
+                    kind=jobs_module.JobKind.ENCODE,
+                    payload={
+                        "path": str(Path(self.tmp.name) / "movies"),
+                        "output_dir": str(Path(self.tmp.name) / "out"),
+                        "quality": True,
+                    },
+                )
+            )
+            cancel = threading.Event()
+            app_module.state.queue.register_cancel_event(job.id, cancel)
+            app_module.state.worker._running_cancel = cancel
             with (
                 patch("uvicorn.Config"),
                 patch("uvicorn.Server", FakeHookServer),
@@ -192,12 +208,49 @@ class TestServeForever(unittest.TestCase):
             # directly, the way the signal dispatch does
             server.handle_exit(2, None)
             self.assertTrue(app_module.state.app_shutdown.is_set(), "the hook did not arm the flag")
+            self.assertTrue(cancel.is_set(), "the hook did not set the running job's cancel event")
             self.assertFalse(
                 app_module.state.app_torn_down.is_set(),
                 "the hook ran the joining teardown in signal context",
             )
             self.assertTrue(server.super_called, "super().handle_exit was skipped")
         finally:
+            app_module.state.worker._running_cancel = None
+            app_module.state.shutdown()
+            app_module.state = None
+
+    def test_capture_signals_neutralizes_the_sigterm_reraise(self) -> None:
+        """Issue #431 (review round 7, finding 2): uvicorn re-raises every
+        captured signal after restoring the original handlers, and SIGTERM's
+        default disposition kills the process before run() returns - so
+        run_app's finally never ran and the teardown was lost on every
+        non-container stop. The override swaps SIGTERM to SIG_IGN before
+        uvicorn captures: the restore + re-raise find an ignored signal and
+        the process survives to run the teardown. A captured SIGTERM here
+        must not raise; surviving this test IS the assertion (on the pre-fix
+        tree the re-raise killed the test process)."""
+        import signal
+
+        from shrinkray.server.app import AppState
+
+        app_module.state = AppState(Path(self.tmp.name) / "sigterm.db")
+        try:
+            with (
+                patch("uvicorn.Config"),
+                patch("uvicorn.Server", FakeHookServer),
+            ):
+                app_module._serve_forever("127.0.0.2", 9999)
+            server = FakeHookServer.last_instance
+            with server.capture_signals():
+                # pre-init: _captured_signals does not exist yet, which is
+                # itself part of the shape under test - append after capture
+                server._captured_signals = getattr(server, "_captured_signals", [])
+                server._captured_signals.append(signal.SIGTERM)
+            # surviving the restore + re-raise IS the assertion (on the
+            # pre-fix tree the re-raise killed this process with exit 143);
+            # the armed flag is the hook test's business, not this one's
+        finally:
+            app_module.state.shutdown()
             app_module.state = None
 
 

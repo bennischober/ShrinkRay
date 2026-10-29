@@ -13,11 +13,13 @@ import os
 import os.path
 import queue
 import secrets
+import signal
 import sqlite3
 import subprocess
 import sys
 import threading
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
 from typing import Any, TypeVar, cast
@@ -380,10 +382,11 @@ class AppState:
     def shutdown(self) -> None:
         """Stops the worker and closes the database.
 
-        Idempotent: the signal handler arms this (the flag the SSE generator
-        observes) and run_app's finally runs the teardown; both paths call
-        this once - the first caller to get past the armed guard does the
-        work (issue #431).
+        Called once from run_app's finally, after serve() returns; idempotent
+        through the armed/torn-down pair of guards, so a caller that arrives
+        after a teardown does nothing (issue #431). The signal handler arms
+        this via request_shutdown() and does NOT call it - joining in signal
+        context would defer the second Ctrl+C (review round 6, finding 2).
         """
         if self.app_shutdown.is_set() and self.app_torn_down.is_set():
             return
@@ -1005,13 +1008,14 @@ def _sse_stream(
         box (queue.Queue): The subscriber's mailbox.
         seed (list): The latest event per job at subscribe time.
         ping_after (float): Mailbox wait before emitting a ping comment.
-        shutdown_requested (Callable[[], bool]): Checked after every mailbox
-            wait; True ends the stream at the next loop-top check (each wait
-            is bounded by ping_after, so the end lands within one ping
-            period). The exit is the generator returning - subscriber
-            unregistered - rather than uvicorn cancelling the task;
-            timeout_graceful_shutdown stays the hard bound either way
-            (issue #431).
+        shutdown_requested (Callable[[], bool]): Checked at the top of every
+            loop iteration; True returns the generator (subscriber
+            unregistered in the finally) within one ping period IF the
+            generator is still being advanced. A live stream is actually
+            ended by whichever lands first - uvicorn closing the connection
+            during its shutdown, or timeout_graceful_shutdown cancelling the
+            task; both paths reach the finally, so the unsubscribe holds
+            either way (issue #431, review round 7, finding 4).
 
     Yields:
         str: SSE frames (retry, hello, data, ping comments).
@@ -1384,6 +1388,24 @@ def _serve_forever(host: str, port: int) -> None:
             if state is not None:
                 state.request_shutdown()
             super().handle_exit(sig, frame)
+
+        @contextmanager
+        def capture_signals(self) -> "Iterator[None]":
+            """Wraps uvicorn's capture_signals with one swap (review round 7,
+            finding 2): after restoring the handlers, uvicorn re-raises every
+            captured signal, and SIGTERM's default disposition kills the
+            process before run() returns - so run_app's finally (the armed
+            teardown) never ran on a non-container stop; only the container's
+            PID-1 exec survived it. SIGTERM is ignored for the re-raise window
+            (SIGINT keeps its default so a KeyboardInterrupt still unwinds);
+            the teardown runs in run_app's finally as armed."""
+            previous = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            try:
+                with super().capture_signals():
+                    yield
+            finally:
+                signal.signal(signal.SIGTERM, previous)
 
     config = uvicorn.Config(
         app, host=host, port=port, log_level="info", timeout_graceful_shutdown=15
