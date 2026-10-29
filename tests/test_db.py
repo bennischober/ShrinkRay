@@ -1683,6 +1683,50 @@ class TestDb(unittest.TestCase):
                     [],
                 )
 
+    def test_the_verify_slot_is_anchored_at_the_grammar_tail(self):
+        """The marker is the grammar's LAST slot before mkdtemp's suffix: a
+        name whose stem ends '-<8hex>-verify-<something>' (an adversarial
+        movie name, or a probe's name carrying a verify-shaped segment) must
+        NOT read as a verify workdir - the tail anchor is what closes the
+        slot (round-7 finding 1, measured)."""
+
+        from shrinkray import service
+        from shrinkray.engine.identity import probe_scratch_prefix
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            # the adversarial movie: its stem ends like a verify name
+            movie = root / "film-1a2b3c4d-verify-cut.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            debris = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            debris.mkdir()
+            (debris / "sample_0.mkv").write_bytes(b"m" * 16)
+            aged = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            os.utime(debris, (aged, aged))
+            os.utime(debris / "sample_0.mkv", (aged, aged))
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                findings = service.doctor(self.connection)
+                debris_findings = [
+                    f for f in findings if f.issue == "stale probe scratch (crash debris?)"
+                ]
+                self.assertEqual(len(debris_findings), 1, "probe debris reports at 1 h")
+        # and the anchored regex rejects the truncated adversarial shape
+        # directly (no mkdtemp suffix after the marker)
+        self.assertIsNone(
+            service._VERIFY_NAME_RE.match("shrinkray-probe-a-1a2b3c4d-verify-9f8e7d6c-extra")
+        )
+        self.assertIsNone(
+            service._VERIFY_NAME_RE.match(
+                "shrinkray-probe-film-1a2b3c4d-verify-cut-0f0e0d0c-x7y8z9a1"
+            )
+        )
+        self.assertIsNotNone(
+            service._VERIFY_NAME_RE.match("shrinkray-probe-movie-1a2b3c4d-verify-x7y8z9a1")
+        )
+
     def test_a_stem_containing_verify_keeps_the_probe_floor(self):
         """The marker is the KIND slot of the grammar, anchored: a movie
         whose STEM contains '-verify-' is a probe workdir and gets the

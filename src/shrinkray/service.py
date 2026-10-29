@@ -659,10 +659,17 @@ SCRATCH_WORKDIR_PREFIXES = (
     "metadata_quality_",
 )
 
-# the verify kind's name shape: <grammar prefix><stem>-<8 hex>-verify-<suffix>,
-# anchored at both ends so only a grammar name's KIND slot matches
+# the verify kind's name shape: <prefix><stem>-<8hex>-verify-<8 suffix chars>
+# with the string ENDING there (mkdtemp's suffix is exactly 8 chars of
+# [a-z0-9_]). The digest + marker + suffix must ALL sit at the tail, so a stem
+# that itself ends in a verify-shaped segment ("...-1a2b3c4d-verify-cut") sits
+# in the STEM slot, before the digest, and cannot match
 _VERIFY_NAME_RE = re.compile(
-    re.escape(_PROBE_GRAMMAR_PREFIX) + r".+-[0-9a-f]{8}" + re.escape(_PROBE_VERIFY_MARKER)
+    re.escape(_PROBE_GRAMMAR_PREFIX)
+    + r".+"
+    + r"[0-9a-f]{8}"
+    + re.escape(_PROBE_VERIFY_MARKER)
+    + r"[a-z0-9_]{8}$"
 )
 
 # a workdir younger than its floor is a LIVE run's workdir, not crash debris:
@@ -674,8 +681,8 @@ _VERIFY_NAME_RE = re.compile(
 # - verify dirs: the measurement copies the model in up front and writes
 #   vmaf.json only at the END - nothing is touched in between (tools/vmaf.py),
 #   so a full-file measurement of a large movie is silent for its whole run
-#   (tens of minutes). Its floor is 6 h: an 18x margin over the longest
-#   supported measurement, while overnight debris (the case this check exists
+#   (tens of minutes; ~20 min on the longest supported content). Its floor
+#   is 6 h: ~18x that, while overnight debris (the case this check exists
 #   for) still reports.
 SCRATCH_STALE_SECONDS = 3600.0
 SCRATCH_VERIFY_STALE_SECONDS = 6 * 3600.0
