@@ -270,10 +270,10 @@ def wait_for_stable(
     while True:
         if cancel is not None and cancel.is_set():
             raise Cancelled("cancelled while waiting for the file to settle")
-        if is_stable(path):
-            return True
         if time.monotonic() >= deadline:
             return False
+        if is_stable(path):
+            return True
         # the interval sleep lives HERE, not inside the witness's early-False
         # paths: a young or unreadable file returns False without sleeping,
         # and without this sleep the loop busy-spins on stat pairs until the
