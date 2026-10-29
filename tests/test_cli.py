@@ -180,6 +180,44 @@ class TestDoctorCli(unittest.TestCase):
             self.assertIn("libvmaf", result.output)
             self.assertIn("toolchain", result.output.lower())
 
+    def test_doctor_reports_stale_scratch_in_the_table(self):
+        """Issue #440: crash debris on the configured scratch shows in the
+        findings table (path, issue, size/age detail) and exits 1 - and
+        nothing is deleted."""
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=movie, mtime=100.0, size=1, name="movie", category="C"),
+            )
+            scratch = root / "scratch"
+            scratch.mkdir()
+            workdir = scratch / "shrinkray-probe-movie-abcdef12-x7y8z9a1"
+            workdir.mkdir()
+            (workdir / "sample_0.mkv").write_bytes(b"m" * 64)
+            runner = CliRunner()
+            with (
+                patch("shrinkray.service.all_problems", return_value=[]),
+                patch.dict(os.environ, {"TMPDIR": str(scratch)}),
+            ):
+                result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("stale probe scratch", result.output)
+            # the table folds the long path; assert the parts that survive
+            # the fold (the grammar is the operator's attribution)
+            self.assertIn("shrinkray-probe", result.output)
+            self.assertIn("abcdef12", result.output)
+            # report-only: the debris still exists after the report
+            self.assertTrue(workdir.is_dir())
+            self.assertTrue((workdir / "sample_0.mkv").exists())
+
     def test_doctor_finding_exits_one(self):
         """A dead path produces the findings table and exit 1 (scripts/
         cron can detect unhealth)."""

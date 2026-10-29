@@ -1097,9 +1097,10 @@ def doctor(
     """Checks the library's health: db reality vs disk reality.
 
     Reports dead paths (files the db knows but the disk lost), encode
-    rows whose output vanished, and with --probe-all corrupt/truncated
-    files. Read-only: doctor never repairs anything (delete-flagging
-    stays the scan's job with its grace period).
+    rows whose output vanished, stale probe-scratch workdirs (crash
+    debris on the scratch volume, report-only), and with --probe-all
+    corrupt/truncated files. Read-only: doctor never repairs anything
+    (delete-flagging stays the scan's job with its grace period).
 
     With no database (a fresh install) the library check is skipped and
     the TOOLCHAIN check still runs: "run doctor" is the last install

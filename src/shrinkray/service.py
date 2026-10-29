@@ -7,8 +7,10 @@ presentation logic — the CLI prints, this module decides and records.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -626,7 +628,8 @@ class DoctorFinding:
     """One health finding of the doctor check.
 
     Attributes:
-        movie (str): The affected file path (as stored in the db).
+        movie (str): The affected file path (as stored in the db), or the
+            scratch workdir's path for the scratch-debris finding.
         issue (str): What is wrong (short, human-readable).
         detail (str | None): Extra context (e.g. the expected vs actual
             state, or the error ffprobe produced).
@@ -635,6 +638,11 @@ class DoctorFinding:
     movie: str
     issue: str
     detail: str | None = None
+
+
+# scratch workdir name grammars doctor recognizes (the current one and the
+# pre-#435 anonymous one - existing debris stays attributable; issue #440):
+SCRATCH_WORKDIR_PREFIXES = ("shrinkray-probe-", "metadata_quality_")
 
 
 def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[DoctorFinding]:
@@ -689,6 +697,73 @@ def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[Doct
                     issue="encode output vanished",
                 )
             )
+    findings.extend(stale_scratch_findings())
+    return findings
+
+
+def scratch_root() -> Path | None:
+    """Returns the scratch root the probe workdirs live under, when known.
+
+    The probe scratch is wherever ``tempfile.mkdtemp`` puts its workdirs:
+    the container's ``$TMPDIR`` (shipped: ``/tmp/shrinkray``), or the OS
+    temp when unset. A stateless CLI run on a developer host has no
+    configured scratch to speak of - doctor skips the check there rather
+    than scanning all of /tmp (issue #440's criterion 1).
+
+    Returns:
+        Path | None: The configured scratch root, or None when the
+        environment does not name one.
+    """
+    tmpdir = os.environ.get("TMPDIR")
+    return Path(tmpdir) if tmpdir else None
+
+
+def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
+    """Reports crash debris in the probe scratch: report-only, never a sweep.
+
+    A probe run's workdir is removed in a ``finally`` (plan.py, pipeline.py),
+    so a hard kill - SIGKILL, power loss, container restart - leaves it on
+    the scratch forever. The debris is invisible to every db-backed finding
+    class (no row ever pointed there). This check lists each stale workdir
+    with its age and recursive byte weight so the operator can decide; it
+    does NOT delete anything (invariant 3: destructive on user data stays
+    opt-in and recoverable), and it walks only the configured scratch root -
+    never the filesystem (issue #440).
+
+    Args:
+        root (Path | None): The scratch root to inspect (defaults to
+            ``scratch_root()``; None or a missing root reports nothing).
+
+    Returns:
+        list[DoctorFinding]: One finding per stale workdir, empty when the
+        scratch is clean or unknown.
+    """
+    if root is None:
+        root = scratch_root()
+    if root is None or not root.is_dir():
+        return []
+    findings: list[DoctorFinding] = []
+    now = time.time()
+    for entry in sorted(root.iterdir()):
+        if not entry.name.startswith(SCRATCH_WORKDIR_PREFIXES) or not entry.is_dir():
+            continue
+        total = 0
+        for item in entry.rglob("*"):
+            try:
+                if item.is_file():
+                    total += item.stat().st_size
+            except OSError:
+                # a file vanishing mid-walk is reported as-is: the size is
+                # decoration for the operator, never a decision input
+                continue
+        age_hours = max((now - entry.stat().st_mtime) / 3600.0, 0.0)
+        findings.append(
+            DoctorFinding(
+                movie=str(entry),
+                issue="stale probe scratch (crash debris?)",
+                detail=f"{total} bytes, mtime {age_hours:.1f} h ago",
+            )
+        )
     return findings
 
 

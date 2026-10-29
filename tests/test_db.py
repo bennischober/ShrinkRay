@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from unittest.mock import patch
 
 from shrinkray import config as config_helper
 from shrinkray import db
@@ -1393,6 +1394,98 @@ class TestDb(unittest.TestCase):
             self.assertEqual(len(findings), 1)
             self.assertEqual(findings[0].issue, "dead path")
             self.assertIn("missing_scans=3", findings[0].detail or "")
+
+    def test_doctor_reports_stale_scratch_workdirs(self):
+        """Issue #440: crash debris in the configured scratch (stale probe
+        workdirs) is a finding with its byte weight and age - and NOTHING
+        is deleted (report-only, invariant 3).
+        """
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            # a healthy library (no db-backed findings)
+            output = root / "enc" / "movie.mkv"
+            output.parent.mkdir()
+            output.write_bytes(b"out")
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "x265",
+                1000,
+                400,
+                60.0,
+                output_file=str(output),
+            )
+            # the crash debris: a killed run's workdir on the configured
+            # scratch, with content (both grammars: current + pre-#435)
+            scratch = root / "scratch"
+            scratch.mkdir()
+            workdir = scratch / "shrinkray-probe-Movie-2024-abcdef12-x7y8z9a1"
+            workdir.mkdir()
+            (workdir / "sample_0.mkv").write_bytes(b"m" * 128)
+            old_debris = scratch / "metadata_quality_deadbeef"
+            old_debris.mkdir()
+            (old_debris / "vmaf.json").write_bytes(b"{}")
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                findings = service.doctor(self.connection)
+                issues = [f.issue for f in findings]
+                self.assertEqual(issues.count("stale probe scratch (crash debris?)"), 2)
+                for finding in findings:
+                    if finding.issue == "stale probe scratch (crash debris?)":
+                        self.assertRegex(finding.detail or "", r"[0-9]+ bytes")
+                        self.assertIn("h ago", finding.detail or "")
+                # report-only: the debris and its content still exist after
+                # the run (inside the fixture - the tempdir cleanup would
+                # otherwise be the thing deleting them)
+                self.assertTrue(workdir.is_dir())
+                self.assertTrue((workdir / "sample_0.mkv").exists())
+                self.assertTrue(old_debris.is_dir())
+
+    def test_doctor_scratch_check_skips_without_a_configured_root(self):
+        """A stateless CLI run has no configured scratch (no TMPDIR): the
+        check is skipped, never a walk of the OS temp (issue #440)."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
+            with patch.dict(os.environ, env, clear=True):
+                findings = service.doctor(self.connection)
+        self.assertEqual(findings, [])
+
+    def test_doctor_scratch_check_ignores_unrelated_entries(self):
+        """Only scratch-workdir grammars are findings; other scratch
+        content (a user's own files) is never listed."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            (scratch / "my-own-notes").mkdir()
+            (scratch / "shrinkray-probe-x-abcdef12-x7y8z9a1").mkdir()
+            (scratch / "metadata_quality_1").mkdir()
+            (scratch / "not_a_dir_shrinkray-probe-y").write_bytes(b"f")
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                findings = service.doctor(self.connection)
+        debris = [f for f in findings if f.issue == "stale probe scratch (crash debris?)"]
+        self.assertEqual(len(debris), 2)
+        self.assertTrue(all("my-own-notes" not in f.movie for f in debris))
+        self.assertTrue(all("not_a_dir" not in f.movie for f in debris))
 
     def test_doctor_reports_vanished_outputs(self):
         """An encode row whose output_file no longer exists is a finding."""
