@@ -19,11 +19,10 @@ SIGTERM/SIGKILL plus the pipe drains), the watcher's join (10s). The compose
 comment on `stop_grace_period: 120s` carries the full budget (issue #431); a
 raw `docker stop -t` below that kills the container mid-unwind, and the job is
 recovered as failed (`interrupted by app restart`) on the next boot (the
-fallback, not the contract). Outside the container the same teardown depends
-on the stop signal being delivered while uvicorn still owns the process: a
-bare-metal `kill -TERM` reaches it (uvicorn's re-raise of the captured SIGTERM
-is neutralized — SIGBREAK too on Windows — for the capture AND the teardown
-window, so the process survives to run it), and a hard kill (`-9`, OOM) leaves
+fallback, not the contract). The stop signals (SIGTERM, and SIGBREAK on
+Windows) are ignored for the whole window - uvicorn's capture, the re-raise
+after it, and the teardown (a second SIGTERM mid-join would otherwise kill
+the process with the CANCELLED row unwritten); a hard kill (`-9`, OOM) leaves
 the job to the boot-time recovery instead.
 
 > **Direction (issue #244).** The deployment target is an **Unraid Community App**

@@ -220,12 +220,12 @@ class TestServeForever(unittest.TestCase):
             app_module.state = None
 
     def test_run_app_holds_the_stop_signal_umbrella_across_the_teardown(self) -> None:
-        """Issue #431 (review round 8, finding 1): the SIGTERM protection must
-        span capture AND teardown - uvicorn restores the handlers when serve
-        returns, so a second SIGTERM during run_app's finally (the 60 s of
-        joins) would hit the default disposition and kill the process
-        mid-teardown. run_app must hold SIG_IGN from before serve until after
-        state.shutdown(), then restore what was there."""
+        """Issue #431 (review rounds 8-9): the SIGTERM protection must span
+        capture AND teardown - uvicorn restores the handlers when serve
+        returns, so a SIGTERM during run_app's teardown (the joins) would hit
+        the default disposition and kill the process mid-unwind. run_app must
+        hold SIG_IGN from before serve until after state.shutdown(), then
+        restore what was there."""
         import signal as signal_module
 
         observed: dict = {}
@@ -295,7 +295,23 @@ def fake_serve(host, port):
     FakeServer(uvicorn.Config(A.app, host=host, port=port)).run()
 
 
+class SlowShutdown:
+    # a state stub whose shutdown() raises SIGTERM at itself: the teardown
+    # window is exactly where the review's finding said the process dies
+
+    def __init__(self):
+        self.shutdown_calls = 0
+        self.worker = mock.Mock()
+        self.watch_thread = None
+        self.watch_stop = mock.Mock()
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+        signal.raise_signal(signal.SIGTERM)
+
+
 tmp = tempfile.mkdtemp()
+state = SlowShutdown()
 with (
     mock.patch("shrinkray.service.all_problems", return_value=[]),
     mock.patch.object(A, "allow_roots"),
@@ -303,8 +319,10 @@ with (
     mock.patch.object(A, "_recover_interrupted_swaps"),
     mock.patch.object(A, "start_watch"),
     mock.patch.object(A, "_serve_forever", fake_serve),
+    mock.patch.object(A, "AppState", lambda *a, **k: state),
 ):
     A.run_app(Path(tmp) / "harness.db")
+assert state.shutdown_calls == 1, "shutdown did not run exactly once"
 print("SURVIVED")
 """
         repo_root = Path(__file__).resolve().parents[1]
@@ -314,6 +332,11 @@ print("SURVIVED")
             capture_output=True,
             text=True,
             timeout=120,
+            env={
+                **os.environ,
+                "VIRTUAL_ENV": str(repo_root / ".venv"),
+                "PATH": str(repo_root / ".venv" / "bin") + os.pathsep + os.environ["PATH"],
+            },
         )
         self.assertEqual(
             r.returncode,
