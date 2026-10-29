@@ -769,6 +769,11 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
         newest = 0.0
         total = 0
         for item in items:
+            if item.is_symlink():
+                # never followed: a symlinked member would walk OUT of the
+                # scratch root (pre-3.13 rglob follows directory symlinks),
+                # and this report-only check reads only the workdir itself
+                continue
             try:
                 item_stat = item.stat()
             except OSError:

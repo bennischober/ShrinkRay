@@ -1525,6 +1525,42 @@ class TestDb(unittest.TestCase):
                 )
                 self.assertTrue(fresh_child.exists())
 
+    def test_doctor_never_walks_out_of_the_workdir_through_a_symlink(self):
+        """A symlinked member inside a stale workdir is skipped, not
+        followed: the report-only check reads only the workdir itself
+        (pre-3.13 rglob follows directory symlinks out of the root)."""
+
+        from shrinkray import service
+        from shrinkray.engine.identity import probe_scratch_prefix
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "secret.txt").write_bytes(b"do not read" * 10)
+            debris = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            debris.mkdir()
+            (debris / "sample_0.mkv").write_bytes(b"m" * 16)
+            os.symlink(outside, debris / "linked")
+            old = time.time() - 2 * service.SCRATCH_STALE_SECONDS
+            os.utime(debris, (old, old))
+            os.utime(debris / "sample_0.mkv", (old, old))
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                findings = service.doctor(self.connection)
+                debris_findings = [
+                    f for f in findings if f.issue == "stale probe scratch (crash debris?)"
+                ]
+                # exactly one finding: the symlink contributed neither a walk
+                # into "outside" nor its contents to the size
+                self.assertEqual(len(debris_findings), 1)
+                self.assertNotIn("do not read", debris_findings[0].detail or "")
+                self.assertTrue((outside / "secret.txt").exists())
+
     def test_doctor_scratch_check_skips_without_a_configured_root(self):
         """A stateless CLI run has no configured scratch (no TMPDIR): the
         check is skipped, never a walk of the OS temp (issue #440)."""
