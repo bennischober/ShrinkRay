@@ -38,10 +38,11 @@ class TestGateMypyFallback(unittest.TestCase):
         # the retry is isolated: it must not re-point the project's shared
         # .venv (review round 1, finding 2)
         self.assertIn("--isolated", gate)
-        self.assertIn("UV_PYTHON_DOWNLOADS=never", gate)
-        # the isolated env's package sync stays cache-served too (review
-        # round 3, finding 2): downloads-never governs interpreters only
-        self.assertIn("UV_OFFLINE=1", gate)
+        # command-shaped pins: a bare assertIn("FLAG", gate) is satisfied by
+        # the flag's own explanatory comment (review round 4, finding 1 -
+        # the round-3 answers' claim that the guard failed on a dropped flag
+        # was false as committed)
+        self.assertIn("UV_PYTHON_DOWNLOADS=never UV_OFFLINE=1 uv run --isolated", gate)
         # the retry captures its own rc too: a candidate's non-139 verdict is
         # returned, not silently advanced past (review round 1, finding 1)
         self.assertIn(
