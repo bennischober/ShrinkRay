@@ -57,6 +57,13 @@ services:
         limits:
           # keep it explicit: the plan derives workers from the quota
           cpus: "${CPUS:-4}"
+    # Docker's default stop grace is 10s; the app's shutdown (issue #431)
+    # terminates the running encode/verify child, waits out its kill window
+    # and records the job CANCELLED before closing the database - the
+    # documented default would SIGKILL the container mid-unwind and lose the
+    # CANCELLED write (it is recovered as 'interrupted' on the next boot,
+    # but the graceful record is the contract)
+    stop_grace_period: 45s
     # no healthcheck block here: the image carries its own HEALTHCHECK (token
     # authenticated, issue #36) and compose inherits it when none is declared
     # — a second copy was one more place to drift.

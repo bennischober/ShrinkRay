@@ -10,6 +10,14 @@ source build is the development path. The trade-offs recorded below are the
 ones the build actually had to respect; where a decision was made, it is
 stated with the reason.
 
+Shutdown (`docker stop`, compose down): the app's stop sets the running
+encode/verify job's cancel event and waits out the child's kill window
+(terminate_tree's SIGTERM/SIGKILL plus the pipe drains) before recording the
+job CANCELLED and closing the database - `docker-compose.yml` sets
+`stop_grace_period: 45s` to cover it (issue #431); a raw `docker stop -t`
+below that kills the container mid-unwind, and the job is recovered as
+interrupted on the next boot (the fallback, not the contract).
+
 > **Direction (issue #244).** The deployment target is an **Unraid Community App**
 > (PRODUCT.md "Deployment target"): the WebUI button opens the read-only dashboard,
 > the Console button opens a shell that prints what to type (`shrinkray setup` to

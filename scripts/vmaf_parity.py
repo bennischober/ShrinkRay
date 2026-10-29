@@ -415,6 +415,7 @@ def main() -> int:
                     "",
                 )
             )
+            _append_result_row(RESULT_FILE, rows[-1])
             continue
         try:
             ours, recipe = measure_ours(reference, distorted, crop, hdr, cancel=cancel)

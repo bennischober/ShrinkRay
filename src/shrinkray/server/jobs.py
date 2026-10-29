@@ -1161,6 +1161,14 @@ class JobWorker:
         self.queue._wake.set()
         if self._thread is not None:
             self._thread.join(timeout=join_timeout)
+        if (
+            self._thread is not None
+            and self._thread.is_alive()
+            and self._running_cancel is not None
+        ):
+            # the worker took a job but had not published its event yet
+            # (review round 4, finding 3): set whatever it published since
+            self._running_cancel.set()
 
     def _run(self) -> None:
         """Consumes jobs until stopped."""

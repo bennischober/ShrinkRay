@@ -575,6 +575,7 @@ class TestJobs(unittest.TestCase):
         from shrinkray.tools.process import Cancelled
 
         worker = jobs.JobWorker(self.connection, self.queue)
+        worker._thread = threading.Thread(target=worker._run, name="job-worker", daemon=True)
         started = threading.Event()
         observed: dict = {}
 
@@ -595,11 +596,10 @@ class TestJobs(unittest.TestCase):
             return {"cancelled": False}
 
         with mock.patch("shrinkray.server.jobs.execute_encode", side_effect=slow_encode):
-            thread = threading.Thread(target=worker._execute, args=(job,))
-            thread.start()
+            worker._thread.start()
             self.assertTrue(started.wait(timeout=5.0), "the job never started")
             worker.stop(join_timeout=10.0)
-            thread.join(timeout=10.0)
+            worker._thread.join(timeout=10.0)
         self.assertTrue(
             observed["cancel_set_by_stop"], "stop() did not terminate the running child"
         )
