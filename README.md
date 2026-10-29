@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/shrinkray-icons/svg/shrinkray-mark.svg" alt="ShrinkRay logomark" width="96" />
+
 # ShrinkRay
 
 **Scan your collection — then shrink it without losing quality.**
