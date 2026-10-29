@@ -30,7 +30,8 @@ until the whole file is scored, so the measurement path (`vmaf.measure_vmaf`) pa
 False and keeps the cancel event as its kill path — a silent-by-design child must
 not be killed as hung. The kill path is the caller's cancel event, and every
 production caller wires one (the worker's stop sets the running job's event;
-the scripts translate signals). Both pipes are
+the direct-encode route passes the watcher's stop event; the scripts translate
+signals). Both pipes are
 drained by daemon threads (`process.py`) — a child writing more than the ~64 K pipe
 buffer would otherwise deadlock a poll-only loop. `timeout` is for bounded reads
 only (the crop timeline pass's duration-derived ceiling, #384). With neither a

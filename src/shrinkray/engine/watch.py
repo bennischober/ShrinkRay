@@ -530,9 +530,9 @@ def watch(
     """Watches the inbox and encodes newly arrived movies.
 
     This function blocks (unless once=True); stop it with Ctrl+C - the stop
-    event is checked between passes and terminates the running encode/verify
-    child (issue #431); the state written so far is kept and the process
-    exits cleanly.
+    event ends the pass loop and terminates the running encode/verify child
+    on the direct-encode route (issue #431; the submit route's running job
+    is terminated by the worker's stop), and the process exits cleanly.
 
     Args:
         roots (list[Path]): The folders to watch, each walked recursively
@@ -553,7 +553,8 @@ def watch(
         stop_event (threading.Event | None): Cooperative stop for the resident
             app: checked between passes AND passed to encode_with_quality as
             its cancel event, so a stop terminates the running encode/verify
-            child (issue #431) instead of waiting it out.
+            child on the direct-encode route (the submit route's running job
+            is terminated by the worker's stop, issue #431).
         db_file (Path | None): The sqlite database file - enables the stall
             watchdog's failure-bundle telemetry (None: no telemetry; the
             CLI one-shot watch prints the reason instead).

@@ -1167,8 +1167,12 @@ class JobWorker:
             and self._running_cancel is not None
         ):
             # the worker took a job but had not published its event yet
-            # (review round 4, finding 3): set whatever it published since
+            # (review round 4, finding 3): set whatever it published since,
+            # then wait out the unwind - the caller closes the database
+            # right after this returns, and the CANCELLED write must not
+            # race it (review round 5, finding 3)
             self._running_cancel.set()
+            self._thread.join(timeout=join_timeout)
 
     def _run(self) -> None:
         """Consumes jobs until stopped."""

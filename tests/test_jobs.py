@@ -576,32 +576,47 @@ class TestJobs(unittest.TestCase):
 
         worker = jobs.JobWorker(self.connection, self.queue)
         worker._thread = threading.Thread(target=worker._run, name="job-worker", daemon=True)
+        take_gate = threading.Event()
+        release_gate = threading.Event()
         started = threading.Event()
         observed: dict = {}
 
+        real_take_next = self.queue.take_next
+
+        def gated_take_next():
+            # hold the worker BEFORE it takes the job: stop() lands here
+            take_gate.set()
+            release_gate.wait(timeout=5.0)
+            return real_take_next()
+
         def slow_encode(job, connection, cancel, progress=None):
             started.set()
-            # the worker is mid-job: a concurrent stop() must set THIS event
-            observed["cancel_set_by_stop"] = None
-            if not started.wait(timeout=5.0):
-                observed["cancel_set_by_stop"] = "never-started"
-                return {"cancelled": False}
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
                 if cancel is not None and cancel.is_set():
-                    observed["cancel_set_by_stop"] = True
+                    observed["cancel_reached_job"] = True
                     raise Cancelled("cancelled by stop")
                 time.sleep(0.05)
-            observed["cancel_set_by_stop"] = False
+            observed["cancel_reached_job"] = False
             return {"cancelled": False}
 
-        with mock.patch("shrinkray.server.jobs.execute_encode", side_effect=slow_encode):
+        with (
+            mock.patch("shrinkray.server.jobs.execute_encode", side_effect=slow_encode),
+            mock.patch.object(self.queue, "take_next", side_effect=gated_take_next),
+        ):
             worker._thread.start()
-            self.assertTrue(started.wait(timeout=5.0), "the job never started")
+            self.assertTrue(take_gate.wait(timeout=5.0), "the worker never reached the take")
+            # stop() lands BEFORE the job is taken: the event must already
+            # exist and be set, so the job the worker then takes observes it
+            # (the pre-round-3 code created the event inside _execute, after
+            # take_next - this stop would have set nothing and the job ran
+            # to completion)
             worker.stop(join_timeout=10.0)
-            worker._thread.join(timeout=10.0)
+            release_gate.set()
+            self.assertTrue(started.wait(timeout=5.0), "the job never started")
+            worker._thread.join(timeout=15.0)
         self.assertTrue(
-            observed["cancel_set_by_stop"], "stop() did not terminate the running child"
+            observed.get("cancel_reached_job"), "stop() did not reach the taken job's cancel event"
         )
         self.assertIsNone(worker._running_cancel, "the finally must clear the running event")
         reloaded = self.queue.get(job.id)

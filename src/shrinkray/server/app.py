@@ -339,6 +339,9 @@ class AppState:
             self._recover_stale_jobs()
         self.watch_thread: threading.Thread | None = None
         self.watch_stop = threading.Event()
+        # set first in shutdown(): the SSE generator observes it and exits, so
+        # uvicorn's graceful wait completes promptly (issue #431)
+        self.app_shutdown = threading.Event()
 
     def with_lock(self, fn: Callable[[sqlite3.Connection], _T]) -> _T:
         """Runs fn(connection) under the database lock.
@@ -370,7 +373,14 @@ class AppState:
         self.connection.commit()
 
     def shutdown(self) -> None:
-        """Stops the worker and closes the database."""
+        """Stops the worker and closes the database.
+
+        Idempotent: the server's exit hook calls it first (issue #431) and
+        run_app's finally calls it again on the way out.
+        """
+        if self.app_shutdown.is_set():
+            return
+        self.app_shutdown.set()
         self.worker.stop()
         self.watch_stop.set()
         if self.watch_thread is not None:
@@ -903,8 +913,9 @@ def events() -> StreamingResponse:
     sid, box, seed = s.bus.subscribe()
 
     def stream() -> Iterator[str]:
-        """Drains the mailbox into SSE frames until the client leaves."""
-        yield from _sse_stream(s.bus, sid, box, seed)
+        """Drains the mailbox into SSE frames until the client leaves or the
+        app shuts down (issue #431)."""
+        yield from _sse_stream(s.bus, sid, box, seed, shutdown_requested=s.app_shutdown.is_set)
 
     return StreamingResponse(
         stream(),
@@ -914,7 +925,12 @@ def events() -> StreamingResponse:
 
 
 def _sse_stream(
-    bus: ProgressBus, sid: int, box: "queue.Queue[dict]", seed: list, ping_after: float = 15.0
+    bus: ProgressBus,
+    sid: int,
+    box: "queue.Queue[dict]",
+    seed: list,
+    ping_after: float = 15.0,
+    shutdown_requested: "Callable[[], bool]" = lambda: False,
 ) -> Iterator[str]:
     """Builds the SSE frame generator for one subscriber.
 
@@ -928,6 +944,9 @@ def _sse_stream(
         box (queue.Queue): The subscriber's mailbox.
         seed (list): The latest event per job at subscribe time.
         ping_after (float): Mailbox wait before emitting a ping comment.
+        shutdown_requested (Callable[[], bool]): Checked after every mailbox
+            wait; True ends the stream so uvicorn's graceful shutdown does
+            not wait out an open dashboard (issue #431).
 
     Yields:
         str: SSE frames (retry, hello, data, ping comments).
@@ -939,7 +958,7 @@ def _sse_stream(
         # quiet stretch, which resets the client's map correctly)
         yield "event: hello\n"
         yield "data: " + json.dumps({"jobs": {str(jid): d for jid, d in seed}}) + "\n\n"
-        while True:
+        while not shutdown_requested():
             try:
                 job_id, data = box.get(timeout=ping_after)
                 yield "data: " + json.dumps({"job_id": job_id, **data}) + "\n\n"
@@ -1287,8 +1306,25 @@ def _serve_forever(host: str, port: int) -> None:
     """
     import uvicorn
 
-    config = uvicorn.Config(app, host=host, port=port, log_level="info")
-    uvicorn.Server(config).run()
+    # timeout_graceful_shutdown + the shutdown hook (issue #431 review round 5,
+    # finding 1): with the dashboard's SSE stream open (an infinite generator),
+    # uvicorn's graceful wait is UNBOUNDED by default, and the finally's
+    # state.shutdown() runs only AFTER Server.run() returns - i.e. after the
+    # wait. The subclass runs the app's own shutdown FIRST on the exit signal:
+    # it sets the flag the SSE generator observes (the streams end, the
+    # connection set empties) and terminates the running job's child, so the
+    # graceful wait finds nothing to wait for. The bounded
+    # timeout_graceful_shutdown covers anything left.
+    class _ServerWithAppShutdown(uvicorn.Server):
+        def handle_exit(self, sig, frame):
+            if state is not None and not state.app_shutdown.is_set():
+                state.shutdown()
+            super().handle_exit(sig, frame)
+
+    config = uvicorn.Config(
+        app, host=host, port=port, log_level="info", timeout_graceful_shutdown=15
+    )
+    _ServerWithAppShutdown(config).run()
 
 
 def run_app(
