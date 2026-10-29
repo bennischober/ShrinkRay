@@ -818,7 +818,7 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
             # the workdir vanished or is unreadable mid-report: skip it
             # (gone or unreadable is healthy for this report-only check)
             continue
-        newest = 0.0
+        newest: float | None = None
         total = 0
         for item in items:
             if item.is_symlink():
@@ -834,9 +834,15 @@ def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
                 # a member vanishing mid-walk is skipped: the size is
                 # decoration for the operator, never a decision input
                 continue
-            newest = max(newest, item_stat.st_mtime)
+            newest = max(newest, item_stat.st_mtime) if newest is not None else item_stat.st_mtime
             if item.is_file():
                 total += item_stat.st_size
+        if newest is None:
+            # every member vanished between iterdir and the walk (the
+            # reviewer's phantom-finding repro): gone is healthy - reporting
+            # it would exit 1 on a healthy host, with newest=0.0 inflating
+            # the age to ~487,000 h
+            continue
         age_hours = max((now - newest) / 3600.0, 0.0)
         # the floor follows the workdir kind (see the constants' comment):
         # a verification's silence is the measurement running, not a death.

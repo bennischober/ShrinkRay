@@ -1486,8 +1486,6 @@ class TestDb(unittest.TestCase):
             old_debris = scratch / "metadata_quality_deadbeef"
             old_debris.mkdir()
             (old_debris / "vmaf.json").write_bytes(b"{}")
-            from shrinkray.engine.identity import probe_scratch_prefix
-
             verify_debris = scratch / (probe_scratch_prefix(movie, kind="verify") + "x7y8z9a1")
             verify_debris.mkdir()
             (verify_debris / "vmaf.json").write_bytes(b"{}")
@@ -1835,10 +1833,10 @@ class TestDb(unittest.TestCase):
             scratch = root / "scratch"
             scratch.mkdir()
             (scratch / "my-own-notes").mkdir()
-            probe_debris = scratch / "shrinkray-probe-x-abcdef12-x7y8z9a1"
-            probe_debris.mkdir()
             from shrinkray.engine.identity import probe_scratch_prefix
 
+            probe_debris = scratch / "shrinkray-probe-x-abcdef12-x7y8z9a1"
+            probe_debris.mkdir()
             verify_debris = scratch / (probe_scratch_prefix(movie, kind="verify") + "x7y8z9a1")
             verify_debris.mkdir()
             (scratch / "metadata_quality_1").mkdir()
