@@ -376,6 +376,7 @@ def _run(
     cwd: Path | None = None,
     cancel: threading.Event | None = None,
     timeout: float | None = None,
+    watchdog: bool = True,
 ) -> tuple[int, str]:
     """Runs a subprocess and returns (returncode, stderr as text).
 
@@ -396,6 +397,11 @@ def _run(
             expiry terminates the tree and returns -2 (the stall code —
             same "the child did not finish" semantics); None keeps the
             documented no-timeout behaviour of the unprotected path.
+        watchdog (bool): Whether the stall watchdog applies to this child
+            (issue #431). libvmaf is silent by design until the whole file
+            is scored, so the measurement path passes False and keeps the
+            cancel event as its kill path; a child whose output cadence is
+            the progress itself (HandBrake) keeps the default True.
 
     Returns:
         tuple[int, str]: The returncode (-1 when cancelled, -2 when timed
@@ -456,8 +462,14 @@ def _run(
                 break
             # stall watchdog: probes/measurements must make progress too
             # (ffmpeg can hang on odd streams); same semantics as the final
-            # encode - terminate the hung child, report it as a failure
-            if stall_seconds is not None and time.monotonic() - last_output_cell[0] > stall_seconds:
+            # encode - terminate the hung child, report it as a failure.
+            # Opted out per child (watchdog=False, issue #431): a silent-by-
+            # design child (libvmaf) would be killed mid-run as hung.
+            if (
+                watchdog
+                and stall_seconds is not None
+                and time.monotonic() - last_output_cell[0] > stall_seconds
+            ):
                 log_error(
                     f"Stall watchdog: no output from the probe/measure child for "
                     f"{stall_seconds / 60:.0f} min => terminating it (hung child)."

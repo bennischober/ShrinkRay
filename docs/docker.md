@@ -10,6 +10,21 @@ source build is the development path. The trade-offs recorded below are the
 ones the build actually had to respect; where a decision was made, it is
 stated with the reason.
 
+Shutdown (`docker stop`, compose down): the app's exit hook arms the shutdown
+inside the signal handler (non-blocking - a join there would defer the second
+Ctrl+C, uvicorn's force-quit escape), setting the SSE flag and the running
+job's cancel event; the teardown itself runs once `serve` returns - the
+worker's stop joins (2 x 30s), the child's kill window (terminate_tree's
+SIGTERM/SIGKILL plus the pipe drains), the watcher's join (10s). The compose
+comment on `stop_grace_period: 120s` carries the full budget (issue #431); a
+raw `docker stop -t` below that kills the container mid-unwind, and the job is
+recovered as failed (`interrupted by app restart`) on the next boot (the
+fallback, not the contract). The stop signals (SIGTERM, and SIGBREAK on
+Windows) are ignored for the whole window - uvicorn's capture, the re-raise
+after it, and the teardown (a second SIGTERM mid-join would otherwise kill
+the process with the CANCELLED row unwritten); a hard kill (`-9`, OOM) leaves
+the job to the boot-time recovery instead.
+
 > **Direction (issue #244).** The deployment target is an **Unraid Community App**
 > (PRODUCT.md "Deployment target"): the WebUI button opens the read-only dashboard,
 > the Console button opens a shell that prints what to type (`shrinkray setup` to

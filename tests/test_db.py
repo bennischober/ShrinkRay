@@ -1009,6 +1009,41 @@ class TestDb(unittest.TestCase):
             app_module.state.shutdown()
             app_module.state = None
 
+    def test_events_stream_ends_when_shutdown_is_requested(self):
+        """Issue #431 (review round 6, finding 3): the shutdown branch of the
+        SSE generator was unexercised - the default `lambda: False` was the
+        only path under test. With the flag set, the next mailbox wait must
+        return the flag, not a ping frame, and the subscriber must still be
+        unregistered (no leak)."""
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState, _sse_stream
+
+        app_module.state = AppState(Path(self.tmp.name) / "sse-shutdown.db")
+        try:
+            sid, box, seed = app_module.state.bus.subscribe()
+            gen = _sse_stream(
+                app_module.state.bus,
+                sid,
+                box,
+                seed,
+                ping_after=0.05,
+                shutdown_requested=app_module.state.app_shutdown.is_set,
+            )
+            self.assertEqual(next(gen), "retry: 3000\n\n")
+            self.assertEqual(next(gen), "event: hello\n")
+            # iteration 1's loop-top check already ran: consume its frame
+            self.assertIn('"jobs"', next(gen))
+            # arm the flag: the next loop-top check ends the stream (a wait
+            # already parked in the mailbox drains up to ping_after first -
+            # bounded by uvicorn's timeout_graceful_shutdown, not zero)
+            app_module.state.app_shutdown.set()
+            with self.assertRaises(StopIteration):
+                next(gen)
+            self.assertEqual(len(app_module.state.bus._subs), 0)
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
     def test_reveal_rejects_outside_root(self):
         """The reveal endpoint uses the same path allowlist as everything
         else (a file manager window must never open outside the roots)."""

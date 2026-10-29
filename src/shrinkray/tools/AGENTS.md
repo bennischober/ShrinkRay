@@ -22,9 +22,18 @@ reads belong in the matching `tools/` module, not in a fourth copy.
 
 ## THE RUNNER CONTRACT
 
-`_run(command, cwd, cancel, timeout)` returns `(returncode, stderr)`, signals
+`_run(command, cwd, cancel, timeout, watchdog=True)` returns `(returncode, stderr)`, signals
 cancellation with `-1`, and a child it terminated (stall watchdog, or the
-caller's `timeout` ceiling) with `-2` and a message saying which. Both pipes are
+caller's `timeout` ceiling) with `-2` and a message saying which. `watchdog=False`
+opts one child out of the stall watchdog (issue #431): libvmaf is silent by design
+until the whole file is scored, so the measurement path (`vmaf.measure_vmaf`) passes
+False and keeps the cancel event as its kill path — a silent-by-design child must
+not be killed as hung. The kill path is the caller's cancel event, and every
+production caller wires one (the worker's stop sets the running job's event; the
+watcher's own direct path passes its stop event — reachable only outside the
+resident app, where `watch()` runs without a queue; the resident app always goes
+through the queue's submit seam and the worker owns the event; the scripts translate
+signals). Both pipes are
 drained by daemon threads (`process.py`) — a child writing more than the ~64 K pipe
 buffer would otherwise deadlock a poll-only loop. `timeout` is for bounded reads
 only (the crop timeline pass's duration-derived ceiling, #384). With neither a

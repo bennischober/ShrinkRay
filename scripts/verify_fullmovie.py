@@ -25,12 +25,15 @@ an EMPTY error message — this is the fix for that blindness).
 # ///
 
 import argparse
+import signal
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from shrinkray.telemetry import logs_dir
+from shrinkray.tools.process import Cancelled
 from shrinkray.tools.vmaf import measure_vmaf
 
 REPO = Path(__file__).resolve().parent.parent
@@ -79,6 +82,12 @@ def main() -> int:
         print(f"resuming: {len(done)} pairs already have results")
 
     failures = 0
+    # the measurement child runs in its own session (tools/process.py), so a
+    # Ctrl+C/SIGTERM would not reach it: the handler converts the signal into
+    # the cancel event, and measure_vmaf terminates the tree (issue #431)
+    cancel = threading.Event()
+    signal.signal(signal.SIGINT, lambda *_: cancel.set())
+    signal.signal(signal.SIGTERM, lambda *_: cancel.set())
     for label, encoded_rel, reference in pairs:
         if label in done:
             print(f"skip (already measured): {label}")
@@ -96,10 +105,14 @@ def main() -> int:
                 workdir=REPO / "test_media" / "scratch",
                 hdr="HDR" in label,
                 db_file=REPO / "metadata.db",
+                cancel=cancel,
             )
             with RESULT_FILE.open("a", encoding="utf-8") as fh:
                 fh.write(f"## {label}\nFULL-MOVIE VMAF: {score:.2f}\n\n")
             print(f"  => VMAF {score:.2f}  (written to {RESULT_FILE.name})")
+        except Cancelled:
+            print("cancelled; partial results already written")
+            return 130
         except Exception as e:
             failures += 1
             bundle = logs_dir(REPO / "metadata.db")
