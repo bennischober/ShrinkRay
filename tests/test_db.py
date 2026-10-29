@@ -1120,13 +1120,16 @@ class TestDb(unittest.TestCase):
 
     def test_compute_hash_ignores_interior_bytes(self):
         # pins the documented limit (issue #438): only the first and last MB
-        # are hashed, so an interior change at the same size is invisible
+        # are hashed and the size is not mixed in, so neither an interior
+        # change nor a longer interior is visible
         with tempfile.TemporaryDirectory() as tmp:
             file = Path(tmp) / "a.mkv"
             mib = 1024 * 1024
             file.write_bytes(b"A" * mib + b"X" * mib + b"A" * mib)
             before = db.compute_hash(file)
             file.write_bytes(b"A" * mib + b"Y" * mib + b"A" * mib)
+            self.assertEqual(before, db.compute_hash(file))
+            file.write_bytes(b"A" * mib + b"Y" * (2 * mib) + b"A" * mib)
             self.assertEqual(before, db.compute_hash(file))
 
     def test_encode_history(self):

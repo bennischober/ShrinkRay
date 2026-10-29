@@ -479,9 +479,10 @@ def _migrate(connection: sqlite3.Connection) -> None:
 def compute_hash(path: Path, chunk_size: int = 1024 * 1024) -> str:
     """Computes a fast hash of the first and last MB of a file.
 
-    This is not a checksum of the whole file: it detects a change of
-    size or of the bytes at either end, but two same-size files that
-    differ only in their interior hash alike. File identity stays
+    This is not a checksum of the whole file: above two chunks
+    (``chunk_size``, 1 MB by default) only the first and last chunk are
+    hashed, and the size is not mixed in, so two files that agree at
+    both ends hash alike whatever lies between them. File identity stays
     size + mtime; a same-size, mtime-preserved byte swap is an accepted
     residual risk (issue #438).
 
