@@ -51,16 +51,32 @@ class TestConsoleFormat(unittest.TestCase):
         self.assertIn("{time:YYYY-MM-DD HH:mm:ss}", CONSOLE_FORMAT)
 
     def test_a_rendered_line_matches_the_shape(self) -> None:
-        """The format string is real loguru syntax, not just a constant."""
+        """The format string is real loguru syntax, not just a constant.
+
+        The product's stderr handler (installed at logger import) is saved
+        and restored around the probe: the test replaces the global handler
+        list only for its own render, never for the rest of the session.
+        """
         rendered: list[str] = []
 
         def sink(message) -> None:
             rendered.append(str(message))
 
-        logger.remove()
-        logger.add(sink, format=CONSOLE_FORMAT, level="INFO")
-        logger.info("format probe")
-        logger.remove()
+        # save the product's own handlers (the stderr handler logger.py
+        # installed at import): the probe replaces them, the finally block
+        # restores them - process-global state is never left removed
+        saved = logger._core.handlers.copy()
+        try:
+            logger.remove()
+            logger.add(sink, format=CONSOLE_FORMAT, level="INFO")
+            logger.info("format probe")
+        finally:
+            logger.remove()
+            for handler in saved.values():
+                logger.add(
+                    handler._sink if hasattr(handler, "_sink") else handler,
+                    level=handler._levelno,
+                )
         self.assertEqual(len(rendered), 1)
         match = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", rendered[0])
         self.assertIsNotNone(match, f"no timestamp in {rendered[0]!r}")
