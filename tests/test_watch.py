@@ -15,6 +15,10 @@ from unittest.mock import patch
 from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import watch as watch_mod
 
+# the module's own value, read before any test patches it: _isolated_lock
+# compares against it to tell "a test set its own interval" from "unpatched"
+_REAL_STABLE_CHECK_INTERVAL = watch_mod.STABLE_CHECK_INTERVAL
+
 
 def _isolated_lock(stack, tmp) -> None:
     """Points the watch loop's single-instance lock at this test's tmp dir.
@@ -28,11 +32,22 @@ def _isolated_lock(stack, tmp) -> None:
     can dip below the floor mid-suite, and the guard's skip-the-pass
     behaviour (correct in production) then eats the pass and the test's
     expectations come back empty (the #303 CI face of the #291 family).
+
+    Also zeroes is_stable's STABLE_CHECK_INTERVAL sleep (30 s per candidate)
+    unless the test already patched it: a watch test's subject is not the
+    stability wait, and three tests that forgot the per-test patch slept
+    120 s per run (issue #478). STABLE_MIN_AGE is left alone - tests that
+    want a stable file backdate its mtime, tests that want "never stable"
+    patch the floor themselves. A test that needs its own interval patches
+    it before this call or enters its patch after it; either way its value
+    wins.
     """
     stack.enter_context(
         mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(tmp) / "shrinkray_watch.lock")
     )
     stack.enter_context(mock.patch.object(watch_mod, "disk_free_bytes", return_value=1 << 40))
+    if watch_mod.STABLE_CHECK_INTERVAL == _REAL_STABLE_CHECK_INTERVAL:
+        stack.enter_context(mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0))
 
 
 class TestWatch(unittest.TestCase):
