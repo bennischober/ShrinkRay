@@ -34,6 +34,8 @@ class TestAuthDisabled(unittest.TestCase):
         app_module.state = AppState(Path(self.tmp.name) / "test.db")
 
     def tearDown(self) -> None:
+        if app_module.state is not None:
+            app_module.state.shutdown()
         app_module.state = None
         self.env.stop()
         self.tmp.cleanup()
@@ -55,6 +57,8 @@ class TestAuthEnabled(unittest.TestCase):
         self.client = TestClient(fast_app)
 
     def tearDown(self) -> None:
+        if app_module.state is not None:
+            app_module.state.shutdown()
         app_module.state = None
         self.env.stop()
         self.tmp.cleanup()
@@ -184,6 +188,8 @@ class TestGeneratedToken(unittest.TestCase):
 
     def tearDown(self) -> None:
         app_module._file_token = None
+        if app_module.state is not None:
+            app_module.state.shutdown()
         app_module.state = None
         self.env.stop()
         self.tmp.cleanup()

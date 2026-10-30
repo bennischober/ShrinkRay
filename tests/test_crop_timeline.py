@@ -13,6 +13,7 @@ runtime share is report-only; the crop decision never uses it.
 
 import contextlib
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -168,6 +169,64 @@ class TestCropCache(unittest.TestCase):
         self.assertEqual(second.bars, (140, 140, 0, 0))
         # one row per file version, keyed by size + mtime
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 1)
+
+    def _opened_connections(self) -> tuple[list[sqlite3.Connection], object]:
+        """Patches db.connect to record every connection the cache opens."""
+        opened: list[sqlite3.Connection] = []
+        real_connect = db.connect
+
+        def recording_connect(db_path: Path) -> sqlite3.Connection:
+            connection = real_connect(db_path)
+            opened.append(connection)
+            return connection
+
+        return opened, patch("shrinkray.db.connect", side_effect=recording_connect)
+
+    def assert_closed(self, connections: list[sqlite3.Connection]) -> None:
+        self.assertTrue(connections, "the cache opened no connection to check")
+        for connection in connections:
+            with self.assertRaises(sqlite3.ProgrammingError, msg="the connection was left open"):
+                connection.execute("SELECT 1")
+
+    def test_a_cache_hit_closes_its_connection(self) -> None:
+        """Issue #480: the hit returned before the finally that closed the
+        connection, leaving it to the garbage collector (a ResourceWarning on
+        Python >= 3.13, an open metadata.db handle in the resident server)."""
+        readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
+        with patch(
+            "shrinkray.engine.crop.run_crop_timeline",
+            side_effect=self._timeline(readings, (1920, 1080)),
+        ):
+            detect_crop_summary_cached(self.movie, self.db_file)
+        opened, recording = self._opened_connections()
+        with (
+            recording,
+            patch(
+                "shrinkray.engine.crop.run_crop_timeline",
+                side_effect=AssertionError("the pass ran although a cache row exists"),
+            ),
+        ):
+            summary = detect_crop_summary_cached(self.movie, self.db_file)
+        self.assertEqual(summary.bars, (140, 140, 0, 0))
+        self.assert_closed(opened)
+
+    def test_a_failing_cache_read_closes_its_connection(self) -> None:
+        """An error the cache does not absorb still closes the connection."""
+
+        class _CacheReadFailed(Exception):
+            pass
+
+        opened, recording = self._opened_connections()
+        with (
+            recording,
+            patch(
+                "shrinkray.engine.crop.get_crop_summary",
+                side_effect=_CacheReadFailed("read failed"),
+            ),
+            self.assertRaises(_CacheReadFailed),
+        ):
+            detect_crop_summary_cached(self.movie, self.db_file)
+        self.assert_closed(opened)
 
     def test_a_changed_file_is_remeasured(self) -> None:
         readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
