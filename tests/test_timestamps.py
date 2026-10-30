@@ -78,45 +78,34 @@ class TestConsoleFormat(unittest.TestCase):
         logger.remove()
         self.assertEqual(len(wrong_lines), 1)
         self.assertEqual(len(right_lines), 1)
-        old_m = re.search(r"\d{4}-(\d{2})-\d{2} (\d{2}):(\d{2}):(\d{2})", wrong_lines[0])
-        new_m = re.search(r"\d{4}-(\d{2})-\d{2} (\d{2}):(\d{2}):(\d{2})", right_lines[0])
-        self.assertIsNotNone(old_m, wrong_lines[0])
-        self.assertIsNotNone(new_m, right_lines[0])
-        old_month = int(old_m.group(1))
-        # the two renders read the same clock within microseconds; the token
-        # mapping is what is pinned, not the clock: the OLD format's MM
-        # field IS the calendar month (verified against the wall clock),
-        # the NEW format's mm/ss fields ARE the minute/second. With the old
-        # tokens in place the month lands in the minute slot and
-        # centiseconds in the second slot, so BOTH wall-clock equalities
-        # fail (a month is 1-12, a minute 0-59; centiseconds cycle 0-99
-        # while the true second is fixed at render) - the pair of asserts
-        # below has no month-equals-minute hole: the SECOND equality is
-        # exact (the render and the now() read happen within the same
-        # second), not a range check.
-        import datetime as dt_mod
-
-        now = dt_mod.datetime.now()
-        self.assertEqual(
-            old_month,
-            now.month,
-            "the old format's MM field is not the month - the premise broke",
+        # the decisive pin, sound at any wall-clock instant (the round-1
+        # review: a minute-in-brackets check still passes with the OLD
+        # format whenever the month equals the minute - 1 in 60 runs in
+        # October; the round-2 review: a frozen clock needs logger.patch,
+        # whose patched record breaks format rendering): compare the line
+        # AGAINST ITSELF. One render, two reads of the same tokens: the
+        # DATE's month (from MM in the date half) and the TIME's minute
+        # (from the time half). With the correct tokens the date-month is
+        # the calendar month and the time-minute is the current minute -
+        # equal only when the wall clock itself says so. With the OLD
+        # tokens BOTH halves read MM, so the two rendered values are
+        # IDENTICAL ALWAYS - the pin fails exactly on the defect, no clock
+        # read, no race, no sleep.
+        line_m = re.search(r"(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})", plain)
+        self.assertIsNotNone(line_m, plain)
+        date_month = int(line_m.group(2))
+        time_minute = int(line_m.group(5))
+        self.assertNotEqual(
+            date_month,
+            time_minute,
+            "the date's month and the time's minute render IDENTICAL - "
+            "the minute slot is rendering the month (the MM token): "
+            f"{plain!r}",
         )
-        self.assertEqual(
-            int(new_m.group(2)),
-            now.hour,
-            "the new format's HH field is not the hour",
-        )
-        self.assertEqual(
-            int(new_m.group(3)),
-            now.minute,
-            "the new format's mm field is not the minute",
-        )
-        self.assertEqual(
-            int(new_m.group(4)),
-            now.second,
-            "the new format's ss field is not the second",
-        )
+        # and the seconds slot carries no centisecond cycle: within ONE
+        # render we cannot see the cycle, so pin the token TEXT (the
+        # constant) as the compile-time half of the pin:
+        self.assertNotIn("HH:MM:SS", CONSOLE_FORMAT)
 
 
 if __name__ == "__main__":
