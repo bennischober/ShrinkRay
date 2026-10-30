@@ -4,7 +4,9 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **A damaged metadata.db no longer stops an encode at the crop step** ([#486](https://github.com/bennischober/ShrinkRay/issues/486)): the crop cache only saves time, but a corrupt or foreign database (`sqlite3.DatabaseError`) escaped its fallback and failed the encode, and a cache write that failed (locked database, full disk) discarded a crop that was already measured. Both are now logged; the crop is computed or used uncached and the encode proceeds.
 
 ## [0.6.0] - 2026-10-30
 
