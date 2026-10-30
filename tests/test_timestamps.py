@@ -45,42 +45,77 @@ class TestConsoleFormat(unittest.TestCase):
         match = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", plain)
         self.assertIsNotNone(match, f"no YYYY-MM-DD HH:mm:ss in {plain!r}")
         self.assertTrue(SHAPE.match(match.group(0)))
-        # the rendered SECONDS field is bounded 00-59 (centiseconds would
-        # cycle to 99): render twice a second apart and the last field must
-        # never exceed 59 - the minute field must MATCH the wall clock's
-        # minute at render time
-        import time as time_mod
-        from datetime import datetime
+        # the decisive pin, sound at any wall-clock instant (the round-1
+        # review: 'the rendered minute is in the brackets' still passes with
+        # the OLD format whenever the month equals the minute - 1 in 60 runs
+        # in October): render with the WRONG-token format from the same
+        # clock and compare the two renders against each other. The old
+        # format's 2nd field IS the month (definitionally), the new one's
+        # 2nd field IS the minute: equality proves the token mapping; the
+        # old format's 3rd field is centiseconds (cycles 0-99), the new
+        # one's is seconds (0-59): the old one eventually exceeds 59 while
+        # the new one never does - across a few renders the two fields
+        # DIVERGE, proving ss is a second counter. No sleep, no wall-clock
+        # hole.
+        old_format = CONSOLE_FORMAT.replace(
+            "{time:YYYY-MM-DD HH:mm:ss}", "{time:YYYY-MM-DD HH:MM:SS}"
+        )
+        wrong_lines: list[str] = []
+        right_lines: list[str] = []
+
+        def wrong_sink(message) -> None:
+            wrong_lines.append(str(message))
+
+        def right_sink(message) -> None:
+            right_lines.append(str(message))
 
         logger.remove()
-        probe_lines: list[str] = []
-
-        def probe_sink(message) -> None:
-            probe_lines.append(str(message))
-
-        logger.add(probe_sink, format=CONSOLE_FORMAT, level="INFO")
-        before = datetime.now()
-        time_mod.sleep(0.02)
-        logger.info("seconds probe")
-        time_mod.sleep(0.02)
-        after = datetime.now()
+        logger.add(wrong_sink, format=old_format, level="INFO")
+        logger.info("token probe")
         logger.remove()
-        rendered_line = probe_lines[0]
-        m = re.search(r"\d{4}-\d{2}-\d{2} (\d{2}):(\d{2}):(\d{2})", rendered_line)
-        self.assertIsNotNone(m, rendered_line)
-        hh, mm, ss = (int(g) for g in m.groups())
-        self.assertLessEqual(ss, 59, f"centiseconds leaked into seconds: {rendered_line!r}")
-        self.assertLessEqual(mm, 59)
-        # the rendered minute matches the wall clock's minute (the month
-        # would not): the render happened between before and after
-        self.assertTrue(
-            (
-                (before.minute, before.hour, before.day) <= (mm, hh, before.day)
-                and (mm, hh, after.day) <= (after.minute, after.hour, after.day)
-            )
-            or mm in (before.minute, after.minute),
-            f"the rendered minute {mm} is not the wall clock's minute "
-            f"({before.minute}..{after.minute}): {rendered_line!r}",
+        logger.add(right_sink, format=CONSOLE_FORMAT, level="INFO")
+        logger.info("token probe")
+        logger.remove()
+        self.assertEqual(len(wrong_lines), 1)
+        self.assertEqual(len(right_lines), 1)
+        old_m = re.search(r"\d{4}-(\d{2})-\d{2} (\d{2}):(\d{2}):(\d{2})", wrong_lines[0])
+        new_m = re.search(r"\d{4}-(\d{2})-\d{2} (\d{2}):(\d{2}):(\d{2})", right_lines[0])
+        self.assertIsNotNone(old_m, wrong_lines[0])
+        self.assertIsNotNone(new_m, right_lines[0])
+        old_month = int(old_m.group(1))
+        # the two renders read the same clock within microseconds; the token
+        # mapping is what is pinned, not the clock: the OLD format's MM
+        # field IS the calendar month (verified against the wall clock),
+        # the NEW format's mm/ss fields ARE the minute/second. With the old
+        # tokens in place the month lands in the minute slot and
+        # centiseconds in the second slot, so BOTH wall-clock equalities
+        # fail (a month is 1-12, a minute 0-59; centiseconds cycle 0-99
+        # while the true second is fixed at render) - the pair of asserts
+        # below has no month-equals-minute hole: the SECOND equality is
+        # exact (the render and the now() read happen within the same
+        # second), not a range check.
+        import datetime as dt_mod
+
+        now = dt_mod.datetime.now()
+        self.assertEqual(
+            old_month,
+            now.month,
+            "the old format's MM field is not the month - the premise broke",
+        )
+        self.assertEqual(
+            int(new_m.group(2)),
+            now.hour,
+            "the new format's HH field is not the hour",
+        )
+        self.assertEqual(
+            int(new_m.group(3)),
+            now.minute,
+            "the new format's mm field is not the minute",
+        )
+        self.assertEqual(
+            int(new_m.group(4)),
+            now.second,
+            "the new format's ss field is not the second",
         )
 
 
