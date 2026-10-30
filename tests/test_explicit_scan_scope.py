@@ -197,11 +197,11 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         """
         from shrinkray.engine.scan import resolve_input_paths
 
-        root, files, walked = resolve_input_paths(str(self.root), [".mkv"])
+        _root, _files, walked = resolve_input_paths(str(self.root), [".mkv"])
         self.assertTrue(walked)
-        root, files, walked = resolve_input_paths(str(self.root / "a.mkv"), [".mkv"])
+        _root, _files, walked = resolve_input_paths(str(self.root / "a.mkv"), [".mkv"])
         self.assertFalse(walked)
-        root, files, walked = resolve_input_paths(str(self.root / "*.mkv"), [".mkv"])
+        _root, _files, walked = resolve_input_paths(str(self.root / "*.mkv"), [".mkv"])
         self.assertFalse(walked)
 
     def test_prune_missing_only_deletes_history_with_the_row(self) -> None:
