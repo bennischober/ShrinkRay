@@ -166,8 +166,12 @@ references dangle at a window's head, and HandBrake's sync drops the dangling fr
 while the copy keeps them. Both runs' pairs were refused by the frame-count gate
 (#408/#419), which is the gate working, not a parity defect; this source is declared
 unmeasurable for the window pair on that evidence, with the counts recorded.
-The encode path itself is unaffected: the window encoded, chose CRF 33 by probe (VMAF
-95.63), saved 94.13%, and replaced normally. An operator who wants a whole-file VMAF
+The encode path itself is unaffected: the window encoded, chose CRF 33 by probe, saved
+94.13%, and replaced normally. (The recorded probe VMAF 95.63 is reported as measured,
+not as an aligned-pair score: the probe search measures probe encodes of this window's
+samples, the same shape whose alignment this section shows is not guaranteed on this
+source, and whether the probe path's alignment is affected here is unmeasured.) An
+operator who wants a whole-file VMAF
 number on this class runs the full file (not a window) - believed, not verified here:
 the pipeline's `--verify` measurement has no window head to dangle on a whole file,
 but whether it tolerates this source's structure is untested; treat it as the
@@ -231,15 +235,16 @@ A frame-count mismatch means the two sides are not comparing the same frames, an
 score is meaningless whatever the delta says. `scripts/vmaf_parity.py` reports such a pair
 as **unmeasured** and fails the run instead of printing a number for it.
 
-**Build this pair from whole files.** Two shapes reproducibly produce a mismatch. One is a
+**Build this pair from whole files.** Two kinds of pair reproducibly produce a mismatch. One is a
 reference cut with `-ss` (whose keyframe-accurate copy cut starts on an earlier keyframe, so it
 holds more content than the window asked for) measured against a HandBrake segment made with
 `--start-at`/`--stop-at` (which trims to the exact frame). The other is a stream-copy window of
 the open-GOP remux pair 4 measures, against its own whole-window HandBrake encode: the window's
-head lost frames in both measured runs. Neither shape is production:
-`build_encode_command` has no trim options, and the verification compares a whole
-output against a whole source. Both are harness artifacts and their scores must never be
-reported as parity results (issues #408 and #432).
+head lost frames in both measured runs (the same shape step 6's probe pair builds in
+production, whose alignment on this source is unmeasured). Neither shape is the shape the
+verification path compares - `build_encode_command` has no trim options, and the verification
+compares a whole output against a whole source. A mismatched pair is a harness artifact and its
+score must never be reported as a parity result (issues #408 and #432).
 
 ## Reporting the run
 
