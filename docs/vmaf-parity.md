@@ -146,21 +146,26 @@ prints ab-av1's), do not read the delta.
 
 **A stream-copy window of an open-GOP source cannot produce a measurable whole-file
 pair.** Measured on the library's 2160p HEVC remux (issue #432): the 10-minute window
-cut mid-GOP (`-ss 600` after `-i`) lost 2 of 14,411 frames in the HandBrake encode
-(14,411 / 14,408), and the same window re-cut **on a keyframe** (`-ss 0.125` before
-`-i`, the window's first keyframe) lost 3 (14,411 / 14,408, output start 0.038 s vs
-reference 0.125 s) - keyframe alignment does not repair the head, because the damage
-is in the open GOP after the first keyframe: the B-frames that follow it reference
-frames before it, those references dangle at a window's head, and HandBrake's sync
-drops the dangling frames while the copy keeps them. Both pairs were refused by the
-frame-count gate, which is the gate working (#408), not a parity defect. This source
-class is therefore declared unmeasurable for the whole-file window pair, with the
-counts above recorded; a HandBrake log line `sync: video time went backwards ... dropped
-N frames` predicts the refusal before any measurement runs. The encode path itself is
-unaffected: the same window encoded, chose CRF 33 by probe (VMAF 95.63), saved 94.13%,
-and replaced normally. An operator who wants a whole-file VMAF number on this class
-runs the full file (not a window), where the pipeline's own verification or a
-whole-file pair has no cut head to dangle.
+cut with an input seek to 600 s (landing mid-GOP) lost frames in the HandBrake encode
+- HandBrake's own log says `dropped 2 frames` while the frame counts measure 14,411 /
+14,408 (the log's drop count and the count delta are different measures; the log line
+names the frames sync discarded, the counts also carry whatever the muxer's
+re-timestamping absorbed) - and the same window re-cut with an input seek **onto the
+window's first keyframe** (0.125 s) still lost 3 (14,411 / 14,408, output start
+0.038 s vs reference 0.125 s). Keyframe alignment does not repair the head, because
+the damage is in the open GOP after the first keyframe: the B-frames that follow it
+reference frames before it, those references dangle at a window's head, and
+HandBrake's sync drops the dangling frames while the copy keeps them. Both pairs were
+refused by the frame-count gate, which is the gate working (#408/#419), not a parity
+defect. This source class is therefore declared unmeasurable for the whole-file window
+pair, with the counts above recorded; a HandBrake log line `sync: video time went
+backwards ... dropped N frames` predicts the refusal before any measurement runs. The
+encode path itself is unaffected: the keyframe re-cut encoded, chose CRF 33 by probe
+(VMAF 95.63), saved 94.13%, and replaced normally. An operator who wants a whole-file
+VMAF number on this class runs the full file (not a window) - believed, not verified
+here: the pipeline's own `--verify` measurement has no cut head to dangle on a whole
+file, but whether it tolerates this source's structure untested; treat it as the
+candidate, not a documented working route.
 
 ### 5. An HDR10 pair
 
