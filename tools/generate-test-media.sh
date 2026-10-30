@@ -9,9 +9,10 @@
 # tiny (< 50 MB each), deterministically generated with lavfi, and cover
 # one boundary each:
 #
-#   bars-1080p.mkv    1080p h264, real pillarbox bars, heavy noise -> the
-#                     full happy path: gates pass, bars detected, AV1
-#                     encode should shrink it (~300 s, ~25 MB)
+#   bars-1080p.mkv    1080p h264, real pillarbox bars, upscaled
+#                     smptehdbars -> the full happy path: gates pass, bars
+#                     detected, the plan ends with an encode decision
+#                     (measured: VMAF 97.4 at CRF 44, 54.3% saved, ~2.3 MB)
 #   short.mkv         60 s 1080p h264 -> BELOW the 90 s duration floor:
 #                     plan must skip with the duration verdict
 #   small-720p.mkv    720p h264, long enough and big enough -> BELOW the
