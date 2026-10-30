@@ -458,6 +458,15 @@ class TestWatch(unittest.TestCase):
                         "shrinkray.engine.watch.encode_with_quality"
                     ),  # not reached: submit path owns the work
                     mock.patch("shrinkray.engine.watch.process_movie", side_effect=fake_scan),
+                    # decide()'s duration read is a real subprocess seam
+                    # (neighbours mock it too); this test's subject is the
+                    # scan's ROOT argument, not the decision
+                    mock.patch(
+                        "shrinkray.engine.watch.probe_duration_seconds",
+                        return_value=600.0,
+                    ),
+                    # the decision needs a toolchain to reach 'encode'
+                    mock.patch("shrinkray.engine.watch.find_handbrake", return_value="hb"),
                     mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
                 ):
                     _isolated_lock(stack, tmp)
