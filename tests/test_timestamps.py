@@ -72,7 +72,7 @@ class TestConsoleFormat(unittest.TestCase):
             logger.info("format probe")
         finally:
             logger.remove()
-            for handler in saved.values():
+            for _handler in saved.values():
                 # the FAITHFUL restore: rebuild the handler from the
                 # product's own construction (logger.py installed ONE
                 # handler: sys.stderr + CONSOLE_FORMAT + INFO) - a level-only
