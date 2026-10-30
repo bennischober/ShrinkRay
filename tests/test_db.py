@@ -1803,6 +1803,43 @@ class TestDb(unittest.TestCase):
                 ]
                 self.assertEqual(len(debris_findings), 1, "the usable variable's scratch is read")
 
+    def test_a_workdir_vanishing_mid_report_is_not_a_finding(self):
+        """A workdir removed between the root listing and its walk yields no
+        members and no stats: gone is healthy - the phantom finding (age
+        ~487,000 h from newest=0.0, exit 1 on a healthy host) is closed
+        (round-10 finding 1, measured repro; this test pins the guard the
+        round-11 review demanded - it fails without the newest-is-None
+        skip)."""
+
+        from shrinkray import service
+        from shrinkray.engine.identity import probe_scratch_prefix
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(self.connection, self._record(str(movie)))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            ghost = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            ghost.mkdir()
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}):
+                # the workdir vanishes BETWEEN the root listing (iterdir ran
+                # and returned the ghost) and the walk (rglob): remove it
+                # inside the first rglob call, the reviewer's exact window
+                real_rglob = Path.rglob
+
+                def vanishing_rglob(self, pattern):
+                    ghost.rmdir()
+                    return real_rglob(self, pattern)
+
+                with patch.object(Path, "rglob", vanishing_rglob):
+                    findings = service.doctor(self.connection)
+                self.assertEqual(
+                    [f for f in findings if f.issue == "stale probe scratch (crash debris?)"],
+                    [],
+                )
+
     def test_doctor_scratch_check_skips_without_a_configured_root(self):
         """A stateless CLI run has no configured scratch (no TMPDIR): the
         check is skipped, never a walk of the OS temp (issue #440)."""
