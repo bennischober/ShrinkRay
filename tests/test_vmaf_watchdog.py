@@ -111,8 +111,7 @@ class TestVmafMeasurementOutlivesTheWatchdog(unittest.TestCase):
                     vmaf_mod.measure_vmaf(tmp / "d.mkv", tmp / "r.mkv", workdir)
         finally:
             process_mod._stall_minutes = old_stall
-        self.assertIn("ffmpeg", str(ctx.exception))
-        self.assertIn("cannot run", str(ctx.exception))
+        self.assertIn("VMAF measurement cannot run 'ffmpeg'", str(ctx.exception))
 
     def test_silent_measurement_completes_under_a_short_watchdog(self):
         """The issue's acceptance criterion: a full-precision measure_vmaf on a

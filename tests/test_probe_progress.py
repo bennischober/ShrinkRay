@@ -43,8 +43,9 @@ class TestProbeProgress(unittest.TestCase):
                 cancel=None,
                 progress=lambda event: None,
             )
-        self.assertIn("ffmpeg", str(ctx.exception))
-        self.assertIn("cannot run", str(ctx.exception))
+        # the FULL message (the guard's own interpolation, not the chained
+        # cause's): the pin catches a guard dropping the binary name
+        self.assertIn("sample extraction cannot run 'ffmpeg'", str(ctx.exception))
 
     def test_the_reextract_guard_is_pinned_too(self):
         """Issue #458's per-site criterion: the LOSSLESS RE-EXTRACT's guard
@@ -80,8 +81,7 @@ class TestProbeProgress(unittest.TestCase):
                 cancel=None,
                 progress=lambda event: None,
             )
-        self.assertIn("re-extract cannot run", str(ctx.exception))
-        self.assertIn("ffmpeg", str(ctx.exception))
+        self.assertIn("sample re-extract cannot run 'ffmpeg'", str(ctx.exception))
         self.assertEqual(len(calls), 2, "the fallback path ran")
 
     def test_extract_samples_reports_per_sample(self):

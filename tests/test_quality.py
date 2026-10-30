@@ -940,8 +940,7 @@ class TestProbeCache(unittest.TestCase):
                 "medium",
                 db_file=None,
             )
-        self.assertIn("hb", str(ctx.exception))
-        self.assertIn("cannot run", str(ctx.exception))
+        self.assertIn("probe encode cannot run 'hb'", str(ctx.exception))
 
     def test_a_size_probe_spawn_failure_raises_the_probe_shape(self):
         """Issue #458: the size probe's seam converts a spawn failure to its
@@ -964,7 +963,7 @@ class TestProbeCache(unittest.TestCase):
                 "svt_av1",
                 "medium",
             )
-        self.assertIn("hb", str(ctx.exception))
+        self.assertIn("size probe encode cannot run 'hb'", str(ctx.exception))
 
     def test_probe_crf_returns_the_mean_of_samples(self):
         """probe_crf aggregates with the MEAN, not the minimum.
