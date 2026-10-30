@@ -158,8 +158,6 @@ misalignment the gate refuses. The frame-count gate is the final oracle: a pair 
 passes it is aligned by construction. That is the gate working, not a measurement
 failure to route around.
 
-
-
 **Check the recipe line, not just the delta.** The script derives the model and the
 analysis pixel format from the pair itself, and it prints them:
 
@@ -208,8 +206,6 @@ refusal (twice, on one window) and the snapping. Both runs' pairs were refused b
 parity script's frame-count gate (#408/#419), which is that gate working, not a parity
 defect; this source is declared unmeasurable for the window pair on that evidence, with
 the counts recorded.
-
-
 
 The encode path did not fail on this window: it encoded, chose CRF 33 by probe against
 this run's target 95.5 (the HDR override: 96.0 default minus the 0.5 calibration, issue
