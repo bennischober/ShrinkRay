@@ -23,9 +23,6 @@ from loguru._datetime import _compile_format
 
 from shrinkray.logger import CONSOLE_FORMAT
 
-# the one shape every human-readable timestamp shares
-SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
-
 # the frozen instants the token pin renders. FROZEN (hour 15) separates the
 # month/minute/second tokens (1/4/5) and sits outside the twelve hours where
 # a 12-hour `hh` render coincides with the 24-hour `HH` render (hours 1-12;
@@ -61,7 +58,10 @@ class TestConsoleFormat(unittest.TestCase):
         self.assertEqual(len(rendered), 1)
         match = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", rendered[0])
         self.assertIsNotNone(match, f"no timestamp in {rendered[0]!r}")
-        self.assertTrue(SHAPE.match(match.group(0)))
+        # this test pins the SHAPE only (issue #167: date + seconds present);
+        # the FIELD semantics - which slot carries which value - live in the
+        # token pins below (issue #429: the digits-only search cannot tell
+        # 17:10:05 from 17:01:05)
 
     def test_the_token_engine_renders_the_frozen_fields(self) -> None:
         """The decisive pin, deterministic: loguru's token engine renders the
@@ -74,14 +74,12 @@ class TestConsoleFormat(unittest.TestCase):
         spec = CONSOLE_FORMAT.split("{time:")[1].split("}")[0]
         render = _compile_format(spec)
         self.assertEqual(render(FROZEN), "2026-01-02 15:04:05")
-        # round 6's finding: the unpadded H token would slip past the hour-15
-        # literal (15 needs no padding) - the hour-5 instant catches it: H
-        # renders 5:04:05 where the shipped spec renders 05:04:05
+        # round 6's finding: the unpadded H token renders 15:04:05 at hour 15
+        # (15 needs no padding) and would pass that literal - the hour-5
+        # instant is what catches it: H renders 5:04:05 there where the
+        # shipped spec renders 05:04:05, so this second equality on the
+        # DERIVED spec fails if the product's constant ever used H
         self.assertEqual(render(FROZEN_SINGLE), "2026-01-02 05:04:05")
-        self.assertNotEqual(
-            _compile_format("YYYY-MM-DD H:mm:ss")(FROZEN_SINGLE),
-            "2026-01-02 05:04:05",
-        )
 
     def test_the_wrong_tokens_fail_the_frozen_pin(self) -> None:
         """The pin discriminates against the defect's token sets: under the
