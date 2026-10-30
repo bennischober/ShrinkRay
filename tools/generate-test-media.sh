@@ -55,9 +55,10 @@ gen() {
 #    50 MB measured 265+ MB per minute), while the soft upscale wastes just
 #    enough x264 bits that AV1 re-encodes the same quality at ~54% smaller
 #    (measured: plan ends with an encode decision at CRF 44, 54.3% saved,
-#    ~2.3 MB source). Static-ish content keeps the file small AND
-#    deterministic; the bars are the fixture's point - the timeline detector
-#    reads them and the encode crops them.
+#    ~2.3 MB source). Static-ish content keeps the file small and its
+#    content/size reproducible (the mux writes a random SegmentUID per run,
+#    so the bytes are not identical); the bars are the fixture's point - the
+#    timeline detector reads them and the encode crops them.
 gen "bars-1080p.mkv" \
   -f lavfi -i "smptehdbars=duration=120:size=1600x1080:rate=30" \
   -f lavfi -i "sine=frequency=440:duration=120" \
