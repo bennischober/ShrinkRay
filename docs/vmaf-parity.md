@@ -123,8 +123,8 @@ native size, exactly as ab-av1 scores it - pass `--crop` so both sides agree.
 
 **Cut the window at a keyframe, then read the log (the open-GOP caveat).** A
 stream-copy cut that lands inside an open-GOP span hands HandBrake a stream whose
-first frames are the open GOP's RASL leading pictures — they reference the
-PREVIOUS GOP's frames, which the cut left behind — so the decode cannot start
+first frames are the open GOP's RASL leading pictures - they reference the
+PREVIOUS GOP's frames, which the cut left behind - so the decode cannot start
 there; HandBrake's sync corrects by dropping them and the encode comes out a few
 frames short of the copy-cut reference. The frame-count gate then refuses the pair
 - correctly: the measured pair would compare different content. Measured on the
@@ -134,19 +134,19 @@ output, HandBrake's own log naming it: `sync: video time went backwards 83 ms,
 dropped 2 frames. PTS 0`), so the pair could not be scored; the window itself is
 fine, the CUT is the defect. **No pre-encode check names the safe cut**, and
 trying to build one hits a wall on every front: `ffprobe` cannot distinguish the
-start (`pict_type` has no IDR member — an HEVC IDR and a CRA both print `I`;
+start (`pict_type` has no IDR member - an HEVC IDR and a CRA both print `I`;
 `key_frame=1` matches CRA too), and a decode test cannot see the defect either
-(`ffmpeg -v error -i CUT.mkv -f null -` prints nothing and exits 0 — measured:
+(`ffmpeg -v error -i CUT.mkv -f null -` prints nothing and exits 0 - measured:
 ffmpeg suppresses the missing-reference error for CRA and fills the reference
 silently). The working recipe is ITERATIVE and uses the two oracles that do
 exist: list the keyframe positions (`ffprobe -skip_frame nokey -show_frames
 -show_entries frame=pts_time`), cut at one, encode, and read the ENCODE'S OWN
-LOG — `sync: ... dropped N frames` means the cut landed on an open GOP's RASL
+LOG - `sync: ... dropped N frames` means the cut landed on an open GOP's RASL
 group: re-cut at the PREVIOUS keyframe and encode again (a closed-GOP source,
 x264's default, has no RASL pictures and any keyframe cut is safe; an open-GOP
 one, x265's default, needs this loop). **Each step back consumes one GOP**: on a
 fully open-GOP source the previous keyframe is another CRA and the retry
-reproduces the failure one GOP earlier — the loop terminates when the kept
+reproduces the failure one GOP earlier - the loop terminates when the kept
 prefix spans the PRECEDING GOP (the cut's RASL group then references frames the
 window still holds), which means keeping a little more before the measured
 window than the measurement itself needs, or (equivalently) trimming the COPY-CUT reference to the same later range - both sides of the pair must move together, since a reference that starts earlier than the encode reproduces the misalignment the gate refuses. The frame-count gate is the final oracle: a pair that passes it is aligned by
