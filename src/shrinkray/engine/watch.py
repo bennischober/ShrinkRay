@@ -816,7 +816,7 @@ def watch(
                     for root in roots
                     for movie in find_new_movies(root, extensions, known)
                 ]
-                for _root, movie in candidates:
+                for movie_root, movie in candidates:
                     if stop_event is not None and stop_event.is_set():
                         log("Watch stopped (stop event set).")
                         return
@@ -854,7 +854,7 @@ def watch(
                         # cannot import server); False means the queue refused
                         # (e.g. the same file is already queued) and the file
                         # stays eligible for a later pass.
-                        if _scan_into_db(movie, roots[0], db_file):
+                        if _scan_into_db(movie, movie_root, db_file):
                             try:
                                 queued = submit(movie)
                             except sqlite3.Error as e:
