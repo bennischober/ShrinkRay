@@ -1,6 +1,6 @@
 """Tests for an explicit file/glob scan never pruning beyond its files (issue #453).
 
-Before the fix, `scan_movies(root, config, files=[a], walked=False)`
+Before the fix, `scan_movies(root, config, files=[a])`
 reconciled the database through `prune_missing(..., scope=str(root))`: every
 catalogued row under the root that the explicit call did not enumerate got
 flagged as missing and, after MISSING_GRACE scans, hard-deleted together
@@ -145,7 +145,8 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
 
     def test_prune_missing_only_restriction(self) -> None:
         """db-level: `only` reconciles exactly those rows; nothing else in
-        the scope is touched, with or without an extra scope filter.
+        the scope is touched - with a scope filter and without one (the
+        no-scope shape is what the scan's enumerated branch uses).
         """
         a = str(self.root / "a.mkv")
         b = str(self.root / "b.mkv")
@@ -158,6 +159,13 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
             )
         self.connection.commit()
         result = db.prune_missing(self.connection, {a}, scope=self.root, only={a})
+        self.assertEqual(result.flagged, 0)
+        self.assertEqual(result.pruned, 0)
+        self.assertEqual(self._row_state(Path(b)), (0, True))
+        self.assertEqual(self._row_state(Path(h)), (0, True))
+        # and the same restriction WITHOUT a scope filter (the scan's
+        # enumerated branch passes only= with no scope):
+        result = db.prune_missing(self.connection, {a}, only={a})
         self.assertEqual(result.flagged, 0)
         self.assertEqual(result.pruned, 0)
         self.assertEqual(self._row_state(Path(b)), (0, True))
@@ -177,23 +185,39 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
     def test_a_walked_folder_scan_still_reconciles_the_scope(self) -> None:
         """A WALKED folder scan is the operator's full-library statement:
         `shrinkray plan <folder>` passes the walk's result as `files` WITH
-        `walked=True`, and the reconcile must flag/grace-delete an
-        unenumerated gone row exactly as before the explicit-scope fix
-        (deleting the `and not walked` clause must turn this test red, so
-        the discriminator is load-bearing).
+        `walked=True`, and the reconcile must flag/grace-delete rows the
+        walk list does not name exactly as before the explicit-scope fix.
+        Two rows make the discriminator load-bearing (the mutation proof):
+        - `b.mkv` IS in the walk list and vanishes after it: the on-disk
+          filter flags it - deleting the `if m.exists()` filter instead
+          RESETS its grace counter (the walked branch's own pin);
+        - `d.mkv` is catalogued but NOT in the walk list (it was created
+          after the walk): only the walked branch's scope reconcile sees it
+          - deleting the `and not walked` clause leaves its row untouched
+          forever (the clause's own pin).
         """
         self._catalogue_all()
+        d = self.root / "d.mkv"
+        self.connection.execute(
+            "INSERT INTO files (path, mtime, size, name, category) "
+            "VALUES (?, 0, 16, 'd.mkv', 'movies')",
+            (str(d),),
+        )
+        self.connection.commit()
         # the CLI's directory shape: the walk happens FIRST, and the file is
-        # deleted AFTER it (round 8's finding 2: the pin is load-bearing
-        # only when the vanished path is IN the walk list - the pre-#453
-        # behaviour would keep b in existing_paths and RESET its grace
-        # counter instead of flagging the deletion)
+        # deleted AFTER it - the vanished path stays IN the walk list, so
+        # without the on-disk filter the reconcile would keep it in
+        # existing_paths and RESET its grace counter instead of flagging the
+        # deletion
         walked_files = engine_scan.find_movies(self.root, [".mkv"])
         self.assertEqual(
             sorted(p.name for p in walked_files),
             ["a.mkv", "b.mkv", "h.mkv"],
         )
         (self.root / "b.mkv").unlink()
+        # d is gone from disk too but is NOT in the walk list: only the
+        # walked branch's scope reconcile sees it - an enumerated reconcile
+        # of the walk list would never touch its row
         for _ in range(3):
             engine_scan.scan_movies(
                 self.root,
@@ -203,9 +227,14 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
                 files=walked_files,
                 walked=True,
             )
-        # b was not enumerated (the walk found only a + h now) and is gone:
-        # after 3 walked scans the grace is exhausted, the row is deleted
+        # b was in the walk list and is gone: after 3 walked scans the grace
+        # is exhausted, the row is deleted (the on-disk filter's pin)
         self.assertEqual(self._row_state(self.root / "b.mkv"), (-1, False))
+        # d was never enumerated and is gone: the walked branch's scope
+        # reconcile flagged and deleted it (the CLAUSE's pin - an enumerated
+        # reconcile of the walk list would have left d's row untouched
+        # forever, silently keeping a deleted file's history)
+        self.assertEqual(self._row_state(d), (-1, False))
         self.assertEqual(self._row_state(self.root / "a.mkv"), (0, True))
 
     def test_the_cli_forwards_the_walked_pair(self) -> None:
