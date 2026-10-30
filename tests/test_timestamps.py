@@ -16,23 +16,28 @@ tokens (the review rounds 1-3 of issue #429's PR each found one).
 
 import re
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 from loguru._datetime import _compile_format
 
 from shrinkray.logger import CONSOLE_FORMAT
 
-# the frozen instants the token pin renders. FROZEN (hour 15) separates the
+# the frozen instants the token pin renders. FROZEN (hour 15 at a FIXED
+# +05:30 offset - round 8's finding: a UTC-aware instant renders the same
+# under a `!UTC` twin, so the local-time claim had no test behind it; at
+# +05:30 the twin renders 09:34:05 and fails the pin) separates the
 # month/minute/second tokens (1/4/5) and sits outside the twelve hours where
 # a 12-hour `hh` render coincides with the 24-hour `HH` render (hours 1-12;
 # hour 00 does NOT coincide - hh renders it 12; round 4's finding: hour 3
-# rendered identically under both). FROZEN_SINGLE (hour 5) closes round 6's
-# finding: there the unpadded `H` renders `5:04:05` while `HH` and `hh` both
-# render `05:04:05`, so the hour pair H/HH is discriminated too - together
-# the two instants separate every token pair in the shape, and no token
-# confusion (AM/PM hour included) can reproduce either literal.
-FROZEN = datetime(2026, 1, 2, 15, 4, 5, tzinfo=timezone.utc)
+# rendered identically under both). FROZEN_SINGLE (hour 5, UTC) closes round
+# 6's finding: there the unpadded `H` renders `5:04:05` while `HH` and `hh`
+# both render `05:04:05`, so the hour pair H/HH is discriminated too -
+# together the two instants separate every token pair in the shape, and no
+# token confusion (AM/PM hour, a !UTC suffix included) can reproduce either
+# literal.
+FROZEN_TZ = timezone(timedelta(hours=5, minutes=30))
+FROZEN = datetime(2026, 1, 2, 15, 4, 5, tzinfo=FROZEN_TZ)
 FROZEN_SINGLE = datetime(2026, 1, 2, 5, 4, 5, tzinfo=timezone.utc)
 
 
@@ -80,6 +85,13 @@ class TestConsoleFormat(unittest.TestCase):
         # shipped spec renders 05:04:05, so this second equality on the
         # DERIVED spec fails if the product's constant ever used H
         self.assertEqual(render(FROZEN_SINGLE), "2026-01-02 05:04:05")
+        # round 8's finding: a `!UTC` twin renders the same as the shipped
+        # spec for a UTC-aware instant - FROZEN sits at a fixed +05:30
+        # offset, so the twin renders 09:34:05 there and fails the pin: the
+        # console stamps the operator's wall clock, not UTC
+        utc_twin = _compile_format(spec + "!UTC")
+        self.assertEqual(utc_twin(FROZEN), "2026-01-02 09:34:05")
+        self.assertNotEqual(utc_twin(FROZEN), "2026-01-02 15:04:05")
 
     def test_the_wrong_tokens_fail_the_frozen_pin(self) -> None:
         """The pin discriminates against the defect's token sets: under the
