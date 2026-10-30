@@ -480,9 +480,10 @@ def scan_movies(
 
     Raises:
         ValueError: If `walked` is given without `files`, or `files` is
-            given without `walked` (round 2's finding: a caller supplying a
-            walk's result while omitting the flag would silently stop
-            flagging deletions - the half-supplied pair is refused instead).
+            given without `walked` - a caller supplying a walk's result
+            while omitting the flag would silently stop flagging deletions,
+            so the half-supplied pair is refused instead of reconciling the
+            wrong scope.
     """
     if (files is None) != (walked is None):
         raise ValueError(

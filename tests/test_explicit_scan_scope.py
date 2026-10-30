@@ -206,7 +206,8 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
 
     def test_the_cli_forwards_the_walked_pair(self) -> None:
         """Round 3's finding 2: the resolver's `walked` fact must REACH
-        scan_movies through both CLI call sites - deleting `walked=walked`
+        scan_movies through BOTH CLI call sites (plan and encode - round 5
+        finding 1: encode was pinned by nothing) - deleting `walked=walked`
         at either site leaves every test green while silently removing
         `plan <folder>`'s deletion path. The real CLI is driven and the
         recorded kwargs pin the forwarding (the engine itself is mocked).
@@ -254,6 +255,13 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
                 folder_kwargs = dict(recorded[-1])
                 runner.invoke(app, ["plan", "a.mkv"])
                 file_kwargs = dict(recorded[-1])
+                # round 5's finding: the ENCODE site (its own
+                # resolve_input_paths + scan_movies call) was pinned by
+                # nothing - drive it too
+                runner.invoke(app, ["encode", str(self.root)])
+                encode_folder_kwargs = dict(recorded[-1])
+                runner.invoke(app, ["encode", "a.mkv"])
+                encode_file_kwargs = dict(recorded[-1])
         finally:
             os.chdir(previous)
 
@@ -261,6 +269,10 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         self.assertIsNotNone(folder_kwargs.get("files"))
         self.assertFalse(file_kwargs.get("walked"), "plan <file> lost walked=False")
         self.assertIsNotNone(file_kwargs.get("files"))
+        self.assertTrue(encode_folder_kwargs.get("walked"), "encode <folder> lost walked")
+        self.assertIsNotNone(encode_folder_kwargs.get("files"))
+        self.assertFalse(encode_file_kwargs.get("walked"), "encode <file> lost walked=False")
+        self.assertIsNotNone(encode_file_kwargs.get("files"))
 
     def test_the_walked_pair_is_refused_half_supplied(self) -> None:
         """Round 3's finding 1: the contract exists in SOURCE - a half-supplied
