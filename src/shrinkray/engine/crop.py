@@ -636,10 +636,30 @@ def detect_crop_rect(
             log(f"The sampled crop pass failed for '{movie.name}': ffmpeg exited {code}")
             return None
         if code != 0:
-            continue
+            # a positive exit (a failed decode, or 255 from a caught outside
+            # signal - believed from fftools/ffmpeg.c, not run, issue #403's
+            # comment) measured nothing: the veto rule (bars common to every
+            # sampled frame) cannot be evaluated for this window, so the whole
+            # file is left uncropped - the safe direction (a wrong crop cuts
+            # into picture; a missed crop only costs space) and the same
+            # outcome a signal-killed window gets above. INTERIM RULE: the
+            # issue carries needs-decision and the maintainer's call is open -
+            # this is the reading the repo's own documents argue for, applied
+            # so the veto cannot be lost silently; a flip to skip-with-log
+            # needs a documented safety argument (issue #403)
+            log(f"The sampled crop pass failed for '{movie.name}': ffmpeg exited {code}")
+            return None
         rect = parse_crop_line(err)
-        if rect is not None:
-            rects.append(rect)
+        if rect is None:
+            # exit 0 but no crop line (cropdetect prints one per frame with
+            # bars; a window past the stream's end prints none): this window
+            # measured nothing either - the same veto consequence as the
+            # failed window above, reviewed in PR #476 (finding 3)
+            log(
+                f"The sampled crop pass measured no bars in a window of '{movie.name}'; the file is left uncropped"
+            )
+            return None
+        rects.append(rect)
 
     return intersect_crop_rects(rects, frame)
 
