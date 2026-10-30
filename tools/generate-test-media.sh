@@ -6,7 +6,8 @@
 # every real-surface run of plan/encode cost hours and the gates' BOUNDARIES
 # (duration floor, size floor, resolution floor, codec whitelist, bar
 # detection) had no fast fixture to exercise them. The fixtures here are
-# tiny (< 50 MB each), deterministically generated with lavfi, and cover
+# tiny (< 50 MB each), generated with lavfi (same size and content every
+# run; not byte-identical - the mux writes a random SegmentUID), and cover
 # one boundary each:
 #
 #   bars-1080p.mkv    1080p h264, real pillarbox bars, smptehdbars at
