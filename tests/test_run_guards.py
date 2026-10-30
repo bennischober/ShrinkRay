@@ -91,6 +91,39 @@ class TestSampleExtractionRunGuards(unittest.TestCase):
         self.assertIn("No such file or directory", message)
 
 
+class TestFFProbeGuard(unittest.TestCase):
+    """The ffprobe read that opens extract_samples (issue #458 round 2): a
+    spawn-class OSError from ffprobe itself raises the step's shape."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.movie = Path(self.tmp.name) / "one.mkv"
+        self.movie.write_bytes(b"x" * 8)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_ffprobe_spawn_failure_raises_runtime_error_not_oserror(self) -> None:
+        with (
+            patch(
+                "shrinkray.engine.samples.subprocess.run",
+                side_effect=OSError(24, "Too many open files"),
+            ),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            extract_samples(
+                self.movie,
+                Path(self.tmp.name),
+                count=1,
+                seconds=1.0,
+                cancel=threading.Event(),
+            )
+        message = str(ctx.exception)
+        self.assertIn("sample extraction could not start", message)
+        self.assertIn("ffprobe", message)
+        self.assertIn("Too many open files", message)
+
+
 class TestEmfileShapedSpawnFailure(unittest.TestCase):
     """The EMFILE/ENOMEM half of issue #458's scenario: the spawn-class OSError
     that carries no binary in its str() still reports the binary's name."""
@@ -109,6 +142,7 @@ class TestEmfileShapedSpawnFailure(unittest.TestCase):
         from shrinkray.engine.search import estimate_size_factor
 
         with (
+            patch("shrinkray.engine.search._tool_versions", return_value={}),
             patch(
                 "shrinkray.engine.search._run",
                 side_effect=OSError(24, "Too many open files"),
@@ -150,6 +184,7 @@ class TestProbeEncodeRunGuards(unittest.TestCase):
 
     def test_size_probe_site_raises_runtime_error_not_oserror(self) -> None:
         with (
+            patch("shrinkray.engine.search._tool_versions", return_value={}),
             patch(
                 "shrinkray.engine.search._run",
                 side_effect=FileNotFoundError(2, "No such file or directory: 'HandBrakeCLI'"),
@@ -179,6 +214,7 @@ class TestProbeEncodeRunGuards(unittest.TestCase):
         from shrinkray.engine.search import probe_crf
 
         with (
+            patch("shrinkray.engine.search._tool_versions", return_value={}),
             patch(
                 "shrinkray.engine.search._run",
                 side_effect=FileNotFoundError(2, "No such file or directory: 'HandBrakeCLI'"),

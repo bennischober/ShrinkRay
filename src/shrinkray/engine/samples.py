@@ -119,9 +119,11 @@ def extract_samples(
             capture_output=True,
             timeout=FFPROBE_TIMEOUT,
         )
-    except FileNotFoundError as e:
-        # ffprobe missing after startup (issue #458): the step's documented
-        # failure shape with the binary named, not a traceback
+    except OSError as e:
+        # ffprobe missing or not spawnable (EMFILE, ENOMEM) after startup
+        # (issue #458): the step's documented failure shape with the binary
+        # named, not a traceback. SubprocessError is not an OSError subclass,
+        # so the timeout handler below keeps its own message (issue #62).
         raise RuntimeError(f"sample extraction could not start: ffprobe ({e})") from e
     except subprocess.SubprocessError as e:
         # TimeoutExpired: a stale mount (NFS/SMB that went away) blocks the
