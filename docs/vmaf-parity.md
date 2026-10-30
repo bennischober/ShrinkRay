@@ -131,7 +131,7 @@ frames short of the copy-cut reference. The frame-count gate then refuses the pa
 2160p h265 remux window cut at a keyframe (the issue's repro, `ffmpeg -ss 600
 -i REMUX -t 600 -c copy`; the record names no bitstream type for that keyframe,
 and `ffprobe` cannot establish one - see below): the encode dropped 2 frames
-(14411 reference vs 14408
+(14,411 reference vs 14,408
 output, HandBrake's own log naming it: `sync: video time went backwards 83 ms,
 dropped 2 frames. PTS 0`), so the pair could not be scored. The refusal is
 measured; reading it as "the window itself is fine, the CUT is the defect" is
@@ -143,7 +143,7 @@ start (`pict_type` has no IDR member - an HEVC IDR and a CRA both print `I`;
 `key_frame=1` matches CRA too), and a decode test cannot see the defect either
 (`ffmpeg -v error -i CUT.mkv -f null -` prints nothing and exits 0 - measured:
 ffmpeg suppresses the missing-reference error for CRA and fills the reference
-silently). The working recipe is ITERATIVE and uses the two oracles that do
+silently). The recipe is ITERATIVE and uses the two oracles that do
 exist: list the keyframe positions (`ffprobe -skip_frame nokey -show_frames
 -show_entries frame=pts_time`), cut at one, encode, and read the ENCODE'S OWN
 LOG - `sync: ... dropped N frames` means the cut landed on an open GOP's RASL
@@ -185,8 +185,8 @@ If the printed recipe does not match ab-av1's own `format=` and `model=` on the 
 pair, the run is measuring something else. Compare the two command lines (the script
 prints ab-av1's), do not read the delta.
 
-**A stream-copy window of this open-GOP remux cannot produce a measurable window
-pair.** The re-measure behind the counts above (issue #432): the 10-minute window was
+**A stream-copy window of this remux produced no measurable window pair in the runs
+recorded.** The re-measure behind the counts above (issue #432): the 10-minute window was
 stream-copied from an input seek at 600 s (the issue's repro command, `-ss` before
 `-i`) - the seek point lands just before the keyframe at 600.125 s, so the copy
 starts on that keyframe - and its HandBrake encode dropped frames at the head: the
@@ -292,9 +292,10 @@ unmeasured). Neither shape is the shape the verification path compares -
 `build_encode_command` has no trim options, and the verification compares a whole output
 against a whole source. On the first shape a mismatch is a harness artifact; on the
 second it is the probe measurement disagreeing with its own reference - and production
-catches none of it: `measure_vmaf` counts no frames, so the search keeps the misaligned
-probe score (the 95.63 above) and the CRF choice rests on it. Either way the score must
-never be reported as a parity result (issues #408 and #432).
+catches none of it: `measure_vmaf` counts no frames, so the search keeps a probe score
+whose alignment on this source is unmeasured (the 95.63 above) and the CRF choice may
+rest on it. Either way the score must never be reported as a parity result (issues #408
+and #432).
 
 ## Reporting the run
 
