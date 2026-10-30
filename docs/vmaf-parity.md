@@ -121,40 +121,42 @@ The same command on a 2160p source. Above 2560x1440 both sides switch to
 threshold). A 4K scope film cropped below 1440 lines stays on the 1080p model at
 native size, exactly as ab-av1 scores it - pass `--crop` so both sides agree.
 
-**Cut the window at a keyframe, then read the log (the open-GOP caveat).** A
-stream-copy cut that lands inside an open-GOP span hands HandBrake a stream whose
-first frames are the open GOP's RASL leading pictures - they reference the
-PREVIOUS GOP's frames, which the cut left behind - so the decode cannot start
-there; HandBrake's sync corrects by dropping them and the encode comes out a few
-frames short of the copy-cut reference. The frame-count gate then refuses the pair
-- correctly: the measured pair would compare different content. Measured on the
-2160p h265 remux window cut at a CRA frame (the issue's repro, `ffmpeg -ss 600
--i REMUX -t 600 -c copy`): the encode dropped 2 frames (14411 reference vs 14408
-output, HandBrake's own log naming it: `sync: video time went backwards 83 ms,
-dropped 2 frames. PTS 0`), so the pair could not be scored; the window itself is
-fine, the CUT is the defect. **No pre-encode check names the safe cut**, and
-trying to build one hits a wall on every front: `ffprobe` cannot distinguish the
-start (`pict_type` has no IDR member - an HEVC IDR and a CRA both print `I`;
-`key_frame=1` matches CRA too), and a decode test cannot see the defect either
-(`ffmpeg -v error -i CUT.mkv -f null -` prints nothing and exits 0 - measured:
-ffmpeg suppresses the missing-reference error for CRA and fills the reference
-silently). The working recipe is ITERATIVE and uses the two oracles that do
-exist: list the keyframe positions (`ffprobe -skip_frame nokey -show_frames
--show_entries frame=pts_time`), cut at one, encode, and read the ENCODE'S OWN
-LOG - `sync: ... dropped N frames` means the cut landed on an open GOP's RASL
-group: re-cut at the PREVIOUS keyframe and encode again (a closed-GOP source,
-x264's default, has no RASL pictures and any keyframe cut is safe; an open-GOP
-one, x265's default, needs this loop). **Each step back consumes one GOP**: on a
-fully open-GOP source the previous keyframe is another CRA and the retry
-reproduces the failure one GOP earlier - the loop terminates when the kept
-prefix spans the PRECEDING GOP (the cut's RASL group then references frames the
-window still holds), which means keeping a little more before the measured
-window than the measurement itself needs, or (equivalently) trimming the
-COPY-CUT reference to the same later range - both sides of the pair must move
-together, since a reference that starts earlier than the encode reproduces the
-misalignment the gate refuses. The frame-count gate is the final oracle: a pair
-that passes it is aligned by construction. That is the gate working, not a
-measurement failure to route around.
+**Cut the window at a keyframe, then read the log (the open-GOP caveat).** A stream-copy
+cut that lands inside an open-GOP span hands HandBrake a stream whose first frames are
+the open GOP's RASL leading pictures - they reference the PREVIOUS GOP's frames, which
+the cut left behind - so the decode cannot start there; HandBrake's sync corrects by
+dropping them and the encode comes out a few frames short of the copy-cut reference. The
+frame-count gate then refuses the pair - correctly: the measured pair would compare
+different content. Measured on the 2160p h265 remux window cut at a keyframe (the
+issue's repro, `ffmpeg -ss 600 -i REMUX -t 600 -c copy`; the record names no bitstream
+type for that keyframe, and `ffprobe` cannot establish one - see below): the encode
+dropped 2 frames (14,411 reference vs 14,408 output, HandBrake's own log naming it:
+`sync: video time went backwards 83 ms, dropped 2 frames. PTS 0`), so the pair could not
+be scored. The refusal is measured; reading it as "the window itself is fine, the CUT is
+the defect" is #494's interpretation - the mechanism below is unmeasured on this remux,
+and the only other candidate reading (the window's own head) was never separated from
+the cut in any run. **No pre-encode check names the safe cut**, and trying to build one
+hits a wall on every front: `ffprobe` cannot distinguish the start (`pict_type` has no
+IDR member - an HEVC IDR and a CRA both print `I`; `key_frame=1` matches CRA too), and a
+decode test cannot see the defect either (`ffmpeg -v error -i CUT.mkv -f null -` prints
+nothing and exits 0 - measured: ffmpeg suppresses the missing-reference error for CRA
+and fills the reference silently). The recipe is ITERATIVE and uses the two oracles that
+do exist: list the keyframe positions (`ffprobe -skip_frame nokey -show_frames
+-show_entries frame=pts_time`), cut at one, encode, and read the ENCODE'S OWN LOG -
+`sync: ... dropped N frames` means the cut landed on an open GOP's RASL group: re-cut at
+the PREVIOUS keyframe and encode again (a closed-GOP source, x264's default, has no RASL
+pictures and any keyframe cut is safe; an open-GOP one, x265's default, needs this loop;
+the recipe is untested on this source - no run has executed a previous-keyframe re-cut,
+see the paragraph below). **Each step back consumes one GOP**: on a fully open-GOP
+source the previous keyframe is another CRA and the retry reproduces the failure one GOP
+earlier - the loop terminates when the kept prefix spans the PRECEDING GOP (the cut's
+RASL group then references frames the window still holds), which means keeping a little
+more before the measured window than the measurement itself needs, or (equivalently)
+trimming the COPY-CUT reference to the same later range - both sides of the pair must
+move together, since a reference that starts earlier than the encode reproduces the
+misalignment the gate refuses. The frame-count gate is the final oracle: a pair that
+passes it is aligned by construction. That is the gate working, not a measurement
+failure to route around.
 
 **Check the recipe line, not just the delta.** The script derives the model and the
 analysis pixel format from the pair itself, and it prints them:
@@ -178,6 +180,43 @@ is not a parity result:
 If the printed recipe does not match ab-av1's own `format=` and `model=` on the same
 pair, the run is measuring something else. Compare the two command lines (the script
 prints ab-av1's), do not read the delta.
+
+**A stream-copy window of this remux produced no measurable window pair in the runs
+recorded.** The re-measure behind the counts above (issue #432): the 10-minute window
+was stream-copied from an input seek at 600 s (the issue's repro command, `-ss` before
+`-i`) - the seek point lands just before the keyframe at 600.125 s, so the copy starts
+on that keyframe - and its HandBrake encode dropped frames at the head: the first run's
+log says `sync: video time went backwards 83 ms, dropped 2 frames`, and the frame counts
+measure 14,411 / 14,408. The first run's two numbers are different measures (the log
+names the frames sync discarded; the count delta also carries what the muxer absorbed);
+the third frame is unexplained, and the log's own drop count varies between the runs (2
+then 3) - also unexplained. A re-cut "onto its first keyframe" (`-ss 0.125` before `-i`)
+was then measured to test the recipe above, and it produced the SAME window - identical
+duration (601.351 s), identical head (keyframe 0.125, then 0.167/0.209/0.251), identical
+mid keyframe (299.466) and tail (601.309), equal size (6,822,081,447 B; not
+byte-identical - container mux metadata differs) - because ffmpeg's copy mode snaps
+packets to the keyframe span. **What the measurement establishes: a re-cut aimed at the
+same keyframe is a no-op through copy mode, and no run on this source has yet executed
+the re-cut the recipe prescribes (the previous keyframe) - the recipe itself is untested
+here.** Whether a previous-keyframe re-cut changes the span under copy-mode snapping,
+and whether the loop then terminates as the recipe says, is unmeasured. The RASL
+mechanism above is #494's reading (ffmpeg source reads and a generated open-GOP clip);
+on this remux it stands as hypothesis, unmeasured - what is measured here is only the
+refusal (twice, on one window) and the snapping. Both runs' pairs were refused by the
+parity script's frame-count gate (#408/#419), which is that gate working, not a parity
+defect; this source is declared unmeasurable for the window pair on that evidence, with
+the counts recorded.
+
+The encode path did not fail on this window: it encoded, chose CRF 33 by probe against
+this run's target 95.5 (the HDR override: 96.0 default minus the 0.5 calibration, issue
+#103), saved 94.13%, and replaced normally. (The recorded probe VMAF 95.63 is reported
+as measured, not as an aligned-pair score: the probe search measures probe encodes of
+this window's samples, the same shape whose alignment this section shows is not
+guaranteed on this source, and whether the probe path's alignment is affected here is
+unmeasured.) An operator who wants a whole-file VMAF number on this class runs the full
+file (not a window) - believed, not verified here: the pipeline's `--verify` measurement
+has no window head to dangle on a whole file, but whether it tolerates this source's
+structure is untested; treat it as the candidate, not a documented working route.
 
 ### 5. An HDR10 pair
 
@@ -237,14 +276,21 @@ A frame-count mismatch means the two sides are not comparing the same frames, an
 score is meaningless whatever the delta says. `scripts/vmaf_parity.py` reports such a pair
 as **unmeasured** and fails the run instead of printing a number for it.
 
-**Build this pair from whole files.** The one shape that reliably produces a mismatch is a
-reference cut with `-ss` (whose keyframe-accurate copy cut starts on an earlier keyframe, so it
-holds more content than the window asked for) measured against a HandBrake segment made with
-`--start-at`/`--stop-at` (which trims to the exact frame). The two sides then cover
-different content windows and their frame counts differ. Production produces neither shape:
+**Build this pair from whole files.** Two kinds of pair reproducibly produce a mismatch.
+One is a reference cut with `-ss` (whose keyframe-accurate copy cut starts on an earlier
+keyframe, so it holds more content than the window asked for) measured against a
+HandBrake segment made with `--start-at`/`--stop-at` (which trims to the exact frame).
+The other is a stream-copy window of the open-GOP remux pair 4 measures, against its own
+whole-window HandBrake encode: the window's head lost frames in both measured runs (the
+same shape step 6's probe pair builds in production, whose alignment on this source is
+unmeasured). Neither shape is the shape the verification path compares -
 `build_encode_command` has no trim options, and the verification compares a whole output
-against a whole source. That shape is a harness artifact and its score must never be reported
-as a parity result (issue #408).
+against a whole source. On the first shape a mismatch is a harness artifact; on the
+second it is the probe measurement disagreeing with its own reference - and production
+catches none of it: `measure_vmaf` counts no frames, so the search keeps a probe score
+whose alignment on this source is unmeasured (the 95.63 above) and the CRF choice may
+rest on it. Either way the score must never be reported as a parity result (issues #408
+and #432).
 
 ## Reporting the run
 
