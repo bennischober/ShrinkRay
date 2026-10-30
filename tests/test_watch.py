@@ -404,6 +404,7 @@ class TestWatch(unittest.TestCase):
         whatever get_category(root_a, movie) produced)."""
 
         from shrinkray import db
+        from shrinkray.engine import scan as scan_mod
         from shrinkray.engine import watch as watch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -435,10 +436,13 @@ class TestWatch(unittest.TestCase):
 
                 def fake_scan(movie, root, config, db_file=None):
                     # the scan's category computation, performed on the root
-                    # the watcher handed over: upsert the row the way the real
-                    # scan would, with the category derived from THIS root
+                    # the watcher handed over - PRODUCTION's own get_category
+                    # (with its Uncategorized fallback), so restoring roots[0]
+                    # fails cleanly on the assert below instead of a
+                    # ValueError inside this fake, and the recorded row is a
+                    # pin on production behavior, not this test's arithmetic
                     scan_roots.append((movie, root))
-                    category = str(movie.parent.relative_to(root))
+                    category = scan_mod.get_category(movie, root)
                     db.upsert_file(
                         connection,
                         db.MovieRecord(
