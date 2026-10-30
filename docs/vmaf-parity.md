@@ -144,15 +144,16 @@ If the printed recipe does not match ab-av1's own `format=` and `model=` on the 
 pair, the run is measuring something else. Compare the two command lines (the script
 prints ab-av1's), do not read the delta.
 
-**A stream-copy window of an open-GOP source cannot produce a measurable whole-file
+**A stream-copy window of this open-GOP remux cannot produce a measurable whole-file
 pair.** Measured on the library's 2160p HEVC remux (issue #432): the 10-minute window
 cut with an input seek to 600 s lands just before the keyframe at 600.125 s - the
 window's first frame is NOT a keyframe (first key at 0.125 s internally) - and its
 HandBrake encode dropped frames at the head: the first run's log says `sync: video
 time went backwards 83 ms, dropped 2 frames`, and the frame counts measure 14,411 /
-14,408. The two numbers are different measures (the log names the frames sync
-discarded; the count delta also carries what the muxer absorbed); the third frame is
-unexplained. A re-measure re-cut the window "onto its first keyframe" (`-ss 0.125`
+14,408. The first run's two numbers are different measures (the log names the frames
+sync discarded; the count delta also carries what the muxer absorbed); the third
+frame is unexplained, and the log's own drop count varies between the runs (2 then 3)
+- also unexplained. A re-measure re-cut the window "onto its first keyframe" (`-ss 0.125`
 before `-i`) and produced the SAME window - identical duration (601.351 s), identical
 head (keyframe 0.125, then 0.167/0.209/0.251), identical mid keyframe (299.466) and
 tail (601.309), equal size - because ffmpeg's copy mode snaps packets to the keyframe
@@ -230,7 +231,7 @@ A frame-count mismatch means the two sides are not comparing the same frames, an
 score is meaningless whatever the delta says. `scripts/vmaf_parity.py` reports such a pair
 as **unmeasured** and fails the run instead of printing a number for it.
 
-**Build this pair from whole files.** Two shapes reliably produce a mismatch. One is a
+**Build this pair from whole files.** Two shapes reproducibly produce a mismatch. One is a
 reference cut with `-ss` (whose keyframe-accurate copy cut starts on an earlier keyframe, so it
 holds more content than the window asked for) measured against a HandBrake segment made with
 `--start-at`/`--stop-at` (which trims to the exact frame). The other is a stream-copy window of
