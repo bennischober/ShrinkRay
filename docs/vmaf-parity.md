@@ -128,11 +128,16 @@ PREVIOUS GOP's frames, which the cut left behind - so the decode cannot start
 there; HandBrake's sync corrects by dropping them and the encode comes out a few
 frames short of the copy-cut reference. The frame-count gate then refuses the pair
 - correctly: the measured pair would compare different content. Measured on the
-2160p h265 remux window cut at a CRA frame (the issue's repro, `ffmpeg -ss 600
--i REMUX -t 600 -c copy`): the encode dropped 2 frames (14411 reference vs 14408
+2160p h265 remux window cut at a keyframe (the issue's repro, `ffmpeg -ss 600
+-i REMUX -t 600 -c copy`; the record names no bitstream type for that keyframe,
+and `ffprobe` cannot establish one - see below): the encode dropped 2 frames
+(14411 reference vs 14408
 output, HandBrake's own log naming it: `sync: video time went backwards 83 ms,
-dropped 2 frames. PTS 0`), so the pair could not be scored; the window itself is
-fine, the CUT is the defect. **No pre-encode check names the safe cut**, and
+dropped 2 frames. PTS 0`), so the pair could not be scored. The refusal is
+measured; reading it as "the window itself is fine, the CUT is the defect" is
+#494's interpretation - the mechanism below is unmeasured on this remux, and
+the only other candidate reading (the window's own head) was never separated
+from the cut in any run. **No pre-encode check names the safe cut**, and
 trying to build one hits a wall on every front: `ffprobe` cannot distinguish the
 start (`pict_type` has no IDR member - an HEVC IDR and a CRA both print `I`;
 `key_frame=1` matches CRA too), and a decode test cannot see the defect either
@@ -144,7 +149,8 @@ exist: list the keyframe positions (`ffprobe -skip_frame nokey -show_frames
 LOG - `sync: ... dropped N frames` means the cut landed on an open GOP's RASL
 group: re-cut at the PREVIOUS keyframe and encode again (a closed-GOP source,
 x264's default, has no RASL pictures and any keyframe cut is safe; an open-GOP
-one, x265's default, needs this loop). **Each step back consumes one GOP**: on a
+one, x265's default, needs this loop; the recipe is untested on this source -
+no run has executed a previous-keyframe re-cut, see the paragraph below). **Each step back consumes one GOP**: on a
 fully open-GOP source the previous keyframe is another CRA and the retry
 reproduces the failure one GOP earlier - the loop terminates when the kept
 prefix spans the PRECEDING GOP (the cut's RASL group then references frames the
@@ -193,16 +199,15 @@ first keyframe" (`-ss 0.125` before `-i`) was then measured to test the recipe
 above, and it produced the SAME window - identical duration (601.351 s), identical
 head (keyframe 0.125, then 0.167/0.209/0.251), identical mid keyframe (299.466) and
 tail (601.309), equal size (6,822,081,447 B; not byte-identical - container mux
-metadata differs) - because ffmpeg's copy mode snaps packets to the keyframe span
-whether the seek lands before or after `-i`. **What the measurement establishes:
-the recipe's re-cut step, aimed at the same keyframe, is a no-op through copy
-mode, and no run on this source has yet executed the re-cut the recipe prescribes
-(the previous keyframe) - the recipe itself is untested here.** Whether a
-previous-keyframe re-cut changes the span under copy-mode snapping, and whether
-the loop then terminates as the recipe says, is unmeasured. The RASL mechanism
-above is #494's reading (ffmpeg source reads and a generated open-GOP clip); on
-this remux it stands as hypothesis, unmeasured - what is measured here is only
-the refusal (twice, on one window) and the snapping. Both runs' pairs were refused
+metadata differs) - because ffmpeg's copy mode snaps packets to the keyframe span.
+**What the measurement establishes: a re-cut aimed at the same keyframe is a
+no-op through copy mode, and no run on this source has yet executed the re-cut
+the recipe prescribes (the previous keyframe) - the recipe itself is untested
+here.** Whether a previous-keyframe re-cut changes the span under copy-mode
+snapping, and whether the loop then terminates as the recipe says, is unmeasured.
+The RASL mechanism above is #494's reading (ffmpeg source reads and a generated
+open-GOP clip); on this remux it stands as hypothesis, unmeasured - what is
+measured here is only the refusal (twice, on one window) and the snapping. Both runs' pairs were refused
 by the parity script's frame-count gate (#408/#419), which is that gate working,
 not a parity defect; this source is declared unmeasurable for the window pair on
 that evidence, with the counts recorded.
