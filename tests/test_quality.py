@@ -3,6 +3,7 @@
 import json
 import math
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -1787,6 +1788,72 @@ class TestProbeCache(unittest.TestCase):
         ):
             factor = engine_search.estimate_size_factor(**{**defaults, **kwargs})
         return factor, encodes
+
+    def _recording_connect(self):
+        """Patches db.connect to record every probe-cache connection."""
+        opened: list[sqlite3.Connection] = []
+        real_connect = db.connect
+
+        def recording_connect(db_path):
+            connection = real_connect(db_path)
+            opened.append(connection)
+            return connection
+
+        return opened, patch("shrinkray.db.connect", side_effect=recording_connect)
+
+    def assert_closed(self, connections):
+        self.assertTrue(connections, "the probe opened no cache connection to check")
+        for connection in connections:
+            with self.assertRaises(sqlite3.ProgrammingError, msg="the connection was left open"):
+                connection.execute("SELECT 1")
+
+    def test_a_failed_vmaf_measurement_closes_the_cache_connection(self):
+        """Issue #480: the probe holds its cache connection across the encode
+        and the measurement; a measurement that raised left it to the garbage
+        collector instead of closing it."""
+
+        def fake_run(command, cancel=None):
+            Path(command[command.index("--output") + 1]).write_bytes(b"z" * 4)
+            return 0, ""
+
+        opened, recording = self._recording_connect()
+        with (
+            recording,
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(engine_search, "_run", side_effect=fake_run),
+            patch.object(engine_search, "measure_vmaf", side_effect=RuntimeError("libvmaf failed")),
+            self.assertRaises(RuntimeError),
+        ):
+            engine_search.probe_crf(
+                [(self.sample, 10.0)],
+                20,
+                self.workdir,
+                "hb",
+                self.movie,
+                10.0,
+                "svt_av1",
+                "medium",
+                db_file=self.db_file,
+            )
+        self.assert_closed(opened)
+
+    def test_a_failed_probe_cache_write_closes_the_connection(self):
+        """A cache write that raises (a full disk) closes the connection, in
+        both the VMAF probe and the size probe."""
+        full = sqlite3.OperationalError("database or disk is full")
+        for name, call in (
+            ("probe_crf", self._probe),
+            ("estimate_size_factor", self._size_factor),
+        ):
+            with self.subTest(name):
+                opened, recording = self._recording_connect()
+                with (
+                    recording,
+                    patch("shrinkray.db.save_probe_score", side_effect=full),
+                    self.assertRaises(sqlite3.OperationalError),
+                ):
+                    call()
+                self.assert_closed(opened)
 
     def test_size_and_vmaf_caches_do_not_collide(self):
         """The same (sample, CRF) probed as size ratio and as VMAF score are

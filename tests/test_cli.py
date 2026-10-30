@@ -1299,11 +1299,11 @@ class TestStartupBacklog(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        # a cleanup, not tearDown: cleanups run last-in first-out, so each
+        # state's connection (registered later) closes before its file goes
+        self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "library"
         self.root.mkdir()
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
 
     def _state(self) -> "object":
         from shrinkray.server import app as app_module
@@ -1313,7 +1313,9 @@ class TestStartupBacklog(unittest.TestCase):
             mock.patch.object(app_module, "JobQueue"),
             mock.patch.object(app_module, "JobWorker"),
         ):
-            return app_module.AppState(Path(self.tmp.name) / "m.db")
+            state = app_module.AppState(Path(self.tmp.name) / "m.db")
+        self.addCleanup(state.shutdown)
+        return state
 
     def test_the_backlog_is_off_by_default(self) -> None:
         """A developer's dashboard must not start encoding the library."""

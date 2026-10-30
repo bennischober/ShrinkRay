@@ -52,6 +52,29 @@ class TestDb(unittest.TestCase):
         version = self.connection.execute("SELECT version FROM schema_version").fetchone()
         self.assertEqual(version["version"], db.SCHEMA_VERSION)
 
+    def test_a_failed_schema_setup_closes_the_connection(self):
+        """Issue #480: a migration that raises inside connect() must not leave
+        the half-set-up connection to the garbage collector - the caller never
+        received it, so nothing else could close it."""
+        opened: list[sqlite3.Connection] = []
+        real_connect = sqlite3.connect
+
+        def recording_connect(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            opened.append(connection)
+            return connection
+
+        db_file = Path(self.tmp.name) / "failing.db"
+        with (
+            patch("shrinkray.db.sqlite3.connect", side_effect=recording_connect),
+            patch("shrinkray.db._migrate", side_effect=sqlite3.OperationalError("disk I/O error")),
+            self.assertRaises(sqlite3.OperationalError),
+        ):
+            db.connect(db_file)
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(sqlite3.ProgrammingError, msg="the connection was left open"):
+            opened[0].execute("SELECT 1")
+
     def test_migration_v1_to_v2(self):
         # simulate a v1 database: current schema without the quality columns
 
