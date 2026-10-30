@@ -166,8 +166,9 @@ references dangle at a window's head, and HandBrake's sync drops the dangling fr
 while the copy keeps them. Both runs' pairs were refused by the frame-count gate
 (#408/#419), which is the gate working, not a parity defect; this source is declared
 unmeasurable for the window pair on that evidence, with the counts recorded.
-The encode path did not fail on this window: it encoded, chose CRF 33 by probe, saved
-94.13%, and replaced normally. (The recorded probe VMAF 95.63 is reported as measured,
+The encode path did not fail on this window: it encoded, chose CRF 33 by probe against
+this run's target 95.5 (the HDR override: 96.0 default minus the 0.5 calibration, issue
+#103), saved 94.13%, and replaced normally. (The recorded probe VMAF 95.63 is reported as measured,
 not as an aligned-pair score: the probe search measures probe encodes of this window's
 samples, the same shape whose alignment this section shows is not guaranteed on this
 source, and whether the probe path's alignment is affected here is unmeasured.) An
@@ -244,9 +245,10 @@ head lost frames in both measured runs (the same shape step 6's probe pair build
 production, whose alignment on this source is unmeasured). Neither shape is the shape the
 verification path compares - `build_encode_command` has no trim options, and the verification
 compares a whole output against a whole source. On the first shape a mismatch is a harness
-artifact; on the second it is the probe measurement disagreeing with its own reference, which
-would leave the CRF choice unmeasured rather than merely off-path. Either way the score must
-never be reported as a parity result (issues #408 and #432).
+artifact; on the second it is the probe measurement disagreeing with its own reference - and
+production catches none of it: `measure_vmaf` counts no frames, so the search keeps the
+misaligned probe score (the 95.63 above) and the CRF choice rests on it. Either way the score
+must never be reported as a parity result (issues #408 and #432).
 
 ## Reporting the run
 
