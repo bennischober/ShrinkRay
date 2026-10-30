@@ -78,10 +78,11 @@ class TestSampledWindowPositiveExit(unittest.TestCase):
     decode, or 255 from a caught outside signal) measured nothing: the veto
     rule (bars common to every sampled frame) cannot be evaluated for that
     window, so treating it as bar-free would risk cutting into picture -
-    the exact loss the veto exists to prevent (issue #403). The decided
-    rule is fail-closed: the whole file is left uncropped and the failure
-    is logged with ffmpeg's exit code (the same outcome a window killed by
-    a signal already gets, crop.py's negative-code branch).
+    the exact loss the veto exists to prevent (issue #403). The INTERIM
+    rule is fail-closed (the maintainer's call is open - the issue carries
+    needs-decision): the whole file is left uncropped and the failure is
+    logged with ffmpeg's exit code (the same outcome a window killed by a
+    signal already gets, crop.py's negative-code branch).
     """
 
     def setUp(self) -> None:
@@ -145,6 +146,17 @@ class TestSampledWindowPositiveExit(unittest.TestCase):
         )
         self.assertIsNone(result)
         self.assertTrue(any("exited 1" in l for l in lines), f"log: {lines}")
+
+    def test_an_exit0_window_without_a_crop_line_also_vetoes(self) -> None:
+        """windows [(0, no-crop-output), bars, bars]: an exit-0 window that
+        prints no crop line measured nothing (a window past the stream's
+        end) - the same veto consequence as a failed window (review round 1,
+        finding 3)."""
+        result, lines = self._run_windows(
+            [(0, "no crop line here"), (0, "crop=1920:800:0:140"), (0, "crop=1920:800:0:140")]
+        )
+        self.assertIsNone(result, "a window with no reading must veto the crop")
+        self.assertTrue(any("measured no bars" in l for l in lines), f"log: {lines}")
 
     def test_a_failed_window_alone_still_logs_and_uncrops(self) -> None:
         """windows [(255, error)] only: the file is uncropped and the exit
