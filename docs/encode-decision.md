@@ -61,7 +61,7 @@ Every gate is a cheap question asked before the expensive next step.
 | 2 | Resolution | At least the 1080p class — width >= 1920 OR height >= 1080? (`is_1080p_class`, `engine/plan.py:244`; the floors may be raised, never lowered — issue #246; the width arm is issue #233) | skip — too few pixels to save |
 | 3 | Size | At least the configured size floor? (`min_source_size_gb`, `engine/plan.py:419`) | skip — payoff below the probe cost |
 | 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` extended by the config's `candidate_codecs`, `engine/plan.py:55`; the list may be extended, never shrunk — issue #233) | skip — a source codec outside the list is not re-encoded |
-| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py`, called at `engine/plan.py:616`) | no crop; the encode proceeds uncropped |
+| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py`, called at `engine/plan.py:616`) | no crop; the encode proceeds uncropped. A sampled window whose ffmpeg fails (any positive exit, including 255 from a caught signal) leaves the file uncropped and is logged: that window measured nothing, so the common-bars rule cannot be evaluated and the safe direction wins — issue #403 |
 | 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:651`) | skip — target unreachable |
 | 7 | **Size gate** | Would the result be smaller? (`engine/search.py:722` at the bound CRF, and at the chosen CRF `:764` from every window's cached encoded bytes — `check_chosen_crf_shrinks`) | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, **with the crop** | — |
