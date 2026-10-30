@@ -121,7 +121,7 @@ The same command on a 2160p source. Above 2560x1440 both sides switch to
 threshold). A 4K scope film cropped below 1440 lines stays on the 1080p model at
 native size, exactly as ab-av1 scores it - pass `--crop` so both sides agree.
 
-**Cut the window from a CLOSED-GOP keyframe boundary (the open-GOP caveat).** A
+**Cut the window from a closed-GOP keyframe boundary (the open-GOP caveat).** A
 stream-copy cut that lands inside an open-GOP span hands HandBrake a stream whose
 first frames are the open GOP's RASL leading pictures — they reference the
 PREVIOUS GOP's frames, which the cut left behind — so the decode cannot start
@@ -132,16 +132,18 @@ frames short of the copy-cut reference. The frame-count gate then refuses the pa
 -i REMUX -t 600 -c copy`): the encode dropped 2 frames (14411 reference vs 14408
 output, HandBrake's own log naming it: `sync: video time went backwards 83 ms,
 dropped 2 frames. PTS 0`), so the pair could not be scored; the window itself is
-fine, the CUT is the defect. The recipe: cut AT an IDR/closed-GOP keyframe.
-Finding one with `ffprobe -select_streams v -show_frames -show_entries
-frame=key_frame,pict_type` and reading `pict_type=IDR` — a plain `key_frame=1` is
-NOT enough: an HEVC CRA frame reports `key_frame=1` too and is exactly an open-GOP
-start (RASL pictures follow it). A closed-GOP source (x264's default) has only IDR
-keyframes and every keyframe-boundary cut is safe; an open-GOP one (x265
-default) needs the IDR check. **A HandBrake log line naming dropped frames
-predicts a misaligned pair** - when you see `sync: ... dropped N frames` in the
-encode's log, the frame-count gate will refuse the pair; that is the gate working,
-not a measurement failure to route around.
+fine, the CUT is the defect. **The recipe is the decode test, not a keyframe
+flag:** `ffprobe` cannot name the safe start — `pict_type` has no IDR member (an
+HEVC IDR and a CRA both print `pict_type=I`), and `key_frame=1` matches CRA too;
+what predicts the pair's fate is whether the cut decodes cleanly from its own
+start: `ffmpeg -v error -i CUT.mkv -f null -` must print NOTHING (a
+RASL-reference failure names the open-GOP cut), and the encode's own log is the
+second predictor. A closed-GOP source (x264's default) has no RASL pictures and
+every cut is safe; an open-GOP one (x265 default) needs the decode test. **A
+HandBrake log line naming dropped frames predicts a misaligned pair** - when you
+see `sync: ... dropped N frames` in the encode's log, the frame-count gate will
+refuse the pair; that is the gate working, not a measurement failure to route
+around.
 
 **Check the recipe line, not just the delta.** The script derives the model and the
 analysis pixel format from the pair itself, and it prints them:
