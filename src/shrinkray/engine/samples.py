@@ -141,37 +141,7 @@ def extract_samples(
                 }
             )
         sample = workdir / f"sample_{index}.mkv"
-        code, err = _run(
-            [
-                FFMPEG_BINARY,
-                "-y",
-                "-v",
-                "error",
-                "-ss",
-                f"{offset:.3f}",
-                "-t",
-                f"{seconds:.3f}",
-                "-i",
-                str(movie),
-                "-map",
-                "0:v:0",
-                "-c:v",
-                "copy",
-                "-avoid_negative_ts",
-                "make_zero",
-                "-an",
-                str(sample),
-            ],
-            cancel=cancel,
-        )
-        if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
-            # the container cannot hold the source codec: re-extract losslessly
-            # so the reference stays pristine, and say so - this path costs a
-            # full decode and encode instead of a copy
-            log_warning(
-                f"Sample extraction could not stream-copy '{movie.name}' "
-                f"at {offset:.0f}s; re-extracting losslessly (slower)."
-            )
+        try:
             code, err = _run(
                 [
                     FFMPEG_BINARY,
@@ -187,7 +157,7 @@ def extract_samples(
                     "-map",
                     "0:v:0",
                     "-c:v",
-                    "ffv1",
+                    "copy",
                     "-avoid_negative_ts",
                     "make_zero",
                     "-an",
@@ -195,6 +165,46 @@ def extract_samples(
                 ],
                 cancel=cancel,
             )
+        except OSError as e:
+            # the binary cannot spawn (missing after startup, EMFILE/ENOMEM):
+            # this step's documented failure shape is RuntimeError (issue #458
+            # - the call site knows what the failure means; the runner stays
+            # unguarded per #401's record)
+            raise RuntimeError(f"sample extraction cannot run '{FFMPEG_BINARY}': {e}") from e
+        if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
+            # the container cannot hold the source codec: re-extract losslessly
+            # so the reference stays pristine, and say so - this path costs a
+            # full decode and encode instead of a copy
+            log_warning(
+                f"Sample extraction could not stream-copy '{movie.name}' "
+                f"at {offset:.0f}s; re-extracting losslessly (slower)."
+            )
+            try:
+                code, err = _run(
+                    [
+                        FFMPEG_BINARY,
+                        "-y",
+                        "-v",
+                        "error",
+                        "-ss",
+                        f"{offset:.3f}",
+                        "-t",
+                        f"{seconds:.3f}",
+                        "-i",
+                        str(movie),
+                        "-map",
+                        "0:v:0",
+                        "-c:v",
+                        "ffv1",
+                        "-avoid_negative_ts",
+                        "make_zero",
+                        "-an",
+                        str(sample),
+                    ],
+                    cancel=cancel,
+                )
+            except OSError as e:
+                raise RuntimeError(f"sample re-extract cannot run '{FFMPEG_BINARY}': {e}") from e
         if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
             raise RuntimeError(f"sample extraction failed at {offset:.0f}s: {err[-400:]}")
         samples.append((sample, offset))

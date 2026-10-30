@@ -915,6 +915,60 @@ class TestProbeCache(unittest.TestCase):
             score = engine_search.probe_crf(**{**defaults, **kwargs})
         return score, encodes
 
+    def test_an_unspawnable_binary_raises_the_probe_shape(self):
+        """Issue #458: a spawn failure at the probe-encode seam raises the
+        step's documented RuntimeError (the binary named), not a raw OSError
+        traceback - the CRF search must never read 'binary missing' as a
+        failed probe encode (a wrong decision)."""
+
+        def broken_run(command, cancel=None):
+            raise FileNotFoundError(2, "No such file or directory", command[0])
+
+        with (
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(engine_search, "_run", side_effect=broken_run),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            engine_search.probe_crf(
+                [(self.sample, 10.0)],
+                20,
+                self.workdir,
+                "hb",
+                self.movie,
+                10.0,
+                "svt_av1",
+                "medium",
+                db_file=None,
+            )
+        self.assertIn("probe encode cannot run 'hb'", str(ctx.exception))
+
+    def test_a_size_probe_spawn_failure_raises_the_probe_shape(self):
+        """Issue #458: the size probe's seam converts a spawn failure to its
+        RuntimeError shape (the binary named)."""
+
+        def broken_run(command, cancel=None):
+            raise FileNotFoundError(2, "No such file or directory", command[0])
+
+        with (
+            # the cache key's tool metadata is a real subprocess seam (the
+            # sibling probe pin stubs it too); this test's subject is the
+            # encode seam
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
+            patch.object(engine_search, "_run", side_effect=broken_run),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            engine_search.estimate_size_factor(
+                [(self.sample, 10.0)],
+                self.workdir,
+                "hb",
+                20,
+                self.movie,
+                10.0,
+                "svt_av1",
+                "medium",
+            )
+        self.assertIn("size probe encode cannot run 'hb'", str(ctx.exception))
+
     def test_probe_crf_returns_the_mean_of_samples(self):
         """probe_crf aggregates with the MEAN, not the minimum.
 

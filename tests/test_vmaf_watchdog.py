@@ -73,6 +73,46 @@ class TestVmafMeasurementOutlivesTheWatchdog(unittest.TestCase):
         finally:
             process_mod._stall_minutes = old_stall
 
+    def test_an_unspawnable_binary_raises_the_measure_shape(self):
+        """Issue #458: a spawn failure at the VMAF measurement's seam raises
+        the step's documented RuntimeError (the binary named), not a raw
+        OSError traceback."""
+
+        from shrinkray.tools import process as process_mod
+        from shrinkray.tools import vmaf as vmaf_mod
+
+        old_stall = process_mod._stall_minutes
+        try:
+            process_mod.configure_stall(5.0 / 60.0)
+            with (
+                mock.patch.object(
+                    vmaf_mod,
+                    "_run",
+                    side_effect=FileNotFoundError(2, "No such file or directory", "ffmpeg"),
+                ),
+                mock.patch.object(
+                    vmaf_mod, "detect_vmaf_style", return_value=vmaf_mod.VMAF_STYLE_MODERN
+                ),
+                # the recipe's probe is NOT this test's subject (it would run
+                # a real ffprobe on a nonexistent path): stub it with a real
+                # model name so the model copy works and the _run stub is what
+                # raises
+                mock.patch.object(
+                    vmaf_mod,
+                    "_recipe_for_file",
+                    return_value=vmaf_mod.vmaf_recipe(crop=None, hdr=False),
+                ),
+                tempfile.TemporaryDirectory() as t,
+            ):
+                tmp = Path(t)
+                workdir = tmp / "work"
+                workdir.mkdir()
+                with self.assertRaises(RuntimeError) as ctx:
+                    vmaf_mod.measure_vmaf(tmp / "d.mkv", tmp / "r.mkv", workdir)
+        finally:
+            process_mod._stall_minutes = old_stall
+        self.assertIn("VMAF measurement cannot run 'ffmpeg'", str(ctx.exception))
+
     def test_silent_measurement_completes_under_a_short_watchdog(self):
         """The issue's acceptance criterion: a full-precision measure_vmaf on a
         >watchdog-window-silent file completes instead of being killed."""
