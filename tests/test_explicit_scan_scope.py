@@ -79,12 +79,20 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
     def test_three_explicit_scans_do_not_delete_unenumerated_rows(self) -> None:
         """The maintainer's reproduction (issue #453): a full folder scan, then
         three explicit scans of a.mkv - b.mkv and .previews/h.mkv must keep
-        their rows and encode history (missing_scans untouched).
+        their rows AND their encode history (the issue's sharpest edge: the
+        third scan hard-deleted the rows together with their encodes).
         """
         self._catalogue_all()
         a = self.root / "a.mkv"
         b = self.root / "b.mkv"
         h = self.root / ".previews" / "h.mkv"
+        # the history handles are captured at insert time (the recorded
+        # pairing: the encodes' rows must SURVIVE the explicit scans)
+        hist_ids: dict[Path, int] = {}
+        for path in (b, h):
+            hist_ids[path] = self.connection.execute(
+                "SELECT id FROM files WHERE path = ?", (str(path),)
+            ).fetchone()[0]
 
         for _ in range(3):
             engine_scan.scan_movies(
@@ -99,6 +107,13 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         self.assertEqual(self._row_state(a), (0, True))
         self.assertEqual(self._row_state(b), (0, True))
         self.assertEqual(self._row_state(h), (0, True))
+        # the unenumerated rows' encode history survives with them:
+        for path in (b, h):
+            hist = self.connection.execute(
+                "SELECT COUNT(*) FROM encodes WHERE file_id = ?",
+                (hist_ids[path],),
+            ).fetchone()[0]
+            self.assertEqual(hist, 1, f"{path.name}'s encode history vanished")
 
     def test_an_explicit_glob_does_not_delete_the_files_it_missed(self) -> None:
         """The *.mkv glob case: files=[a, b] must leave c.mp4's row alone."""
@@ -191,9 +206,10 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         - `b.mkv` IS in the walk list and vanishes after it: the on-disk
           filter flags it - deleting the `if m.exists()` filter instead
           RESETS its grace counter (the walked branch's own pin);
-        - `d.mkv` is catalogued but NOT in the walk list (it was created
-          after the walk): only the walked branch's scope reconcile sees it
-          - deleting the `and not walked` clause leaves its row untouched
+        - `d.mkv` is catalogued but NOT in the walk list (the walk list is
+          captured before d is written to disk - the on-disk file appears
+          after the walk, so only the walked branch's scope reconcile sees
+          it): deleting the `and not walked` clause leaves its row untouched
           forever (the clause's own pin).
         """
         self._catalogue_all()
@@ -383,7 +399,7 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         # its encodes are gone; b (unenumerated) keeps row + encodes. The
         # history counts use the CAPTURED ids: after a's row is deleted a
         # path-subselect resolves to NULL and matches nothing - 0 by
-        # construction (the reviewer's round-11 finding)
+        # construction
         for _ in range(3):
             db.prune_missing(self.connection, set(), scope=self.root, only={a})
         a_row = self.connection.execute(
