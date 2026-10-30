@@ -51,8 +51,9 @@ gen() {
 #    pillarbox bars, 2 min, stereo AAC. The content is smptehdbars rendered
 #    at 1600x1080 and pillarboxed to 1920x1080 (measured, issue #433): the
 #    pattern's soft gradients are inside the plan's svt_av1 reach - VMAF 97.4
-#    (testsrc's fine geometry ceilings at ~86, 'target unreachable'; grain at
-#    levels that keep the file under 50 MB measured 265+ MB per minute) - and
+#    (testsrc's fine geometry ceilings at ~86, 'target unreachable'; the grain
+#    doses that stay under 50 MB were not found - every level that produced a
+#    VMAF-reachable file measured 265+ MB per minute) - and
 #    x264 spends enough bits on those gradients that a whole-file encode at
 #    the chosen CRF 44 lands 7.94% smaller with the bars cropped (measured:
 #    2,277,368 -> 2,096,560 bytes, audio copied). Static content keeps the
