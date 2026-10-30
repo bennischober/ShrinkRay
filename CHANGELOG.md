@@ -8,7 +8,6 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **Console log lines tell the real time again** ([#429](https://github.com/bennischober/ShrinkRay/issues/429), [#497](https://github.com/bennischober/ShrinkRay/pull/497)): every line since #167 printed hour:month:centiseconds - loguru tokens are case-sensitive and the format used MM:SS (month:centiseconds) where it meant mm:ss; an operator correlating a log line with reality read a time of day that was not the time of day, and the real minute was nowhere in the line. The tokens are HH:mm:ss now, and the token test renders through loguru's token engine against two frozen instants (hour 15 at a fixed +05:30 offset - so a `!UTC` suffix renders 09:34:05 there and fails the pin, proving the console stamps the wall clock, not UTC - and hour 5), pinning the exact literals (2026-01-02 15:04:05 and 05:04:05; the old tokens render 15:01:00, a 12-hour token renders 03:04:05, and the hour-5 instant fails under an unpadded-hour token) - no wall-clock hole can pass the wrong tokens.
 
-
 ## [0.6.0] - 2026-10-30
 
 ### Fixed

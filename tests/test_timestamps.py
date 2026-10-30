@@ -69,9 +69,10 @@ class TestConsoleFormat(unittest.TestCase):
 
         # the probe sink is added BESIDE the product's handler (never
         # replacing it), and only the probe's own handler id is removed in
-        # the finally - the product handler is untouched, so no private
-        # reconstruction, no hardcoded level, and the wiring under test IS
-        # the wiring the product runs
+        # the finally: the product handler survives untouched - the probe's
+        # assertions read its own render (loguru renders each handler with
+        # its own spec), so the product's wiring is pinned by the constant
+        # test and the token pins, not by this render
         probe_id = logger.add(sink, format=CONSOLE_FORMAT, level="INFO")
         try:
             logger.info("format probe")
