@@ -6,12 +6,14 @@
 # every real-surface run of plan/encode cost hours and the gates' BOUNDARIES
 # (duration floor, size floor, resolution floor, codec whitelist, bar
 # detection) had no fast fixture to exercise them. The fixtures here are
-# tiny (< 50 MB each), deterministically generated with lavfi, and cover
+# tiny (< 50 MB each), generated with lavfi (same size and content every
+# run; not byte-identical - the mux writes a random SegmentUID), and cover
 # one boundary each:
 #
-#   bars-1080p.mkv    1080p h264, real pillarbox bars, heavy noise -> the
-#                     full happy path: gates pass, bars detected, AV1
-#                     encode should shrink it (~300 s, ~25 MB)
+#   bars-1080p.mkv    1080p h264, real pillarbox bars, smptehdbars at
+#                     1600x1080 -> the full happy path: gates pass, bars
+#                     detected, the encode lands 7.94% smaller (measured at
+#                     CRF 44, VMAF 97.4, ~2.3 MB source)
 #   short.mkv         60 s 1080p h264 -> BELOW the 90 s duration floor:
 #                     plan must skip with the duration verdict
 #   small-720p.mkv    720p h264, long enough and big enough -> BELOW the
@@ -47,16 +49,25 @@ gen() {
 }
 
 # 1. bars-1080p.mkv — the happy-path fixture: 1080p h264 with real 160 px
-#    pillarbox bars, gentle motion (testsrc's moving box), 2 min, stereo
-#    AAC. Gentle motion keeps the x264 source small while AV1's edge on
-#    synthetic content still gives the size gate room to pass.
+#    pillarbox bars, 2 min, stereo AAC. The content is smptehdbars rendered
+#    at 1600x1080 and pillarboxed to 1920x1080 (measured, issue #433): the
+#    pattern's soft gradients are inside the plan's svt_av1 reach - VMAF 97.4
+#    (testsrc's fine geometry ceilings at ~86, 'target unreachable'; the grain
+#    doses that stay under 50 MB were not found - every level that produced a
+#    VMAF-reachable file measured 265+ MB per minute) - and
+#    x264 spends enough bits on those gradients that a whole-file encode at
+#    the chosen CRF 44 lands 7.94% smaller with the bars cropped (measured:
+#    2,277,368 -> 2,096,560 bytes, audio copied). Static content keeps the
+#    fixture small; the mux writes a random SegmentUID per run, so runs are
+#    not byte-identical; the bars are the fixture's point - the timeline
+#    detector reads them and the encode crops them.
 gen "bars-1080p.mkv" \
-  -f lavfi -i "testsrc=size=1600x1080:rate=30:duration=120" \
+  -f lavfi -i "smptehdbars=duration=120:size=1600x1080:rate=30" \
   -f lavfi -i "sine=frequency=440:duration=120" \
   -f lavfi -i "sine=frequency=620:duration=120" \
-  -filter_complex "[0:v]pad=1920:1080:(ow-iw)/2:0:black[v];[1:a][2:a]amix=inputs=2[a]" \
+  -filter_complex "[0:v]scale=1600:1080:flags=bicubic,pad=1920:1080:(ow-iw)/2:0:black[v];[1:a][2:a]amix=inputs=2[a]" \
   -map "[v]" -map "[a]" \
-  -c:v libx264 -preset medium -crf 28 -pix_fmt yuv420p \
+  -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p \
   -c:a aac -b:a 128k
 
 # 2. short.mkv — below the duration floor (MIN_ENCODE_SECONDS = 90).
