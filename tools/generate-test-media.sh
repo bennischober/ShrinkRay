@@ -47,16 +47,23 @@ gen() {
 }
 
 # 1. bars-1080p.mkv — the happy-path fixture: 1080p h264 with real 160 px
-#    pillarbox bars, gentle motion (testsrc's moving box), 2 min, stereo
-#    AAC. Gentle motion keeps the x264 source small while AV1's edge on
-#    synthetic content still gives the size gate room to pass.
+#    pillarbox bars, 2 min, stereo AAC. The content is smptehdbars UPSCALED
+#    bicubic to 1600x1080 (measured, issue #433): the plan's svt_av1 search
+#    reaches VMAF 97.4 on it (testsrc's fine geometry ceilings at ~86 -
+#    'target unreachable' - and grain at levels that keep the file under
+#    50 MB measured 265+ MB per minute), while the soft upscale wastes just
+#    enough x264 bits that AV1 re-encodes the same quality at ~54% smaller
+#    (measured: plan ends with an encode decision at CRF 44, 54.3% saved,
+#    ~2.3 MB source). Static-ish content keeps the file small AND
+#    deterministic; the bars are the fixture's point - the timeline detector
+#    reads them and the encode crops them.
 gen "bars-1080p.mkv" \
-  -f lavfi -i "testsrc=size=1600x1080:rate=30:duration=120" \
+  -f lavfi -i "smptehdbars=duration=120:size=1600x1080:rate=30" \
   -f lavfi -i "sine=frequency=440:duration=120" \
   -f lavfi -i "sine=frequency=620:duration=120" \
-  -filter_complex "[0:v]pad=1920:1080:(ow-iw)/2:0:black[v];[1:a][2:a]amix=inputs=2[a]" \
+  -filter_complex "[0:v]scale=1600:1080:flags=bicubic,pad=1920:1080:(ow-iw)/2:0:black[v];[1:a][2:a]amix=inputs=2[a]" \
   -map "[v]" -map "[a]" \
-  -c:v libx264 -preset medium -crf 28 -pix_fmt yuv420p \
+  -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p \
   -c:a aac -b:a 128k
 
 # 2. short.mkv — below the duration floor (MIN_ENCODE_SECONDS = 90).
