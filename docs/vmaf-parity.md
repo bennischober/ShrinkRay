@@ -121,6 +121,24 @@ The same command on a 2160p source. Above 2560x1440 both sides switch to
 threshold). A 4K scope film cropped below 1440 lines stays on the 1080p model at
 native size, exactly as ab-av1 scores it - pass `--crop` so both sides agree.
 
+**Cut the window from a keyframe boundary (the open-GOP caveat).** A stream-copy
+cut that starts inside an open-GOP span (the frame before the next keyframe owns
+no IDR) hands HandBrake a stream whose timestamps jump backwards at the cut; its
+sync corrects by DROPPING frames, and the encode comes out a few frames short of
+the copy-cut reference. The frame-count gate then refuses the pair - correctly:
+the measured pair would compare different content. Measured on the 2160p h265
+remux window (`ffmpeg -ss 600 -i REMUX -t 600 -c copy`): the encode dropped 2
+frames (14411 reference vs 14408 output, HandBrake's own log naming it:
+`sync: video time went backwards 83 ms, dropped 2 frames. PTS 0`), so the pair
+could not be scored; the window itself is fine, the CUT is the defect. The recipe:
+put `-ss` BEFORE `-i` (input seeking decodes from the previous keyframe and the
+window starts on one), or cut at a keyframe boundary
+(`ffprobe -select_streams v -show_frames -show_entries frame=key_frame` to find
+one). **A HandBrake log line naming dropped frames predicts a misaligned pair** -
+when you see `sync: ... dropped N frames` in the encode's log, the frame-count
+gate will refuse the pair; that is the gate working, not a measurement failure to
+route around.
+
 **Check the recipe line, not just the delta.** The script derives the model and the
 analysis pixel format from the pair itself, and it prints them:
 

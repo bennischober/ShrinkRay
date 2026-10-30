@@ -32,6 +32,10 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 - **A dead parameter is gone from the encode executor** ([#456](https://github.com/bennischober/ShrinkRay/issues/456), [#490](https://github.com/bennischober/ShrinkRay/pull/490)): `_encode_measured`'s signature carried a `job` parameter no code read while its docstring documented it as "The job being executed" — the next reader trusted that and hunted for behavior that does not exist. The parameter and its Args entry are gone; the only caller stopped passing it; no behavior changes.
 - **A binary that cannot spawn is reported by its step, not as a traceback** ([#458](https://github.com/bennischober/ShrinkRay/issues/458), [#491](https://github.com/bennischober/ShrinkRay/pull/491)): the five remaining `_run` seams outside the crop step (both sample extractions, both HandBrake probe encodes, the VMAF measurement) raised a raw `OSError` when the binary disappeared after startup or a spawn failed — the run died with `FileNotFoundError` instead of a clear report. Each site now converts the failure to its step's documented `RuntimeError` shape with the binary named, so the entry points report it per file and leave the file alone (the runner itself stays unguarded by decision, #401's record). Pinned per site with a stubbed seam.
 
+### Docs
+
+- **The parity procedure's 4K pair is cut from a keyframe boundary** ([#432](https://github.com/bennischober/ShrinkRay/issues/432), [#494](https://github.com/bennischober/ShrinkRay/pull/494)): a stream-copy window cut inside an open-GOP span makes HandBrake's sync drop frames (measured on the 2160p h265 remux: 14,411 reference vs 14,408 output, the encode's own log naming `sync: video time went backwards 83 ms, dropped 2 frames`), so the frame-count gate refuses the pair — correctly, since it would compare different content. `docs/vmaf-parity.md` pair 4 now names the mechanism, the recipe (put `-ss` before `-i`, or cut at a keyframe boundary), and the predictor: a HandBrake `sync: ... dropped N frames` log line predicts a refused pair — the gate working, not a measurement failure.
+
 ## [0.5.0] - 2026-10-28
 
 ### Removed
