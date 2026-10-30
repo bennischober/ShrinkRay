@@ -78,9 +78,15 @@ def ensure_unchanged(movie: Path, identity: RunIdentity, stage: str) -> None:
 # 255-byte filename limit even for a stem of multibyte characters
 PROBE_SCRATCH_STEM_BYTES = 48
 
+# the one home of the name's pieces (service.py's doctor parses names back
+# with these; re-spelling the literals there is how the verify floor once
+# keyed on a name no build wrote):
+PROBE_GRAMMAR_PREFIX = "shrinkray-probe-"
+PROBE_VERIFY_MARKER = "-verify-"
 
-def probe_scratch_prefix(movie: Path) -> str:
-    """Builds the attributable scratch-directory prefix for one probe run.
+
+def probe_scratch_prefix(movie: Path, kind: str = "probe") -> str:
+    """Builds the attributable scratch-directory prefix for one engine run.
 
     Every scratch ``tempfile.mkdtemp`` the probe paths create (``plan.py``'s
     probe workdir, ``pipeline.py``'s probe workdir and the verification
@@ -94,19 +100,32 @@ def probe_scratch_prefix(movie: Path) -> str:
     in the container) is then attributable to its movie at a glance, which
     the anonymous ``metadata_quality_`` name could not offer (issue #435).
 
-    The name is DECORATION: nothing in the engine reads it back — the probe
-    cache's identity is the content-addressed key in the database
-    (``search.probe_cache_key``), and no invalidation may ever key on the
-    workdir name. ``mkdtemp`` appends its own random suffix, so two
+    ``kind="verify"`` (the verification measurement's workdir) appends the
+    ``verify-`` marker: the doctor's staleness floor keys on it (a
+    verification writes nothing into its workdir during the measurement, so
+    its "is this debris?" floor is longer than a probe's), and a name alone
+    cannot otherwise tell the two kinds apart. The marker rides in the one
+    helper so the grammar never forks.
+
+    The name stays DECORATION for every DECISION: the probe cache's
+    identity is the content-addressed key in the database
+    (``search.probe_cache_key``), and no invalidation, reuse or cleanup
+    decision may ever key on the workdir name. The one reader is the
+    operator-facing report (``service.stale_scratch_findings`` parses the
+    name's kind marker for its staleness floor) - a name-shaped label, not
+    an identity input. ``mkdtemp`` appends its own random suffix, so two
     concurrent encodes of the same movie stay distinct; the shared prefix is
     never a reason for lock code at the call sites.
 
     Args:
         movie (Path): The source file the probe run measures.
+        kind (str): The workdir's role ("probe", the default, or "verify"
+            for the verification measurement's workdir).
 
     Returns:
         str: The ``mkdtemp`` prefix for that movie's scratch directories.
     """
     stem = movie.stem.encode("utf-8", "ignore")[:PROBE_SCRATCH_STEM_BYTES].decode("utf-8", "ignore")
     digest = hashlib.sha256(os.fsencode(str(movie.resolve()))).hexdigest()[:8]
-    return f"shrinkray-probe-{stem}-{digest}-"
+    marker = "verify-" if kind == "verify" else ""
+    return f"{PROBE_GRAMMAR_PREFIX}{stem}-{digest}-{marker}"

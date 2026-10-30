@@ -180,6 +180,138 @@ class TestDoctorCli(unittest.TestCase):
             self.assertIn("libvmaf", result.output)
             self.assertIn("toolchain", result.output.lower())
 
+    def test_a_broken_toolchain_does_not_swallow_the_scratch_report(self):
+        """The no-db path reports BOTH facts (round-15's finding): a fresh
+        install with a broken toolchain AND overnight debris gets the
+        toolchain message AND the findings table in one run - the db path
+        renders findings regardless of problems too."""
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            missing_db = root / "fresh.db"
+            scratch = root / "scratch"
+            scratch.mkdir()
+            from shrinkray.engine.identity import probe_scratch_prefix
+
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            workdir = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            workdir.mkdir()
+            (workdir / "sample_0.mkv").write_bytes(b"m" * 16)
+            import time as time_mod
+
+            from shrinkray import service as service_mod
+
+            aged = time_mod.time() - 2 * service_mod.SCRATCH_STALE_SECONDS
+            os.utime(workdir, (aged, aged))
+            os.utime(workdir / "sample_0.mkv", (aged, aged))
+            runner = CliRunner()
+            with (
+                patch(
+                    "shrinkray.service.all_problems",
+                    return_value=["ffmpeg has no libvmaf filter: the CRF search cannot measure."],
+                ),
+                patch.dict(os.environ, {"TMPDIR": str(scratch)}),
+            ):
+                result = runner.invoke(app, ["doctor", "--db", str(missing_db)])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("libvmaf", result.output, "the toolchain fact is named")
+            self.assertIn("stale probe scratch", result.output, "the debris fact is named")
+
+    def test_doctor_reports_stale_scratch_without_a_database(self):
+        """The scratch check runs even with NO database (round-14 finding 1):
+        crash debris is a no-database fact - the stateless one-shot
+        container's probe workdirs die the same death, and this is the
+        deployment the docs name. A stale workdir + no db = the findings
+        table, exit 1; a clean scratch + no db = the old all-clear."""
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            missing_db = root / "fresh.db"
+            scratch = root / "scratch"
+            scratch.mkdir()
+            from shrinkray.engine.identity import probe_scratch_prefix
+
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            workdir = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            workdir.mkdir()
+            (workdir / "sample_0.mkv").write_bytes(b"m" * 16)
+            import time as time_mod
+
+            from shrinkray import service as service_mod
+
+            aged = time_mod.time() - 2 * service_mod.SCRATCH_STALE_SECONDS
+            os.utime(workdir, (aged, aged))
+            os.utime(workdir / "sample_0.mkv", (aged, aged))
+            runner = CliRunner()
+            with (
+                patch("shrinkray.service.all_problems", return_value=[]),
+                patch.dict(os.environ, {"TMPDIR": str(scratch)}),
+            ):
+                result = runner.invoke(app, ["doctor", "--db", str(missing_db)])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("stale probe scratch", result.output)
+            self.assertFalse(missing_db.exists(), "doctor created a database to report on it")
+
+    def test_doctor_reports_stale_scratch_in_the_table(self):
+        """Issue #440: crash debris on the configured scratch shows in the
+        findings table (path, issue, size/age detail) and exits 1 - and
+        nothing is deleted."""
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=movie, mtime=100.0, size=1, name="movie", category="C"),
+            )
+            scratch = root / "scratch"
+            scratch.mkdir()
+            from shrinkray.engine.identity import probe_scratch_prefix
+
+            workdir = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            workdir.mkdir()
+            (workdir / "sample_0.mkv").write_bytes(b"m" * 64)
+            # stale past the floor: a fresh workdir is a LIVE probe's workdir,
+            # which doctor must never report
+            import time as time_mod
+
+            from shrinkray import service as service_mod
+
+            old = time_mod.time() - 2 * service_mod.SCRATCH_STALE_SECONDS
+            os.utime(workdir, (old, old))
+            for child in workdir.iterdir():
+                os.utime(child, (old, old))
+            runner = CliRunner()
+            with (
+                patch("shrinkray.service.all_problems", return_value=[]),
+                patch.dict(os.environ, {"TMPDIR": str(scratch)}),
+            ):
+                result = runner.invoke(app, ["doctor", "--db", str(self.db_file)])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("stale probe scratch", result.output)
+            # the table folds the long path; assert the parts that survive
+            # the fold (the grammar is the operator's attribution)
+            self.assertIn("shrinkray-probe", result.output)
+            self.assertIn("movie", result.output)
+            # report-only: the debris still exists after the report
+            self.assertTrue(workdir.is_dir())
+            self.assertTrue((workdir / "sample_0.mkv").exists())
+
     def test_doctor_finding_exits_one(self):
         """A dead path produces the findings table and exit 1 (scripts/
         cron can detect unhealth)."""

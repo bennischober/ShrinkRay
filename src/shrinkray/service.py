@@ -7,8 +7,11 @@ presentation logic — the CLI prints, this module decides and records.
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,6 +19,12 @@ from typing import TYPE_CHECKING
 from shrinkray import db
 from shrinkray.config import DEFAULT_PROBE_ENCODER_PRESET
 from shrinkray.db import MovieRecord
+from shrinkray.engine.identity import (
+    PROBE_GRAMMAR_PREFIX as _PROBE_GRAMMAR_PREFIX,
+)
+from shrinkray.engine.identity import (
+    PROBE_VERIFY_MARKER as _PROBE_VERIFY_MARKER,
+)
 from shrinkray.logger import log_error
 from shrinkray.replace import SwapError
 from shrinkray.replace import stage as stage_for_swap
@@ -626,7 +635,8 @@ class DoctorFinding:
     """One health finding of the doctor check.
 
     Attributes:
-        movie (str): The affected file path (as stored in the db).
+        movie (str): The affected file path (as stored in the db), or the
+            scratch workdir's path for the scratch-debris finding.
         issue (str): What is wrong (short, human-readable).
         detail (str | None): Extra context (e.g. the expected vs actual
             state, or the error ffprobe produced).
@@ -637,14 +647,57 @@ class DoctorFinding:
     detail: str | None = None
 
 
+# scratch workdir name grammars doctor recognizes: the current one (with the
+# verify marker #440 added when the verification workdir needed its own floor)
+# and the two historical ones (the anonymous pre-#435 name and the short-lived
+# shrinkray_verify_ prefix that #435 replaced) - existing debris stays
+# attributable. The grammar pieces come from the OWNER (identity.py) so the
+# producer's names and the doctor's parser cannot drift apart:
+SCRATCH_WORKDIR_PREFIXES = (
+    _PROBE_GRAMMAR_PREFIX,
+    "shrinkray_verify_",
+    "metadata_quality_",
+)
+
+# the verify kind's name shape: <prefix><stem>-<8hex>-verify-<8 suffix chars>
+# with the string ENDING there (mkdtemp's suffix is exactly 8 chars of
+# [a-z0-9_]). The digest + marker + suffix must ALL sit at the tail, so a stem
+# that itself ends in a verify-shaped segment ("...-1a2b3c4d-verify-cut") sits
+# in the STEM slot, before the digest, and cannot match
+_VERIFY_NAME_RE = re.compile(
+    re.escape(_PROBE_GRAMMAR_PREFIX)
+    + r".+"
+    + r"[0-9a-f]{8}"
+    + re.escape(_PROBE_VERIFY_MARKER)
+    + r"[a-z0-9_]{8}$"
+)
+
+# a workdir younger than its floor is a LIVE run's workdir, not crash debris:
+# reporting it would exit 1 on a healthy host. The floors differ by workdir kind
+# because they write differently (the issue's review rounds 2-3):
+# - probe dirs (a bisect): minutes of work, new dirs appear as the queue moves,
+#   so one hour of silence is the conservative "nobody is coming back" line
+#   (lock.py's silence-window shape).
+# - verify dirs: the measurement copies the model in up front and writes
+#   vmaf.json only at the END - nothing is touched in between (tools/vmaf.py),
+#   so a full-file measurement of a large movie is silent for its whole run
+#   (tens of minutes; ~20 min on the longest supported content). Its floor
+#   is 6 h: ~18x that, while overnight debris (the case this check exists
+#   for) still reports.
+SCRATCH_STALE_SECONDS = 3600.0
+SCRATCH_VERIFY_STALE_SECONDS = 6 * 3600.0
+
+
 def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[DoctorFinding]:
     """Checks the library's health: db reality vs disk reality.
 
     Composes existing primitives into one report (B6): dead paths,
     soft-missing counters, encode rows whose output vanished, sources that
-    no longer probe cleanly, and orphaned outputs (an encode row's output
-    file whose source row is gone). Read-only: doctor never repairs,
-    delete-flagging stays the scan's job (grace period semantics).
+    no longer probe cleanly, orphaned outputs (an encode row's output
+    file whose source row is gone), and stale probe-scratch workdirs on
+    the configured scratch root (crash debris; ``stale_scratch_findings``).
+    Read-only: doctor never repairs, delete-flagging stays the scan's job
+    (grace period semantics).
 
     Args:
         connection: The database connection.
@@ -689,6 +742,134 @@ def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[Doct
                     issue="encode output vanished",
                 )
             )
+    findings.extend(stale_scratch_findings())
+    return findings
+
+
+def scratch_root() -> Path | None:
+    """Returns the scratch root the probe workdirs live under, when known.
+
+    The probe scratch is wherever ``tempfile.mkdtemp`` puts its workdirs:
+    the container's ``$TMPDIR`` (shipped: ``/tmp/shrinkray``). The same
+    variables tempfile consults are honored (``TMPDIR``, then ``TEMP``,
+    then ``TMP`` - Windows names TEMP); when none is set (a stateless CLI
+    run on a developer host) doctor skips the check rather than scanning
+    the OS temp root (issue #440's criterion 1).
+
+    Returns:
+        Path | None: The configured scratch root, or None when the
+        environment does not name one.
+    """
+    for var in ("TMPDIR", "TEMP", "TMP"):
+        value = os.environ.get(var)
+        if value and Path(value).is_dir():
+            return Path(value)
+        # a SET variable naming a missing dir falls through to the next one,
+        # like tempfile does toward the OS temp; when nothing usable is
+        # named, the caller skips the check (never scans the OS temp)
+    return None
+
+
+def stale_scratch_findings(root: Path | None = None) -> list[DoctorFinding]:
+    """Reports crash debris in the probe scratch: report-only, never a sweep.
+
+    A probe run's workdir is removed in a ``finally`` (plan.py, pipeline.py),
+    so a hard kill - SIGKILL, power loss, container restart - leaves it on
+    the scratch forever. The debris is invisible to every db-backed finding
+    class (no row ever pointed there). This check lists each stale workdir
+    with its age and recursive byte weight so the operator can decide; it
+    does NOT delete anything (invariant 3: destructive on user data stays
+    opt-in and recoverable), and it walks only the configured scratch root -
+    never the filesystem (issue #440).
+
+    Args:
+        root (Path | None): The scratch root to inspect (defaults to
+            ``scratch_root()``; None or a missing root reports nothing).
+
+    Returns:
+        list[DoctorFinding]: One finding per stale workdir, empty when the
+        scratch is clean or unknown.
+    """
+    if root is None:
+        root = scratch_root()
+    if root is None or not root.is_dir():
+        return []
+    findings: list[DoctorFinding] = []
+    now = time.time()
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        # the scratch volume vanished between the is_dir check and the walk
+        return []
+    for entry in entries:
+        if entry.is_symlink():
+            # never read through: a link's stat() follows into its target
+            # (its bytes and mtime would enter the report), and this
+            # report-only check reads only the configured scratch itself.
+            # rglob does not descend link entries on any CPython tested
+            # (3.10-3.15, measured), but that is pathlib's behavior, not a
+            # contract this check may lean on
+            continue
+        if not entry.name.startswith(SCRATCH_WORKDIR_PREFIXES) or not entry.is_dir():
+            continue
+        try:
+            items = [entry, *entry.rglob("*")]
+        except OSError:
+            # the workdir vanished or is unreadable mid-report: skip it
+            # (gone or unreadable is healthy for this report-only check)
+            continue
+        newest: float | None = None
+        total = 0
+        for item in items:
+            if item.is_symlink():
+                # never read through: a link's stat() follows into its
+                # target's bytes and mtime, which must not enter the report;
+                # rglob does not descend link entries on any CPython tested
+                # (3.10-3.15, measured), but that is pathlib's behavior, not
+                # a contract this check may lean on
+                continue
+            try:
+                item_stat = item.stat()
+            except OSError:
+                # a member vanishing mid-walk is skipped: the size is
+                # decoration for the operator, never a decision input
+                continue
+            newest = max(newest, item_stat.st_mtime) if newest is not None else item_stat.st_mtime
+            if item.is_file():
+                total += item_stat.st_size
+        if newest is None:
+            # every member vanished between iterdir and the walk (the
+            # reviewer's phantom-finding repro): gone is healthy - reporting
+            # it would exit 1 on a healthy host, with newest=0.0 inflating
+            # the age to ~487,000 h
+            continue
+        age_hours = max((now - newest) / 3600.0, 0.0)
+        # the floor follows the workdir kind (see the constants' comment):
+        # a verification's silence is the measurement running, not a death.
+        # The kind is read from the grammar's verify marker - the CURRENT
+        # builds' name (identity.probe_scratch_prefix(kind="verify")) and the
+        # short-lived shrinkray_verify_ name both carry it
+        # the marker is the workdir KIND, anchored to the grammar: it must
+        # be the LAST element before mkdtemp's random suffix (i.e. the name
+        # ends "<digest>-verify-<8 chars>") - a movie whose STEM contains
+        # "-verify-" is a probe workdir and gets the probe floor
+        is_verify = _VERIFY_NAME_RE.match(entry.name) is not None or entry.name.startswith(
+            "shrinkray_verify_"
+        )
+        floor = SCRATCH_VERIFY_STALE_SECONDS if is_verify else SCRATCH_STALE_SECONDS
+        if now - newest < floor:
+            # a live run's workdir: the verification writes its one direct
+            # child up front and nothing during a long measurement, so the
+            # DIRECTORY's own mtime would report a still-running run as
+            # debris - the age reads the NEWEST mtime under it instead
+            continue
+        findings.append(
+            DoctorFinding(
+                movie=str(entry),
+                issue="stale probe scratch (crash debris?)",
+                detail=f"{total} bytes, mtime {age_hours:.1f} h ago",
+            )
+        )
     return findings
 
 

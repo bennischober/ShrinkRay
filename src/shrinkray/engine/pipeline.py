@@ -1578,7 +1578,9 @@ def encode_with_quality(
         output_size = output_file.stat().st_size
         verified_subsample = 10 if output_size > VERIFY_SUBSAMPLE_THRESHOLD_BYTES else None
         try:
-            verify_workdir = Path(tempfile.mkdtemp(prefix=probe_scratch_prefix(input_file)))
+            verify_workdir = Path(
+                tempfile.mkdtemp(prefix=probe_scratch_prefix(input_file, kind="verify"))
+            )
             try:
                 verified_vmaf = measure_vmaf(
                     output_file,

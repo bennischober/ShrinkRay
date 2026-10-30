@@ -1097,9 +1097,10 @@ def doctor(
     """Checks the library's health: db reality vs disk reality.
 
     Reports dead paths (files the db knows but the disk lost), encode
-    rows whose output vanished, and with --probe-all corrupt/truncated
-    files. Read-only: doctor never repairs anything (delete-flagging
-    stays the scan's job with its grace period).
+    rows whose output vanished, stale probe-scratch workdirs (crash
+    debris on the scratch volume, report-only), and with --probe-all
+    corrupt/truncated files. Read-only: doctor never repairs anything
+    (delete-flagging stays the scan's job with its grace period).
 
     With no database (a fresh install) the library check is skipped and
     the TOOLCHAIN check still runs: "run doctor" is the last install
@@ -1122,13 +1123,34 @@ def doctor(
     if not db_file.is_file():
         # a fresh install: the library check cannot run (and must not
         # create a database just to report on it); the toolchain result
-        # above is the install check (issue #241)
+        # above is the install check (issue #241). The SCRATCH check still
+        # runs: crash debris is a no-database fact (#440) - the stateless
+        # one-shot container's probe workdirs live on the same scratch and
+        # die the same death, and this is exactly the section of the docs
+        # that names that deployment
+        from shrinkray.service import stale_scratch_findings as _scratch
+
+        scratch_findings = _scratch()
         if problems:
+            # the toolchain's verdict does not swallow the scratch report:
+            # a fresh install with a broken toolchain AND overnight debris
+            # gets BOTH facts in one run (the db path renders findings
+            # regardless of problems too - the two paths must agree)
             console.print(
                 "[red]The toolchain cannot do the one thing this tool does "
                 "(see the problems above); fix the toolchain before the "
                 "first encode.[/red]"
             )
+        if scratch_findings:
+            table = Table(title="Doctor findings (scratch)", title_justify="left")
+            table.add_column("File", overflow="fold")
+            table.add_column("Issue", overflow="fold")
+            table.add_column("Detail", overflow="fold")
+            for finding in scratch_findings:
+                table.add_row(finding.movie, finding.issue, finding.detail or "—")
+            console.print(table)
+            raise typer.Exit(1)
+        if problems:
             raise typer.Exit(1)
         console.print(
             "[green]Toolchain is healthy.[/green] No database found at "
