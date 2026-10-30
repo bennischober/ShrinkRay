@@ -174,12 +174,12 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         self.assertEqual(result.flagged, 1)
 
     def test_a_walked_folder_scan_still_reconciles_the_scope(self) -> None:
-        """The reviewer's round-1 finding 3, pinned through the CLI shape
-        (round 2's finding 1): `shrinkray plan <folder>` passes the walk's
-        result as `files` WITH `walked=True` - the reconcile must treat that
-        as a full-library statement and flag/grace-delete an unenumerated
-        gone row exactly as before this fix (deleting the `and not walked`
-        clause must turn this test red, so the discriminator is load-bearing).
+        """A WALKED folder scan is the operator's full-library statement:
+        `shrinkray plan <folder>` passes the walk's result as `files` WITH
+        `walked=True`, and the reconcile must flag/grace-delete an
+        unenumerated gone row exactly as before the explicit-scope fix
+        (deleting the `and not walked` clause must turn this test red, so
+        the discriminator is load-bearing).
         """
         self._catalogue_all()
         (self.root / "b.mkv").unlink()
@@ -205,12 +205,13 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         self.assertEqual(self._row_state(self.root / "a.mkv"), (0, True))
 
     def test_the_cli_forwards_the_walked_pair(self) -> None:
-        """Round 3's finding 2: the resolver's `walked` fact must REACH
-        scan_movies through BOTH CLI call sites (plan and encode - round 5
-        finding 1: encode was pinned by nothing) - deleting `walked=walked`
-        at either site leaves every test green while silently removing
-        `plan <folder>`'s deletion path. The real CLI is driven and the
-        recorded kwargs pin the forwarding (the engine itself is mocked).
+        """The resolver's `walked` fact must REACH scan_movies through
+        BOTH CLI call sites (plan and encode): a CLI command that resolves a
+        walk's result but drops the flag reconciles the WRONG scope -
+        deleting `walked=walked` at either site leaves every test green
+        while silently removing `plan <folder>`'s deletion path. The real
+        CLI is driven and the recorded kwargs pin the forwarding (the engine
+        itself is mocked).
         """
         import os
         from contextlib import contextmanager
@@ -255,9 +256,9 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
                 folder_kwargs = dict(recorded[-1])
                 runner.invoke(app, ["plan", "a.mkv"])
                 file_kwargs = dict(recorded[-1])
-                # round 5's finding: the ENCODE site (its own
-                # resolve_input_paths + scan_movies call) was pinned by
-                # nothing - drive it too
+                # the ENCODE site has its own resolve_input_paths +
+                # scan_movies call - drive it too (the plan pin alone leaves
+                # an encode-site regression green)
                 runner.invoke(app, ["encode", str(self.root)])
                 encode_folder_kwargs = dict(recorded[-1])
                 runner.invoke(app, ["encode", "a.mkv"])
@@ -275,9 +276,11 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         self.assertIsNotNone(encode_file_kwargs.get("files"))
 
     def test_the_walked_pair_is_refused_half_supplied(self) -> None:
-        """Round 3's finding 1: the contract exists in SOURCE - a half-supplied
+        """The files/walked pair is contracted in SOURCE: a half-supplied
         pair (files without walked, walked without files) is refused with a
-        ValueError instead of silently reconciling the wrong scope.
+        ValueError instead of silently reconciling the wrong scope - a
+        caller supplying a walk's result while omitting the flag would
+        otherwise stop flagging deletions without any error.
         """
         with self.assertRaises(ValueError):
             engine_scan.scan_movies(self.root, _make_scan_config(), files=[self.root / "a.mkv"])

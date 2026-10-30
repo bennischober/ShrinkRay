@@ -518,12 +518,20 @@ def scan_movies(
     if connection is not None and not rescan:
         cache = db.get_cached_records(connection)
         for index, filename in enumerate(movies):
-            if not filename.exists():
-                # a vanished file is reconciliation's business, not the
-                # cache's (issue #453): stat()ing it here crashes the scan
-                continue
             row = cache.get(str(filename))
-            if row is not None and db.is_unchanged(row, filename):
+            if row is None:
+                continue
+            try:
+                unchanged = db.is_unchanged(row, filename)
+            except FileNotFoundError:
+                # a file removed between the enumeration and this stat - an
+                # encode's rename-swap, the watcher, an operator deleting
+                # while a glob scan's cache pass is running - is
+                # reconciliation's business, not a scan crash (issue #453):
+                # the row is left out of the cache, the scan proceeds, and
+                # the reconcile pass flags it with the grace period
+                continue
+            if unchanged:
                 results[index] = record_from_cache(row)
                 cached[str(filename)] = row
                 if on_movie is not None:
