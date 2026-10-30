@@ -1,11 +1,12 @@
 """Tests for an explicit file/glob scan never pruning beyond its files (issue #453).
 
-`scan_movies(root, config, files=[a])` reconciles the database through
-`prune_missing(..., scope=str(root))`: every catalogued row under the root
-that the explicit call did not enumerate gets flagged as missing and, after
-MISSING_GRACE scans, hard-deleted together with its encode history - although
-the explicit scan never inspected those files. An explicit scan inspects
-exactly its files and has no opinion about the rest of the scope.
+Before the fix, `scan_movies(root, config, files=[a], walked=False)`
+reconciled the database through `prune_missing(..., scope=str(root))`: every
+catalogued row under the root that the explicit call did not enumerate got
+flagged as missing and, after MISSING_GRACE scans, hard-deleted together
+with its encode history - although the explicit scan never inspected those
+files. An explicit scan inspects exactly its files and has no opinion about
+the rest of the scope.
 """
 
 import tempfile

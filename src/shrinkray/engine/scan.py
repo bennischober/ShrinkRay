@@ -607,15 +607,20 @@ def scan_movies(
         # (an enumerated file that vanished is exactly what reconciliation
         # flags); only = the full enumeration - a row the scan did not
         # enumerate is never flagged or deleted, the scan has no opinion
-        # about the rest of the scope.
+        # about the rest of the scope. The walked branch filters the same
+        # way (round 7's finding): its walk list was built before the scan's
+        # probes ran, so a file removed DURING the scan would otherwise stay
+        # in existing_paths and the reconcile would RESET its grace counter
+        # instead of flagging the deletion.
+        existing = {str(m.resolve()) for m in movies if m.exists()}
         if files is not None and not walked:
             prune = db.prune_missing(
                 connection,
-                {str(m.resolve()) for m in movies if m.exists()},
+                existing,
                 only={str(m) for m in movies},
             )
         else:
-            prune = db.prune_missing(connection, {str(m) for m in movies}, scope=str(root))
+            prune = db.prune_missing(connection, existing, scope=str(root))
         log_prune_result(prune)
 
     return movies_by_category, movies, error_list
