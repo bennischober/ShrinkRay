@@ -121,7 +121,7 @@ The same command on a 2160p source. Above 2560x1440 both sides switch to
 threshold). A 4K scope film cropped below 1440 lines stays on the 1080p model at
 native size, exactly as ab-av1 scores it - pass `--crop` so both sides agree.
 
-**Cut the window from a closed-GOP keyframe boundary (the open-GOP caveat).** A
+**Cut the window at a keyframe, then read the log (the open-GOP caveat).** A
 stream-copy cut that lands inside an open-GOP span hands HandBrake a stream whose
 first frames are the open GOP's RASL leading pictures — they reference the
 PREVIOUS GOP's frames, which the cut left behind — so the decode cannot start
@@ -149,8 +149,7 @@ fully open-GOP source the previous keyframe is another CRA and the retry
 reproduces the failure one GOP earlier — the loop terminates when the kept
 prefix spans the PRECEDING GOP (the cut's RASL group then references frames the
 window still holds), which means keeping a little more before the measured
-window than the measurement itself needs, or starting the encode range later.
-The frame-count gate is the final oracle: a pair that passes it is aligned by
+window than the measurement itself needs, or (equivalently) trimming the COPY-CUT reference to the same later range - both sides of the pair must move together, since a reference that starts earlier than the encode reproduces the misalignment the gate refuses). The frame-count gate is the final oracle: a pair that passes it is aligned by
 construction. That is the gate working, not a measurement failure to route
 around.
 
