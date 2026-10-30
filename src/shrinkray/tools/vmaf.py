@@ -542,12 +542,17 @@ def measure_vmaf(
     # file is scored - a full-precision measurement of a large movie produces
     # no output for its entire run, so the stall watchdog kills a healthy
     # measurement as hung. The cancel event remains the kill path.
-    code, err = _run(
-        command,
-        cwd=workdir,
-        cancel=cancel,
-        watchdog=False,
-    )
+    try:
+        code, err = _run(
+            command,
+            cwd=workdir,
+            cancel=cancel,
+            watchdog=False,
+        )
+    except OSError as e:
+        # ffmpeg missing or not spawnable (EMFILE, ENOMEM): the step's
+        # documented failure shape, not a traceback (issue #458)
+        raise RuntimeError(f"vmaf measurement could not start: {e}") from e
     if code == -1:
         raise Cancelled("cancelled during vmaf measurement")
     log_file = workdir / "vmaf.json"
