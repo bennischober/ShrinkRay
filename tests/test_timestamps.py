@@ -54,11 +54,13 @@ class TestConsoleFormat(unittest.TestCase):
         """The format string is real loguru syntax, not just a constant.
 
         The probe sink is added BESIDE the product's installed handler and
-        only the probe's own id is removed afterwards (round 12's finding 1):
-        the product handler is never touched, so this test also renders
-        through the product's real wiring (round 12's finding 2) - a
-        reverted `format=` at the wiring fails here, and no later log
-        line's shape changes.
+        only the probe's own id is removed afterwards: the product handler
+        survives the test untouched (no later log line's shape changes).
+        What this test does NOT do is measure the product handler's own
+        formatter - loguru renders each handler with its own spec, so the
+        assertions read the probe's render; the product's wiring (the
+        `format=` at logger.py's add call) is pinned by the constant test
+        and the token pins, not by a render through the installed handler.
         """
         rendered: list[str] = []
 
