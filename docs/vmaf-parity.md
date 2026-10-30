@@ -237,19 +237,20 @@ A frame-count mismatch means the two sides are not comparing the same frames, an
 score is meaningless whatever the delta says. `scripts/vmaf_parity.py` reports such a pair
 as **unmeasured** and fails the run instead of printing a number for it.
 
-**Build this pair from whole files.** Two kinds of pair reproducibly produce a mismatch. One is
-a reference cut with `-ss` (whose keyframe-accurate copy cut starts on an earlier keyframe, so
-it holds more content than the window asked for) measured against a HandBrake segment made
-with `--start-at`/`--stop-at` (which trims to the exact frame). The other is a stream-copy
-window of the open-GOP remux pair 4 measures, against its own whole-window HandBrake encode:
-the window's head lost frames in both measured runs (the same shape step 6's probe pair
-builds in production, whose alignment on this source is unmeasured). Neither shape is the
-shape the verification path compares - `build_encode_command` has no trim options, and the
-verification compares a whole output against a whole source. On the first shape a mismatch
-is a harness artifact; on the second it is the probe measurement disagreeing with its own
-reference - and production catches none of it: `measure_vmaf` counts no frames, so the
-search keeps the misaligned probe score (the 95.63 above) and the CRF choice rests on it.
-Either way the score must never be reported as a parity result (issues #408 and #432).
+**Build this pair from whole files.** Two kinds of pair reproducibly produce a mismatch.
+One is a reference cut with `-ss` (whose keyframe-accurate copy cut starts on an earlier
+keyframe, so it holds more content than the window asked for) measured against a
+HandBrake segment made with `--start-at`/`--stop-at` (which trims to the exact frame).
+The other is a stream-copy window of the open-GOP remux pair 4 measures, against its own
+whole-window HandBrake encode: the window's head lost frames in both measured runs (the
+same shape step 6's probe pair builds in production, whose alignment on this source is
+unmeasured). Neither shape is the shape the verification path compares -
+`build_encode_command` has no trim options, and the verification compares a whole output
+against a whole source. On the first shape a mismatch is a harness artifact; on the
+second it is the probe measurement disagreeing with its own reference - and production
+catches none of it: `measure_vmaf` counts no frames, so the search keeps the misaligned
+probe score (the 95.63 above) and the CRF choice rests on it. Either way the score must
+never be reported as a parity result (issues #408 and #432).
 
 ## Reporting the run
 
