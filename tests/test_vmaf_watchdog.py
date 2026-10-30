@@ -93,6 +93,15 @@ class TestVmafMeasurementOutlivesTheWatchdog(unittest.TestCase):
                 mock.patch.object(
                     vmaf_mod, "detect_vmaf_style", return_value=vmaf_mod.VMAF_STYLE_MODERN
                 ),
+                # the recipe's probe is NOT this test's subject (it would run
+                # a real ffprobe on a nonexistent path): stub it with a real
+                # model name so the model copy works and the _run stub is what
+                # raises
+                mock.patch.object(
+                    vmaf_mod,
+                    "_recipe_for_file",
+                    return_value=vmaf_mod.vmaf_recipe(crop=None, hdr=False),
+                ),
                 tempfile.TemporaryDirectory() as t,
             ):
                 tmp = Path(t)
