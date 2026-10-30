@@ -90,6 +90,7 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
                 self.root,
                 _make_scan_config(),
                 files=[a],
+                walked=False,
                 connection=self.connection,
                 workers=1,
             )
@@ -114,6 +115,7 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
                 self.root,
                 _make_scan_config(),
                 files=[self.root / "a.mkv", self.root / "b.mkv"],
+                walked=False,
                 connection=self.connection,
                 workers=1,
             )
@@ -132,6 +134,7 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
                 self.root,
                 _make_scan_config(),
                 files=[self.root / "a.mkv", gone],
+                walked=False,
                 connection=self.connection,
                 workers=1,
             )
@@ -171,19 +174,30 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         self.assertEqual(result.flagged, 1)
 
     def test_a_walked_folder_scan_still_reconciles_the_scope(self) -> None:
-        """The reviewer's round-1 finding 3, pinned: a WALKED folder scan
-        (the `shrinkray plan <folder>` path) reconciles the WHOLE root scope
-        - an unenumerated row is flagged and grace-deleted exactly as before
-        this fix (the issue's repair must not silence folder reconciliation).
+        """The reviewer's round-1 finding 3, pinned through the CLI shape
+        (round 2's finding 1): `shrinkray plan <folder>` passes the walk's
+        result as `files` WITH `walked=True` - the reconcile must treat that
+        as a full-library statement and flag/grace-delete an unenumerated
+        gone row exactly as before this fix (deleting the `and not walked`
+        clause must turn this test red, so the discriminator is load-bearing).
         """
         self._catalogue_all()
         (self.root / "b.mkv").unlink()
+        # the CLI's directory shape: the walked list (a + h, b is gone)
+        # arrives as `files`, walked=True
+        walked_files = engine_scan.find_movies(self.root, [".mkv"])
+        self.assertEqual(
+            sorted(p.name for p in walked_files),
+            ["a.mkv", "h.mkv"],
+        )
         for _ in range(3):
             engine_scan.scan_movies(
                 self.root,
                 _make_scan_config(),
                 connection=self.connection,
                 workers=1,
+                files=walked_files,
+                walked=True,
             )
         # b was not enumerated (the walk found only a + h now) and is gone:
         # after 3 walked scans the grace is exhausted, the row is deleted
