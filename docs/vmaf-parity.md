@@ -144,7 +144,7 @@ If the printed recipe does not match ab-av1's own `format=` and `model=` on the 
 pair, the run is measuring something else. Compare the two command lines (the script
 prints ab-av1's), do not read the delta.
 
-**A stream-copy window of this open-GOP remux cannot produce a measurable whole-file
+**A stream-copy window of this open-GOP remux cannot produce a measurable window
 pair.** Measured on the library's 2160p HEVC remux (issue #432): the 10-minute window
 cut with an input seek to 600 s lands just before the keyframe at 600.125 s - the
 window's first frame is NOT a keyframe (first key at 0.125 s internally) - and its
@@ -166,7 +166,7 @@ references dangle at a window's head, and HandBrake's sync drops the dangling fr
 while the copy keeps them. Both runs' pairs were refused by the frame-count gate
 (#408/#419), which is the gate working, not a parity defect; this source is declared
 unmeasurable for the window pair on that evidence, with the counts recorded.
-The encode path itself is unaffected: the window encoded, chose CRF 33 by probe, saved
+The encode path did not fail on this window: it encoded, chose CRF 33 by probe, saved
 94.13%, and replaced normally. (The recorded probe VMAF 95.63 is reported as measured,
 not as an aligned-pair score: the probe search measures probe encodes of this window's
 samples, the same shape whose alignment this section shows is not guaranteed on this
@@ -243,8 +243,10 @@ the open-GOP remux pair 4 measures, against its own whole-window HandBrake encod
 head lost frames in both measured runs (the same shape step 6's probe pair builds in
 production, whose alignment on this source is unmeasured). Neither shape is the shape the
 verification path compares - `build_encode_command` has no trim options, and the verification
-compares a whole output against a whole source. A mismatched pair is a harness artifact and its
-score must never be reported as a parity result (issues #408 and #432).
+compares a whole output against a whole source. On the first shape a mismatch is a harness
+artifact; on the second it is the probe measurement disagreeing with its own reference, which
+would leave the CRF choice unmeasured rather than merely off-path. Either way the score must
+never be reported as a parity result (issues #408 and #432).
 
 ## Reporting the run
 
