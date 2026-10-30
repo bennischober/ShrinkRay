@@ -204,6 +204,74 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         self.assertEqual(self._row_state(self.root / "b.mkv"), (-1, False))
         self.assertEqual(self._row_state(self.root / "a.mkv"), (0, True))
 
+    def test_the_cli_forwards_the_walked_pair(self) -> None:
+        """Round 3's finding 2: the resolver's `walked` fact must REACH
+        scan_movies through both CLI call sites - deleting `walked=walked`
+        at either site leaves every test green while silently removing
+        `plan <folder>`'s deletion path. The real CLI is driven and the
+        recorded kwargs pin the forwarding (the engine itself is mocked).
+        """
+        import os
+        from contextlib import contextmanager
+        from unittest.mock import patch
+
+        from shrinkray.__main__ import app
+
+        recorded: list[dict] = []
+
+        def fake_scan(root, config, **kwargs):
+            recorded.append(kwargs)
+            return {}, [], []
+
+        # the CLI binds scan_movies into its own namespace: the patch target
+        # is the LOOKUP home (the suite's convention), not the engine module
+
+        @contextmanager
+        def toolchain_present():
+            from shrinkray.engine import watch as watch_mod
+
+            with (
+                patch("shrinkray.service.shutil.which", return_value="ffprobe"),
+                patch("shrinkray.tools.handbrake.find_handbrake", return_value="hb"),
+                patch("shrinkray.tools.handbrake.supports_svt_av1", return_value=True),
+                patch("shrinkray.tools.vmaf.detect_vmaf_style", return_value="modern"),
+                patch.object(watch_mod, "STABLE_MIN_AGE", 0.0),
+                patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
+            ):
+                yield
+
+        previous = os.getcwd()
+        os.chdir(self.root)
+        try:
+            from typer.testing import CliRunner
+
+            runner = CliRunner()
+            with (
+                toolchain_present(),
+                patch("shrinkray.__main__.scan_movies", side_effect=fake_scan),
+            ):
+                runner.invoke(app, ["plan", str(self.root)])
+                folder_kwargs = dict(recorded[-1])
+                runner.invoke(app, ["plan", "a.mkv"])
+                file_kwargs = dict(recorded[-1])
+        finally:
+            os.chdir(previous)
+
+        self.assertTrue(folder_kwargs.get("walked"), "plan <folder> lost walked")
+        self.assertIsNotNone(folder_kwargs.get("files"))
+        self.assertFalse(file_kwargs.get("walked"), "plan <file> lost walked=False")
+        self.assertIsNotNone(file_kwargs.get("files"))
+
+    def test_the_walked_pair_is_refused_half_supplied(self) -> None:
+        """Round 3's finding 1: the contract exists in SOURCE - a half-supplied
+        pair (files without walked, walked without files) is refused with a
+        ValueError instead of silently reconciling the wrong scope.
+        """
+        with self.assertRaises(ValueError):
+            engine_scan.scan_movies(self.root, _make_scan_config(), files=[self.root / "a.mkv"])
+        with self.assertRaises(ValueError):
+            engine_scan.scan_movies(self.root, _make_scan_config(), walked=True)
+
     def test_resolve_input_paths_reports_the_walked_fact(self) -> None:
         """The resolver returns the discriminator: a directory argument is a
         walk (True), a named file and a glob are enumerations (False) - the

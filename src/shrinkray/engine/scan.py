@@ -433,7 +433,7 @@ def scan_movies(
     exclude: Path | None = None,
     on_movie: Callable[[int, dict | None, str | None], None] | None = None,
     files: list[Path] | None = None,
-    walked: bool = False,
+    walked: bool | None = None,
     db_file: Path | None = None,
 ) -> tuple[dict, list[Path], list[str]]:
     """Scans the root directory for movies and collects their metadata.
@@ -475,7 +475,18 @@ def scan_movies(
 
     Returns:
         tuple: Movies by category, all found movies and error messages.
+
+    Raises:
+        ValueError: If `walked` is given without `files`, or `files` is
+            given without `walked` (round 2's finding: a caller supplying a
+            walk's result while omitting the flag would silently stop
+            flagging deletions - the half-supplied pair is refused instead).
     """
+    if (files is None) != (walked is None):
+        raise ValueError(
+            "scan_movies requires `files` and `walked` together (or neither): "
+            f"files={files!r}, walked={walked!r}"
+        )
     movies_by_category: dict[str, list[dict]] = {}
 
     # search for movie files with the configured extensions, recursive
