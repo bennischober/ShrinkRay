@@ -6,8 +6,8 @@ from loguru import logger
 # the resident mode runs for days, a time-only stamp loses the day the moment
 # the log leaves the terminal; issue #429 — loguru's tokens are case-sensitive:
 # MM is the MONTH and SS is CENTISECONDS, so the old format printed
-# hour:month:centiseconds; minutes are mm, seconds are ss). The DB and the
-# report stay UTC; this line is the operator's wall clock.
+# hour:month:centiseconds; minutes are mm, seconds are ss). The DB stores its
+# own timestamps in UTC; this line is the operator's wall clock.
 CONSOLE_FORMAT = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>"
 
 # loguru default handler is already colorful => set our own format

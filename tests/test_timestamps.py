@@ -1,19 +1,34 @@
 """Timestamp format tests (issue #167).
 
-Every human-readable timestamp in the product shares one shape:
-`YYYY-MM-DD HH:MM:SS`. The console log is local time; both must carry the
-date and the seconds so a captured log line answers "which day, exactly, did
-this print" without external context. (The report half was removed with
-issue #202: the report module is gone.)
+Every human-readable timestamp in the product shares one shape. The console
+log is local time and carries the date and the seconds, so a captured log
+line answers "which day, exactly, did this print" without external context.
+In loguru's tokens the shape is `YYYY-MM-DD HH:mm:ss` (mm is the minute, ss
+the second - MM is the MONTH and SS the CENTISECOND, issue #429's defect).
+(The report half was removed with issue #202: the report module is gone.)
+
+The token pin renders through loguru's own token engine
+(`loguru._datetime._compile_format`, the same compiled formatter a sink's
+spec is rendered with) against a frozen instant - a wall-clock read cannot
+make the pin flaky, and no wall-clock hole can make it pass on the wrong
+tokens (the review rounds 1-3 of issue #429's PR each found one).
 """
 
 import re
 import unittest
+from datetime import datetime, timezone
+
+from loguru import logger
+from loguru._datetime import _compile_format
 
 from shrinkray.logger import CONSOLE_FORMAT
 
 # the one shape every human-readable timestamp shares
 SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+# the frozen instant the token pin renders: month 1, minute 4, second 5 -
+# three different values, so no token confusion can reproduce the literal
+FROZEN = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 
 
 class TestConsoleFormat(unittest.TestCase):
@@ -28,8 +43,6 @@ class TestConsoleFormat(unittest.TestCase):
 
     def test_a_rendered_line_matches_the_shape(self) -> None:
         """The format string is real loguru syntax, not just a constant."""
-        from loguru import logger
-
         rendered: list[str] = []
 
         def sink(message) -> None:
@@ -40,72 +53,27 @@ class TestConsoleFormat(unittest.TestCase):
         logger.info("format probe")
         logger.remove()
         self.assertEqual(len(rendered), 1)
-        # strip the color markup loguru may wrap the timestamp in
-        plain = rendered[0]
-        match = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", plain)
-        self.assertIsNotNone(match, f"no YYYY-MM-DD HH:mm:ss in {plain!r}")
+        match = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", rendered[0])
+        self.assertIsNotNone(match, f"no timestamp in {rendered[0]!r}")
         self.assertTrue(SHAPE.match(match.group(0)))
-        # the decisive pin, sound at any wall-clock instant (the round-1
-        # review: 'the rendered minute is in the brackets' still passes with
-        # the OLD format whenever the month equals the minute - 1 in 60 runs
-        # in October): render with the WRONG-token format from the same
-        # clock and compare the two renders against each other. The old
-        # format's 2nd field IS the month (definitionally), the new one's
-        # 2nd field IS the minute: equality proves the token mapping; the
-        # old format's 3rd field is centiseconds (cycles 0-99), the new
-        # one's is seconds (0-59): the old one eventually exceeds 59 while
-        # the new one never does - across a few renders the two fields
-        # DIVERGE, proving ss is a second counter. No sleep, no wall-clock
-        # hole.
-        old_format = CONSOLE_FORMAT.replace(
-            "{time:YYYY-MM-DD HH:mm:ss}", "{time:YYYY-MM-DD HH:MM:SS}"
-        )
-        wrong_lines: list[str] = []
-        right_lines: list[str] = []
 
-        def wrong_sink(message) -> None:
-            wrong_lines.append(str(message))
+    def test_the_token_engine_renders_the_frozen_fields(self) -> None:
+        """The decisive pin, deterministic: loguru's token engine renders the
+        frozen instant as 2026-01-02 03:04:05 under the product's spec - the
+        month, the minute and the second each land in their own slot.
+        """
+        render = _compile_format("YYYY-MM-DD HH:mm:ss")
+        self.assertEqual(render(FROZEN), "2026-01-02 03:04:05")
 
-        def right_sink(message) -> None:
-            right_lines.append(str(message))
-
-        logger.remove()
-        logger.add(wrong_sink, format=old_format, level="INFO")
-        logger.info("token probe")
-        logger.remove()
-        logger.add(right_sink, format=CONSOLE_FORMAT, level="INFO")
-        logger.info("token probe")
-        logger.remove()
-        self.assertEqual(len(wrong_lines), 1)
-        self.assertEqual(len(right_lines), 1)
-        # the decisive pin, sound at any wall-clock instant (the round-1
-        # review: a minute-in-brackets check still passes with the OLD
-        # format whenever the month equals the minute - 1 in 60 runs in
-        # October; the round-2 review: a frozen clock needs logger.patch,
-        # whose patched record breaks format rendering): compare the line
-        # AGAINST ITSELF. One render, two reads of the same tokens: the
-        # DATE's month (from MM in the date half) and the TIME's minute
-        # (from the time half). With the correct tokens the date-month is
-        # the calendar month and the time-minute is the current minute -
-        # equal only when the wall clock itself says so. With the OLD
-        # tokens BOTH halves read MM, so the two rendered values are
-        # IDENTICAL ALWAYS - the pin fails exactly on the defect, no clock
-        # read, no race, no sleep.
-        line_m = re.search(r"(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})", plain)
-        self.assertIsNotNone(line_m, plain)
-        date_month = int(line_m.group(2))
-        time_minute = int(line_m.group(5))
-        self.assertNotEqual(
-            date_month,
-            time_minute,
-            "the date's month and the time's minute render IDENTICAL - "
-            "the minute slot is rendering the month (the MM token): "
-            f"{plain!r}",
-        )
-        # and the seconds slot carries no centisecond cycle: within ONE
-        # render we cannot see the cycle, so pin the token TEXT (the
-        # constant) as the compile-time half of the pin:
-        self.assertNotIn("HH:MM:SS", CONSOLE_FORMAT)
+    def test_the_old_tokens_fail_the_frozen_pin(self) -> None:
+        """The pin discriminates: under the old tokens the same engine
+        renders the same frozen instant as 2026-01-02 03:01:00 (the month 1
+        in the minute slot, centisecond 0 in the second slot) - the defect
+        issue #429 reports, reproducible on demand.
+        """
+        render = _compile_format("YYYY-MM-DD HH:MM:SS")
+        self.assertEqual(render(FROZEN), "2026-01-02 03:01:00")
+        self.assertNotEqual(render(FROZEN), "2026-01-02 03:04:05")
 
 
 if __name__ == "__main__":
