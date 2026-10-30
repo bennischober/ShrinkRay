@@ -33,9 +33,10 @@ from shrinkray.logger import CONSOLE_FORMAT
 # rendered identically under both). FROZEN_SINGLE (hour 5, UTC) closes round
 # 6's finding: there the unpadded `H` renders `5:04:05` while `HH` and `hh`
 # both render `05:04:05`, so the hour pair H/HH is discriminated too -
-# together the two instants separate every token pair in the shape, and no
-# token confusion (AM/PM hour, a !UTC suffix included) can reproduce either
-# literal.
+# together the two instants separate every token pair in the shape: no wrong
+# spec (an AM/PM hour, the old tokens, or a `!UTC` suffix) renders BOTH
+# literals (the suffix DOES render the hour-5 literal - the hour-15
+# equality is what catches it).
 FROZEN_TZ = timezone(timedelta(hours=5, minutes=30))
 FROZEN = datetime(2026, 1, 2, 15, 4, 5, tzinfo=FROZEN_TZ)
 FROZEN_SINGLE = datetime(2026, 1, 2, 5, 4, 5, tzinfo=timezone.utc)
@@ -91,7 +92,6 @@ class TestConsoleFormat(unittest.TestCase):
         # console stamps the operator's wall clock, not UTC
         utc_twin = _compile_format(spec + "!UTC")
         self.assertEqual(utc_twin(FROZEN), "2026-01-02 09:34:05")
-        self.assertNotEqual(utc_twin(FROZEN), "2026-01-02 15:04:05")
 
     def test_the_wrong_tokens_fail_the_frozen_pin(self) -> None:
         """The pin discriminates against the defect's token sets: under the
