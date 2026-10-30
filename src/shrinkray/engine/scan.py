@@ -465,9 +465,15 @@ def scan_movies(
     if not movies:
         # nothing found: the folder may have been emptied or renamed — the
         # database still needs to reconcile (flagging, not deleting, thanks
-        # to the grace period) before the early return
+        # to the grace period) before the early return. An explicitly EMPTY
+        # file list reconciles exactly nothing (issue #453): an empty
+        # enumeration is not an opinion about the scope. A folder scan that
+        # genuinely found nothing reconciles the scope.
         if connection is not None:
-            prune = db.prune_missing(connection, set(), scope=str(root))
+            if files is not None:
+                prune = db.prune_missing(connection, set(), only=set())
+            else:
+                prune = db.prune_missing(connection, set(), scope=str(root))
             log_prune_result(prune)
         log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
         return movies_by_category, movies, []
@@ -480,6 +486,10 @@ def scan_movies(
     if connection is not None and not rescan:
         cache = db.get_cached_records(connection)
         for index, filename in enumerate(movies):
+            if not filename.exists():
+                # a vanished file is reconciliation's business, not the
+                # cache's (issue #453): stat()ing it here crashes the scan
+                continue
             row = cache.get(str(filename))
             if row is not None and db.is_unchanged(row, filename):
                 results[index] = record_from_cache(row)
@@ -549,9 +559,23 @@ def scan_movies(
             record = movie_record_from_data(movies[index], result)
             db.upsert_file(connection, record)
         # reconcile with disk: flag files that vanished (grace period before
-        # deletion), recover reappeared ones; only rows inside the scanned
-        # root are touched (other roots in the database keep their history)
-        prune = db.prune_missing(connection, {str(m) for m in movies}, scope=str(root))
+        # deletion), recover reappeared ones. A folder scan reconciles the
+        # rows inside the scanned root (other roots in the database keep
+        # their history); an explicit file/glob scan reconciles EXACTLY its
+        # enumerated files (issue #453): it inspected nothing else, so rows
+        # it did not enumerate are never flagged or deleted - the explicit
+        # scan has no opinion about the rest of the scope.
+        if files is not None:
+            # existing = the enumerated files still ON DISK (an enumerated
+            # file can be gone - that is exactly what reconciliation flags);
+            # only = the full enumeration (the rows this scan may reconcile)
+            prune = db.prune_missing(
+                connection,
+                {str(m) for m in movies if m.exists()},
+                only={str(m) for m in movies},
+            )
+        else:
+            prune = db.prune_missing(connection, {str(m) for m in movies}, scope=str(root))
         log_prune_result(prune)
 
     return movies_by_category, movies, error_list
