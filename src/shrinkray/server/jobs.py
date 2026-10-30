@@ -911,7 +911,6 @@ def execute_encode(
         # job writes into - the user's output_dir in two-directory mode,
         # the per-run staging directory in place.
         outcomes = _encode_measured(
-            job,
             connection,
             cancel,
             progress,
@@ -924,7 +923,6 @@ def execute_encode(
 
 
 def _encode_measured(
-    job: Job,
     connection: sqlite3.Connection,
     cancel: threading.Event,
     progress: ProgressCallback | None,
@@ -939,7 +937,6 @@ def _encode_measured(
     job, excluding the directory the job writes into.
 
     Args:
-        job (Job): The job being executed.
         connection: The worker's database connection.
         cancel: Cooperative cancellation signal.
         progress: Callback progress(dict) for live updates.
