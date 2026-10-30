@@ -149,14 +149,20 @@ def _cached_or_none(
         tuple: (cached score or None, the encoded byte size or None, the
             open connection for the cache write); (None, None, None) without
             a database. The size is None on pre-#314 rows - a size read
-            misses rather than misleads.
+            misses rather than misleads. The caller owns the returned
+            connection and closes it on every path.
     """
     if db_file is None:
         return None, None, None
     from shrinkray import db as _db
 
     connection = _db.connect(db_file)
-    entry = _db.get_probe_entry(connection, key)
+    try:
+        entry = _db.get_probe_entry(connection, key)
+    except BaseException:
+        # the caller never received it: closing it is ours (issue #480)
+        connection.close()
+        raise
     if entry is None:
         return None, None, connection
     score, size = entry
@@ -166,13 +172,16 @@ def _cached_or_none(
 def _store_probe(
     connection: sqlite3.Connection | None, key: str, value: float, encoded_size: int | None = None
 ) -> None:
-    """Stores one probe measurement (best-effort commit via db layer)."""
+    """Stores one probe measurement (best-effort commit via db layer).
+
+    The connection stays open: its owner (the caller of _cached_or_none)
+    closes it in a finally, so a failure anywhere in the probe closes it too.
+    """
     if connection is None:
         return
     from shrinkray import db as _db
 
     _db.save_probe_score(connection, key, value, encoded_size)
-    connection.close()
 
 
 def sample_count_for(
@@ -418,46 +427,47 @@ def probe_crf(
         cached, _cached_size, connection = (None, None, None)
         if use_probe_cache:
             cached, _cached_size, connection = _cached_or_none(db_file, key)
-        if cached is not None:
-            log(f"probe cache hit (CRF {crf}, sample {index + 1}/{len(samples)})")
-            scores.append(cached)
+        # one finally closes the cache connection on every exit: a cancel or a
+        # failed VMAF measurement mid-probe left it to the garbage collector
+        # (issue #480)
+        try:
+            if cached is not None:
+                log(f"probe cache hit (CRF {crf}, sample {index + 1}/{len(samples)})")
+                scores.append(cached)
+                continue
+            encoded = workdir / f"probe_crf{crf}_{index}.mkv"
+            command = build_encode_command(
+                handbrake,
+                sample,
+                encoded,
+                crf,
+                encoder,
+                probe_encoder_preset,
+                crop=crop,
+                encoder_threads=encoder_threads,
+            )
+            code, err = _run(command, cancel=cancel)
+            if code == -1:
+                raise Cancelled("cancelled during probe encode")
+            if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
+                raise RuntimeError(f"probe encode failed (crf {crf}): {err[-400:]}")
+            _check_cancel(cancel)
+            score = measure_vmaf(
+                encoded,
+                sample,
+                workdir,
+                crop=crop,
+                hdr=hdr,
+                cancel=cancel,
+                db_file=db_file,
+                recipe=recipe,
+            )
+            _store_probe(connection, key, score, encoded.stat().st_size)
+            encoded.unlink()
+            scores.append(score)
+        finally:
             if connection is not None:
                 connection.close()
-            continue
-        encoded = workdir / f"probe_crf{crf}_{index}.mkv"
-        command = build_encode_command(
-            handbrake,
-            sample,
-            encoded,
-            crf,
-            encoder,
-            probe_encoder_preset,
-            crop=crop,
-            encoder_threads=encoder_threads,
-        )
-        code, err = _run(command, cancel=cancel)
-        if code == -1:
-            if connection is not None:
-                connection.close()
-            raise Cancelled("cancelled during probe encode")
-        if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
-            if connection is not None:
-                connection.close()
-            raise RuntimeError(f"probe encode failed (crf {crf}): {err[-400:]}")
-        _check_cancel(cancel)
-        score = measure_vmaf(
-            encoded,
-            sample,
-            workdir,
-            crop=crop,
-            hdr=hdr,
-            cancel=cancel,
-            db_file=db_file,
-            recipe=recipe,
-        )
-        _store_probe(connection, key, score, encoded.stat().st_size)
-        encoded.unlink()
-        scores.append(score)
     return sum(scores) / len(scores)
 
 
@@ -540,36 +550,35 @@ def estimate_size_factor(
     cached, _cached_size, connection = (None, None, None)
     if use_probe_cache:
         cached, _cached_size, connection = _cached_or_none(db_file, key)
-    if cached is not None:
-        log(f"probe cache hit (size probe, CRF {crf})")
-        if connection is not None:
-            connection.close()
-        return cached
-    command = build_encode_command(
-        handbrake,
-        sample,
-        encoded,
-        crf,
-        encoder,
-        probe_encoder_preset,
-        crop=crop,
-        encoder_threads=encoder_threads,
-    )
-    code, err = _run(command, cancel=cancel)
-    if code == -1:
-        if connection is not None:
-            connection.close()
-        raise Cancelled("cancelled during size probe")
-    if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
-        if connection is not None:
-            connection.close()
-        raise RuntimeError(f"size probe encode failed (crf {crf}): {err[-400:]}")
+    # one finally closes the cache connection on every exit (issue #480)
     try:
-        factor = encoded.stat().st_size / sample.stat().st_size
+        if cached is not None:
+            log(f"probe cache hit (size probe, CRF {crf})")
+            return cached
+        command = build_encode_command(
+            handbrake,
+            sample,
+            encoded,
+            crf,
+            encoder,
+            probe_encoder_preset,
+            crop=crop,
+            encoder_threads=encoder_threads,
+        )
+        code, err = _run(command, cancel=cancel)
+        if code == -1:
+            raise Cancelled("cancelled during size probe")
+        if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
+            raise RuntimeError(f"size probe encode failed (crf {crf}): {err[-400:]}")
+        try:
+            factor = encoded.stat().st_size / sample.stat().st_size
+        finally:
+            encoded.unlink()
+        _store_probe(connection, key, factor)
+        return factor
     finally:
-        encoded.unlink()
-    _store_probe(connection, key, factor)
-    return factor
+        if connection is not None:
+            connection.close()
 
 
 def find_optimal_crf(
