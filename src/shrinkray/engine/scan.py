@@ -607,8 +607,8 @@ def scan_movies(
         # (an enumerated file that vanished is exactly what reconciliation
         # flags); only = the full enumeration - a row the scan did not
         # enumerate is never flagged or deleted, the scan has no opinion
-        # about the rest of the scope. The walked branch filters the same
-        # way (round 7's finding): its walk list was built before the scan's
+        # about the rest of the scope. The walked branch consumes the same
+        # on-disk-filtered set: its walk list was built before the scan's
         # probes ran, so a file removed DURING the scan would otherwise stay
         # in existing_paths and the reconcile would RESET its grace counter
         # instead of flagging the deletion.
