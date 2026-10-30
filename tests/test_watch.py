@@ -412,6 +412,99 @@ class TestWatch(unittest.TestCase):
             # gets that the encode met the target
             self.assertTrue(captured["kwargs"].get("verify"))
 
+    def test_a_second_root_movie_is_scanned_under_its_own_root(self):
+        """Issue #404: a movie found under root B is recorded with a category
+        relative to root B, not root A (the submit branch passed roots[0] to
+        the scan, so a multi-root library filed second-root movies under
+        whatever get_category(root_a, movie) produced)."""
+
+        from shrinkray import db
+        from shrinkray.engine import scan as scan_mod
+        from shrinkray.engine import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root_a = Path(tmp) / "media-a"
+            root_b = Path(tmp) / "media-b"
+            root_a.mkdir()
+            root_b.mkdir()
+            # root B carries the movie in its own Title subfolder; root A
+            # carries a DIFFERENT title subfolder (so roots[0]'s category
+            # would be wrong, not merely equal)
+            title_b = root_b / "TitleB"
+            title_b.mkdir()
+            movie_b = title_b / "film.mkv"
+            movie_b.write_bytes(b"movie-b")
+            (root_a / "TitleA").mkdir()
+            old = time.time() - 3600
+            os.utime(movie_b, (old, old))
+
+            db_file = Path(tmp) / "metadata.db"
+            connection = db.connect(db_file)
+            try:
+                submit_calls: list = []
+
+                def fake_submit(movie):
+                    submit_calls.append(movie)
+                    return True
+
+                scan_roots: list = []
+
+                def fake_scan(movie, root, config, db_file=None):
+                    # the scan's category computation, performed on the root
+                    # the watcher handed over - PRODUCTION's own get_category
+                    # (with its Uncategorized fallback), so restoring roots[0]
+                    # fails cleanly on the assert below instead of a
+                    # ValueError inside this fake, and the recorded row is a
+                    # pin on production behavior, not this test's arithmetic
+                    scan_roots.append((movie, root))
+                    category = scan_mod.get_category(movie, root)
+                    db.upsert_file(
+                        connection,
+                        db.MovieRecord(
+                            path=movie,
+                            mtime=movie.stat().st_mtime,
+                            size=movie.stat().st_size,
+                            name=movie.name,
+                            category=category,
+                        ),
+                    )
+                    connection.commit()
+                    return {"category": category}, None
+
+                stack = ExitStack()
+                with (
+                    mock.patch(
+                        "shrinkray.engine.watch.encode_with_quality"
+                    ),  # not reached: submit path owns the work
+                    mock.patch("shrinkray.engine.watch.process_movie", side_effect=fake_scan),
+                    # decide()'s duration read is a real subprocess seam
+                    # (neighbours mock it too); this test's subject is the
+                    # scan's ROOT argument, not the decision
+                    mock.patch(
+                        "shrinkray.engine.watch.probe_duration_seconds",
+                        return_value=600.0,
+                    ),
+                    # the decision needs a toolchain to reach 'encode'
+                    mock.patch("shrinkray.engine.watch.find_handbrake", return_value="hb"),
+                    mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
+                ):
+                    _isolated_lock(stack, tmp)
+                    with stack:
+                        watch_mod.watch(
+                            [root_a, root_b], None, once=True, submit=fake_submit, db_file=db_file
+                        )
+                # the scan received the movie's OWN root, not roots[0]
+                self.assertEqual(scan_roots, [(movie_b, root_b)])
+                self.assertEqual(len(submit_calls), 1)
+                row = connection.execute(
+                    "SELECT f.category FROM files f WHERE f.path = ?",
+                    (str(movie_b),),
+                ).fetchone()
+                self.assertIsNotNone(row, "the movie was scanned into the db")
+                self.assertEqual(row["category"], "TitleB")
+            finally:
+                connection.close()
+
     def test_watch_pass_reports_quality_skip(self):
         """A quality skip (no size gain / unreachable) is surfaced as a
         skip log, not an encode error."""
