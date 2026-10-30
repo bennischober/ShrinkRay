@@ -462,13 +462,15 @@ def scan_movies(
             file or a glob's matches, resolved by resolve_input_paths);
             when given, the root is NOT walked (issue #197: a one-file
             command must touch exactly that file, not its folder).
-        walked (bool): Whether `files` was produced by WALKING the root
-            (a directory argument) rather than enumerated explicitly
-            (a file or glob argument) - the database reconciliation keys
-            on this (issue #453): a walked root's scan is the operator's
-            full-library statement and reconciles the whole root scope;
-            an enumerated list inspects exactly its files and reconciles
-            only those rows, never the rest of the scope.
+        walked (bool | None): Whether `files` was produced by WALKING the root
+            (a directory argument) rather than enumerated explicitly (a file
+            or glob argument); None (the default) means no `files` list was
+            given either - the two are supplied together or not at all (a
+            half-supplied pair raises ValueError, see Raises). The database
+            reconciliation keys on this (issue #453): a walked root's scan
+            is the operator's full-library statement and reconciles the
+            whole root scope; an enumerated list inspects exactly its files
+            and reconciles only those rows, never the rest of the scope.
         db_file (Path | None): The database file, read per movie to project
             an existing timeline crop summary into the flag (issue #181);
             never used to run the expensive pass from scan.
