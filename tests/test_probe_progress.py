@@ -16,6 +16,36 @@ from shrinkray.tools import vmaf as tools_vmaf
 class TestProbeProgress(unittest.TestCase):
     """Step events flow from the probing pipeline to the progress callback."""
 
+    def test_an_unspawnable_binary_raises_the_step_shape(self):
+        """Issue #458: a spawn failure at the sample-extraction seam raises
+        the step's documented RuntimeError (ffmpeg named), not a raw
+        OSError traceback; the sample path fails loudly and per file."""
+
+        def broken_run(command, cancel=None):
+            raise FileNotFoundError(2, "No such file or directory", command[0])
+
+        with (
+            patch(
+                "shrinkray.engine.samples.subprocess.run",
+                return_value=type(
+                    "P", (), {"returncode": 0, "stdout": b'{"format": {"duration": 100.0}}'}
+                )(),
+            ),
+            patch("shrinkray.engine.samples._run", side_effect=broken_run),
+            tempfile.TemporaryDirectory() as tmp,
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            engine_samples.extract_samples(
+                Path("movie.mkv"),
+                Path(tmp),
+                1,
+                10.0,
+                cancel=None,
+                progress=lambda event: None,
+            )
+        self.assertIn("ffmpeg", str(ctx.exception))
+        self.assertIn("cannot run", str(ctx.exception))
+
     def test_extract_samples_reports_per_sample(self):
         """Each extracted sample emits one step event (n/count)."""
         events: list[dict] = []

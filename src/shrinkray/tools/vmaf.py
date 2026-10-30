@@ -542,12 +542,18 @@ def measure_vmaf(
     # file is scored - a full-precision measurement of a large movie produces
     # no output for its entire run, so the stall watchdog kills a healthy
     # measurement as hung. The cancel event remains the kill path.
-    code, err = _run(
-        command,
-        cwd=workdir,
-        cancel=cancel,
-        watchdog=False,
-    )
+    try:
+        code, err = _run(
+            command,
+            cwd=workdir,
+            cancel=cancel,
+            watchdog=False,
+        )
+    except OSError as e:
+        # the binary cannot spawn (missing after startup, EMFILE/ENOMEM):
+        # the measurement's documented failure shape is RuntimeError (issue
+        # #458; the runner stays unguarded per #401's record)
+        raise RuntimeError(f"VMAF measurement cannot run '{command[0]}': {e}") from e
     if code == -1:
         raise Cancelled("cancelled during vmaf measurement")
     log_file = workdir / "vmaf.json"

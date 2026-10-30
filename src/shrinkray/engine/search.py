@@ -446,7 +446,14 @@ def probe_crf(
                 crop=crop,
                 encoder_threads=encoder_threads,
             )
-            code, err = _run(command, cancel=cancel)
+            try:
+                code, err = _run(command, cancel=cancel)
+            except OSError as e:
+                # the binary cannot spawn (missing after startup,
+                # EMFILE/ENOMEM): the probe step's documented failure shape is
+                # RuntimeError (issue #458; the runner stays unguarded per
+                # #401's record)
+                raise RuntimeError(f"probe encode cannot run '{handbrake}': {e}") from e
             if code == -1:
                 raise Cancelled("cancelled during probe encode")
             if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
@@ -565,7 +572,10 @@ def estimate_size_factor(
             crop=crop,
             encoder_threads=encoder_threads,
         )
-        code, err = _run(command, cancel=cancel)
+        try:
+            code, err = _run(command, cancel=cancel)
+        except OSError as e:
+            raise RuntimeError(f"size probe encode cannot run '{handbrake}': {e}") from e
         if code == -1:
             raise Cancelled("cancelled during size probe")
         if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
