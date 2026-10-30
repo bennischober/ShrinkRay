@@ -180,28 +180,32 @@ pair, the run is measuring something else. Compare the two command lines (the sc
 prints ab-av1's), do not read the delta.
 
 **A stream-copy window of this open-GOP remux cannot produce a measurable window
-pair.** The re-measure behind the counts above (issue #432): the 10-minute window cut
-with an input seek to 600 s - the seek point lands just before the keyframe at
-600.125 s, so the copy starts on that keyframe - and its HandBrake encode dropped
-frames at the head: the first run's log says `sync: video time went backwards 83 ms,
-dropped 2 frames`, and the frame counts measure 14,411 / 14,408. The first run's two
-numbers are different measures (the log names the frames sync discarded; the count
-delta also carries what the muxer absorbed); the third frame is unexplained, and the
-log's own drop count varies between the runs (2 then 3) - also unexplained. A re-cut
-"onto its first keyframe" (`-ss 0.125` before `-i`) was then measured to qualify the
-iterative recipe above, and it produced the SAME window - identical duration
-(601.351 s), identical head (keyframe 0.125, then 0.167/0.209/0.251), identical mid
-keyframe (299.466) and tail (601.309), equal size - because ffmpeg's copy mode snaps
-packets to the keyframe span either way. **The recipe's re-cut step is a no-op when
-it seeks near the boundary through copy mode**: to actually change the span, the
-re-cut must seek before the PREVIOUS GOP's boundary (the recipe's own
-one-GOP-per-step rule, but executed against the snapping), or trim the copy-cut
-reference to the same later range - both sides of the pair moving together, as the
-recipe requires. The RASL mechanism above is the cause; the re-cut's failure mode
-(copy-mode snapping) is measured, the mechanism sentence is not re-derived here.
-Both runs' pairs were refused by the parity script's frame-count gate (#408/#419),
-which is that gate working, not a parity defect; this source is declared
-unmeasurable for the window pair on that evidence, with the counts recorded.
+pair.** The re-measure behind the counts above (issue #432): the 10-minute window was
+stream-copied from an input seek at 600 s (the issue's repro command, `-ss` before
+`-i`) - the seek point lands just before the keyframe at 600.125 s, so the copy
+starts on that keyframe - and its HandBrake encode dropped frames at the head: the
+first run's log says `sync: video time went backwards 83 ms, dropped 2 frames`, and
+the frame counts measure 14,411 / 14,408. The first run's two numbers are different
+measures (the log names the frames sync discarded; the count delta also carries
+what the muxer absorbed); the third frame is unexplained, and the log's own drop
+count varies between the runs (2 then 3) - also unexplained. A re-cut "onto its
+first keyframe" (`-ss 0.125` before `-i`) was then measured to test the recipe
+above, and it produced the SAME window - identical duration (601.351 s), identical
+head (keyframe 0.125, then 0.167/0.209/0.251), identical mid keyframe (299.466) and
+tail (601.309), equal size (6,822,081,447 B; not byte-identical - container mux
+metadata differs) - because ffmpeg's copy mode snaps packets to the keyframe span
+whether the seek lands before or after `-i`. **What the measurement establishes:
+the recipe's re-cut step, aimed at the same keyframe, is a no-op through copy
+mode, and no run on this source has yet executed the re-cut the recipe prescribes
+(the previous keyframe) - the recipe itself is untested here.** Whether a
+previous-keyframe re-cut changes the span under copy-mode snapping, and whether
+the loop then terminates as the recipe says, is unmeasured. The RASL mechanism
+above is #494's reading (ffmpeg source reads and a generated open-GOP clip); on
+this remux it stands as hypothesis, unmeasured - what is measured here is only
+the refusal (twice, on one window) and the snapping. Both runs' pairs were refused
+by the parity script's frame-count gate (#408/#419), which is that gate working,
+not a parity defect; this source is declared unmeasurable for the window pair on
+that evidence, with the counts recorded.
 
 The encode path did not fail on this window: it encoded, chose CRF 33 by probe against
 this run's target 95.5 (the HDR override: 96.0 default minus the 0.5 calibration, issue
