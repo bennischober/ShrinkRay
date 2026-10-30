@@ -1286,6 +1286,9 @@ class TestEncodeLock(unittest.TestCase):
                         "shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_quality
                     ),
                     mock.patch("shrinkray.__main__.record_quality_results"),
+                    # the fresh fixture would sit out the real stability wait
+                    # (~90 s, issue #478); its own tests are test_file_stability's
+                    mock.patch("shrinkray.engine.watch.wait_for_stable", return_value=True),
                 ):
                     _record_encodes(
                         connection,
@@ -1344,6 +1347,9 @@ class TestEncodeLock(unittest.TestCase):
                         "shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_quality
                     ),
                     mock.patch("shrinkray.__main__.record_quality_results"),
+                    # the fresh fixture would sit out the real stability wait
+                    # (~90 s, issue #478); its own tests are test_file_stability's
+                    mock.patch("shrinkray.engine.watch.wait_for_stable", return_value=True),
                 ):
                     _record_encodes(
                         connection,

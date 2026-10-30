@@ -585,15 +585,21 @@ def connect(db_path: Path) -> sqlite3.Connection:
         sqlite3.Connection: The connection (row_factory set to sqlite3.Row).
     """
     connection = sqlite3.connect(db_path, check_same_thread=False)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.executescript(SCHEMA)
-    # ensure the version row exists
-    if connection.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
-        connection.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
-    _migrate(connection)
-    connection.commit()
+    # the caller only owns the connection once it is returned: a schema or
+    # migration failure must not leave it to the garbage collector (issue #480)
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.executescript(SCHEMA)
+        # ensure the version row exists
+        if connection.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
+            connection.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+        _migrate(connection)
+        connection.commit()
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 

@@ -516,21 +516,23 @@ def detect_crop_summary_cached(
     if not movie.is_file():
         return None
     connection: sqlite3.Connection | None = None
+    # one finally owns the connection on every exit, the cache hit included
+    # (issue #480: the hit returned before the old finally and leaked it)
     try:
         if db_file is not None:
-            from shrinkray import db
+            try:
+                from shrinkray import db
 
-            connection = db.connect(db_file)
-            cached = get_crop_summary(connection, movie)
-            if cached is not None:
-                return cached
-    except (OSError, RuntimeError) as e:
-        # a broken database must not stop the encode: compute uncached
-        log(f"The crop cache is unavailable ({e}); computing uncached.")
-        if connection is not None:
-            connection.close()
-            connection = None
-    try:
+                connection = db.connect(db_file)
+                cached = get_crop_summary(connection, movie)
+                if cached is not None:
+                    return cached
+            except (OSError, RuntimeError) as e:
+                # a broken database must not stop the encode: compute uncached
+                log(f"The crop cache is unavailable ({e}); computing uncached.")
+                if connection is not None:
+                    connection.close()
+                    connection = None
         readings, frame = run_crop_timeline(movie, cancel=cancel)
         if frame is None:
             return None

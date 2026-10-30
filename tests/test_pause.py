@@ -290,6 +290,8 @@ class TestStatusAndCli(unittest.TestCase):
         os.environ.pop(app_module.AUTH_TOKEN_ENV, None)
 
     def tearDown(self) -> None:
+        if app_module.state is not None:
+            app_module.state.shutdown()
         app_module.state = None
         self.env.stop()
         self.tmp.cleanup()

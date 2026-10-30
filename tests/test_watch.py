@@ -15,6 +15,10 @@ from unittest.mock import patch
 from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import watch as watch_mod
 
+# the module's own value, read before any test patches it: _isolated_lock
+# compares against it to tell "a test set its own interval" from "unpatched"
+_REAL_STABLE_CHECK_INTERVAL = watch_mod.STABLE_CHECK_INTERVAL
+
 
 def _isolated_lock(stack, tmp) -> None:
     """Points the watch loop's single-instance lock at this test's tmp dir.
@@ -28,11 +32,22 @@ def _isolated_lock(stack, tmp) -> None:
     can dip below the floor mid-suite, and the guard's skip-the-pass
     behaviour (correct in production) then eats the pass and the test's
     expectations come back empty (the #303 CI face of the #291 family).
+
+    Also zeroes is_stable's STABLE_CHECK_INTERVAL sleep (30 s per candidate)
+    unless the test already patched it: a watch test's subject is not the
+    stability wait, and three tests that forgot the per-test patch slept
+    120 s per run (issue #478). STABLE_MIN_AGE is left alone - tests that
+    want a stable file backdate its mtime, tests that want "never stable"
+    patch the floor themselves. A test that needs its own interval patches
+    it before this call or enters its patch after it; either way its value
+    wins.
     """
     stack.enter_context(
         mock.patch.object(watch_mod, "WATCH_LOCK_FILE", Path(tmp) / "shrinkray_watch.lock")
     )
     stack.enter_context(mock.patch.object(watch_mod, "disk_free_bytes", return_value=1 << 40))
+    if watch_mod.STABLE_CHECK_INTERVAL == _REAL_STABLE_CHECK_INTERVAL:
+        stack.enter_context(mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0))
 
 
 class TestWatch(unittest.TestCase):
@@ -396,6 +411,99 @@ class TestWatch(unittest.TestCase):
             # and the full-file VMAF is the only evidence the operator ever
             # gets that the encode met the target
             self.assertTrue(captured["kwargs"].get("verify"))
+
+    def test_a_second_root_movie_is_scanned_under_its_own_root(self):
+        """Issue #404: a movie found under root B is recorded with a category
+        relative to root B, not root A (the submit branch passed roots[0] to
+        the scan, so a multi-root library filed second-root movies under
+        whatever get_category(root_a, movie) produced)."""
+
+        from shrinkray import db
+        from shrinkray.engine import scan as scan_mod
+        from shrinkray.engine import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root_a = Path(tmp) / "media-a"
+            root_b = Path(tmp) / "media-b"
+            root_a.mkdir()
+            root_b.mkdir()
+            # root B carries the movie in its own Title subfolder; root A
+            # carries a DIFFERENT title subfolder (so roots[0]'s category
+            # would be wrong, not merely equal)
+            title_b = root_b / "TitleB"
+            title_b.mkdir()
+            movie_b = title_b / "film.mkv"
+            movie_b.write_bytes(b"movie-b")
+            (root_a / "TitleA").mkdir()
+            old = time.time() - 3600
+            os.utime(movie_b, (old, old))
+
+            db_file = Path(tmp) / "metadata.db"
+            connection = db.connect(db_file)
+            try:
+                submit_calls: list = []
+
+                def fake_submit(movie):
+                    submit_calls.append(movie)
+                    return True
+
+                scan_roots: list = []
+
+                def fake_scan(movie, root, config, db_file=None):
+                    # the scan's category computation, performed on the root
+                    # the watcher handed over - PRODUCTION's own get_category
+                    # (with its Uncategorized fallback), so restoring roots[0]
+                    # fails cleanly on the assert below instead of a
+                    # ValueError inside this fake, and the recorded row is a
+                    # pin on production behavior, not this test's arithmetic
+                    scan_roots.append((movie, root))
+                    category = scan_mod.get_category(movie, root)
+                    db.upsert_file(
+                        connection,
+                        db.MovieRecord(
+                            path=movie,
+                            mtime=movie.stat().st_mtime,
+                            size=movie.stat().st_size,
+                            name=movie.name,
+                            category=category,
+                        ),
+                    )
+                    connection.commit()
+                    return {"category": category}, None
+
+                stack = ExitStack()
+                with (
+                    mock.patch(
+                        "shrinkray.engine.watch.encode_with_quality"
+                    ),  # not reached: submit path owns the work
+                    mock.patch("shrinkray.engine.watch.process_movie", side_effect=fake_scan),
+                    # decide()'s duration read is a real subprocess seam
+                    # (neighbours mock it too); this test's subject is the
+                    # scan's ROOT argument, not the decision
+                    mock.patch(
+                        "shrinkray.engine.watch.probe_duration_seconds",
+                        return_value=600.0,
+                    ),
+                    # the decision needs a toolchain to reach 'encode'
+                    mock.patch("shrinkray.engine.watch.find_handbrake", return_value="hb"),
+                    mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
+                ):
+                    _isolated_lock(stack, tmp)
+                    with stack:
+                        watch_mod.watch(
+                            [root_a, root_b], None, once=True, submit=fake_submit, db_file=db_file
+                        )
+                # the scan received the movie's OWN root, not roots[0]
+                self.assertEqual(scan_roots, [(movie_b, root_b)])
+                self.assertEqual(len(submit_calls), 1)
+                row = connection.execute(
+                    "SELECT f.category FROM files f WHERE f.path = ?",
+                    (str(movie_b),),
+                ).fetchone()
+                self.assertIsNotNone(row, "the movie was scanned into the db")
+                self.assertEqual(row["category"], "TitleB")
+            finally:
+                connection.close()
 
     def test_watch_pass_reports_quality_skip(self):
         """A quality skip (no size gain / unreachable) is surfaced as a
