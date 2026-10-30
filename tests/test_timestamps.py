@@ -53,39 +53,28 @@ class TestConsoleFormat(unittest.TestCase):
     def test_a_rendered_line_matches_the_shape(self) -> None:
         """The format string is real loguru syntax, not just a constant.
 
-        The product's stderr handler (installed at logger import) is saved
-        and restored around the probe: the test replaces the global handler
-        list only for its own render, never for the rest of the session.
+        The probe sink is added BESIDE the product's installed handler and
+        only the probe's own id is removed afterwards (round 12's finding 1):
+        the product handler is never touched, so this test also renders
+        through the product's real wiring (round 12's finding 2) - a
+        reverted `format=` at the wiring fails here, and no later log
+        line's shape changes.
         """
         rendered: list[str] = []
 
         def sink(message) -> None:
             rendered.append(str(message))
 
-        # save the product's own handlers (the stderr handler logger.py
-        # installed at import): the probe replaces them, the finally block
-        # restores them - process-global state is never left removed
-        saved = logger._core.handlers.copy()
+        # the probe sink is added BESIDE the product's handler (never
+        # replacing it), and only the probe's own handler id is removed in
+        # the finally - the product handler is untouched, so no private
+        # reconstruction, no hardcoded level, and the wiring under test IS
+        # the wiring the product runs
+        probe_id = logger.add(sink, format=CONSOLE_FORMAT, level="INFO")
         try:
-            logger.remove()
-            logger.add(sink, format=CONSOLE_FORMAT, level="INFO")
             logger.info("format probe")
         finally:
-            logger.remove()
-            for _handler in saved.values():
-                # the FAITHFUL restore: rebuild the handler from the
-                # product's own construction (logger.py installed ONE
-                # handler: sys.stderr + CONSOLE_FORMAT + INFO) - a level-only
-                # restore re-adds stderr in loguru's DEFAULT format, silently
-                # changing every later log line's shape (round 11's finding);
-                # re-running the product's own add() is exact by construction
-                import shrinkray.logger as product_logger
-
-                logger.add(
-                    product_logger.sys.stderr,
-                    format=product_logger.CONSOLE_FORMAT,
-                    level="INFO",
-                )
+            logger.remove(probe_id)
         self.assertEqual(len(rendered), 1)
         match = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", rendered[0])
         self.assertIsNotNone(match, f"no timestamp in {rendered[0]!r}")
