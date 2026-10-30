@@ -210,7 +210,7 @@ def extract_samples(
             except OSError as e:
                 # same failure class for the lossless re-extract (issue #458)
                 raise RuntimeError(
-                    f"sample extraction could not start at {offset:.0f}s: {e}"
+                    f"sample extraction could not start at {offset:.0f}s: ffmpeg ({e})"
                 ) from e
         if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
             raise RuntimeError(f"sample extraction failed at {offset:.0f}s: {err[-400:]}")
