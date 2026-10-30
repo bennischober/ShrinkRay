@@ -144,9 +144,15 @@ exist: list the keyframe positions (`ffprobe -skip_frame nokey -show_frames
 LOG — `sync: ... dropped N frames` means the cut landed on an open GOP's RASL
 group: re-cut at the PREVIOUS keyframe and encode again (a closed-GOP source,
 x264's default, has no RASL pictures and any keyframe cut is safe; an open-GOP
-one, x265's default, needs this loop). The frame-count gate is the final oracle:
-a pair that passes it is aligned by construction. That is the gate working, not a
-measurement failure to route around.
+one, x265's default, needs this loop). **Each step back consumes one GOP**: on a
+fully open-GOP source the previous keyframe is another CRA and the retry
+reproduces the failure one GOP earlier — the loop terminates when the kept
+prefix spans the PRECEDING GOP (the cut's RASL group then references frames the
+window still holds), which means keeping a little more before the measured
+window than the measurement itself needs, or starting the encode range later.
+The frame-count gate is the final oracle: a pair that passes it is aligned by
+construction. That is the gate working, not a measurement failure to route
+around.
 
 **Check the recipe line, not just the delta.** The script derives the model and the
 analysis pixel format from the pair itself, and it prints them:
