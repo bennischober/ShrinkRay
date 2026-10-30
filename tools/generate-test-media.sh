@@ -48,17 +48,17 @@ gen() {
 }
 
 # 1. bars-1080p.mkv — the happy-path fixture: 1080p h264 with real 160 px
-#    pillarbox bars, 2 min, stereo AAC. The content is smptehdbars UPSCALED
-#    bicubic to 1600x1080 (measured, issue #433): the plan's svt_av1 search
-#    reaches VMAF 97.4 on it (testsrc's fine geometry ceilings at ~86 -
-#    'target unreachable' - and grain at levels that keep the file under
-#    50 MB measured 265+ MB per minute), while the soft upscale wastes just
-#    enough x264 bits that AV1 re-encodes the same quality at ~54% smaller
-#    (measured: plan ends with an encode decision at CRF 44, 54.3% saved,
-#    ~2.3 MB source). Static-ish content keeps the file small and its
-#    content/size reproducible (the mux writes a random SegmentUID per run,
-#    so the bytes are not identical); the bars are the fixture's point - the
-#    timeline detector reads them and the encode crops them.
+#    pillarbox bars, 2 min, stereo AAC. The content is smptehdbars rendered
+#    at 1600x1080 and pillarboxed to 1920x1080 (measured, issue #433): the
+#    pattern's soft gradients are inside the plan's svt_av1 reach - VMAF 97.4
+#    (testsrc's fine geometry ceilings at ~86, 'target unreachable'; grain at
+#    levels that keep the file under 50 MB measured 265+ MB per minute) - and
+#    x264 spends enough bits on those gradients that a whole-file encode at
+#    the chosen CRF 44 lands 7.94% smaller with the bars cropped (measured:
+#    2,277,368 -> 2,096,560 bytes, audio copied). Static content keeps the
+#    fixture small; the mux writes a random SegmentUID per run, so runs are
+#    not byte-identical; the bars are the fixture's point - the timeline
+#    detector reads them and the encode crops them.
 gen "bars-1080p.mkv" \
   -f lavfi -i "smptehdbars=duration=120:size=1600x1080:rate=30" \
   -f lavfi -i "sine=frequency=440:duration=120" \
