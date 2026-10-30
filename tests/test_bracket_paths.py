@@ -26,7 +26,7 @@ class TestBracketPaths(unittest.TestCase):
 
     def test_an_existing_file_with_brackets_scans_exactly_that_file(self) -> None:
         movie = self._movie("with [BRACKETS] name.mkv")
-        root, movies = resolve_input_paths(str(movie), [".mkv"])
+        root, movies, _walked = resolve_input_paths(str(movie), [".mkv"])
         self.assertEqual(movies, [movie.resolve()])
         self.assertEqual(root, movie.parent.resolve())
 
@@ -35,7 +35,7 @@ class TestBracketPaths(unittest.TestCase):
         folder.mkdir()
         movie = folder / "a.mkv"
         movie.write_bytes(b"x" * 8)
-        root, movies = resolve_input_paths(str(folder), [".mkv"])
+        root, movies, _walked = resolve_input_paths(str(folder), [".mkv"])
         self.assertIn(movie.resolve(), movies)
         self.assertEqual(root, folder.resolve())
 
@@ -48,7 +48,7 @@ class TestBracketPaths(unittest.TestCase):
     def test_a_quoted_glob_that_matches_files_still_scans_those(self) -> None:
         self._movie("a.mkv")
         self._movie("b.mkv")
-        root, movies = resolve_input_paths(str(self.root / "*.mkv"), [".mkv"])
+        root, movies, _walked = resolve_input_paths(str(self.root / "*.mkv"), [".mkv"])
         self.assertEqual(len(movies), 2)
         self.assertEqual(root, self.root.resolve())
 

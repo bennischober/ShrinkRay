@@ -926,23 +926,23 @@ class TestInputShapes(unittest.TestCase):
 
     def test_a_single_file_is_one_movie(self) -> None:
         """The case the one-shot mode exists for: one stubborn file."""
-        _root, found = scan.resolve_input_paths(str(self.one), self.extensions)
+        _root, found, _walked = scan.resolve_input_paths(str(self.one), self.extensions)
         self.assertEqual(found, [self.one.resolve()])
 
     def test_a_folder_walks_recursively(self) -> None:
         """A folder behaves as before: every movie under it."""
-        _root, found = scan.resolve_input_paths(str(self.movies), self.extensions)
+        _root, found, _walked = scan.resolve_input_paths(str(self.movies), self.extensions)
         self.assertEqual(found, sorted([self.one.resolve(), self.two.resolve()]))
 
     def test_a_glob_matches_every_file_it_names(self) -> None:
         """A quoted glob arrives unexpanded, so the CLI must expand it."""
         pattern = str(self.movies / "*.mp4")
-        _root, found = scan.resolve_input_paths(pattern, self.extensions)
+        _root, found, _walked = scan.resolve_input_paths(pattern, self.extensions)
         self.assertEqual(found, [self.two.resolve()])
 
     def test_a_recursive_glob_reaches_nested_movies(self) -> None:
         pattern = str(self.movies / "**" / "*.mkv")
-        _root, found = scan.resolve_input_paths(pattern, self.extensions)
+        _root, found, _walked = scan.resolve_input_paths(pattern, self.extensions)
         self.assertEqual(found, [self.one.resolve()])
 
     def test_a_glob_matching_nothing_is_an_error(self) -> None:
@@ -963,7 +963,7 @@ class TestInputShapes(unittest.TestCase):
         leading literal directory, not the filesystem root.
         """
         pattern = str(self.movies / "*.mp4")
-        root, _found = scan.resolve_input_paths(pattern, self.extensions)
+        root, _found, _walked = scan.resolve_input_paths(pattern, self.extensions)
         self.assertEqual(root, self.movies.resolve())
 
     def test_the_output_directory_is_excluded_from_a_glob(self) -> None:
@@ -972,14 +972,14 @@ class TestInputShapes(unittest.TestCase):
         out.mkdir()
         (out / "done.mkv").write_bytes(b"o")
         pattern = str(self.root / "**" / "*.mkv")
-        _root, found = scan.resolve_input_paths(pattern, self.extensions, exclude=out)
+        _root, found, _walked = scan.resolve_input_paths(pattern, self.extensions, exclude=out)
         self.assertIn(self.one.resolve(), found)
         self.assertNotIn((out / "done.mkv").resolve(), found)
 
     def test_a_non_movie_glob_match_is_ignored(self) -> None:
         """The extension decides, so a glob naming a poster keeps only movies."""
         pattern = str(self.nested / "*")
-        _root, found = scan.resolve_input_paths(pattern, self.extensions)
+        _root, found, _walked = scan.resolve_input_paths(pattern, self.extensions)
         self.assertEqual(found, [self.one.resolve()])
 
 

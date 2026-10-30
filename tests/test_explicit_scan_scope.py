@@ -170,6 +170,40 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         result = db.prune_missing(self.connection, set(), scope=self.root, only={a})
         self.assertEqual(result.flagged, 1)
 
+    def test_a_walked_folder_scan_still_reconciles_the_scope(self) -> None:
+        """The reviewer's round-1 finding 3, pinned: a WALKED folder scan
+        (the `shrinkray plan <folder>` path) reconciles the WHOLE root scope
+        - an unenumerated row is flagged and grace-deleted exactly as before
+        this fix (the issue's repair must not silence folder reconciliation).
+        """
+        self._catalogue_all()
+        (self.root / "b.mkv").unlink()
+        for _ in range(3):
+            engine_scan.scan_movies(
+                self.root,
+                _make_scan_config(),
+                connection=self.connection,
+                workers=1,
+            )
+        # b was not enumerated (the walk found only a + h now) and is gone:
+        # after 3 walked scans the grace is exhausted, the row is deleted
+        self.assertEqual(self._row_state(self.root / "b.mkv"), (-1, False))
+        self.assertEqual(self._row_state(self.root / "a.mkv"), (0, True))
+
+    def test_resolve_input_paths_reports_the_walked_fact(self) -> None:
+        """The resolver returns the discriminator: a directory argument is a
+        walk (True), a named file and a glob are enumerations (False) - the
+        scan's reconciliation keys on exactly this.
+        """
+        from shrinkray.engine.scan import resolve_input_paths
+
+        root, files, walked = resolve_input_paths(str(self.root), [".mkv"])
+        self.assertTrue(walked)
+        root, files, walked = resolve_input_paths(str(self.root / "a.mkv"), [".mkv"])
+        self.assertFalse(walked)
+        root, files, walked = resolve_input_paths(str(self.root / "*.mkv"), [".mkv"])
+        self.assertFalse(walked)
+
     def test_prune_missing_only_deletes_history_with_the_row(self) -> None:
         """db-level: when grace exhausts for an `only` row, its encodes go
         WITH it (the documented pairing) - and an unenumerated row's history

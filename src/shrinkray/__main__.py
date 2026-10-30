@@ -362,12 +362,12 @@ def encode(
         # the output directory must never be a scan target (previous outputs
         # would be re-encoded/re-probed)
         try:
-            root, files = resolve_input_paths(path, config.extensions, exclude=output_dir)
+            root, files, walked = resolve_input_paths(path, config.extensions, exclude=output_dir)
         except FileNotFoundError as e:
             log_error(str(e))
             raise typer.Exit(1) from e
         _, movies, _ = scan_movies(
-            root, config, connection=connection, exclude=output_dir, files=files
+            root, config, connection=connection, exclude=output_dir, files=files, walked=walked
         )
         # in place: the encode needs a real path, so it lands in a working
         # directory INSIDE the library root - the same filesystem, so the swap's
@@ -858,11 +858,11 @@ def plan(
     signals = contextlib.ExitStack()
     try:
         try:
-            root, files = resolve_input_paths(path, config.extensions)
+            root, files, walked = resolve_input_paths(path, config.extensions)
         except FileNotFoundError as e:
             log_error(str(e))
             raise typer.Exit(1) from e
-        _, movies, _ = scan_movies(root, config, connection=connection, files=files)
+        _, movies, _ = scan_movies(root, config, connection=connection, files=files, walked=walked)
 
         threads_cap = cap_threads(threads or config.handbrake_max_threads)
 
