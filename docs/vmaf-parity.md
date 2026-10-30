@@ -163,20 +163,19 @@ keyframe recipe was NOT actually tested as a different cut shape - copy mode mad
 both commands the same window. The working hypothesis, unmeasured: on an open-GOP
 source the B-frames after the first keyframe reference frames before it, those
 references dangle at a window's head, and HandBrake's sync drops the dangling frames
-while the copy keeps them. Both runs' pairs were refused by the frame-count gate
-(#408/#419), which is the gate working, not a parity defect; this source is declared
+while the copy keeps them. Both runs' pairs were refused by the parity script's frame-count
+gate (#408/#419), which is that gate working, not a parity defect; this source is declared
 unmeasurable for the window pair on that evidence, with the counts recorded.
 The encode path did not fail on this window: it encoded, chose CRF 33 by probe against
 this run's target 95.5 (the HDR override: 96.0 default minus the 0.5 calibration, issue
-#103), saved 94.13%, and replaced normally. (The recorded probe VMAF 95.63 is reported as measured,
-not as an aligned-pair score: the probe search measures probe encodes of this window's
-samples, the same shape whose alignment this section shows is not guaranteed on this
-source, and whether the probe path's alignment is affected here is unmeasured.) An
-operator who wants a whole-file VMAF
-number on this class runs the full file (not a window) - believed, not verified here:
-the pipeline's `--verify` measurement has no window head to dangle on a whole file,
-but whether it tolerates this source's structure is untested; treat it as the
-candidate, not a documented working route.
+#103), saved 94.13%, and replaced normally. (The recorded probe VMAF 95.63 is reported as
+measured, not as an aligned-pair score: the probe search measures probe encodes of this
+window's samples, the same shape whose alignment this section shows is not guaranteed on
+this source, and whether the probe path's alignment is affected here is unmeasured.) An
+operator who wants a whole-file VMAF number on this class runs the full file (not a window)
+- believed, not verified here: the pipeline's `--verify` measurement has no window head to
+dangle on a whole file, but whether it tolerates this source's structure is untested; treat
+it as the candidate, not a documented working route.
 
 ### 5. An HDR10 pair
 
