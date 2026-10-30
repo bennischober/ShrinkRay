@@ -15,8 +15,8 @@ binary behavior. These tests run the plan -> encode -> reuse cycle with
 the real HandBrakeCLI/ffmpeg so a change that breaks real-binary
 behavior surfaces here, not in the user's library.
 
-Cost: a synthetic 100s clip at 320x240 keeps a full cycle in the
-minutes range (plan ~1 min, reused encode well under that).
+Cost: a synthetic 100s clip at 1920x1080 keeps a full cycle in the
+minutes range (the measured cycle: ~80 s per test, 2m41s for the pair).
 """
 
 import os
@@ -64,9 +64,17 @@ class TestSmokePlanReuse(unittest.TestCase):
     def _make_clip(path: Path, seconds: int) -> None:
         """Generates a REAL media file: synthetic video + tone audio.
 
-        h264 crf 18 keeps the source compressible-but-not-degenerate so
-        the x265 re-encode actually finds a size gain (a 'no size gain'
-        plan would skip the reuse path under test).
+        1920x1080 keeps the source inside the encode decision's 1080p-class
+        floor (issue #233): a below-floor source is skipped as 'resolution
+        too low' before any plan runs, so the reuse path under test never
+        starts (issue #442). smptehdbars is a synthetic source the plan's
+        svt_av1 search can actually reach the default 96.0 VMAF target on -
+        testsrc's moving geometry measured a ~82 ceiling in the real probe
+        pipeline, so the plan failed with 'target unreachable' before the
+        reuse path under test could start (measured, issue #442). h264 crf
+        18 keeps the source compressible-but-not-degenerate so the re-encode
+        actually finds a size gain (a 'no size gain' plan would skip the
+        reuse path).
         """
         subprocess.run(
             [
@@ -77,7 +85,7 @@ class TestSmokePlanReuse(unittest.TestCase):
                 "-f",
                 "lavfi",
                 "-i",
-                f"testsrc=duration={seconds}:size=320x240:rate=25",
+                f"smptehdbars=duration={seconds}:size=1920x1080:rate=25",
                 "-f",
                 "lavfi",
                 "-i",
