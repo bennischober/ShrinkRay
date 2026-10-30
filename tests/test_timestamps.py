@@ -27,11 +27,11 @@ from shrinkray.logger import CONSOLE_FORMAT
 SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
 # the frozen instant the token pin renders: month 1, hour 15, minute 4,
-# second 5 - four DIFFERENT fields, and the hour is not one of the five
+# second 5 - four DIFFERENT fields, and the hour is outside the twelve
 # values where a 12-hour `hh` render coincides with the 24-hour `HH` render
-# (00-11 with a leading zero, round 4's finding: hour 3 rendered identically
-# under both tokens), so no token confusion - AM/PM hour included - can
-# reproduce the literal
+# (hours 1-12; hour 00 does NOT coincide - hh renders it 12, round 4's
+# finding: hour 3 rendered identically under both tokens), so no token
+# confusion - AM/PM hour included - can reproduce the literal
 FROZEN = datetime(2026, 1, 2, 15, 4, 5, tzinfo=timezone.utc)
 
 
@@ -81,6 +81,12 @@ class TestConsoleFormat(unittest.TestCase):
         """
         render = _compile_format("YYYY-MM-DD HH:MM:SS")
         self.assertEqual(render(FROZEN), "2026-01-02 15:01:00")
+        # and a 12-hour token fails the exact-literal pin too: hour 15 is
+        # outside hh's 1-12 coincidence range (round 4's finding), so the
+        # hour slot cannot silently go 12-hour
+        twelve_hour = _compile_format("YYYY-MM-DD hh:mm:ss")(FROZEN)
+        self.assertEqual(twelve_hour, "2026-01-02 03:04:05")
+        self.assertNotEqual(twelve_hour, "2026-01-02 15:04:05")
 
 
 if __name__ == "__main__":
