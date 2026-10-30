@@ -4,7 +4,9 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The release page no longer ships uv's build-guard `.gitignore`** ([#504](https://github.com/bennischober/ShrinkRay/issues/504)): `uv build` writes a one-byte `dist/.gitignore` (content `*`) after every build, its guard against committing local artifacts, and the release workflow's `files: dist/*` glob — expanded with `dot: true` — uploaded it as an asset, which GitHub stores renamed as `default.gitignore` (as on v0.5.0 and v0.6.0). The build step now passes `--no-create-gitignore` and the upload lists the artifacts by extension (`dist/*.whl`, `dist/*.tar.gz`), so a tagged release carries exactly the sdist and the wheel. The wheel and sdist stay: the project publishes no PyPI package, so the release page is the only installable-artifact source.
 
 ## [0.6.0] - 2026-10-30
 
