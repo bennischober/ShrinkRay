@@ -73,9 +73,18 @@ class TestConsoleFormat(unittest.TestCase):
         finally:
             logger.remove()
             for handler in saved.values():
+                # the FAITHFUL restore: rebuild the handler from the
+                # product's own construction (logger.py installed ONE
+                # handler: sys.stderr + CONSOLE_FORMAT + INFO) - a level-only
+                # restore re-adds stderr in loguru's DEFAULT format, silently
+                # changing every later log line's shape (round 11's finding);
+                # re-running the product's own add() is exact by construction
+                import shrinkray.logger as product_logger
+
                 logger.add(
-                    handler._sink if hasattr(handler, "_sink") else handler,
-                    level=handler._levelno,
+                    product_logger.sys.stderr,
+                    format=product_logger.CONSOLE_FORMAT,
+                    level="INFO",
                 )
         self.assertEqual(len(rendered), 1)
         match = re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", rendered[0])
