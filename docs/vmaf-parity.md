@@ -146,25 +146,29 @@ prints ab-av1's), do not read the delta.
 
 **A stream-copy window of an open-GOP source cannot produce a measurable whole-file
 pair.** Measured on the library's 2160p HEVC remux (issue #432): the 10-minute window
-cut with an input seek to 600 s (landing mid-GOP) lost frames in the HandBrake encode
-- HandBrake's own log says `dropped 2 frames` while the frame counts measure 14,411 /
-14,408 (the log's drop count and the count delta are different measures; the log line
-names the frames sync discarded, the counts also carry whatever the muxer's
-re-timestamping absorbed) - and the same window re-cut with an input seek **onto the
-window's first keyframe** (0.125 s) still lost 3 (14,411 / 14,408, output start
-0.038 s vs reference 0.125 s). Keyframe alignment does not repair the head, because
-the damage is in the open GOP after the first keyframe: the B-frames that follow it
-reference frames before it, those references dangle at a window's head, and
-HandBrake's sync drops the dangling frames while the copy keeps them. Both pairs were
-refused by the frame-count gate, which is the gate working (#408/#419), not a parity
-defect. This source class is therefore declared unmeasurable for the whole-file window
-pair, with the counts above recorded; a HandBrake log line `sync: video time went
-backwards ... dropped N frames` predicts the refusal before any measurement runs. The
-encode path itself is unaffected: the keyframe re-cut encoded, chose CRF 33 by probe
-(VMAF 95.63), saved 94.13%, and replaced normally. An operator who wants a whole-file
-VMAF number on this class runs the full file (not a window) - believed, not verified
-here: the pipeline's own `--verify` measurement has no cut head to dangle on a whole
-file, but whether it tolerates this source's structure untested; treat it as the
+cut with an input seek to 600 s anchored on the keyframe at 600.125 s (the window's
+first frame is NOT a keyframe; first key at 0.125 s internally), and its HandBrake
+encode dropped frames at the head - the log says `sync: video time went backwards
+83 ms, dropped 2 frames`, and the frame counts measure 14,411 / 14,408. The two
+numbers are different measures (the log names the frames sync discarded; the count
+delta also carries what the muxer absorbed); the third frame is unexplained. A
+re-measure re-cut the window "onto its first keyframe" (`-ss 0.125` before `-i`) and
+produced the SAME window - identical duration (601.351 s), identical head (keyframe
+0.125, then 0.167/0.209/0.251), identical mid keyframe (299.466) and tail (601.309),
+equal size - because ffmpeg's copy mode snaps packets to the keyframe span either way;
+its encode again dropped frames (14,411 / 14,408). So the misalignment reproduced on
+an identical window, and the proposed keyframe recipe was NOT actually tested as a
+different cut shape - copy mode made both commands the same window. The working
+hypothesis, unmeasured: on an open-GOP source the B-frames after the first keyframe
+reference frames before it, those references dangle at a window's head, and HandBrake's
+sync drops the dangling frames while the copy keeps them. Both pairs were refused by
+the frame-count gate (#408/#419), which is the gate working, not a parity defect; this
+source class is declared unmeasurable for the window pair, with the counts recorded.
+The encode path itself is unaffected: the window encoded, chose CRF 33 by probe (VMAF
+95.63), saved 94.13%, and replaced normally. An operator who wants a whole-file VMAF
+number on this class runs the full file (not a window) - believed, not verified here:
+the pipeline's `--verify` measurement has no window head to dangle on a whole file,
+but whether it tolerates this source's structure is untested; treat it as the
 candidate, not a documented working route.
 
 ### 5. An HDR10 pair
@@ -225,14 +229,15 @@ A frame-count mismatch means the two sides are not comparing the same frames, an
 score is meaningless whatever the delta says. `scripts/vmaf_parity.py` reports such a pair
 as **unmeasured** and fails the run instead of printing a number for it.
 
-**Build this pair from whole files.** The one shape that reliably produces a mismatch is a
+**Build this pair from whole files.** Two shapes reliably produce a mismatch. One is a
 reference cut with `-ss` (whose keyframe-accurate copy cut starts on an earlier keyframe, so it
 holds more content than the window asked for) measured against a HandBrake segment made with
-`--start-at`/`--stop-at` (which trims to the exact frame). The two sides then cover
-different content windows and their frame counts differ. Production produces neither shape:
-`build_encode_command` has no trim options, and the verification compares a whole output
-against a whole source. That shape is a harness artifact and its score must never be reported
-as a parity result (issue #408).
+`--start-at`/`--stop-at` (which trims to the exact frame). The other is any stream-copy window
+of an open-GOP source measured against its own whole-window HandBrake encode (pair 4 above):
+the window's head loses frames in the encode no matter how the cut was requested. Neither shape
+is production: `build_encode_command` has no trim options, and the verification compares a whole
+output against a whole source. Both are harness artifacts and their scores must never be
+reported as parity results (issues #408 and #432).
 
 ## Reporting the run
 
