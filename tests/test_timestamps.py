@@ -26,9 +26,13 @@ from shrinkray.logger import CONSOLE_FORMAT
 # the one shape every human-readable timestamp shares
 SHAPE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
-# the frozen instant the token pin renders: month 1, minute 4, second 5 -
-# three different values, so no token confusion can reproduce the literal
-FROZEN = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+# the frozen instant the token pin renders: month 1, hour 15, minute 4,
+# second 5 - four DIFFERENT fields, and the hour is not one of the five
+# values where a 12-hour `hh` render coincides with the 24-hour `HH` render
+# (00-11 with a leading zero, round 4's finding: hour 3 rendered identically
+# under both tokens), so no token confusion - AM/PM hour included - can
+# reproduce the literal
+FROZEN = datetime(2026, 1, 2, 15, 4, 5, tzinfo=timezone.utc)
 
 
 class TestConsoleFormat(unittest.TestCase):
@@ -59,21 +63,24 @@ class TestConsoleFormat(unittest.TestCase):
 
     def test_the_token_engine_renders_the_frozen_fields(self) -> None:
         """The decisive pin, deterministic: loguru's token engine renders the
-        frozen instant as 2026-01-02 03:04:05 under the product's spec - the
-        month, the minute and the second each land in their own slot.
+        frozen instant as 2026-01-02 15:04:05 under the PRODUCT's spec -
+        derived from the shipped constant, not a literal copy (round 4's
+        finding 2), so the pin measures the format the product actually
+        renders: the month, the hour, the minute and the second each land
+        in their own slot.
         """
-        render = _compile_format("YYYY-MM-DD HH:mm:ss")
-        self.assertEqual(render(FROZEN), "2026-01-02 03:04:05")
+        spec = CONSOLE_FORMAT.split("{time:")[1].split("}")[0]
+        render = _compile_format(spec)
+        self.assertEqual(render(FROZEN), "2026-01-02 15:04:05")
 
     def test_the_old_tokens_fail_the_frozen_pin(self) -> None:
         """The pin discriminates: under the old tokens the same engine
-        renders the same frozen instant as 2026-01-02 03:01:00 (the month 1
+        renders the same frozen instant as 2026-01-02 15:01:00 (the month 1
         in the minute slot, centisecond 0 in the second slot) - the defect
         issue #429 reports, reproducible on demand.
         """
         render = _compile_format("YYYY-MM-DD HH:MM:SS")
-        self.assertEqual(render(FROZEN), "2026-01-02 03:01:00")
-        self.assertNotEqual(render(FROZEN), "2026-01-02 03:04:05")
+        self.assertEqual(render(FROZEN), "2026-01-02 15:01:00")
 
 
 if __name__ == "__main__":
