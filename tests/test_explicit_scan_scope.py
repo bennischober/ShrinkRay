@@ -203,6 +203,18 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
             "VALUES (?, 0, 16, 'd.mkv', 'movies')",
             (str(d),),
         )
+        # d's encode history: the clause's claim covers the row AND its
+        # history (a deleted file's encodes surviving silently is the loss
+        # the clause prevents), so the fixture must give d an encode row to
+        # observe
+        d_file_id = self.connection.execute(
+            "SELECT id FROM files WHERE path = ?", (str(d),)
+        ).fetchone()[0]
+        self.connection.execute(
+            "INSERT INTO encodes (file_id, preset, encoder, input_size, "
+            "output_size, saved_percent) VALUES (?, '5', 'svt_av1', 16, 8, 50.0)",
+            (d_file_id,),
+        )
         self.connection.commit()
         # the CLI's directory shape: the walk happens FIRST, and the file is
         # deleted AFTER it - the vanished path stays IN the walk list, so
@@ -233,8 +245,15 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         # d was never enumerated and is gone: the walked branch's scope
         # reconcile flagged and deleted it (the CLAUSE's pin - an enumerated
         # reconcile of the walk list would have left d's row untouched
-        # forever, silently keeping a deleted file's history)
+        # forever, silently keeping a deleted file's history) - and d's
+        # encode history went WITH the row (the documented pairing, now
+        # observed by the fixture's own encode row)
         self.assertEqual(self._row_state(d), (-1, False))
+        d_hist = self.connection.execute(
+            "SELECT COUNT(*) FROM encodes WHERE file_id = (SELECT id FROM files WHERE path = ?)",
+            (str(d),),
+        ).fetchone()[0]
+        self.assertEqual(d_hist, 0)
         self.assertEqual(self._row_state(self.root / "a.mkv"), (0, True))
 
     def test_the_cli_forwards_the_walked_pair(self) -> None:
