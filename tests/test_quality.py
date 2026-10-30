@@ -950,6 +950,10 @@ class TestProbeCache(unittest.TestCase):
             raise FileNotFoundError(2, "No such file or directory", command[0])
 
         with (
+            # the cache key's tool metadata is a real subprocess seam (the
+            # sibling probe pin stubs it too); this test's subject is the
+            # encode seam
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0;libvmaf=v3"),
             patch.object(engine_search, "_run", side_effect=broken_run),
             self.assertRaises(RuntimeError) as ctx,
         ):
