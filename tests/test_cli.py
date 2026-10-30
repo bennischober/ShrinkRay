@@ -180,6 +180,48 @@ class TestDoctorCli(unittest.TestCase):
             self.assertIn("libvmaf", result.output)
             self.assertIn("toolchain", result.output.lower())
 
+    def test_a_broken_toolchain_does_not_swallow_the_scratch_report(self):
+        """The no-db path reports BOTH facts (round-15's finding): a fresh
+        install with a broken toolchain AND overnight debris gets the
+        toolchain message AND the findings table in one run - the db path
+        renders findings regardless of problems too."""
+
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            missing_db = root / "fresh.db"
+            scratch = root / "scratch"
+            scratch.mkdir()
+            from shrinkray.engine.identity import probe_scratch_prefix
+
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            workdir = scratch / (probe_scratch_prefix(movie) + "x7y8z9a1")
+            workdir.mkdir()
+            (workdir / "sample_0.mkv").write_bytes(b"m" * 16)
+            import time as time_mod
+
+            from shrinkray import service as service_mod
+
+            aged = time_mod.time() - 2 * service_mod.SCRATCH_STALE_SECONDS
+            os.utime(workdir, (aged, aged))
+            os.utime(workdir / "sample_0.mkv", (aged, aged))
+            runner = CliRunner()
+            with (
+                patch(
+                    "shrinkray.service.all_problems",
+                    return_value=["ffmpeg has no libvmaf filter: the CRF search cannot measure."],
+                ),
+                patch.dict(os.environ, {"TMPDIR": str(scratch)}),
+            ):
+                result = runner.invoke(app, ["doctor", "--db", str(missing_db)])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("libvmaf", result.output, "the toolchain fact is named")
+            self.assertIn("stale probe scratch", result.output, "the debris fact is named")
+
     def test_doctor_reports_stale_scratch_without_a_database(self):
         """The scratch check runs even with NO database (round-14 finding 1):
         crash debris is a no-database fact - the stateless one-shot

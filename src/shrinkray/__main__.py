@@ -1132,12 +1132,15 @@ def doctor(
 
         scratch_findings = _scratch()
         if problems:
+            # the toolchain's verdict does not swallow the scratch report:
+            # a fresh install with a broken toolchain AND overnight debris
+            # gets BOTH facts in one run (the db path renders findings
+            # regardless of problems too - the two paths must agree)
             console.print(
                 "[red]The toolchain cannot do the one thing this tool does "
                 "(see the problems above); fix the toolchain before the "
                 "first encode.[/red]"
             )
-            raise typer.Exit(1)
         if scratch_findings:
             table = Table(title="Doctor findings (scratch)", title_justify="left")
             table.add_column("File", overflow="fold")
@@ -1146,6 +1149,8 @@ def doctor(
             for finding in scratch_findings:
                 table.add_row(finding.movie, finding.issue, finding.detail or "—")
             console.print(table)
+            raise typer.Exit(1)
+        if problems:
             raise typer.Exit(1)
         console.print(
             "[green]Toolchain is healthy.[/green] No database found at "
