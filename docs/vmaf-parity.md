@@ -144,6 +144,24 @@ If the printed recipe does not match ab-av1's own `format=` and `model=` on the 
 pair, the run is measuring something else. Compare the two command lines (the script
 prints ab-av1's), do not read the delta.
 
+**A stream-copy window of an open-GOP source cannot produce a measurable whole-file
+pair.** Measured on the library's 2160p HEVC remux (issue #432): the 10-minute window
+cut mid-GOP (`-ss 600` after `-i`) lost 2 of 14,411 frames in the HandBrake encode
+(14,411 / 14,408), and the same window re-cut **on a keyframe** (`-ss 0.125` before
+`-i`, the window's first keyframe) lost 3 (14,411 / 14,408, output start 0.038 s vs
+reference 0.125 s) - keyframe alignment does not repair the head, because the damage
+is in the open GOP after the first keyframe: the B-frames that follow it reference
+frames before it, those references dangle at a window's head, and HandBrake's sync
+drops the dangling frames while the copy keeps them. Both pairs were refused by the
+frame-count gate, which is the gate working (#408), not a parity defect. This source
+class is therefore declared unmeasurable for the whole-file window pair, with the
+counts above recorded; a HandBrake log line `sync: video time went backwards ... dropped
+N frames` predicts the refusal before any measurement runs. The encode path itself is
+unaffected: the same window encoded, chose CRF 33 by probe (VMAF 95.63), saved 94.13%,
+and replaced normally. An operator who wants a whole-file VMAF number on this class
+runs the full file (not a window), where the pipeline's own verification or a
+whole-file pair has no cut head to dangle.
+
 ### 5. An HDR10 pair
 
 ```sh
