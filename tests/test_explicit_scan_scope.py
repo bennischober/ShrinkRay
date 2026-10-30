@@ -247,11 +247,13 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         # reconcile of the walk list would have left d's row untouched
         # forever, silently keeping a deleted file's history) - and d's
         # encode history went WITH the row (the documented pairing, now
-        # observed by the fixture's own encode row)
+        # observed by the fixture's own encode row). The count uses the
+        # CAPTURED d_file_id, not a subselect: after the row is deleted the
+        # subselect resolves to NULL and matches nothing - the assertion
+        # would be 0 by construction whether or not the encode row survived
         self.assertEqual(self._row_state(d), (-1, False))
         d_hist = self.connection.execute(
-            "SELECT COUNT(*) FROM encodes WHERE file_id = (SELECT id FROM files WHERE path = ?)",
-            (str(d),),
+            "SELECT COUNT(*) FROM encodes WHERE file_id = ?", (d_file_id,)
         ).fetchone()[0]
         self.assertEqual(d_hist, 0)
         self.assertEqual(self._row_state(self.root / "a.mkv"), (0, True))
@@ -360,6 +362,7 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         """
         a = str(self.root / "a.mkv")
         b = str(self.root / "b.mkv")
+        ids: dict[str, int] = {}
         for p in (a, b):
             self.connection.execute(
                 "INSERT INTO files (path, mtime, size, name, category) "
@@ -369,6 +372,7 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
             file_id = self.connection.execute(
                 "SELECT id FROM files WHERE path = ?", (p,)
             ).fetchone()[0]
+            ids[p] = file_id
             self.connection.execute(
                 "INSERT INTO encodes (file_id, preset, encoder, input_size, "
                 "output_size, saved_percent) VALUES (?, '5', 'svt_av1', 16, 8, 50.0)",
@@ -376,22 +380,23 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
             )
         self.connection.commit()
         # three reconciles of only={a} with a absent: grace 3 -> the row AND
-        # its encodes are gone; b (unenumerated) keeps row + encodes
+        # its encodes are gone; b (unenumerated) keeps row + encodes. The
+        # history counts use the CAPTURED ids: after a's row is deleted a
+        # path-subselect resolves to NULL and matches nothing - 0 by
+        # construction (the reviewer's round-11 finding)
         for _ in range(3):
             db.prune_missing(self.connection, set(), scope=self.root, only={a})
         a_row = self.connection.execute(
             "SELECT COUNT(*) FROM files WHERE path = ?", (a,)
         ).fetchone()[0]
         a_hist = self.connection.execute(
-            "SELECT COUNT(*) FROM encodes WHERE file_id = (SELECT id FROM files WHERE path = ?)",
-            (a,),
+            "SELECT COUNT(*) FROM encodes WHERE file_id = ?", (ids[a],)
         ).fetchone()[0]
         b_row = self.connection.execute(
             "SELECT COUNT(*) FROM files WHERE path = ?", (b,)
         ).fetchone()[0]
         b_hist = self.connection.execute(
-            "SELECT COUNT(*) FROM encodes WHERE file_id = (SELECT id FROM files WHERE path = ?)",
-            (b,),
+            "SELECT COUNT(*) FROM encodes WHERE file_id = ?", (ids[b],)
         ).fetchone()[0]
         self.assertEqual((a_row, a_hist), (0, 0))
         self.assertEqual((b_row, b_hist), (1, 1))
