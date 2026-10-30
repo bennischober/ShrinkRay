@@ -451,7 +451,9 @@ def probe_crf(
             except OSError as e:
                 # HandBrakeCLI missing or not spawnable (EMFILE, ENOMEM): the
                 # step's documented failure shape, not a traceback (issue #458)
-                raise RuntimeError(f"probe encode could not start (crf {crf}): {e}") from e
+                raise RuntimeError(
+                    f"probe encode could not start (crf {crf}): HandBrakeCLI ({e})"
+                ) from e
             if code == -1:
                 raise Cancelled("cancelled during probe encode")
             if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:
@@ -575,7 +577,9 @@ def estimate_size_factor(
         except OSError as e:
             # HandBrakeCLI missing or not spawnable (EMFILE, ENOMEM): the
             # step's documented failure shape, not a traceback (issue #458)
-            raise RuntimeError(f"size probe encode could not start (crf {crf}): {e}") from e
+            raise RuntimeError(
+                f"size probe encode could not start (crf {crf}): HandBrakeCLI ({e})"
+            ) from e
         if code == -1:
             raise Cancelled("cancelled during size probe")
         if code != 0 or not encoded.is_file() or encoded.stat().st_size == 0:

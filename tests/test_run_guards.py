@@ -91,6 +91,49 @@ class TestSampleExtractionRunGuards(unittest.TestCase):
         self.assertIn("No such file or directory", message)
 
 
+class TestEmfileShapedSpawnFailure(unittest.TestCase):
+    """The EMFILE/ENOMEM half of issue #458's scenario: the spawn-class OSError
+    that carries no binary in its str() still reports the binary's name."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.sample = Path(self.tmp.name) / "sample_0.mkv"
+        self.sample.write_bytes(b"x" * 8)
+        self.movie = Path(self.tmp.name) / "one.mkv"
+        self.movie.write_bytes(b"x" * 8)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_size_probe_emfile_names_the_binary(self) -> None:
+        from shrinkray.engine.search import estimate_size_factor
+
+        with (
+            patch(
+                "shrinkray.engine.search._run",
+                side_effect=OSError(24, "Too many open files"),
+            ),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            estimate_size_factor(
+                [(self.sample, 0.0)],
+                Path(self.tmp.name),
+                "/usr/bin/HandBrakeCLI",
+                30,
+                self.movie,
+                1.0,
+                "svt_av1",
+                8,
+                cancel=threading.Event(),
+                db_file=None,
+                use_probe_cache=False,
+            )
+        message = str(ctx.exception)
+        self.assertIn("size probe encode could not start", message)
+        self.assertIn("HandBrakeCLI", message)
+        self.assertIn("Too many open files", message)
+
+
 class TestProbeEncodeRunGuards(unittest.TestCase):
     """engine/search.py: the HandBrake probe encodes raise the documented
     RuntimeError, not OSError."""

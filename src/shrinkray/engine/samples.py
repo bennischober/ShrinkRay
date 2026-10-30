@@ -119,6 +119,10 @@ def extract_samples(
             capture_output=True,
             timeout=FFPROBE_TIMEOUT,
         )
+    except FileNotFoundError as e:
+        # ffprobe missing after startup (issue #458): the step's documented
+        # failure shape with the binary named, not a traceback
+        raise RuntimeError(f"sample extraction could not start: ffprobe ({e})") from e
     except subprocess.SubprocessError as e:
         # TimeoutExpired: a stale mount (NFS/SMB that went away) blocks the
         # read in the kernel — without a timeout this call would hang the
@@ -168,7 +172,9 @@ def extract_samples(
         except OSError as e:
             # ffmpeg missing or not spawnable (EMFILE, ENOMEM): the step's
             # documented failure shape, not a traceback (issue #458)
-            raise RuntimeError(f"sample extraction could not start at {offset:.0f}s: {e}") from e
+            raise RuntimeError(
+                f"sample extraction could not start at {offset:.0f}s: ffmpeg ({e})"
+            ) from e
         if code != 0 or not sample.is_file() or sample.stat().st_size == 0:
             # the container cannot hold the source codec: re-extract losslessly
             # so the reference stays pristine, and say so - this path costs a

@@ -552,7 +552,7 @@ def measure_vmaf(
     except OSError as e:
         # ffmpeg missing or not spawnable (EMFILE, ENOMEM): the step's
         # documented failure shape, not a traceback (issue #458)
-        raise RuntimeError(f"vmaf measurement could not start: {e}") from e
+        raise RuntimeError(f"vmaf measurement could not start: ffmpeg ({e})") from e
     if code == -1:
         raise Cancelled("cancelled during vmaf measurement")
     log_file = workdir / "vmaf.json"
