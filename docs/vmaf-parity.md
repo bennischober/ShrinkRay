@@ -149,7 +149,7 @@ fully open-GOP source the previous keyframe is another CRA and the retry
 reproduces the failure one GOP earlier — the loop terminates when the kept
 prefix spans the PRECEDING GOP (the cut's RASL group then references frames the
 window still holds), which means keeping a little more before the measured
-window than the measurement itself needs, or (equivalently) trimming the COPY-CUT reference to the same later range - both sides of the pair must move together, since a reference that starts earlier than the encode reproduces the misalignment the gate refuses). The frame-count gate is the final oracle: a pair that passes it is aligned by
+window than the measurement itself needs, or (equivalently) trimming the COPY-CUT reference to the same later range - both sides of the pair must move together, since a reference that starts earlier than the encode reproduces the misalignment the gate refuses. The frame-count gate is the final oracle: a pair that passes it is aligned by
 construction. That is the gate working, not a measurement failure to route
 around.
 
