@@ -144,40 +144,40 @@ If the printed recipe does not match ab-av1's own `format=` and `model=` on the 
 pair, the run is measuring something else. Compare the two command lines (the script
 prints ab-av1's), do not read the delta.
 
-**A stream-copy window of this open-GOP remux cannot produce a measurable window
-pair.** Measured on the library's 2160p HEVC remux (issue #432): the 10-minute window
-cut with an input seek to 600 s - the seek point lands just before the keyframe at
-600.125 s, so the copy starts on that keyframe (first key at 0.125 s internally) - and
-its HandBrake encode dropped frames at the head: the first run's log says `sync: video
-time went backwards 83 ms, dropped 2 frames`, and the frame counts measure 14,411 /
-14,408. The first run's two numbers are different measures (the log names the frames
-sync discarded; the count delta also carries what the muxer absorbed); the third
-frame is unexplained, and the log's own drop count varies between the runs (2 then 3)
-- also unexplained. A re-measure re-cut the window "onto its first keyframe" (`-ss 0.125`
-before `-i`) and produced the SAME window - identical duration (601.351 s), identical
-head (keyframe 0.125, then 0.167/0.209/0.251), identical mid keyframe (299.466) and
-tail (601.309), equal size - because ffmpeg's copy mode snaps packets to the keyframe
-span either way; its encode again dropped frames (14,411 / 14,408; that run's log
-named 3). So the misalignment reproduced on an identical window, and the proposed
-keyframe recipe was NOT actually tested as a different cut shape - copy mode made
-both commands the same window. The working hypothesis, unmeasured: the damage lives
-in the GOP structure after that first keyframe - on an open-GOP source the B-frames
-after it reference frames before it, those references dangle at a window's head, and
-HandBrake's sync drops the dangling frames while the copy keeps them. Both runs'
-pairs were refused by the parity script's frame-count gate (#408/#419), which is that
-gate working, not a parity defect; this source is declared unmeasurable for the window
-pair on that evidence, with the counts recorded.
+**A stream-copy window of this open-GOP remux cannot produce a measurable window pair.**
+Measured on the library's 2160p HEVC remux (issue #432): the 10-minute window cut with
+an input seek to 600 s - the seek point lands just before the keyframe at 600.125 s, so
+the copy starts on that keyframe (first key at 0.125 s internally) - and its HandBrake
+encode dropped frames at the head: the first run's log says `sync: video time went
+backwards 83 ms, dropped 2 frames`, and the frame counts measure 14,411 / 14,408. The
+first run's two numbers are different measures (the log names the frames sync discarded;
+the count delta also carries what the muxer absorbed); the third frame is unexplained,
+and the log's own drop count varies between the runs (2 then 3) - also unexplained. A
+re-measure re-cut the window "onto its first keyframe" (`-ss 0.125` before `-i`) and
+produced the SAME window - identical duration (601.351 s), identical head (keyframe
+0.125, then 0.167/0.209/0.251), identical mid keyframe (299.466) and tail (601.309),
+equal size - because ffmpeg's copy mode snaps packets to the keyframe span either way;
+its encode again dropped frames (14,411 / 14,408; that run's log named 3). So the
+misalignment reproduced on an identical window, and the proposed keyframe recipe was NOT
+actually tested as a different cut shape - copy mode made both commands the same window.
+The working hypothesis, unmeasured: the damage lives in the GOP structure after that
+first keyframe - on an open-GOP source the B-frames after it reference frames before it,
+those references dangle at a window's head, and HandBrake's sync drops the dangling
+frames while the copy keeps them. Both runs' pairs were refused by the parity script's
+frame-count gate (#408/#419), which is that gate working, not a parity defect; this
+source is declared unmeasurable for the window pair on that evidence, with the counts
+recorded.
+
 The encode path did not fail on this window: it encoded, chose CRF 33 by probe against
 this run's target 95.5 (the HDR override: 96.0 default minus the 0.5 calibration, issue
-#103), saved 94.13%, and replaced normally. (The recorded probe VMAF 95.63 is
-reported as measured, not as an aligned-pair score: the probe search measures probe
-encodes of this window's samples, the same shape whose alignment this section shows is
-not guaranteed on this source, and whether the probe path's alignment is affected here
-is unmeasured.) An operator who wants a whole-file VMAF number on this class runs the
-full file (not a window) - believed, not verified here: the pipeline's `--verify`
-measurement has no window head to dangle on a whole file, but whether it tolerates
-this source's structure is untested; treat it as the candidate, not a documented
-working route.
+#103), saved 94.13%, and replaced normally. (The recorded probe VMAF 95.63 is reported
+as measured, not as an aligned-pair score: the probe search measures probe encodes of
+this window's samples, the same shape whose alignment this section shows is not
+guaranteed on this source, and whether the probe path's alignment is affected here is
+unmeasured.) An operator who wants a whole-file VMAF number on this class runs the full
+file (not a window) - believed, not verified here: the pipeline's `--verify` measurement
+has no window head to dangle on a whole file, but whether it tolerates this source's
+structure is untested; treat it as the candidate, not a documented working route.
 
 ### 5. An HDR10 pair
 
