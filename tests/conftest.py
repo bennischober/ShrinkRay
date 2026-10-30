@@ -44,6 +44,22 @@ def _untracked_entries() -> set[str] | None:
     return set(result.stdout.splitlines())
 
 
+@pytest.fixture(autouse=True)
+def _isolate_scratch_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The suite's doctor tests must not depend on the ambient scratch env.
+
+    The product's `doctor` reads `TMPDIR`/`TEMP`/`TMP` (issue #440): on a dev
+    machine whose scratch holds real probe debris, every doctor test's
+    expectation would flip (the round-16 reviewer measured 6 failures from
+    one stale workdir in `$TMPDIR`). The suite isolates the three variables
+    per test; a test that WANTS a configured scratch patches it explicitly
+    (`patch.dict(os.environ, {...})` inside the test, which wins over this
+    isolation).
+    """
+    for var in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _no_working_tree_pollution() -> Iterator[None]:
     """Fails the session when a test leaves a new untracked entry behind."""
