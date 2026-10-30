@@ -183,14 +183,17 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         the discriminator is load-bearing).
         """
         self._catalogue_all()
-        (self.root / "b.mkv").unlink()
-        # the CLI's directory shape: the walked list (a + h, b is gone)
-        # arrives as `files`, walked=True
+        # the CLI's directory shape: the walk happens FIRST, and the file is
+        # deleted AFTER it (round 8's finding 2: the pin is load-bearing
+        # only when the vanished path is IN the walk list - the pre-#453
+        # behaviour would keep b in existing_paths and RESET its grace
+        # counter instead of flagging the deletion)
         walked_files = engine_scan.find_movies(self.root, [".mkv"])
         self.assertEqual(
             sorted(p.name for p in walked_files),
-            ["a.mkv", "h.mkv"],
+            ["a.mkv", "b.mkv", "h.mkv"],
         )
+        (self.root / "b.mkv").unlink()
         for _ in range(3):
             engine_scan.scan_movies(
                 self.root,
