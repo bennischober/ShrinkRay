@@ -132,18 +132,21 @@ frames short of the copy-cut reference. The frame-count gate then refuses the pa
 -i REMUX -t 600 -c copy`): the encode dropped 2 frames (14411 reference vs 14408
 output, HandBrake's own log naming it: `sync: video time went backwards 83 ms,
 dropped 2 frames. PTS 0`), so the pair could not be scored; the window itself is
-fine, the CUT is the defect. **The recipe is the decode test, not a keyframe
-flag:** `ffprobe` cannot name the safe start — `pict_type` has no IDR member (an
-HEVC IDR and a CRA both print `pict_type=I`), and `key_frame=1` matches CRA too;
-what predicts the pair's fate is whether the cut decodes cleanly from its own
-start: `ffmpeg -v error -i CUT.mkv -f null -` must print NOTHING (a
-RASL-reference failure names the open-GOP cut), and the encode's own log is the
-second predictor. A closed-GOP source (x264's default) has no RASL pictures and
-every cut is safe; an open-GOP one (x265 default) needs the decode test. **A
-HandBrake log line naming dropped frames predicts a misaligned pair** - when you
-see `sync: ... dropped N frames` in the encode's log, the frame-count gate will
-refuse the pair; that is the gate working, not a measurement failure to route
-around.
+fine, the CUT is the defect. **No pre-encode check names the safe cut**, and
+trying to build one hits a wall on every front: `ffprobe` cannot distinguish the
+start (`pict_type` has no IDR member — an HEVC IDR and a CRA both print `I`;
+`key_frame=1` matches CRA too), and a decode test cannot see the defect either
+(`ffmpeg -v error -i CUT.mkv -f null -` prints nothing and exits 0 — measured:
+ffmpeg suppresses the missing-reference error for CRA and fills the reference
+silently). The working recipe is ITERATIVE and uses the two oracles that do
+exist: list the keyframe positions (`ffprobe -skip_frame nokey -show_frames
+-show_entries frame=pts_time`), cut at one, encode, and read the ENCODE'S OWN
+LOG — `sync: ... dropped N frames` means the cut landed on an open GOP's RASL
+group: re-cut at the PREVIOUS keyframe and encode again (a closed-GOP source,
+x264's default, has no RASL pictures and any keyframe cut is safe; an open-GOP
+one, x265's default, needs this loop). The frame-count gate is the final oracle:
+a pair that passes it is aligned by construction. That is the gate working, not a
+measurement failure to route around.
 
 **Check the recipe line, not just the delta.** The script derives the model and the
 analysis pixel format from the pair itself, and it prints them:
