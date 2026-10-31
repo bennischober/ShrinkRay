@@ -182,6 +182,12 @@ def find_new_movies(inbox: Path, extensions: list[str], known: set[str]) -> list
             # this stat (issue #427's discovery-class escapes) - skip it;
             # it is gone, there is nothing to watch
             continue
+        if any(part.startswith(".") for part in m.relative_to(inbox).parts[:-1]):
+            # a dot-DIRECTORY inside the watched root is not library
+            # content (issue #439) - the same segment rule find_movies
+            # applies, so the two listings share one membership rule: the
+            # watcher must not encode what the scanner would not catalogue
+            continue
         if identity not in known and not is_staging_path(m, inbox):
             kept.append(m)
     return kept

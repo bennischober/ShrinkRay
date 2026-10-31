@@ -255,6 +255,14 @@ def find_movies(root: Path, extensions: list[str], exclude: Path | None = None) 
                 # scoped to the walk root (issue #286): a library below an
                 # ancestor named .shrinkray-* is still a library.
                 continue
+            if any(part.startswith(".") for part in candidate.relative_to(root).parts[:-1]):
+                # a dot-DIRECTORY inside the scan root is not library
+                # content (issue #439): backups, media-server previews, a
+                # .git checkout - the same convention every organizing tool
+                # uses. A path-SEGMENT rule, not a name rule: a dot-FILE is
+                # still a library file, and an explicit user ask (Mode A)
+                # is never second-guessed (this filter runs in the WALK only).
+                continue
             # absolute paths: the db cache is keyed by absolute path, so a
             # relative scan root must not produce relative cache misses
             movies.append(candidate.resolve())
@@ -498,6 +506,25 @@ def scan_movies(
 
     # search for movie files with the configured extensions, recursive
     movies = files if files is not None else find_movies(root, config.extensions, exclude=exclude)
+    # the implicit walk's reconcile carries the dot-directories the
+    # discovery skipped (issue #439): the walk did not look there, so the
+    # reconcile has no opinion about those rows either way - their
+    # missing/recovery fields stay exactly as they are. Computed BEFORE the
+    # empty-walk early return: the empty-walk branch reconciles too, and it
+    # is exactly the shape where every visible file is gone (moved library,
+    # detached mount) while the hidden rows remain - the maintainer's
+    # correction applies there just the same (measured: without it the
+    # hidden rows are bumped then hard-deleted after the grace).
+    excluded_dirs: set[str] = set()
+    if connection is not None and not (files is not None and not walked):
+        excluded_dirs = {
+            str(candidate)
+            for candidate in root.resolve().rglob("*")
+            if candidate.is_dir()
+            and candidate.name.startswith(".")
+            and candidate != root.resolve()
+            and not is_staging_path(candidate, root.resolve())
+        }
     if not movies:
         # nothing found: the folder may have been emptied or renamed — the
         # database still needs to reconcile (flagging, not deleting, thanks
@@ -509,7 +536,9 @@ def scan_movies(
             if files is not None and not walked:
                 prune = db.prune_missing(connection, set(), only=set())
             else:
-                prune = db.prune_missing(connection, set(), scope=str(root))
+                prune = db.prune_missing(
+                    connection, set(), scope=str(root), except_paths=excluded_dirs
+                )
             log_prune_result(prune)
         log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
         return movies_by_category, movies, []
@@ -624,7 +653,16 @@ def scan_movies(
                 only={str(m) for m in movies},
             )
         else:
-            prune = db.prune_missing(connection, existing, scope=str(root))
+            # the excluded set was computed before the early return above
+            # (the same dot-directories the discovery skipped, issue #439):
+            # rows inside them keep their missing/recovery fields untouched
+            # - the walk did not look there, so the reconcile has no
+            # opinion either way (finding 9's note: the predicate receives
+            # the resolved root, so a relative scan root cannot let a
+            # staging directory into the set)
+            prune = db.prune_missing(
+                connection, existing, scope=str(root), except_paths=excluded_dirs
+            )
         log_prune_result(prune)
 
     return movies_by_category, movies, error_list
