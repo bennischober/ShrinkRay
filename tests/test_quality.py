@@ -1864,7 +1864,7 @@ class TestProbeCache(unittest.TestCase):
             "crf": 32,
             "movie": self.movie,
             "sample_seconds": 10.0,
-            "encoder": "x265",
+            "encoder": "svt_av1",
             "probe_encoder_preset": "medium",
             "db_file": self.db_file,
         }
