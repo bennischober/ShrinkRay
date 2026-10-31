@@ -114,7 +114,11 @@ class TestDocsNameRealSurfaces(unittest.TestCase):
 
 # an image pin a user copies; the release cut bumps pyproject.toml, never the
 # docs, so the README's example stayed on v0.4.0 through two releases (#467)
-IMAGE_PIN_RE = re.compile(r"ghcr\.io/bennischober/shrinkray:v(\d+\.\d+\.\d+)")
+# the whole tag, pre-release suffix included (v0.7.0rc1 is not v0.7.0); every
+# part ends in an alphanumeric, so a sentence's closing period is not captured
+IMAGE_PIN_RE = re.compile(
+    r"ghcr\.io/bennischober/shrinkray:v(\d+\.\d+\.\d+(?:[-+.]?[0-9A-Za-z]+(?:[-+.][0-9A-Za-z]+)*)?)"
+)
 PROJECT_VERSION_RE = re.compile(r'^version = "([^"]+)"$', re.MULTILINE)
 
 
