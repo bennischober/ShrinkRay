@@ -1,5 +1,6 @@
 """Quality/CRF-search tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
+import contextlib
 import json
 import math
 import os
@@ -856,6 +857,37 @@ class TestPlanReuse(unittest.TestCase):
         self.assertIsNone(result.skipped_reason)
         self.assertGreater(result.saved_percent, 0)
         self.assertTrue(output.exists())
+
+    def test_a_broken_database_reuses_no_plan(self):
+        """Issue #507: plan reuse is a shortcut; a database that cannot be
+        opened or read is no plan (the caller re-probes), not a failed job."""
+        movie = self._movie()
+        self._store_plan(movie)
+        malformed = sqlite3.DatabaseError("database disk image is malformed")
+        variants = [
+            *_broken_databases(Path(self.tmp.name)),
+            (
+                "failed read",
+                self.db_file,
+                lambda: patch("shrinkray.db.get_valid_plan", side_effect=malformed),
+            ),
+        ]
+        for failure, db_file, broken in variants:
+            with self.subTest(failure=failure):
+                with broken(), patch.object(engine_plan, "log") as log:
+                    plan = engine_plan._lookup_plan(
+                        db_file,
+                        movie,
+                        encoder="svt_av1",
+                        encoder_preset="5",
+                        target_vmaf=engine_search.DEFAULT_TARGET_VMAF,
+                        crf_range=engine_search.DEFAULT_CRF_RANGE,
+                        sample_count=6,
+                        sample_seconds=10.0,
+                    )
+                self.assertIsNone(plan)
+                logged = " ".join(str(c.args[0]) for c in log.call_args_list)
+                self.assertIn("plan cache is unavailable", logged)
 
 
 class TestProbeCache(unittest.TestCase):
@@ -1916,6 +1948,93 @@ class TestProbeCache(unittest.TestCase):
         factor, encodes = self._size_factor()
         self.assertEqual(len(encodes), 1)  # not served from the vmaf entry
         self.assertEqual(factor, 0.5)
+
+    def test_a_broken_database_probes_uncached(self):
+        """Issue #507: the probe cache only saves time, but a database that
+        cannot be opened raised out of both probes and failed the job (the
+        #486 rule stopped at the crop cache)."""
+        for name, call, expected in (
+            ("probe_crf", self._probe, 95.5),
+            ("estimate_size_factor", self._size_factor, 0.5),
+        ):
+            for failure, db_file, broken in _broken_databases(Path(self.tmp.name)):
+                with self.subTest(name, failure=failure):
+                    with broken(), patch.object(engine_search, "log") as log:
+                        result, encodes = call(db_file=db_file)
+                    self.assertEqual(result, expected)
+                    self.assertEqual(len(encodes), 1)  # measured, not served
+                    logged = " ".join(str(c.args[0]) for c in log.call_args_list)
+                    self.assertIn("probe cache is unavailable", logged)
+
+    def test_a_failed_probe_cache_read_probes_uncached_and_closes(self):
+        """Issue #507: a database that opens but cannot be read (a damaged
+        page) costs the cache entry, and the connection is still closed."""
+        malformed = sqlite3.DatabaseError("database disk image is malformed")
+        for name, call, expected in (
+            ("probe_crf", self._probe, 95.5),
+            ("estimate_size_factor", self._size_factor, 0.5),
+        ):
+            with self.subTest(name):
+                opened, recording = self._recording_connect()
+                with recording, patch("shrinkray.db.get_probe_entry", side_effect=malformed):
+                    result, encodes = call()
+                self.assertEqual(result, expected)
+                self.assertEqual(len(encodes), 1)
+                self.assert_closed(opened)
+
+    def test_a_broken_database_sizes_the_chosen_crf_from_one_window(self):
+        """Issue #507: the all-window size read is a shortcut; a database that
+        cannot be opened or read lands in the miss lane (the single-window
+        size encode), never in a new error path."""
+        malformed = sqlite3.DatabaseError("database disk image is malformed")
+        variants = [
+            *_broken_databases(Path(self.tmp.name)),
+            (
+                "failed read",
+                self.db_file,
+                lambda: patch("shrinkray.db.get_probe_entry", side_effect=malformed),
+            ),
+        ]
+        for failure, db_file, broken in variants:
+            with self.subTest(failure=failure):
+                with (
+                    broken(),
+                    patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+                    patch.object(engine_search, "estimate_size_factor", return_value=0.7) as one,
+                    patch.object(engine_search, "log") as log,
+                ):
+                    factor = engine_search.check_chosen_crf_shrinks(
+                        [(self.sample, 10.0)],
+                        self.workdir,
+                        "hb",
+                        22,
+                        self.movie,
+                        10.0,
+                        "svt_av1",
+                        "5",
+                        db_file=db_file,
+                    )
+                self.assertEqual(factor, 0.7)
+                one.assert_called_once()
+                logged = " ".join(str(c.args[0]) for c in log.call_args_list)
+                self.assertIn("probe cache is unavailable", logged)
+
+
+def _broken_databases(root: Path):
+    """The ways a cache's database fails to open (issue #507): a damaged file
+    (a real sqlite3.DatabaseError from db.connect) and a connect-time OSError
+    (EMFILE). Yields (label, db_file, context-manager factory)."""
+    corrupt = root / "corrupt.db"
+    corrupt.write_bytes(b"not a database, just garbage bytes" * 128)
+    emfile = OSError(24, "Too many open files")
+    return [
+        ("corrupt file", corrupt, contextlib.nullcontext),
+        (
+            "connect OSError",
+            root / "test.db",
+            lambda: patch("shrinkray.db.connect", side_effect=emfile),
+        ),
+    ]
 
 
 class TestChosenCrfSizeGate(unittest.TestCase):

@@ -73,6 +73,8 @@ approximation.
   the flag was off - reusing one would have kept the bars.
 - Plans for soft-missing files are ignored (mtime+size guard covers a
   rescanned file; no lookup when the file no longer exists).
+- A database the lookup cannot open or read (damaged, foreign, out of file
+  handles) is logged and treated as no plan: the encode probes (issue #507).
 - `achieved_vmaf` from a plan is SAMPLE-based; `--verify` (full-file) is
   unaffected and still runs when requested.
 - Size estimates stay the plan's job; the encode path never recomputes

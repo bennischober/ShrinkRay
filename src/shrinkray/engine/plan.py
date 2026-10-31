@@ -113,7 +113,8 @@ def _lookup_plan(
     Opens a short-lived read connection (the engine stays connection-free;
     db_file already locates the logs dir, so it already knows the db).
     Any mismatch, missing file row or vanished movie returns None — the
-    caller re-probes, never guesses.
+    caller re-probes, never guesses. So does a database that cannot be
+    opened or read (logged): the plan cache only saves time.
 
     Args:
         db_file (Path): The database file.
@@ -136,8 +137,9 @@ def _lookup_plan(
 
     if not input_file.is_file():
         return None
-    connection = _db.connect(db_file)
+    connection: sqlite3.Connection | None = None
     try:
+        connection = _db.connect(db_file)
         return _db.get_valid_plan(
             connection,
             input_file,
@@ -151,8 +153,14 @@ def _lookup_plan(
             vmaf_statistic=VMAF_STATISTIC,
             vmaf_recipe=vmaf_recipe,
         )
+    except (OSError, sqlite3.Error) as e:
+        # a damaged or unopenable metadata.db must not stop the job: no
+        # reuse, the caller probes (issue #507, the #486 rule)
+        log(f"The plan cache is unavailable ({e}); probing instead of reusing a plan.")
+        return None
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 def source_codec(movie: Path) -> str | None:
