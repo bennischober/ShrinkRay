@@ -124,6 +124,12 @@ def extract_samples(
         # read in the kernel — without a timeout this call would hang the
         # job worker/watch loop forever with no error (issue #62).
         raise RuntimeError(f"ffprobe timed out after {FFPROBE_TIMEOUT}s for '{movie}': {e}") from e
+    except OSError as e:
+        # the binary cannot spawn (missing after startup, EMFILE/ENOMEM):
+        # this step's documented failure shape is RuntimeError (issue #495 -
+        # the #458 sweep enumerated _run sites only and missed this read;
+        # same shape as the two _run guards below and the crop step #401)
+        raise RuntimeError(f"sample extraction cannot run 'ffprobe': {e}") from e
     if proc.returncode != 0:
         raise RuntimeError(f"ffprobe failed for '{movie}'")
     duration = float(json.loads(proc.stdout.decode())["format"]["duration"])
