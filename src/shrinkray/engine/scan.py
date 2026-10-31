@@ -121,7 +121,7 @@ def get_category(filename: Path, root: Path) -> str:
 
 def resolve_input_paths(
     argument: str, extensions: list[str], exclude: Path | None = None
-) -> tuple[Path, list[Path]]:
+) -> tuple[Path, list[Path], bool]:
     """Resolves a CLI path argument to a category root and its movie files.
 
     The Mode A contract is "a file, a folder, or a glob". All three shapes are
@@ -143,8 +143,14 @@ def resolve_input_paths(
         exclude (Path | None): Directory to exclude (e.g. the output dir).
 
     Returns:
-        tuple[Path, list[Path]]: The category root and the resolved movie
-            files, sorted and deduplicated.
+        tuple[Path, list[Path], bool]: The category root, the resolved movie
+            files (sorted and deduplicated), and whether the files were
+            produced by WALKING a directory (True) instead of being
+            enumerated by an explicit file/glob argument (False) - the
+            database reconciliation keys on this (issue #453): a walked
+            root's scan is the operator's full-library statement and
+            reconciles the whole root scope; an enumerated list inspects
+            exactly its files and reconciles only those rows.
 
     Raises:
         FileNotFoundError: If the path does not exist, or the glob matches
@@ -155,7 +161,7 @@ def resolve_input_paths(
         if path.is_file():
             # a single movie is one item: no walk, and no extension check -
             # the operator named the file explicitly
-            return path.parent.resolve(), [path.resolve()]
+            return path.parent.resolve(), [path.resolve()], False
         if not path.is_dir():
             # a literal path that does not exist, OR a bracketed glob that
             # happens to contain no * or ? (e.g. 'movies/[2024] film.mkv'):
@@ -169,9 +175,13 @@ def resolve_input_paths(
                 if Path(match).is_file()
             ]
             if bracketed:
-                return Path(argument).parent.resolve(), sorted(dict.fromkeys(bracketed))
+                return (
+                    Path(argument).parent.resolve(),
+                    sorted(dict.fromkeys(bracketed)),
+                    False,
+                )
             raise FileNotFoundError(f"'{argument}' does not exist")
-        return path.resolve(), find_movies(path, extensions, exclude=exclude)
+        return path.resolve(), find_movies(path, extensions, exclude=exclude), True
 
     # a glob: expand it here, because a quoted pattern arrives unexpanded
     suffixes = {"." + extension.lower().lstrip(".") for extension in extensions}
@@ -192,7 +202,7 @@ def resolve_input_paths(
     root = Path(argument).parent
     while any(char in str(root) for char in "*?["):
         root = root.parent
-    return root.resolve(), sorted(dict.fromkeys(matches))
+    return root.resolve(), sorted(dict.fromkeys(matches)), False
 
 
 def _is_within(path: Path, directory: Path) -> bool:
@@ -423,6 +433,7 @@ def scan_movies(
     exclude: Path | None = None,
     on_movie: Callable[[int, dict | None, str | None], None] | None = None,
     files: list[Path] | None = None,
+    walked: bool | None = None,
     db_file: Path | None = None,
 ) -> tuple[dict, list[Path], list[str]]:
     """Scans the root directory for movies and collects their metadata.
@@ -447,17 +458,42 @@ def scan_movies(
         exclude (Path | None): Directory to exclude (e.g. the encode output).
         on_movie (callable | None): Called as on_movie(index, data, error)
             after each movie completes, for progressive UI updates.
-        files (list[Path] | None): The explicit movie list (a single named
-            file or a glob's matches, resolved by resolve_input_paths);
-            when given, the root is NOT walked (issue #197: a one-file
-            command must touch exactly that file, not its folder).
+        files (list[Path] | None): The movie list to scan instead of
+            walking the root - a named file or a glob's matches (resolved
+            by resolve_input_paths, `walked=False`), or the WALKED result
+            of a directory argument (resolved by resolve_input_paths,
+            `walked=True`); when given, the root is not re-walked here
+            (issue #197: a one-file command must touch exactly that file,
+            not its folder) - what the list represents is `walked`'s
+            business (see below).
+        walked (bool | None): Whether `files` was produced by WALKING the root
+            (a directory argument) rather than enumerated explicitly (a file
+            or glob argument); None (the default) means no `files` list was
+            given either - the two are supplied together or not at all (a
+            half-supplied pair raises ValueError, see Raises). The database
+            reconciliation keys on this (issue #453): a walked root's scan
+            is the operator's full-library statement and reconciles the
+            whole root scope; an enumerated list inspects exactly its files
+            and reconciles only those rows, never the rest of the scope.
         db_file (Path | None): The database file, read per movie to project
             an existing timeline crop summary into the flag (issue #181);
             never used to run the expensive pass from scan.
 
     Returns:
         tuple: Movies by category, all found movies and error messages.
+
+    Raises:
+        ValueError: If `walked` is given without `files`, or `files` is
+            given without `walked` - a caller supplying a walk's result
+            while omitting the flag would silently stop flagging deletions,
+            so the half-supplied pair is refused instead of reconciling the
+            wrong scope.
     """
+    if (files is None) != (walked is None):
+        raise ValueError(
+            "scan_movies requires `files` and `walked` together (or neither): "
+            f"files={files!r}, walked={walked!r}"
+        )
     movies_by_category: dict[str, list[dict]] = {}
 
     # search for movie files with the configured extensions, recursive
@@ -465,9 +501,15 @@ def scan_movies(
     if not movies:
         # nothing found: the folder may have been emptied or renamed — the
         # database still needs to reconcile (flagging, not deleting, thanks
-        # to the grace period) before the early return
+        # to the grace period) before the early return. An ENUMERATED list
+        # that resolved to nothing reconciles exactly nothing (issue #453):
+        # an empty enumeration is not an opinion about the scope. A WALKED
+        # root that genuinely found nothing reconciles the scope.
         if connection is not None:
-            prune = db.prune_missing(connection, set(), scope=str(root))
+            if files is not None and not walked:
+                prune = db.prune_missing(connection, set(), only=set())
+            else:
+                prune = db.prune_missing(connection, set(), scope=str(root))
             log_prune_result(prune)
         log_warning(f"No movie files found in '{root}' with extensions {config.extensions}!")
         return movies_by_category, movies, []
@@ -481,7 +523,19 @@ def scan_movies(
         cache = db.get_cached_records(connection)
         for index, filename in enumerate(movies):
             row = cache.get(str(filename))
-            if row is not None and db.is_unchanged(row, filename):
+            if row is None:
+                continue
+            try:
+                unchanged = db.is_unchanged(row, filename)
+            except FileNotFoundError:
+                # a file removed between the enumeration and this stat - an
+                # encode's rename-swap, the watcher, an operator deleting
+                # while a glob scan's cache pass is running - is
+                # reconciliation's business, not a scan crash (issue #453):
+                # the row is left out of the cache, the scan proceeds, and
+                # the reconcile pass flags it with the grace period
+                continue
+            if unchanged:
                 results[index] = record_from_cache(row)
                 cached[str(filename)] = row
                 if on_movie is not None:
@@ -549,9 +603,28 @@ def scan_movies(
             record = movie_record_from_data(movies[index], result)
             db.upsert_file(connection, record)
         # reconcile with disk: flag files that vanished (grace period before
-        # deletion), recover reappeared ones; only rows inside the scanned
-        # root are touched (other roots in the database keep their history)
-        prune = db.prune_missing(connection, {str(m) for m in movies}, scope=str(root))
+        # deletion), recover reappeared ones. A WALKED root's scan is the
+        # operator's full-library statement: it reconciles the rows inside
+        # the scanned root (other roots in the database keep their history).
+        # An ENUMERATED list (a named file, a glob) inspects exactly its
+        # files (issue #453): existing = the enumerated files still on disk
+        # (an enumerated file that vanished is exactly what reconciliation
+        # flags); only = the full enumeration - a row the scan did not
+        # enumerate is never flagged or deleted, the scan has no opinion
+        # about the rest of the scope. The walked branch consumes the same
+        # on-disk-filtered set: its walk list was built before the scan's
+        # probes ran, so a file removed DURING the scan would otherwise stay
+        # in existing_paths and the reconcile would RESET its grace counter
+        # instead of flagging the deletion.
+        existing = {str(m.resolve()) for m in movies if m.exists()}
+        if files is not None and not walked:
+            prune = db.prune_missing(
+                connection,
+                existing,
+                only={str(m) for m in movies},
+            )
+        else:
+            prune = db.prune_missing(connection, existing, scope=str(root))
         log_prune_result(prune)
 
     return movies_by_category, movies, error_list
