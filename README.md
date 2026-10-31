@@ -234,7 +234,10 @@ other services keep their cores.
 ## How it works
 
 1. **Discovery** — the library is walked recursively for configured extensions
-   (`config.json`), with the output directory always excluded.
+   (`config.json`), with the output directory always excluded. Hidden
+   (dot-)directories are never library content: media inside them is not
+   discovered, catalogued or re-encoded (#439) — a file you DO name explicitly
+   (a path or glob) is still scanned, wherever it lives.
 2. **Metadata** — `ffprobe` extracts stream details; duration, aspect ratio and
    size are computed and cached (unchanged files skip probing entirely).
 3. **Black-bar detection** — `cropdetect` samples several segments per movie;

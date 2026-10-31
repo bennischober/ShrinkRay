@@ -1354,11 +1354,24 @@ def list_retained(connection: sqlite3.Connection) -> list[sqlite3.Row]:
     return connection.execute("SELECT * FROM retained ORDER BY id DESC").fetchall()
 
 
+def _is_below(path: str, directory: str) -> bool:
+    """Whether `path` is strictly inside `directory` (not the directory itself).
+
+    Separator-agnostic by construction: both operands are built from
+    Path.resolve(), so the comparison runs on each platform's own separator
+    (a literal "/" suffix would never match a backslash-separated Windows
+    path - the prefix test db.py used before was POSIX-only).
+    """
+    prefix = directory.rstrip("/\\")
+    return path.startswith(prefix) and len(path) > len(prefix) and path[len(prefix)] in "/\\"
+
+
 def prune_missing(
     connection: sqlite3.Connection,
     existing_paths: set[str],
     scope: str | None = None,
     only: set[str] | None = None,
+    except_paths: set[str] | None = None,
 ) -> PruneResult:
     """Reconciles the database with what is actually on disk.
 
@@ -1381,12 +1394,25 @@ def prune_missing(
     flagged (grace applies), an unenumerated row is never touched.
     ``only`` beats ``scope`` when both are given.
 
+    With ``except_paths`` (the implicit walk's dot-directories, issue
+    #439), rows strictly INSIDE those directories are skipped ENTIRELY -
+    their missing/recovery fields are left exactly as they are: the walk
+    did not look there, so it has no opinion about them either way (a
+    scope prefix cannot express this gap - it is an inclusion rule, the
+    exclusion is per-subtree). ``except_paths`` beats ``only``: a row that
+    is both enumerated and inside an excluded subtree is skipped (no
+    caller combines them today). A row at EXACTLY an excluded path (the
+    directory itself, never a media file) is still reconciled - the
+    comparison is strict-below.
+
     Args:
         connection (sqlite3.Connection): The database connection.
         existing_paths (set[str]): Paths that are still on disk.
         scope (str | None): Only reconcile rows under this directory path.
         only (set[str] | None): Only reconcile exactly these paths (an
             explicit file/glob scan's enumerated files).
+        except_paths (set[str] | None): Never reconcile rows strictly below
+            these directory paths (the implicit walk's excluded subtrees).
 
     Returns:
         PruneResult: What was flagged, recovered and hard-deleted.
@@ -1396,6 +1422,9 @@ def prune_missing(
     # prefix match would silently never fire (no flagging, no pruning)
     scope_normalized = str(Path(scope).resolve()) if scope is not None else None
     only_normalized = {str(Path(p).resolve()) for p in only} if only is not None else None
+    except_normalized = (
+        {str(Path(p).resolve()) for p in except_paths} if except_paths is not None else None
+    )
     result = PruneResult()
     in_scope = 0
     for row in rows:
@@ -1406,6 +1435,8 @@ def prune_missing(
             if path not in only_normalized:
                 continue
         elif scope_normalized is not None and not path.startswith(scope_normalized):
+            continue
+        if except_normalized is not None and any(_is_below(path, ex) for ex in except_normalized):
             continue
         in_scope += 1
         if path in existing_paths:
