@@ -105,26 +105,40 @@ class TestConsoleFormat(unittest.TestCase):
     def test_the_product_wiring_installs_the_shipped_constant(self) -> None:
         """logger.py's add() call installs the shipped constant.
 
-        A grep-pin, the convention of test_quality's
-        test_no_surface_repeats_the_default_literal: the wiring in logger.py
-        is what carries the constant to the console, and a rewire to a
-        restated format literal would leave every other pin green (the
-        constant test and the token pins read the constant, the shape probe
-        passes the constant itself) while the product's console line
-        reverted to whatever the literal says - the source read catches
-        exactly that rewire. The match is over the whitespace-NORMALIZED,
-        comment-stripped source (assertRegex) and must END at a delimiter:
-        any call layout passes (a parenthesized value, a wrapped argument
-        list), while a restated alias (format=CONSOLE_FORMAT_ALIAS), a
-        concatenation (+ " |") or a .format() call cannot satisfy the pin
-        while rendering something else.
+        An ast-based pin (round 22's MUST-FIX: the substring search passed
+        a trailing-comment decoy, a docstring mention and a second
+        literal-format add call - measured by the reviewer; the first ast
+        draft collected only Name-valued format kwargs and missed the
+        literal second add, caught by the decoy battery in the commit
+        message). The module is parsed and there must be EXACTLY ONE
+        logger.add call, whose format keyword must BE the name
+        CONSOLE_FORMAT: a second add call with any format (a literal, an
+        alias, none) fails the count, a rewire to a literal/alias/
+        concatenation/.format() fails the name check, and comments or
+        docstrings cannot satisfy anything (they are not in the AST). The
+        wiring is the only place the constant reaches the console: every
+        other pin reads the constant itself, so a rewire would leave them
+        all green while the console line changed.
         """
         source = (
             Path(__file__).resolve().parent.parent / "src" / "shrinkray" / "logger.py"
         ).read_text(encoding="utf-8")
-        code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
-        normalized = " ".join(code.split())
-        self.assertRegex(normalized, r"format\s*=\s*\(?\s*CONSOLE_FORMAT\s*\)?\s*[,)]")
+        import ast
+
+        tree = ast.parse(source)
+        adds = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "logger"
+        ]
+        self.assertEqual(len(adds), 1, "logger.py must have exactly one logger.add call")
+        fmt = next((kw.value for kw in adds[0].keywords if kw.arg == "format"), None)
+        self.assertIsInstance(fmt, ast.Name, "the add call's format must be a bare name")
+        self.assertEqual(fmt.id, "CONSOLE_FORMAT")
 
     def test_the_wrong_tokens_fail_the_frozen_pin(self) -> None:
         """The pin discriminates against the defect's token sets: under the
