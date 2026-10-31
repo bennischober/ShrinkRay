@@ -185,14 +185,25 @@ def _store_probe(
 ) -> None:
     """Stores one probe measurement (best-effort commit via db layer).
 
-    The connection stays open: its owner (the caller of _cached_or_none)
-    closes it in a finally, so a failure anywhere in the probe closes it too.
+    The cache write is best-effort like the crop cache (#486) and the probe
+    cache's read side (#507): a write that fails (disk full, a lock that
+    outlasts the busy timeout, a damaged database) is logged and swallowed,
+    so the measurement that already succeeded is used and only the next
+    run's shortcut is lost. The connection stays open: its owner (the caller
+    of _cached_or_none) closes it in a finally, so a failure anywhere in the
+    probe closes it too.
     """
     if connection is None:
         return
     from shrinkray import db as _db
 
-    _db.save_probe_score(connection, key, value, encoded_size)
+    try:
+        _db.save_probe_score(connection, key, value, encoded_size)
+    except (sqlite3.Error, OSError) as exc:
+        log(
+            f"The probe-cache write failed ({exc}); the measured value is "
+            "used, the next run re-measures."
+        )
 
 
 def sample_count_for(
