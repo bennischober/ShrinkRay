@@ -691,8 +691,10 @@ The behaviour, per file:
   search against a required quality floor (VMAF 96 by default) followed by one full
   encode. There is no fixed-preset encode.
 - **Output.** AV1 only, encoded on the CPU. 8-bit and 10-bit sources are both
-  supported. Only the video stream is re-encoded; every audio and subtitle track is
-  carried over 1:1 from the source.
+  supported. Only the video stream is re-encoded; audio and subtitle tracks are carried
+  over from the source — all of them by default, or only the languages set in
+  `handbrake.audio_languages` / `handbrake.subtitle_languages`. An audio codec HandBrake
+  cannot pass through is converted losslessly (FLAC) rather than copied.
 
 The boundary that shape implies: **ShrinkRay may change a file's bytes, never its
 identity.** Path, filename and the set of files stay as they are. Re-encoding
