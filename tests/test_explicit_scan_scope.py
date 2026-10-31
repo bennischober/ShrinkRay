@@ -158,6 +158,43 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         # is exhausted and the row is hard-deleted (its own reconciliation)
         self.assertEqual(self._row_state(gone), (-1, False))
 
+    def test_an_explicitly_empty_enumeration_reconciles_nothing(self) -> None:
+        """An explicitly EMPTY enumeration (files=[], walked=False) has no
+        opinion about the scope: nothing flagged, nothing deleted (issue
+        #453). The scan's early return serves this shape with
+        `prune_missing(..., only=set())`; the CLI's resolver raises for a
+        glob that matches nothing, so no CLI shape produces it today - the
+        pin documents the ENGINE's contract: an empty enumeration is not an
+        opinion about the scope. Deleting the early return's enumerated
+        special case reconciles the whole root with an empty existing set
+        and flags every row (mutation-proofed, recorded in the commit
+        message).
+        """
+        self._catalogue_all()
+        b_hist = self.connection.execute(
+            "SELECT id FROM files WHERE path = ?", (str(self.root / "b.mkv"),)
+        ).fetchone()[0]
+        engine_scan.scan_movies(
+            self.root,
+            _make_scan_config(),
+            files=[],
+            walked=False,
+            connection=self.connection,
+            workers=1,
+        )
+        for path in (
+            self.root / "a.mkv",
+            self.root / "b.mkv",
+            self.root / ".previews" / "h.mkv",
+        ):
+            self.assertEqual(self._row_state(path), (0, True))
+        # the empty enumeration's no-opinion claim covers the history too:
+        # b's encode row survives untouched
+        hist = self.connection.execute(
+            "SELECT COUNT(*) FROM encodes WHERE file_id = ?", (b_hist,)
+        ).fetchone()[0]
+        self.assertEqual(hist, 1)
+
     def test_prune_missing_only_restriction(self) -> None:
         """db-level: `only` reconciles exactly those rows; nothing else in
         the scope is touched - with a scope filter and without one (the
