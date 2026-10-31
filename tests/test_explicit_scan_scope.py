@@ -206,11 +206,11 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         - `b.mkv` IS in the walk list and vanishes after it: the on-disk
           filter flags it - deleting the `if m.exists()` filter instead
           RESETS its grace counter (the walked branch's own pin);
-        - `d.mkv` is catalogued but NOT in the walk list (the walk list is
-          captured before d is written to disk - the on-disk file appears
-          after the walk, so only the walked branch's scope reconcile sees
-          it): deleting the `and not walked` clause leaves its row untouched
-          forever (the clause's own pin).
+        - `d.mkv` is catalogued but NOT in the walk list (the row is
+          inserted at the db seam and the file is never written to disk, so
+          the walk has nothing on disk to find): deleting the `and not
+          walked` clause leaves its row untouched forever (the clause's own
+          pin).
         """
         self._catalogue_all()
         d = self.root / "d.mkv"
