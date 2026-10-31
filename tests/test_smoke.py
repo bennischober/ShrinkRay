@@ -54,7 +54,7 @@ class TestSmokePlanReuse(unittest.TestCase):
         # the plan lookup is keyed by the scanned library's file row
         service.ensure_file_row(self.connection, self.clip)
         # record_plan reads config.handbrake_encoder; explicit (no user config)
-        self.config = SimpleNamespace(handbrake_encoder="x265")
+        self.config = SimpleNamespace(handbrake_encoder="svt_av1")
 
     def tearDown(self):
         self.connection.close()
@@ -128,7 +128,7 @@ class TestSmokePlanReuse(unittest.TestCase):
         self.assertTrue(
             plan_result.success,
             f"plan skipped the movie: {plan_result.skipped_reason!r} "
-            "(the smoke source must leave room for an x265 size gain)",
+            "(the smoke source must leave room for an svt_av1 size gain)",
         )
         service.record_plan(self.connection, self.clip, plan_result, self.config)
         plans = self.connection.execute("SELECT COUNT(*) FROM plans").fetchone()[0]
@@ -170,7 +170,7 @@ class TestSmokePlanReuse(unittest.TestCase):
             result = encode_with_quality(
                 self.clip,
                 self.root / "out2" / "clip.mkv",
-                target_vmaf=90.0,  # differs from the plan's 95.0
+                target_vmaf=90.0,  # differs from the plan's 96.0 (the default target)
                 db_file=self.db_file,
             )
         self.assertEqual(len(calls), 1, "changed settings must trigger a real re-probe")
