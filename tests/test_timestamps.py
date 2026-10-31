@@ -17,6 +17,7 @@ tokens (the review rounds 1-3 of issue #429's PR each found one).
 import re
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from loguru import logger
 from loguru._datetime import _compile_format
@@ -59,8 +60,9 @@ class TestConsoleFormat(unittest.TestCase):
         What this test does NOT do is measure the product handler's own
         formatter - loguru renders each handler with its own spec, so the
         assertions read the probe's render; the product's wiring (the
-        `format=` at logger.py's add call) is pinned by the constant test
-        and the token pins, not by a render through the installed handler.
+        `format=` at logger.py's add call) is pinned by the wiring test
+        below (a source-read grep-pin), not by a render through the
+        installed handler.
         """
         rendered: list[str] = []
 
@@ -71,8 +73,8 @@ class TestConsoleFormat(unittest.TestCase):
         # replacing it), and only the probe's own handler id is removed in
         # the finally: the product handler survives untouched - the probe's
         # assertions read its own render (loguru renders each handler with
-        # its own spec), so the product's wiring is pinned by the constant
-        # test and the token pins, not by this render
+        # its own spec), so the product's wiring is pinned by the wiring
+        # test below, not by this render
         probe_id = logger.add(sink, format=CONSOLE_FORMAT, level="INFO")
         try:
             logger.info("format probe")
@@ -109,6 +111,28 @@ class TestConsoleFormat(unittest.TestCase):
         # console stamps the operator's wall clock, not UTC
         utc_twin = _compile_format(spec + "!UTC")
         self.assertEqual(utc_twin(FROZEN), "2026-01-02 09:34:05")
+
+    def test_the_product_wiring_installs_the_shipped_constant(self) -> None:
+        """logger.py's add() call installs the shipped constant.
+
+        A grep-pin, the convention of test_quality's
+        test_no_surface_repeats_the_default_literal: the wiring in logger.py
+        is what carries the constant to the console, and a rewire to a
+        restated format literal would leave every other pin green (the
+        constant test and the token pins read the constant, the shape probe
+        passes the constant itself) while the product's console line
+        reverted to whatever the literal says - the source read catches
+        exactly that rewire.
+        """
+        source = (
+            Path(__file__).resolve().parent.parent / "src" / "shrinkray" / "logger.py"
+        ).read_text(encoding="utf-8")
+        wiring = [
+            line.strip()
+            for line in source.splitlines()
+            if "format=CONSOLE_FORMAT" in line and not line.lstrip().startswith("#")
+        ]
+        self.assertEqual(wiring, ["format=CONSOLE_FORMAT,"])
 
     def test_the_wrong_tokens_fail_the_frozen_pin(self) -> None:
         """The pin discriminates against the defect's token sets: under the
