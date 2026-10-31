@@ -335,11 +335,19 @@ class AppState:
         self.config_file: Path | None = None  # the app command's --config
         self.db_lock = threading.RLock()
         self.connection = db.connect(db_file)
-        self.bus = ProgressBus()
-        self.queue = JobQueue(self.connection, bus=self.bus)
-        self.worker = JobWorker(self.connection, self.queue)
-        with self.db_lock:
-            self._recover_stale_jobs()
+        try:
+            self.bus = ProgressBus()
+            self.queue = JobQueue(self.connection, bus=self.bus)
+            self.worker = JobWorker(self.connection, self.queue)
+            with self.db_lock:
+                self._recover_stale_jobs()
+        except BaseException:
+            # a failure after the connect leaves no caller holding the AppState
+            # to call shutdown() on: the constructor owns the cleanup (issue
+            # #487, the #480 deterministic-close contract) - close and raise
+            # the original exception unchanged
+            self.connection.close()
+            raise
         self.watch_thread: threading.Thread | None = None
         self.watch_stop = threading.Event()
         # set first in shutdown(): the SSE generator observes it and exits, so
