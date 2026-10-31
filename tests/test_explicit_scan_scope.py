@@ -273,11 +273,15 @@ class TestExplicitScanDoesNotPruneBeyondItsFiles(unittest.TestCase):
         # deleted AFTER it - the vanished path stays IN the walk list, so
         # without the on-disk filter the reconcile would keep it in
         # existing_paths and RESET its grace counter instead of flagging the
-        # deletion
+        # deletion. (Issue #439, merged while this PR was open, moved h's
+        # discovery out of the walk - h is now a dot-directory row the walk
+        # does not see; the walked-scan reconcile of THIS test still
+        # deletes h's row through the scope prefix, which the issue
+        # deliberately does not change: the row predates the rule.)
         walked_files = engine_scan.find_movies(self.root, [".mkv"])
         self.assertEqual(
             sorted(p.name for p in walked_files),
-            ["a.mkv", "b.mkv", "h.mkv"],
+            ["a.mkv", "b.mkv"],
         )
         (self.root / "b.mkv").unlink()
         # d is gone from disk too but is NOT in the walk list: only the

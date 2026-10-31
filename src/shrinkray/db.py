@@ -1359,6 +1359,7 @@ def prune_missing(
     existing_paths: set[str],
     scope: str | None = None,
     only: set[str] | None = None,
+    except_paths: set[str] | None = None,
 ) -> PruneResult:
     """Reconciles the database with what is actually on disk.
 
@@ -1381,12 +1382,21 @@ def prune_missing(
     flagged (grace applies), an unenumerated row is never touched.
     ``only`` beats ``scope`` when both are given.
 
+    With ``except_paths`` (the implicit walk's dot-directories, issue
+    #439), rows inside those subtrees are skipped ENTIRELY - their
+    missing/recovery fields are left exactly as they are: the walk did not
+    look there, so it has no opinion about them either way (a scope prefix
+    cannot express this gap - it is an inclusion rule, the exclusion is
+    per-subtree).
+
     Args:
         connection (sqlite3.Connection): The database connection.
         existing_paths (set[str]): Paths that are still on disk.
         scope (str | None): Only reconcile rows under this directory path.
         only (set[str] | None): Only reconcile exactly these paths (an
             explicit file/glob scan's enumerated files).
+        except_paths (set[str] | None): Never reconcile rows under these
+            directory paths (the implicit walk's excluded subtrees).
 
     Returns:
         PruneResult: What was flagged, recovered and hard-deleted.
@@ -1396,6 +1406,9 @@ def prune_missing(
     # prefix match would silently never fire (no flagging, no pruning)
     scope_normalized = str(Path(scope).resolve()) if scope is not None else None
     only_normalized = {str(Path(p).resolve()) for p in only} if only is not None else None
+    except_normalized = (
+        {str(Path(p).resolve()) for p in except_paths} if except_paths is not None else None
+    )
     result = PruneResult()
     in_scope = 0
     for row in rows:
@@ -1408,6 +1421,10 @@ def prune_missing(
         elif scope_normalized is not None and not path.startswith(scope_normalized):
             continue
         in_scope += 1
+        if except_normalized is not None and any(
+            path.startswith(ex + "/") for ex in except_normalized
+        ):
+            continue
         if path in existing_paths:
             if row["missing_scans"]:
                 connection.execute(
