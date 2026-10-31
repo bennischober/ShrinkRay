@@ -74,9 +74,9 @@ encode is quality-measured — there is no fixed-preset mode:
 > the *largest* CRF that still meets the required VMAF — then the movie is encoded
 > once with exactly that setting.
 
-Nothing is guessed: every decision is measured, recorded in the database, and
-movies that cannot profit (already efficient sources) are skipped — not
-wasted.
+Nothing is guessed: every decision is measured, and movies that cannot profit
+(already efficient sources) are skipped — not wasted. With a database (`--db`, or
+the resident app) every decision is also recorded, so it is not measured twice.
 
 > [!NOTE]
 > **HDR10 sources are processed, not guaranteed** (issue
@@ -232,9 +232,12 @@ other services keep their cores.
 2. **Metadata** — `ffprobe` extracts stream details; duration, aspect ratio and
    size are computed and cached (unchanged files skip probing entirely).
 3. **Black-bar detection** — `cropdetect` runs over the whole runtime, reading
-   only keyframes; only bars that every sustained stretch of the film agrees on
-   are cropped, so a changing aspect ratio never loses picture. With a database
-   the result is cached per file version; a sampled detector is the fallback.
+   only keyframes, and only bars that every sustained stretch of the film agrees
+   on are cropped. With a database the result is cached per file version. When
+   that pass yields no bars, a sampled detector (`--crop-samples` windows, bars
+   common to every window) decides instead — including, today, when the pass
+   *measured* a full-frame stretch, which can crop a film whose aspect ratio
+   changes ([#525](https://github.com/bennischober/ShrinkRay/issues/525)).
 4. **Quality search** — one 10-second sample per 10 minutes of runtime
    (`quality.sample_every`) is encoded at a few CRF values and scored with VMAF
    against its source; the search interpolates between a passing and a failing
@@ -281,10 +284,11 @@ removed it: an unmeasured encode can take a library file's path).
 | `--dry-run` | show what would be encoded, without encoding |
 | `--overwrite` | re-encode even if the output already exists |
 
-**Batch-safe:** every finished encode is recorded, so an interrupted run skips
-its completed work on the next start. Movies whose quality target is provably
-unreachable (e.g. already-efficient HEVC) or that would not shrink are skipped
-and remembered — future runs do not re-probe them.
+**Batch-safe, with a database:** with `--db` (or in the resident app) every
+finished encode is recorded, so an interrupted run skips its completed work on the
+next start, and movies whose quality target is unreachable (e.g. already-efficient
+HEVC) or that would not shrink are remembered — future runs do not re-probe them.
+A stateless run (no `--db`) records nothing and decides every file afresh.
 
 ### `plan` — look before you leap
 
@@ -363,7 +367,7 @@ the next start.
 ### `retained` — the originals kept aside
 
 ```bash
-uv run shrinkray retained                          # list every retained original (needs --db)
+uv run shrinkray retained                          # list every retained original (reads metadata.db, or --db)
 uv run shrinkray retained recover --dir 'D:\Movies\Some Film'   # resolve an interrupted swap
 ```
 
@@ -378,13 +382,15 @@ your own action, once you are satisfied with the result.
 
 ```bash
 uv run shrinkray doctor               # toolchain + library health
-uv run shrinkray doctor --probe-all   # also ffprobe every file for truncation (slow)
+uv run shrinkray doctor --probe-all   # also ffprobe every catalogued file for truncation (slow)
 ```
 
-Checks the toolchain first (ffprobe, HandBrakeCLI, ffmpeg with libvmaf) — it works without a
-database, so it is the last step of an install. With a database it then reports files
-the database knows but the disk lost, encode rows whose output vanished and stale scratch
-folders. It is read-only: it reports, it never repairs.
+Checks the toolchain first (ffprobe, HandBrakeCLI, ffmpeg with libvmaf) and stale
+scratch folders — both work without a database, so `doctor` is the last step of an
+install. With a database (`metadata.db`, or `--db`) it also reports files the database
+knows but the disk lost and encode rows whose output vanished; `--probe-all` ffprobes
+every file row in that database, so it needs one. It is read-only: it reports, it never
+repairs.
 
 > [!NOTE]
 > VMAF scores are only comparable within the same libvmaf version: the same
@@ -405,7 +411,7 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 | 2 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
 | 3 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
 | 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
-| 5 | Bar detection | Which bars does every sustained segment share? | — | never skips — "no bars" is a normal outcome |
+| 5 | Bar detection | Which bars does every sustained segment share? (sampled fallback: every sampled window, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
 | 6 | CRF search | Largest CRF that meets the VMAF target? | 96 | skip — target unreachable |
 | 7 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, with the crop | — | — |
@@ -619,7 +625,7 @@ The Python checks are one script, the same one CI and the release job run:
 
 ```bash
 tools/gate.sh          # lock check, ruff, format, mypy (linux AND win32), pytest, import layering
-uv run ruff format .   # format touched files
+uv run ruff format <files>   # format the files you touched
 ```
 
 A bare `uv run mypy` checks only your own platform's view; the gate checks both.
@@ -675,7 +681,8 @@ The behaviour, per file:
 - **Bar removal is part of every re-encode**, not an option: any file that is encoded has
   its bars detected and removed, so a re-encoded file is always clean. There is no flag to
   keep them, and no file is skipped for lacking them. A film whose aspect ratio changes is
-  handled by cropping only the bars every sustained segment agrees on.
+  handled by cropping only the bars every sustained segment agrees on (a fallback
+  that can break this is tracked in [#525](https://github.com/bennischober/ShrinkRay/issues/525)).
 - **One encode mode.** Every re-encode, bar removal included, is a VMAF-driven CRF
   search against a required quality floor (VMAF 96 by default) followed by one full
   encode. There is no fixed-preset encode.
