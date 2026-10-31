@@ -50,38 +50,29 @@ runs the CRF search for the ones that pass the gates, works through the backlog 
 own, and keeps a watchdog on the folder so new and changed files are picked up within
 seconds. The dashboard is its status window — what is running, what is planned, what is
 left, what was reclaimed — not a control panel. Configuration and control belong to the
-terminal (planned: `shrinkray setup`, see [Direction](#direction)).
+terminal: `shrinkray setup` (see [`setup`](#setup--configure-pause-and-resume)).
 
 > [!IMPORTANT]
-> **The one-shot shape is what runs today.** `encode` takes a file, a folder or a glob, and
-> omitting the output directory re-encodes **in place**: the verified output takes the source's
-> own path and the original is renamed aside and kept. No database is created unless you pass
-> `--db`. Naming an output directory instead keeps the older behaviour of writing a second copy
-> there.
+> **Both shapes run today.** `encode` takes a file, a folder or a glob, and omitting the
+> output directory re-encodes **in place**: the verified output takes the source's own path
+> and the original is renamed aside and kept. No database is created unless you pass `--db`.
+> Naming an output directory instead writes a second copy there.
 
 ## What does it do?
 
-**`scan`** walks your movie folders and catalogs every file: duration, codecs,
-resolution, FPS, audio languages, HDR detection, black-bar detection — cached
-in a sqlite database, so repeated scans are near-instant.
+Every run starts by **scanning** the files it was given: duration, codecs, resolution,
+FPS, audio languages, HDR detection and a coarse black-bar check. With a database
+(`--db`, or the resident app) the scan is cached, so an unchanged file is not probed again.
+There is no separate scan command: `encode`, `plan` and the resident app scan as they go.
 
 **`encode`** re-encodes your library with HandBrake to save disk space. Every
 encode is quality-measured — there is no fixed-preset mode:
 
 > **Fix quality, not bitrate.** For every movie, short samples are probed at
 > different CRF values, each probe is scored with [VMAF](https://github.com/Netflix/vmaf)
-> (Netflix's Emmy-winning perceptual quality metric), and a binary search finds
-> the *largest* CRF that stays visually transparent — then the movie is encoded
+> (Netflix's Emmy-winning perceptual quality metric), and a search finds
+> the *largest* CRF that still meets the required VMAF — then the movie is encoded
 > once with exactly that setting.
-
-Measured on real content (target VMAF 95, x265 — those runs predate the AV1 output and the
-96 default, so the numbers below describe what they measured, not today's defaults):
-
-| Movie | Content | Result | Saved |
-|---|---|---|---|
-| Django Unchained (PAL DVD) | grainy live action | CRF 19, VMAF 95.25, letterbox bars removed | **64 %** |
-| Bloodshot (alt. ending) | 1080p live action | CRF 20, VMAF 95.76 | **73 %** |
-| Rick & Morty S01E01 | already-efficient HEVC | skipped — target unreachable | *(correctly)* |
 
 Nothing is guessed: every decision is measured, recorded in the database, and
 movies that cannot profit (already efficient sources) are skipped — not
@@ -183,7 +174,7 @@ database, so it works on a fresh install):
 |---|---|---|---|
 | [uv](https://docs.astral.sh/uv/getting-started/installation/) | Python & dependencies (manages everything else) | — | `winget install astral-sh.uv` |
 | [FFmpeg](https://www.ffmpeg.org/download.html) | scanning, bar detection, VMAF scoring | **must include `libvmaf`** — Debian/Ubuntu's `apt` build does not, and without it the CRF search cannot measure a single file | Windows: `winget install Gyan.FFmpeg`; Linux: a static GPL build (see below); or the container |
-| [HandBrake CLI](https://handbrake.fr/downloads.php) | every encode and every probe | **>= 1.6** (the `svt_av1` encoder id; Ubuntu 22.04 ships 1.5.x, which cannot) | Windows: `winget install HandBrake.HandBrake`; Linux: compiled from source or the container |
+| [HandBrake CLI](https://handbrake.fr/downloads.php) | every encode and every probe | **>= 1.6** (the `svt_av1` encoder id; Ubuntu 22.04 ships 1.5.x, which cannot) | Windows: `winget install HandBrake.HandBrake.CLI` (the command-line package; `HandBrake.HandBrake` is the GUI); Linux: compiled from source or the container |
 
 The two routes below bring a correct toolchain themselves: the Windows installer
 (`install.ps1`) and the Docker image. Native Linux is the route that needs care.
@@ -211,10 +202,10 @@ sudo tar -xf /tmp/ffmpeg.tar.xz -C /opt --strip-components=1
 sudo ln -sf /opt/ffmpeg /usr/local/bin/ffmpeg
 sudo ln -sf /opt/ffprobe /usr/local/bin/ffprobe
 
-# 3. HandBrake CLI >= 1.6: no Linux binary is published, build from source
+# 3. HandBrake CLI >= 1.6: no Linux binary is published, so build it from source
+#    following HandBrake's own instructions (dependencies differ per distro):
+#    https://handbrake.fr/docs/en/latest/developer/build-linux.html
 #    (or use the container, which carries it pinned)
-sudo apt install build-essential cmake libx264-dev libx265-dev libvpx-dev
-#    (full build instructions: github.com/HandBrake/HandBrake/blob/master/linux/BUILD.md)
 
 # 4. verify the toolchain — the last install step
 cd ~/.shrinkray && uv run shrinkray doctor
@@ -240,11 +231,14 @@ other services keep their cores.
    (a path or glob) is still scanned, wherever it lives.
 2. **Metadata** — `ffprobe` extracts stream details; duration, aspect ratio and
    size are computed and cached (unchanged files skip probing entirely).
-3. **Black-bar detection** — `cropdetect` samples several segments per movie;
-   a threshold keeps noise pixels from being mistaken for bars.
-4. **Quality search** *(quality mode)* — three 10-second samples are encoded at
-   different CRF values and scored with VMAF against their source; a binary
-   search converges on the largest CRF that still meets the quality floor.
+3. **Black-bar detection** — `cropdetect` runs over the whole runtime, reading
+   only keyframes; only bars that every sustained stretch of the film agrees on
+   are cropped, so a changing aspect ratio never loses picture. With a database
+   the result is cached per file version; a sampled detector is the fallback.
+4. **Quality search** — one 10-second sample per 10 minutes of runtime
+   (`quality.sample_every`) is encoded at a few CRF values and scored with VMAF
+   against its source; the search interpolates between a passing and a failing
+   probe until it finds the largest CRF that still meets the required VMAF.
 5. **Encode & verify** — the full movie is encoded once with the winning CRF;
    the output duration is verified against the source to catch interrupted
    encodes.
@@ -276,7 +270,14 @@ removed it: an unmeasured encode can take a library file's path).
 | `--probe-encoder-preset N` | the PROBES' encoder speed preset (default: the `handbrake.probe_encoder_preset` config value, shipped as `5`; SVT-AV1 speed -1 to 10, higher = faster (a lower preset is slower and compresses better); a measurement setting — changing it invalidates stored plans) |
 | `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `3`; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
-| `--crop-samples N` | cropdetect windows per movie (more samples can only shrink the crop) |
+| `--crop-samples N` | cropdetect windows for the sampled fallback detector (more samples can only shrink the crop) |
+| `--sample-every S` | seconds of runtime per probe window (default: `quality.sample_every`, 600) |
+| `--sample-count N` | a fixed number of probe windows, overriding `--sample-every` |
+| `--verify` | after each encode, measure VMAF on the FULL output against the source (slow; ground truth beyond the samples) |
+| `--replan` | ignore stored plans and re-probe every movie |
+| `--threads N` | per-encode thread cap (0 = all cores; default: `handbrake.max_threads`) |
+| `--db PATH` | keep a database (scan cache, plans, history); omitted, the run is stateless |
+| `--config PATH` | the config.json to use |
 | `--dry-run` | show what would be encoded, without encoding |
 | `--overwrite` | re-encode even if the output already exists |
 
@@ -359,6 +360,32 @@ loopback development flow is unchanged — no token, no prompt. TLS is deliberat
 left to a reverse proxy. Stop with Ctrl+C; the running job's state is recovered on
 the next start.
 
+### `retained` — the originals kept aside
+
+```bash
+uv run shrinkray retained                          # list every retained original (needs --db)
+uv run shrinkray retained recover --dir 'D:\Movies\Some Film'   # resolve an interrupted swap
+```
+
+ShrinkRay never deletes a source: a replaced original is renamed to
+`<name>.shrinkray-original` next to the new file. `list` shows the swaps recorded in the
+database (the resident app's, or a run with `--db`); a stateless one-shot run records
+nothing, so its originals are found by that suffix on disk. `recover` inspects one
+folder (not recursively) and resolves a swap a crash interrupted. Deleting an original is
+your own action, once you are satisfied with the result.
+
+### `doctor` — check the toolchain and the library
+
+```bash
+uv run shrinkray doctor               # toolchain + library health
+uv run shrinkray doctor --probe-all   # also ffprobe every file for truncation (slow)
+```
+
+Checks the toolchain first (ffprobe, HandBrakeCLI, ffmpeg with libvmaf) — it works without a
+database, so it is the last step of an install. With a database it then reports files
+the database knows but the disk lost, encode rows whose output vanished and stale scratch
+folders. It is read-only: it reports, it never repairs.
+
 > [!NOTE]
 > VMAF scores are only comparable within the same libvmaf version: the same
 > encode scored 95.76 on ffmpeg 5 (libvmaf v2) and 94.40 on ffmpeg 9 (libvmaf v3).
@@ -378,14 +405,14 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 | 2 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
 | 3 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
 | 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
-| 5 | Bar detection | Which bars does EVERY sampled frame share? | — | never skips — "no bars" is a normal outcome |
+| 5 | Bar detection | Which bars does every sustained segment share? | — | never skips — "no bars" is a normal outcome |
 | 6 | CRF search | Largest CRF that meets the VMAF target? | 96 | skip — target unreachable |
 | 7 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, with the crop | — | — |
 
 The two rows people ask about:
 
-- **Rows 2-4 are the "not worth it" gates** you asked for: a 480p DVD rip
+- **Rows 2-4 are the "not worth it" gates**: a 480p DVD rip
   fails row 2 today, an MPEG-2/Xvid/VC-1 rip fails row 4, and a small file
   fails row 3 the moment you set a floor. All three are config keys under
   `eligibility`, and all three are checked before any ffmpeg probe runs — a
@@ -452,8 +479,8 @@ Example [config.json](config.json):
     "handbrake": {
         "preset": "Fast 1080p30",        // legacy: unread by the measured pipeline
         "encoder": "svt_av1",
-        "probe_encoder_preset": "5", // quality mode: the PROBES' speed preset
-        "encoder_preset": "3",         // quality mode: the FINAL encode's preset
+        "probe_encoder_preset": "5", // the PROBES' speed preset
+        "encoder_preset": "3",         // the FINAL encode's preset
         "max_threads": 0                  // per-encode thread cap (0 = all cores)
     },
     "quality": {
@@ -462,7 +489,9 @@ Example [config.json](config.json):
     "resources": {
         "idle_priority": true       // encodes run below normal priority
     },
-    "codec": { "hdr": { "color_space": [], "color_transfer": [] } },
+    "codec": {
+        "hdr": { "color_space": ["bt2020nc"], "color_transfer": ["smpte2084"] }  // the defaults; an empty list means "nothing is HDR"
+    },
     "app": {
         "auto_backlog": false      // start scan -> plan -> encode on boot
     },
@@ -512,14 +541,14 @@ lean is a measured fact here, not an aspiration.
 
 ShrinkRay does not talk to media servers: telling another application that
 a file changed is that application's job (it can watch the folder itself).
-The opt-in Jellyfin refresh integration was removed (a config.json that
-still carries its `integrations` key loads fine and logs one warning).
+The former opt-in refresh integration was removed (a config.json that still
+carries its `integrations` key loads fine and logs one warning).
 
 ## Development
 
 A [devcontainer](.devcontainer/devcontainer.json) is included - open in VS Code
 and reopen in the container. Note that its apt `ffmpeg` is built **without
-libvmaf**, so quality mode cannot run there; use the `dev` target of the
+libvmaf**, so no encode or probe can run there; use the `dev` target of the
 [Dockerfile](Dockerfile) for a full toolchain (see
 [docs/docker.md](docs/docker.md)).
 
@@ -579,26 +608,29 @@ needed for *developing or rebuilding* the UI - using the tool does not require
 it:
 ```bash
 cd ui
-npm install        # once
+npm ci             # once (the locked dependencies)
 npm run dev        # dev server with hot reload (API proxied to :8420)
-npm run build      # production build to ui/dist (served by the app)
 npm run check      # svelte-check (type checking)
+npm run test       # the UI tests
+npm run build      # production build to ui/dist (served by the app)
 ```
 
+The Python checks are one script, the same one CI and the release job run:
+
 ```bash
-uv run pytest          # tests (with coverage report)
-uv run ruff check .    # lint
-uv run ruff format .   # format
-uv run mypy            # static type checking
+tools/gate.sh          # lock check, ruff, format, mypy (linux AND win32), pytest, import layering
+uv run ruff format .   # format touched files
 ```
+
+A bare `uv run mypy` checks only your own platform's view; the gate checks both.
 
 Releases are automated: push a tag, the workflow checks, builds and publishes.
 The release cut that precedes the tag bumps the version in `pyproject.toml`, and
 the image pin above must name the same version - the test suite fails until it does.
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 ## Direction
@@ -625,11 +657,11 @@ with separate jobs:
   database, pause state and a token generated on first start, so restarts and image
   updates keep it.
 
-The pause and the console banner are built (`touch /data/paused`, see
-[docs/docker.md](docs/docker.md#the-console)); `shrinkray setup` is not yet. [docs/tui.md](docs/tui.md) records the
-decision and the open design work.
+All three are built: the pause (`touch /data/paused`, or the switch in `shrinkray setup`),
+the console banner (see [docs/docker.md](docs/docker.md#the-console)) and `shrinkray setup`
+itself. [docs/tui.md](docs/tui.md) records the decision and the open design work.
 
-The target behaviour, per file:
+The behaviour, per file:
 
 - **Watch, scan, record, decide.** A watchdog watches the library folder. When a file
   appears or changes, it is scanned (codec, resolution, black bars, ...), the result
@@ -643,7 +675,7 @@ The target behaviour, per file:
 - **Bar removal is part of every re-encode**, not an option: any file that is encoded has
   its bars detected and removed, so a re-encoded file is always clean. There is no flag to
   keep them, and no file is skipped for lacking them. A film whose aspect ratio changes is
-  handled by cropping only the bars common to every sampled frame.
+  handled by cropping only the bars every sustained segment agrees on.
 - **One encode mode.** Every re-encode, bar removal included, is a VMAF-driven CRF
   search against a required quality floor (VMAF 96 by default) followed by one full
   encode. There is no fixed-preset encode.
@@ -657,22 +689,6 @@ replaces a file in place — the original is renamed aside and kept, and the
 dashboard lists it for manual deletion. ShrinkRay never deletes a source file.
 Everything else — naming, moving, organizing, matching, deduplicating, acquiring —
 belongs to the tooling that already built the collection, and is out of scope here.
-
-> [!NOTE]
-> **Target shape vs. what ships today.** These two operating modes are the contract:
->
-> - **One-shot CLI** — point it at a file, a folder, or a glob; it skips the database,
->   runs the CRF search, and re-encodes in place, retaining the original.
-> - **Fire and forget** — a container that scans the mounted library into its own
->   database, detects black bars for every file, runs the CRF search for the whole
->   backlog, encodes it, and watches for changes.
->
-> **Both operating modes are implemented.** The one-shot CLI takes a file, a
-> folder, or a glob; it is stateless unless `--db` is passed; and it encodes
-> in place when no output directory is given (the original is renamed aside
-> and kept). Fire-and-forget is the container shape above. Follow the
-> [issue tracker](https://github.com/bennischober/ShrinkRay/issues) for what
-> is in flight.
 
 ## FAQ
 
@@ -707,7 +723,7 @@ on your `PATH` (the tool also checks the default install locations).
   walked through) · [docs/plan-reuse.md](docs/plan-reuse.md) (the plan
   cache) · [docs/black-bar-spike.md](docs/black-bar-spike.md) (the bar
   detector's measured data) · [docs/tui.md](docs/tui.md) (the terminal
-  surface: decided, not built)
+  surface)
 - [FFmpeg documentation](https://ffmpeg.org/ffmpeg.html) ·
   [cropdetect filter](https://ffmpeg.org/ffmpeg-filters.html#cropdetect) ·
   [libvmaf](https://github.com/Netflix/vmaf)
