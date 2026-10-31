@@ -45,7 +45,7 @@ class TestPlans(unittest.TestCase):
             "input_mtime": Path(self.tmp.name).joinpath("movie.mkv").stat().st_mtime,
             "input_size": 16,
             "encoder": "svt_av1",
-            "encoder_preset": "3",  # svt_av1 vocabulary (config.py), not x265's "medium"
+            "encoder_preset": "3",  # svt_av1 vocabulary (config.py), the legacy name's preset is "medium"
             "target_vmaf": 95.0,
             "crf_low": 14,
             "crf_high": 32,
@@ -58,7 +58,7 @@ class TestPlans(unittest.TestCase):
     def _lookup(self, movie: Path, **overrides):
         args: dict = {
             "encoder": "svt_av1",
-            "encoder_preset": "3",  # svt_av1 vocabulary (config.py), not x265's "medium"
+            "encoder_preset": "3",  # svt_av1 vocabulary (config.py), the legacy name's preset is "medium"
             "target_vmaf": 95.0,
             "crf_range": (14, 32),
             "sample_count": 7,
