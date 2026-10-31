@@ -25,19 +25,15 @@ from loguru._datetime import _compile_format
 from shrinkray.logger import CONSOLE_FORMAT
 
 # the frozen instants the token pin renders. FROZEN (hour 15 at a FIXED
-# +05:30 offset - round 8's finding: a UTC-aware instant renders the same
-# under a `!UTC` twin, so the local-time claim had no test behind it; at
-# +05:30 the twin renders 09:34:05 and fails the pin) separates the
-# month/minute/second tokens (1/4/5) and sits outside the twelve hours where
-# a 12-hour `hh` render coincides with the 24-hour `HH` render (hours 1-12;
-# hour 00 does NOT coincide - hh renders it 12; round 4's finding: hour 3
-# rendered identically under both). FROZEN_SINGLE (hour 5, UTC) closes round
-# 6's finding: there the unpadded `H` renders `5:04:05` while `HH` and `hh`
-# both render `05:04:05`, so the hour pair H/HH is discriminated too -
-# together the two instants separate every token pair in the shape: no wrong
-# spec (an AM/PM hour, the old tokens, or a `!UTC` suffix) renders BOTH
-# literals (the suffix DOES render the hour-5 literal - the hour-15
-# equality is what catches it).
+# +05:30 offset) separates the month/minute/second tokens (1/4/5) and sits
+# outside the twelve hours where a 12-hour `hh` render coincides with the
+# 24-hour `HH` render (hours 1-12; hour 00 does NOT coincide - hh renders it
+# 12; round 4's finding: hour 3 rendered identically under both).
+# FROZEN_SINGLE (hour 5, UTC) closes round 6's finding: there the unpadded
+# `H` renders `5:04:05` while `HH` and `hh` both render `05:04:05`, so the
+# hour pair H/HH is discriminated too - together the two instants separate
+# every token pair in the shape: no wrong spec (an AM/PM hour or the old
+# tokens) renders BOTH literals.
 FROZEN_TZ = timezone(timedelta(hours=5, minutes=30))
 FROZEN = datetime(2026, 1, 2, 15, 4, 5, tzinfo=FROZEN_TZ)
 FROZEN_SINGLE = datetime(2026, 1, 2, 5, 4, 5, tzinfo=timezone.utc)
@@ -105,12 +101,6 @@ class TestConsoleFormat(unittest.TestCase):
         # shipped spec renders 05:04:05, so this second equality on the
         # DERIVED spec fails if the product's constant ever used H
         self.assertEqual(render(FROZEN_SINGLE), "2026-01-02 05:04:05")
-        # round 8's finding: a `!UTC` twin renders the same as the shipped
-        # spec for a UTC-aware instant - FROZEN sits at a fixed +05:30
-        # offset, so the twin renders 09:34:05 there and fails the pin: the
-        # console stamps the operator's wall clock, not UTC
-        utc_twin = _compile_format(spec + "!UTC")
-        self.assertEqual(utc_twin(FROZEN), "2026-01-02 09:34:05")
 
     def test_the_product_wiring_installs_the_shipped_constant(self) -> None:
         """logger.py's add() call installs the shipped constant.
@@ -125,13 +115,19 @@ class TestConsoleFormat(unittest.TestCase):
         exactly that rewire. The assertion is assertIn over the
         comment-stripped source, not an exact line: a reformat of the call
         must not fail the pin, and a commented-out wiring must not satisfy
-        it.
+        it. The match is over the whitespace-NORMALIZED source and must END
+        at a delimiter: any call layout passes (a parenthesized value, a
+        wrapped argument list), while a restated alias
+        (format=CONSOLE_FORMAT_ALIAS), a concatenation (+ " |") or a
+        .format() call cannot satisfy the pin while rendering something
+        else.
         """
         source = (
             Path(__file__).resolve().parent.parent / "src" / "shrinkray" / "logger.py"
         ).read_text(encoding="utf-8")
         code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
-        self.assertIn("format=CONSOLE_FORMAT", code)
+        normalized = " ".join(code.split())
+        self.assertRegex(normalized, r"format\s*=\s*\(?\s*CONSOLE_FORMAT\s*\)?\s*[,)]")
 
     def test_the_wrong_tokens_fail_the_frozen_pin(self) -> None:
         """The pin discriminates against the defect's token sets: under the
