@@ -733,7 +733,7 @@ class TestPlanReuse(unittest.TestCase):
         self.assertEqual(result.crf_source, "probe")
 
     def test_hdr_plan_reuses_after_engine_switches_to_10bit(self):
-        """An HDR plan is stored under the EFFECTIVE encoder (x265_10bit)
+        """An HDR plan is stored under the EFFECTIVE encoder (svt_av1_10bit)
         and a following encode of the same HDR file reuses it — regression:
         plan results never carried hdr/encoder, so HDR plans were stored as
         'x265' and the encode-side lookup (which matches on the overridden
@@ -741,7 +741,7 @@ class TestPlanReuse(unittest.TestCase):
         See issues #26 and #24."""
         movie = self._movie()
         # plan_quality's write path: HDR override applied on the result
-        # (effective encoder x265_10bit, HDR target/range), stored via
+        # (effective encoder svt_av1_10bit, HDR target/range), stored via
         # record_plan
         self._store_plan(
             movie,
