@@ -44,7 +44,7 @@ class TestPlans(unittest.TestCase):
             "estimated_size": 8,
             "input_mtime": Path(self.tmp.name).joinpath("movie.mkv").stat().st_mtime,
             "input_size": 16,
-            "encoder": "x265",
+            "encoder": "svt_av1",
             "encoder_preset": "medium",
             "target_vmaf": 95.0,
             "crf_low": 14,
@@ -57,7 +57,7 @@ class TestPlans(unittest.TestCase):
 
     def _lookup(self, movie: Path, **overrides):
         args: dict = {
-            "encoder": "x265",
+            "encoder": "svt_av1",
             "encoder_preset": "medium",
             "target_vmaf": 95.0,
             "crf_range": (14, 32),
@@ -166,10 +166,10 @@ class TestRecordPlan(unittest.TestCase):
             encoder_preset="5",
             probe_encoder_preset="5",
             hdr=False,
-            encoder="x265",
+            encoder="svt_av1",
             input_mtime=None,  # a duck-typed result without the #436 field
         )
-        config = type("Conf", (), {"handbrake_encoder": "x265"})()
+        config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
         plan_id = service.record_plan(self.connection, movie, result, config)
         return plan_id, movie
 
@@ -211,7 +211,7 @@ class TestRecordPlan(unittest.TestCase):
             probe_encoder_preset="5",
             hdr=False,
         )
-        config = type("Conf", (), {"handbrake_encoder": "x265"})()
+        config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
         self.assertIsNone(service.record_plan(self.connection, movie, result, config))
 
 
