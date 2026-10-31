@@ -121,13 +121,64 @@ class TestDotDirectoriesAreNotLibraryContent(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_the_cli_folder_shape_excludes_the_hidden_subtrees(self) -> None:
+        """Finding 1 of round 2 (measured by the reviewer): the CLI folder
+        shape (plan/encode <folder>) passes the walk's result with
+        walked=True - the exclusion set must be computed for THAT shape
+        too, or a catalogued hidden row is bumped and hard-deleted while
+        its file is still on disk (the regression the round-1 hoist
+        introduced with its files-is-None guard). The pin drives the CLI
+        shape through the real resolve_input_paths.
+        """
+        conn = db.connect(self.root / "t.db")
+        try:
+            a = str(self.root / "movie.mkv")
+            h = str(self.root / ".previews" / "h.mkv")
+            for p, name in ((a, "movie.mkv"), (h, "h.mkv")):
+                conn.execute(
+                    "INSERT INTO files (path, mtime, size, name, category, missing_scans, "
+                    "missing_since) VALUES (?, 0, 16, ?, 'movies', 1, datetime('now'))",
+                    (p, name),
+                )
+            conn.commit()
+            from shrinkray.engine.scan import resolve_input_paths
+
+            _root, files, walked = resolve_input_paths(str(self.root), [".mkv"])
+            self.assertTrue(walked)
+            for _ in range(db.MISSING_GRACE + 1):
+                engine_scan.scan_movies(
+                    self.root,
+                    _make_scan_config(),
+                    connection=conn,
+                    workers=1,
+                    files=files,
+                    walked=walked,
+                )
+            h_row = conn.execute("SELECT missing_scans FROM files WHERE path = ?", (h,)).fetchone()
+            self.assertIsNotNone(h_row, "the hidden row survives the CLI folder shape")
+            # h was seeded with missing_scans=1; the exclusion means the
+            # reconcile has NO OPINION about it - the flag stays EXACTLY as
+            # seeded (not recovered to 0: recovery would be an opinion)
+            self.assertEqual(h_row["missing_scans"], 1)
+            self.assertIsNotNone(
+                conn.execute("SELECT missing_since FROM files WHERE path = ?", (h,)).fetchone()[
+                    "missing_since"
+                ]
+            )
+            a_row = conn.execute("SELECT missing_scans FROM files WHERE path = ?", (a,)).fetchone()
+            self.assertEqual(a_row["missing_scans"], 0)
+        finally:
+            conn.close()
+
     def test_the_empty_walk_keeps_the_hidden_rows(self) -> None:
-        """The empty-walk shape (the reviewer's finding 1, measured): a root
-        whose visible media is GONE (moved library, detached mount) while
-        hidden rows remain - the early return's reconcile carries the same
-        exclusion set, so the hidden rows are neither bumped nor deleted
-        after the grace; the mass warning still fires on the visible rows
-        (finding 4).
+        """The empty-walk shape (round-1 finding 1; round-2 finding 2's
+        corrected fixture): a root whose ONLY content is hidden (every
+        visible file gone - moved library, detached mount) while hidden
+        rows remain. The fixture holds NO dot-FILE at the root, so the
+        walk returns NOTHING and the early return's reconcile is the one
+        under test - the reviewer measured that the original fixture kept
+        a dot-FILE at the root, the scan stayed non-empty, and the early
+        return never ran (the pin could not fail under mutation M2).
         """
         conn = db.connect(self.root / "t.db")
         try:
@@ -141,19 +192,27 @@ class TestDotDirectoriesAreNotLibraryContent(unittest.TestCase):
                 )
             conn.commit()
             (self.root / "movie.mkv").unlink()
+            (self.root / ".hidden-file.mkv").unlink()
             for _ in range(db.MISSING_GRACE + 1):
                 engine_scan.scan_movies(self.root, _make_scan_config(), connection=conn, workers=1)
             h_row = conn.execute("SELECT missing_scans FROM files WHERE path = ?", (h,)).fetchone()
             self.assertIsNotNone(h_row, "the hidden row survives the empty-walk grace")
+            # h's row was never seeded as missing: the exclusion means the
+            # reconcile never touched it, so it stays 0 (untouched, not
+            # recovered - a recovery would be an opinion)
             self.assertEqual(h_row["missing_scans"], 0)
         finally:
             conn.close()
 
     def test_the_empty_walk_still_warns_on_mass_flagging(self) -> None:
-        """Finding 4: rows inside excluded subtrees do not inflate the mass
-        heuristic's denominator - a detached mount (every visible file
-        gone, hidden rows present) warns loudly where the inflated
-        denominator would silence it.
+        """Finding 4 (round-2 finding 3's discriminating fixture): rows
+        inside excluded subtrees do not inflate the mass heuristic's
+        denominator - the fixture is 10 visible + 50 HIDDEN rows, wide
+        enough that the mutated code (in_scope counting the excluded rows,
+        denominator 60, threshold 12) silences the warning while the head
+        code (denominator 10, threshold 5) fires. The reviewer measured
+        the original 10+1 fixture staying mass=True under the mutation,
+        so the pin could not fail.
         """
         conn = db.connect(self.root / "t.db")
         try:
@@ -163,11 +222,12 @@ class TestDotDirectoriesAreNotLibraryContent(unittest.TestCase):
                     "VALUES (?, 0, 16, ?, 'movies')",
                     (str(self.root / f"v{i}.mkv"), f"v{i}.mkv"),
                 )
-            conn.execute(
-                "INSERT INTO files (path, mtime, size, name, category) "
-                "VALUES (?, 0, 16, 'h.mkv', 'movies')",
-                (str(self.root / ".previews" / "h.mkv"),),
-            )
+            for i in range(50):
+                conn.execute(
+                    "INSERT INTO files (path, mtime, size, name, category) "
+                    "VALUES (?, 0, 16, ?, 'movies')",
+                    (str(self.root / ".previews" / f"h{i}.mkv"), f"h{i}.mkv"),
+                )
             conn.commit()
             result = db.prune_missing(
                 conn, set(), scope=str(self.root), except_paths={str(self.root / ".previews")}

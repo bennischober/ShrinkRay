@@ -516,7 +516,7 @@ def scan_movies(
     # correction applies there just the same (measured: without it the
     # hidden rows are bumped then hard-deleted after the grace).
     excluded_dirs: set[str] = set()
-    if connection is not None and files is None:
+    if connection is not None and not (files is not None and not walked):
         excluded_dirs = {
             str(candidate)
             for candidate in root.resolve().rglob("*")
