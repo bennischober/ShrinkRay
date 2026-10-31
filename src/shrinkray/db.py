@@ -1358,6 +1358,7 @@ def prune_missing(
     connection: sqlite3.Connection,
     existing_paths: set[str],
     scope: str | None = None,
+    only: set[str] | None = None,
 ) -> PruneResult:
     """Reconciles the database with what is actually on disk.
 
@@ -1369,15 +1370,23 @@ def prune_missing(
     as a guard against accidents (e.g. a renamed media folder flags instead
     of wiping the whole scope).
 
-    Without a scope, only rows inside the given scope directory are
+    With a scope, only rows inside the given scope directory are
     considered: a scan of one folder must never touch the history of files
     stored elsewhere (e.g. a scan of test_media/movies_two must leave the
     records of test_media/movies alone).
+
+    With ``only`` (an explicit file/glob scan, issue #453), ONLY those rows
+    are reconciled — an explicit scan inspected exactly its files and has no
+    opinion about the rest of the scope: an enumerated-but-gone file is
+    flagged (grace applies), an unenumerated row is never touched.
+    ``only`` beats ``scope`` when both are given.
 
     Args:
         connection (sqlite3.Connection): The database connection.
         existing_paths (set[str]): Paths that are still on disk.
         scope (str | None): Only reconcile rows under this directory path.
+        only (set[str] | None): Only reconcile exactly these paths (an
+            explicit file/glob scan's enumerated files).
 
     Returns:
         PruneResult: What was flagged, recovered and hard-deleted.
@@ -1386,11 +1395,17 @@ def prune_missing(
     # the db stores absolute paths; a relative scan root must resolve or the
     # prefix match would silently never fire (no flagging, no pruning)
     scope_normalized = str(Path(scope).resolve()) if scope is not None else None
+    only_normalized = {str(Path(p).resolve()) for p in only} if only is not None else None
     result = PruneResult()
     in_scope = 0
     for row in rows:
         path = row["path"]
-        if scope_normalized is not None and not path.startswith(scope_normalized):
+        if only_normalized is not None:
+            # an explicit scan reconciles exactly its enumerated files (issue
+            # #453): rows it did not enumerate are out of its opinion
+            if path not in only_normalized:
+                continue
+        elif scope_normalized is not None and not path.startswith(scope_normalized):
             continue
         in_scope += 1
         if path in existing_paths:
