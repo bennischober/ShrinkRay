@@ -4,7 +4,11 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The release page no longer ships uv's build-guard `.gitignore`** ([#504](https://github.com/bennischober/ShrinkRay/issues/504)): `uv build` writes a one-byte `dist/.gitignore` (content `*`) after every build, its guard against committing local artifacts, and the release workflow's `files: dist/*` glob — expanded with `dot: true` — uploaded it as an asset, which GitHub stores renamed as `default.gitignore` (as on v0.5.0 and v0.6.0). The build step now passes `--no-create-gitignore` and the upload lists the artifacts by extension (`dist/*.whl`, `dist/*.tar.gz`), so a tagged release carries exactly the sdist and the wheel. The wheel and sdist stay: the project publishes no PyPI package, so the release page is the only installable-artifact source.
+- **A missing or unspawnable ffprobe during sample extraction fails as the step's named error** ([#495](https://github.com/bennischober/ShrinkRay/issues/495)): the ffprobe duration read that opens `extract_samples` is a bare `subprocess.run` whose handler caught only `subprocess.SubprocessError` (#62's timeout class), so a spawn failure (the binary missing after startup, EMFILE/ENOMEM) escaped as a raw `OSError` traceback — `FileNotFoundError` is an `OSError`, not a `SubprocessError`. The #458 sweep (PR #491) guarded the function's two `_run` sites but enumerated `_run` call sites only and missed this read. The read now converts the spawn class to the step's documented `RuntimeError` (`sample extraction cannot run 'ffprobe': ...`), the same shape as those two guards and the crop step (#401); the `SubprocessError` branch stays first so the #62 timeout message is unchanged. Pinned by a test that raises `OSError(24)` at the seam.
+- **A damaged metadata.db no longer stops an encode at the crop step** ([#486](https://github.com/bennischober/ShrinkRay/issues/486)): the crop cache only saves time, but a corrupt or foreign database (`sqlite3.DatabaseError`) escaped its fallback and failed the encode, and a cache write that failed (locked database, full disk) discarded a crop that was already measured. Both are now logged; the crop is computed or used uncached and the encode proceeds.
 
 ## [0.6.0] - 2026-10-30
 
