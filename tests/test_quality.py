@@ -1923,22 +1923,33 @@ class TestProbeCache(unittest.TestCase):
             )
         self.assert_closed(opened)
 
-    def test_a_failed_probe_cache_write_closes_the_connection(self):
-        """A cache write that raises (a full disk) closes the connection, in
-        both the VMAF probe and the size probe."""
+    def test_a_failed_probe_cache_write_is_logged_and_keeps_the_measurement(self):
+        """Issue #517: a cache write that fails (a full disk) costs only the
+        next run's shortcut - the write is logged, the connection still
+        closes, and the measured value is used, like the crop cache (#486)
+        and the probe cache's read side (#507).
+
+        The old shape pinned the raise (written for #480's close-on-every-path
+        rule); the raise was a side effect of the pin, not a product decision
+        about the write - #517 replaces it with the #486 rule."""
         full = sqlite3.OperationalError("database or disk is full")
-        for name, call in (
-            ("probe_crf", self._probe),
-            ("estimate_size_factor", self._size_factor),
+        for name, call, expected in (
+            ("probe_crf", self._probe, 95.5),
+            ("estimate_size_factor", self._size_factor, 0.5),
         ):
             with self.subTest(name):
                 opened, recording = self._recording_connect()
                 with (
                     recording,
                     patch("shrinkray.db.save_probe_score", side_effect=full),
-                    self.assertRaises(sqlite3.OperationalError),
+                    patch.object(engine_search, "log") as log,
                 ):
-                    call()
+                    result, encodes = call()
+                # the measurement that already succeeded survives
+                self.assertEqual(result, expected)
+                self.assertEqual(len(encodes), 1)  # measured, not served
+                logged = " ".join(str(c.args[0]) for c in log.call_args_list)
+                self.assertIn("The probe-cache write failed", logged)
                 self.assert_closed(opened)
 
     def test_size_and_vmaf_caches_do_not_collide(self):
