@@ -458,10 +458,14 @@ def scan_movies(
         exclude (Path | None): Directory to exclude (e.g. the encode output).
         on_movie (callable | None): Called as on_movie(index, data, error)
             after each movie completes, for progressive UI updates.
-        files (list[Path] | None): The explicit movie list (a single named
-            file or a glob's matches, resolved by resolve_input_paths);
-            when given, the root is NOT walked (issue #197: a one-file
-            command must touch exactly that file, not its folder).
+        files (list[Path] | None): The movie list to scan instead of
+            walking the root - a named file or a glob's matches (resolved
+            by resolve_input_paths, `walked=False`), or the WALKED result
+            of a directory argument (resolved by resolve_input_paths,
+            `walked=True`); when given, the root is not re-walked here
+            (issue #197: a one-file command must touch exactly that file,
+            not its folder) - what the list represents is `walked`'s
+            business (see below).
         walked (bool | None): Whether `files` was produced by WALKING the root
             (a directory argument) rather than enumerated explicitly (a file
             or glob argument); None (the default) means no `files` list was
