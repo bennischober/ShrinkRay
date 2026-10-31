@@ -1,4 +1,4 @@
-"""The docs' routes and commands are mechanically aligned with the code.
+"""The docs' routes, commands and image pins are mechanically aligned with the code.
 
 #238 and #288 each found user-facing docs naming removed routes and commands -
 caught by hand, after the fact. This test is the mechanical check behind the
@@ -110,6 +110,30 @@ class TestDocsNameRealSurfaces(unittest.TestCase):
                     )
                 checked += 1
         self.assertGreaterEqual(checked, 5, "the docs stopped naming commands?")
+
+
+# an image pin a user copies; the release cut bumps pyproject.toml, never the
+# docs, so the README's example stayed on v0.4.0 through two releases (#467)
+IMAGE_PIN_RE = re.compile(r"ghcr\.io/bennischober/shrinkray:v(\d+\.\d+\.\d+)")
+PROJECT_VERSION_RE = re.compile(r'^version = "([^"]+)"$', re.MULTILINE)
+
+
+class TestDocsPinTheCurrentRelease(unittest.TestCase):
+    def test_every_image_pin_in_the_docs_names_the_project_version(self) -> None:
+        match = PROJECT_VERSION_RE.search((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+        assert match is not None, "pyproject.toml has no version line"
+        version = match.group(1)
+        checked = 0
+        for doc in DOC_FILES:
+            for pin in IMAGE_PIN_RE.finditer(doc.read_text(encoding="utf-8")):
+                with self.subTest(doc=doc.name, pin=pin.group(0)):
+                    self.assertEqual(
+                        pin.group(1),
+                        version,
+                        f"{doc.name} pins v{pin.group(1)}, but this release is v{version}",
+                    )
+                checked += 1
+        self.assertGreaterEqual(checked, 1, "the docs stopped showing a pinned image?")
 
 
 if __name__ == "__main__":
