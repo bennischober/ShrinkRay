@@ -27,7 +27,11 @@ jobs:
         run: tools/gate.sh --no-cov
 
       - name: Build distributions
-        run: uv build
+        # --no-create-gitignore: uv writes a one-byte dist/.gitignore (content
+        # `*`) after every build, its guard against committing local artifacts
+        # (astral-sh/uv#16332); the release glob must stay inside the artifact
+        # set (issue #504)
+        run: uv build --no-create-gitignore
 
       - name: Extract release notes from CHANGELOG
         run: uv run python tools/release_notes.py "${{ github.ref_name }}" > RELEASE_NOTES.md
@@ -36,7 +40,12 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           body_path: RELEASE_NOTES.md
-          files: dist/*
+          # the artifacts by extension, not dist/*: the action globs with
+          # dot:true, so a wildcard also matches dotfiles - the stray
+          # default.gitignore asset came through this line (issue #504)
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
 
       - name: Upload artifacts (on failure for debugging)
         if: failure()

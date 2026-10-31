@@ -501,7 +501,9 @@ def detect_crop_summary_cached(
     The cache is keyed by (path, size, mtime) — the same identity rule the
     scan cache uses. db_file None (a stateless run) computes without caching.
     A failed pass returns None and caches nothing: the next run tries again,
-    and the caller falls back to the sampled detector.
+    and the caller falls back to the sampled detector. A database that cannot
+    be opened, read or written is logged and costs only the cache, never the
+    encode.
 
     Args:
         movie (Path): The source movie file.
@@ -527,8 +529,9 @@ def detect_crop_summary_cached(
                 cached = get_crop_summary(connection, movie)
                 if cached is not None:
                     return cached
-            except (OSError, RuntimeError) as e:
+            except (OSError, RuntimeError, sqlite3.Error) as e:
                 # a broken database must not stop the encode: compute uncached
+                # (sqlite3.Error: a damaged or foreign metadata.db, issue #486)
                 log(f"The crop cache is unavailable ({e}); computing uncached.")
                 if connection is not None:
                     connection.close()
@@ -540,7 +543,12 @@ def detect_crop_summary_cached(
         if connection is not None:
             from shrinkray import db
 
-            db.save_crop_summary(connection, movie, summary)
+            try:
+                db.save_crop_summary(connection, movie, summary)
+            except (OSError, sqlite3.Error) as e:
+                # the measurement stands; only the next run's shortcut is lost
+                # (the uncommitted upsert rolls back when the finally closes)
+                log(f"The crop summary could not be cached ({e}); using it uncached.")
         return summary
     finally:
         if connection is not None:
