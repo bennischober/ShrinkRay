@@ -47,6 +47,38 @@ class TestProbeProgress(unittest.TestCase):
         # cause's): the pin catches a guard dropping the binary name
         self.assertIn("sample extraction cannot run 'ffmpeg'", str(ctx.exception))
 
+    def test_the_ffprobe_duration_read_is_pinned_too(self):
+        """Issue #495: the ffprobe duration read that opens extract_samples is
+        a bare subprocess.run whose handler catches only SubprocessError (#62's
+        timeout class). A missing or unspawnable ffprobe is an OSError, not a
+        SubprocessError, so it escaped as a raw traceback; it must raise the
+        step's documented RuntimeError (ffprobe named), like the function's
+        two _run-site guards (#458) and the crop step (#401)."""
+
+        def broken_run(command, **kwargs):
+            raise OSError(24, "Too many open files")
+
+        with (
+            patch(
+                "shrinkray.engine.samples.subprocess.run",
+                side_effect=broken_run,
+            ),
+            tempfile.TemporaryDirectory() as tmp,
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            engine_samples.extract_samples(
+                Path("movie.mkv"),
+                Path(tmp),
+                1,
+                10.0,
+                cancel=None,
+                progress=lambda event: None,
+            )
+        # the FULL message (the guard's own interpolation, not the chained
+        # cause's): the pin catches a guard dropping the binary name
+        self.assertIn("cannot run 'ffprobe'", str(ctx.exception))
+        self.assertIn("Too many open files", str(ctx.exception))
+
     def test_the_reextract_guard_is_pinned_too(self):
         """Issue #458's per-site criterion: the LOSSLESS RE-EXTRACT's guard
         (the second _run inside the stream-copy fallback) also converts a
