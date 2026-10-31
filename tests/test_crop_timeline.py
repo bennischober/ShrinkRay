@@ -228,6 +228,50 @@ class TestCropCache(unittest.TestCase):
             detect_crop_summary_cached(self.movie, self.db_file)
         self.assert_closed(opened)
 
+    def test_a_corrupt_database_computes_uncached(self) -> None:
+        """Issue #486: a damaged metadata.db raises sqlite3.DatabaseError, which
+        the fallback did not catch, so the cache that only saves time stopped
+        the encode."""
+        corrupt = self.root / "corrupt.db"
+        corrupt.write_bytes(b"not a database, just garbage bytes" * 128)
+        readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
+        with (
+            patch(
+                "shrinkray.engine.crop.run_crop_timeline",
+                side_effect=self._timeline(readings, (1920, 1080)),
+            ),
+            patch("shrinkray.engine.crop.log") as log,
+        ):
+            summary = detect_crop_summary_cached(self.movie, corrupt)
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.bars, (140, 140, 0, 0))
+        logged = " ".join(str(call.args[0]) for call in log.call_args_list)
+        self.assertIn("crop cache is unavailable", logged)
+
+    def test_a_failing_cache_write_keeps_the_measured_summary(self) -> None:
+        """Issue #486: a database that opens but cannot store the row (locked,
+        full disk) must not discard a crop that was already measured."""
+        readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
+        opened, recording = self._opened_connections()
+        with (
+            recording,
+            patch(
+                "shrinkray.engine.crop.run_crop_timeline",
+                side_effect=self._timeline(readings, (1920, 1080)),
+            ),
+            patch(
+                "shrinkray.db.save_crop_summary",
+                side_effect=sqlite3.OperationalError("database or disk is full"),
+            ),
+            patch("shrinkray.engine.crop.log") as log,
+        ):
+            summary = detect_crop_summary_cached(self.movie, self.db_file)
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.bars, (140, 140, 0, 0))
+        logged = " ".join(str(call.args[0]) for call in log.call_args_list)
+        self.assertIn("could not be cached", logged)
+        self.assert_closed(opened)
+
     def test_a_changed_file_is_remeasured(self) -> None:
         readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
         fake = self._timeline(readings, (1920, 1080))
