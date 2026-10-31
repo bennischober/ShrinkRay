@@ -36,6 +36,12 @@ class TestWaitForStable(unittest.TestCase):
         self.age_s = 5.0
         self._slept = 0
 
+    def tearDown(self) -> None:
+        # the sibling classes own their tmp the same way; without this the
+        # directory was removed only at GC time, emitting a ResourceWarning
+        # per test on Python >= 3.13 (issue #488)
+        self.tmp.cleanup()
+
     def _clock(self, age_s: float | None = None):
         """Patches time.time to read age_s seconds past the real mtime."""
         return patch(
