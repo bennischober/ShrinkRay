@@ -298,11 +298,12 @@ class TestSmokeColourRetag(unittest.TestCase):
         """The doc's other claim: already-set components survive the encode.
 
         All three components are set to values the unset-fill at this
-        fixture's 1080p size would NOT write itself (smpte170m/smpte170m/
-        bt470bg; the 1080p fill is all-bt709, while at SD sizes the fill
-        writes smpte170m/bt470bg itself - docs/encode-settings.md): survival
-        of THOSE values proves pass-through for every component; a forced
-        rewrite would produce bt709."""
+        fixture's 1080p size would NOT write itself (smpte170m space and
+        transfer, bt470bg primaries; the 1080p fill is all-bt709, while at
+        SD sizes the fill writes smpte170m/bt470bg itself -
+        docs/encode-settings.md): survival of THOSE values proves
+        pass-through for every component; a forced rewrite would produce
+        bt709."""
         from shrinkray.tools.handbrake import build_encode_command, find_handbrake
 
         # all three components set to non-bt709 values: a stream copy from the
