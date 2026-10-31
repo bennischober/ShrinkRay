@@ -140,6 +140,8 @@ def _cached_or_none(
     statements) and keeps probe_crf/estimate_size_factor connection-free
     like the rest of the engine. Returns (None, None, None) without a
     db_file: probing then runs uncached (CLI one-shots without a database).
+    A database that cannot be opened or read is logged and also returns
+    (None, None, None): it costs the cache, never the probe.
 
     Args:
         db_file (Path | None): The database file (None => no caching).
@@ -148,20 +150,29 @@ def _cached_or_none(
     Returns:
         tuple: (cached score or None, the encoded byte size or None, the
             open connection for the cache write); (None, None, None) without
-            a database. The size is None on pre-#314 rows - a size read
-            misses rather than misleads. The caller owns the returned
+            a usable database. The size is None on pre-#314 rows - a size
+            read misses rather than misleads. The caller owns the returned
             connection and closes it on every path.
     """
     if db_file is None:
         return None, None, None
     from shrinkray import db as _db
 
-    connection = _db.connect(db_file)
+    connection: sqlite3.Connection | None = None
     try:
+        connection = _db.connect(db_file)
         entry = _db.get_probe_entry(connection, key)
+    except (OSError, sqlite3.Error) as e:
+        # a damaged or unopenable metadata.db must not stop the job: probe
+        # uncached and write nothing to it (issue #507, the #486 rule)
+        if connection is not None:
+            connection.close()
+        log(f"The probe cache is unavailable ({e}); probing uncached.")
+        return None, None, None
     except BaseException:
         # the caller never received it: closing it is ours (issue #480)
-        connection.close()
+        if connection is not None:
+            connection.close()
         raise
     if entry is None:
         return None, None, connection
@@ -918,45 +929,54 @@ def check_chosen_crf_shrinks(
     # score. When every window's entry carries a size, the factor is the
     # total encoded over the total sample bytes (ab-av1's estimate over all
     # samples); when ANY window misses (pre-#314 cache rows, no database,
-    # cache bypass) the decision falls back to the single-window encode -
-    # a miss degrades to the old behaviour, never to a guess.
+    # cache bypass, a database that cannot be opened or read - issue #507)
+    # the decision falls back to the single-window encode - a miss degrades
+    # to the old behaviour, never to a guess.
     if db_file is not None and use_probe_cache:
         from shrinkray import db as _db
 
-        connection = _db.connect(db_file)
+        tool_versions = _tool_versions(handbrake)
+        keys = [
+            probe_cache_key(
+                movie,
+                offset,
+                sample_seconds,
+                chosen,
+                encoder,
+                probe_encoder_preset,
+                crop,
+                hdr,
+                encoder_threads,
+                tool_versions,
+                recipe.identifier(),
+            )
+            for _sample, offset in samples
+        ]
+        sizes: list[int] = []
+        connection: sqlite3.Connection | None = None
         try:
-            encoded_total = 0
-            sample_total = 0
-            complete = True
-            tool_versions = _tool_versions(handbrake)
-            for _index, (sample, offset) in enumerate(samples):
-                key = probe_cache_key(
-                    movie,
-                    offset,
-                    sample_seconds,
-                    chosen,
-                    encoder,
-                    probe_encoder_preset,
-                    crop,
-                    hdr,
-                    encoder_threads,
-                    tool_versions,
-                    recipe.identifier(),
-                )
+            connection = _db.connect(db_file)
+            for key in keys:
                 entry = _db.get_probe_entry(connection, key)
                 if entry is None or entry[1] is None:
-                    complete = False
                     break
-                encoded_total += entry[1]
-                sample_total += sample.stat().st_size
-            if complete and sample_total > 0:
+                sizes.append(entry[1])
+        except (OSError, sqlite3.Error) as e:
+            # only the database failures are caught here: a missing sample
+            # or binary still fails as itself, outside this block
+            log(f"The probe cache is unavailable ({e}); sizing from one window.")
+            sizes = []
+        finally:
+            if connection is not None:
+                connection.close()
+        if sizes and len(sizes) == len(samples):
+            sample_total = sum(sample.stat().st_size for sample, _offset in samples)
+            if sample_total > 0:
                 log(
                     f"size at chosen CRF {chosen}: all {len(samples)} probe "
                     "windows' encoded bytes reused (issue #314)"
                 )
-                return encoded_total / sample_total
-        finally:
-            connection.close()
+                return sum(sizes) / sample_total
     return estimate_size_factor(
         samples,
         workdir,
