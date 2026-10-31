@@ -112,15 +112,12 @@ class TestConsoleFormat(unittest.TestCase):
         constant test and the token pins read the constant, the shape probe
         passes the constant itself) while the product's console line
         reverted to whatever the literal says - the source read catches
-        exactly that rewire. The assertion is assertIn over the
-        comment-stripped source, not an exact line: a reformat of the call
-        must not fail the pin, and a commented-out wiring must not satisfy
-        it. The match is over the whitespace-NORMALIZED source and must END
-        at a delimiter: any call layout passes (a parenthesized value, a
-        wrapped argument list), while a restated alias
-        (format=CONSOLE_FORMAT_ALIAS), a concatenation (+ " |") or a
-        .format() call cannot satisfy the pin while rendering something
-        else.
+        exactly that rewire. The match is over the whitespace-NORMALIZED,
+        comment-stripped source (assertRegex) and must END at a delimiter:
+        any call layout passes (a parenthesized value, a wrapped argument
+        list), while a restated alias (format=CONSOLE_FORMAT_ALIAS), a
+        concatenation (+ " |") or a .format() call cannot satisfy the pin
+        while rendering something else.
         """
         source = (
             Path(__file__).resolve().parent.parent / "src" / "shrinkray" / "logger.py"
