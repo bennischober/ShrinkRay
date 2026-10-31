@@ -496,7 +496,7 @@ class TestDb(unittest.TestCase):
                 self.connection,
                 file_id,
                 "VMAF>95",
-                "x265",
+                "svt_av1",
                 1000,
                 500,
                 50.0,
@@ -515,7 +515,7 @@ class TestDb(unittest.TestCase):
             self.connection,
             file_id,
             "VMAF>95",
-            "x265",
+            "svt_av1",
             1000,
             300,
             70.0,
@@ -538,7 +538,7 @@ class TestDb(unittest.TestCase):
             self.connection,
             file_id,
             "VMAF>95",
-            "x265",
+            "svt_av1",
             1000,
             300,
             70.0,
@@ -571,7 +571,7 @@ class TestDb(unittest.TestCase):
             self.connection,
             file_id,
             "VMAF>95",
-            "x265",
+            "svt_av1",
             1000,
             300,
             70.0,
@@ -630,7 +630,7 @@ class TestDb(unittest.TestCase):
                     path=Path("D:/x/new.mkv"), mtime=99.0, size=5, name="new", category="Cat"
                 ),
             )
-            db.add_encode(self.connection, file_id, "VMAF>95", "x265", 5, 3, 40.0)
+            db.add_encode(self.connection, file_id, "VMAF>95", "svt_av1", 5, 3, 40.0)
             self.connection.commit()
             fresh = client.get("/api/library", headers={"If-None-Match": etag})
             self.assertEqual(fresh.status_code, 200)
@@ -668,8 +668,8 @@ class TestDb(unittest.TestCase):
                     category="Cat",
                 ),
             )
-            db.add_encode(self.connection, file_id, "VMAF>95", "x265", 1000, 300, 70.0)
-            db.add_encode(self.connection, file_id, "VMAF>90", "x265", 1000, 250, 75.0)
+            db.add_encode(self.connection, file_id, "VMAF>95", "svt_av1", 1000, 300, 70.0)
+            db.add_encode(self.connection, file_id, "VMAF>90", "svt_av1", 1000, 250, 75.0)
             self.connection.commit()
 
             app_module.state = AppState(Path(self.tmp.name) / "test.db")
@@ -701,7 +701,7 @@ class TestDb(unittest.TestCase):
                     self.connection,
                     file_id,
                     "VMAF>95",
-                    "x265",
+                    "svt_av1",
                     300,
                     150,
                     50.0,
@@ -723,7 +723,7 @@ class TestDb(unittest.TestCase):
                     self.connection,
                     child_id,
                     "VMAF>95",
-                    "x265",
+                    "svt_av1",
                     150,
                     80,
                     46.7,
@@ -756,7 +756,7 @@ class TestDb(unittest.TestCase):
                     estimated_size=450,
                     input_mtime=Path(movie_path).stat().st_mtime,
                     input_size=Path(movie_path).stat().st_size,
-                    encoder="x265",
+                    encoder="svt_av1",
                     encoder_preset="5",
                     target_vmaf=95.0,
                     crf_low=14,
@@ -790,7 +790,7 @@ class TestDb(unittest.TestCase):
                     estimated_size=None,
                     input_mtime=Path(movie_path).stat().st_mtime,
                     input_size=Path(movie_path).stat().st_size,
-                    encoder="x265",
+                    encoder="svt_av1",
                     encoder_preset="5",
                     target_vmaf=95.0,
                     crf_low=14,
@@ -928,7 +928,7 @@ class TestDb(unittest.TestCase):
             self.connection,
             file_id,
             "VMAF>95",
-            "x265",
+            "svt_av1",
             1000,
             300,
             70.0,
@@ -1045,7 +1045,7 @@ class TestDb(unittest.TestCase):
             )
 
             # a change re-validates the library in the next snapshot
-            db.add_encode(self.connection, file_id, "Fast 1080p30", "x265", 1, 1, 0.0)
+            db.add_encode(self.connection, file_id, "Fast 1080p30", "svt_av1", 1, 1, 0.0)
             self.connection.commit()
             third = client.get("/api/snapshot", headers={"If-None-Match": body["library_etag"]})
             body3 = third.json()
@@ -1220,7 +1220,7 @@ class TestDb(unittest.TestCase):
     def test_encode_history(self):
         record = self._record("D:/Movies/test.mkv")
         file_id = db.upsert_file(self.connection, record)
-        db.add_encode(self.connection, file_id, "Fast 1080p30", "x265", 1000, 400, 60.0)
+        db.add_encode(self.connection, file_id, "Fast 1080p30", "svt_av1", 1000, 400, 60.0)
 
         encodes = db.get_encodes_for_file(self.connection, file_id)
         self.assertEqual(len(encodes), 1)
@@ -1237,7 +1237,7 @@ class TestDb(unittest.TestCase):
             record2 = self._record(str(root / "b.mkv"))
             id1 = db.upsert_file(self.connection, record1)
             db.upsert_file(self.connection, record2)
-            db.add_encode(self.connection, id1, "p", "x265", 1, 1, 0.0)
+            db.add_encode(self.connection, id1, "p", "svt_av1", 1, 1, 0.0)
 
             # prune with the stored path strings (Path normalizes separators)
             existing = {str(root / "a.mkv")}
@@ -1318,7 +1318,7 @@ class TestDb(unittest.TestCase):
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
             # real encode recorded but output missing => not finished (must re-encode)
-            db.add_encode(self.connection, file_id, "VMAF>95", "x265", 100, 50, 50.0)
+            db.add_encode(self.connection, file_id, "VMAF>95", "svt_av1", 100, 50, 50.0)
             self.assertFalse(
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
@@ -1348,7 +1348,7 @@ class TestDb(unittest.TestCase):
             out_dir.mkdir()
             (out_dir / "movie.mkv").write_bytes(b"truncated debris")
             file_id = db.upsert_file(self.connection, self._record(str(movie)))
-            db.add_encode(self.connection, file_id, "VMAF>95", "x265", 1000, 500, 50.0)
+            db.add_encode(self.connection, file_id, "VMAF>95", "svt_av1", 1000, 500, 50.0)
             with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=False):
                 finished = service.finished_movies(self.connection, [movie], out_dir)
             self.assertEqual(finished, set())
@@ -1443,7 +1443,7 @@ class TestDb(unittest.TestCase):
                 output_size=400,
                 hdr=True,
                 # what the engine carries on an HDR result (the 10-bit switch)
-                encoder="x265_10bit",
+                encoder="svt_av1_10bit",
             )
             outcome = service.record_quality_results(
                 self.connection, movie, hdr_result, config_helper.Conf()
@@ -1451,7 +1451,7 @@ class TestDb(unittest.TestCase):
             self.assertTrue(outcome.encoded)
             row = self.connection.execute("SELECT preset, encoder FROM encodes").fetchone()
             self.assertEqual(row["preset"], "VMAF>94.5")
-            self.assertEqual(row["encoder"], "x265_10bit")
+            self.assertEqual(row["encoder"], "svt_av1_10bit")
 
     def test_records_config_encoder_for_non_hdr(self):
         """A non-HDR result records the config encoder (the default unchanged
@@ -1500,7 +1500,7 @@ class TestDb(unittest.TestCase):
                 self.connection,
                 file_id,
                 "VMAF>95",
-                "x265",
+                "svt_av1",
                 1000,
                 400,
                 60.0,
@@ -1550,7 +1550,7 @@ class TestDb(unittest.TestCase):
                 self.connection,
                 file_id,
                 "VMAF>95",
-                "x265",
+                "svt_av1",
                 1000,
                 400,
                 60.0,
@@ -2000,7 +2000,7 @@ class TestDb(unittest.TestCase):
                 self.connection,
                 file_id,
                 "VMAF>95",
-                "x265",
+                "svt_av1",
                 1000,
                 400,
                 60.0,
@@ -2036,9 +2036,9 @@ class TestDb(unittest.TestCase):
             root.mkdir()
             other.mkdir()
             id_inside = db.upsert_file(self.connection, self._record(str(root / "a.mkv")))
-            db.add_encode(self.connection, id_inside, "p", "x265", 1, 1, 0.0)
+            db.add_encode(self.connection, id_inside, "p", "svt_av1", 1, 1, 0.0)
             id_outside = db.upsert_file(self.connection, self._record(str(other / "b.mkv")))
-            db.add_encode(self.connection, id_outside, "p", "x265", 2, 1, 50.0)
+            db.add_encode(self.connection, id_outside, "p", "svt_av1", 2, 1, 50.0)
 
             # scan of root finds only a.mkv, scope limits pruning to that root
             existing = {str(root / "a.mkv")}
