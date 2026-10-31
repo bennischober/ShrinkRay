@@ -548,7 +548,7 @@ docker run --rm -v /srv/media:/media ghcr.io/bennischober/shrinkray:latest \
 See [docs/docker.md](docs/docker.md#one-shot-runs-no-server) for scratch space,
 permissions and what a stateless run records.
 
-Pin a release with the version tag (`ghcr.io/bennischober/shrinkray:v0.4.0`);
+Pin a release with the version tag (`ghcr.io/bennischober/shrinkray:v0.6.0`);
 `docker inspect` on the image shows the version label without starting it.
 The image runs every command as the user you pass in `PUID`/`PGID` (default
 1000/1000, never root; Unraid: 99/100 — see
@@ -590,6 +590,8 @@ uv run mypy            # static type checking
 ```
 
 Releases are automated: push a tag, the workflow checks, builds and publishes.
+The release cut that precedes the tag bumps the version in `pyproject.toml`, and
+the image pin above must name the same version - the test suite fails until it does.
 
 ```bash
 git tag v0.3.0
