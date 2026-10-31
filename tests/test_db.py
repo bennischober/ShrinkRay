@@ -75,6 +75,66 @@ class TestDb(unittest.TestCase):
         with self.assertRaises(sqlite3.ProgrammingError, msg="the connection was left open"):
             opened[0].execute("SELECT 1")
 
+    def test_a_failed_queue_setup_closes_the_connection(self) -> None:
+        """Issue #487: a failure in AppState.__init__ after db.connect (here the
+        JobQueue constructor) must close the connection before re-raising - no
+        caller holds the AppState to call shutdown() on, so the constructor
+        owns the cleanup."""
+        from shrinkray.server.app import AppState
+
+        opened: list[sqlite3.Connection] = []
+        real_connect = db.connect
+
+        def recording_connect(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            opened.append(connection)
+            return connection
+
+        db_file = Path(self.tmp.name) / "appstate-queue.db"
+        with (
+            patch("shrinkray.db.connect", side_effect=recording_connect),
+            patch(
+                "shrinkray.server.app.JobQueue",
+                side_effect=RuntimeError("queue setup failed"),
+            ),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            AppState(db_file)
+        # the ORIGINAL exception, re-raised unchanged (acceptance 1)
+        self.assertEqual(str(ctx.exception), "queue setup failed")
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(sqlite3.ProgrammingError, msg="the connection was left open"):
+            opened[0].execute("SELECT 1")
+
+    def test_a_failed_stale_job_recovery_closes_the_connection(self) -> None:
+        """Issue #487: the other post-connect failure seam, _recover_stale_jobs
+        (already holding the db lock), must leave the connection closed too."""
+        from shrinkray.server.app import AppState
+
+        opened: list[sqlite3.Connection] = []
+        real_connect = db.connect
+
+        def recording_connect(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            opened.append(connection)
+            return connection
+
+        db_file = Path(self.tmp.name) / "appstate-recovery.db"
+        with (
+            patch("shrinkray.db.connect", side_effect=recording_connect),
+            patch.object(
+                AppState,
+                "_recover_stale_jobs",
+                side_effect=RuntimeError("recovery failed"),
+            ),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            AppState(db_file)
+        self.assertEqual(str(ctx.exception), "recovery failed")
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(sqlite3.ProgrammingError, msg="the connection was left open"):
+            opened[0].execute("SELECT 1")
+
     def test_migration_v1_to_v2(self):
         # simulate a v1 database: current schema without the quality columns
 
