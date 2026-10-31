@@ -71,7 +71,7 @@ encode is quality-measured — there is no fixed-preset mode:
 > **Fix quality, not bitrate.** For every movie, short samples are probed at
 > different CRF values, each probe is scored with [VMAF](https://github.com/Netflix/vmaf)
 > (Netflix's Emmy-winning perceptual quality metric), and a search finds
-> the *largest* CRF that still meets the required VMAF — then the movie is encoded
+> the *largest* CRF (or one step below it) that still meets the required VMAF — then the movie is encoded
 > once with exactly that setting.
 
 Nothing is guessed: every decision is measured, and movies that cannot profit
@@ -238,10 +238,13 @@ other services keep their cores.
    common to every window) decides instead — including, today, when the pass
    *measured* a full-frame stretch, which can crop a film whose aspect ratio
    changes ([#525](https://github.com/bennischober/ShrinkRay/issues/525)).
-4. **Quality search** — one 10-second sample per 10 minutes of runtime
-   (`quality.sample_every`) is encoded at a few CRF values and scored with VMAF
-   against its source; the search interpolates between a passing and a failing
-   probe until it finds the largest CRF that still meets the required VMAF.
+4. **Quality search** — 10-second samples are encoded at a few CRF values and
+   scored with VMAF against their source: 3 samples for `encode` and `plan`, one
+   per 10 minutes of runtime in the resident app (the modes differ today —
+   [#526](https://github.com/bennischober/ShrinkRay/issues/526)). The search
+   interpolates between a passing and a failing probe and settles on the largest
+   CRF that meets the required VMAF, or one step below it when an early stop
+   saves the last probe.
 5. **Encode & verify** — the full movie is encoded once with the winning CRF;
    the output duration is verified against the source to catch interrupted
    encodes.
@@ -274,11 +277,11 @@ removed it: an unmeasured encode can take a library file's path).
 | `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `3`; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows for the sampled fallback detector (more samples can only shrink the crop) |
-| `--sample-every S` | seconds of runtime per probe window (default: `quality.sample_every`, 600) |
-| `--sample-count N` | a fixed number of probe windows, overriding `--sample-every` |
+| `--sample-count N` | the number of probe windows (default: `quality.sample_count`, 3) |
+| `--sample-every S` | seconds of runtime per probe window — today shadowed by the always-set sample count, so it has no effect on `encode` ([#526](https://github.com/bennischober/ShrinkRay/issues/526)) |
 | `--verify` | after each encode, measure VMAF on the FULL output against the source (slow; ground truth beyond the samples) |
 | `--replan` | ignore stored plans and re-probe every movie |
-| `--threads N` | per-encode thread cap (0 = all cores; default: `handbrake.max_threads`) |
+| `--threads N` | per-encode thread cap; 0 or omitted uses `handbrake.max_threads`, whose 0 means all cores |
 | `--db PATH` | keep a database (scan cache, plans, history); omitted, the run is stateless |
 | `--config PATH` | the config.json to use |
 | `--dry-run` | show what would be encoded, without encoding |
