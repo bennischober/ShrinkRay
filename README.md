@@ -266,7 +266,8 @@ uv run shrinkray encode 'D:\Movies' \
 ```
 
 Every encode is **quality-measured**: a VMAF-driven CRF search per movie picks
-the largest CRF that keeps perceptual quality, bars are detected and removed,
+the largest CRF that meets the required VMAF (or one step below it, when an early stop
+saves the last probe), bars are detected and removed,
 and a grown output is refused. There is no fixed-preset mode (issue #202
 removed it: an unmeasured encode can take a library file's path).
 
@@ -415,7 +416,7 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 | 3 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
 | 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
 | 5 | Bar detection | Which bars does every sustained segment share? (sampled fallback: every sampled window, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
-| 6 | CRF search | Largest CRF that meets the VMAF target? | 96 | skip — target unreachable |
+| 6 | CRF search | Largest CRF (or one step below it) that meets the VMAF target? | 96 | skip — target unreachable |
 | 7 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, with the crop | — | — |
 
