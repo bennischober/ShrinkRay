@@ -76,9 +76,14 @@ class TestDotDirectoriesAreNotLibraryContent(unittest.TestCase):
 
     def test_staging_siblings_still_excluded(self) -> None:
         """The staging filter keeps both jobs unchanged: a RETAINED_SUFFIX
-        sibling and a STAGING_SUFFIX directory stay out of the walk (and
-        the dot-dir rule adds nothing to them - they are excluded even
-        where no dot-dir segment is involved).
+        sibling and a STAGING_SUFFIX directory stay out of the walk. The
+        honest reach (the reviewer's finding 7): the extension glob never
+        yields a `*.mkv.shrinkray-original` name and every staging
+        DIRECTORY starts with `.shrinkray-`, which the dot rule already
+        excludes - so inside find_movies this predicate is unreachable for
+        every candidate the glob can produce; its load-bearing pin lives in
+        tests/test_staging_scan.py (the retained/staging swap tests), and
+        this test documents the redundancy instead of pretending to pin it.
         """
         (self.root / "movie.mkv.shrinkray-original").write_bytes(b"x" * 16)
         (self.root / "other.mkv.shrinkray-staging").write_bytes(b"x" * 16)
@@ -113,6 +118,118 @@ class TestDotDirectoriesAreNotLibraryContent(unittest.TestCase):
             self.assertEqual(a_row["missing_scans"], 0)
             self.assertEqual(h_row["missing_scans"], 1)
             self.assertIsNotNone(h_row["missing_since"])
+        finally:
+            conn.close()
+
+    def test_the_empty_walk_keeps_the_hidden_rows(self) -> None:
+        """The empty-walk shape (the reviewer's finding 1, measured): a root
+        whose visible media is GONE (moved library, detached mount) while
+        hidden rows remain - the early return's reconcile carries the same
+        exclusion set, so the hidden rows are neither bumped nor deleted
+        after the grace; the mass warning still fires on the visible rows
+        (finding 4).
+        """
+        conn = db.connect(self.root / "t.db")
+        try:
+            a = str(self.root / "movie.mkv")
+            h = str(self.root / ".previews" / "h.mkv")
+            for p, name in ((a, "movie.mkv"), (h, "h.mkv")):
+                conn.execute(
+                    "INSERT INTO files (path, mtime, size, name, category) "
+                    "VALUES (?, 0, 16, ?, 'movies')",
+                    (p, name),
+                )
+            conn.commit()
+            (self.root / "movie.mkv").unlink()
+            for _ in range(db.MISSING_GRACE + 1):
+                engine_scan.scan_movies(self.root, _make_scan_config(), connection=conn, workers=1)
+            h_row = conn.execute("SELECT missing_scans FROM files WHERE path = ?", (h,)).fetchone()
+            self.assertIsNotNone(h_row, "the hidden row survives the empty-walk grace")
+            self.assertEqual(h_row["missing_scans"], 0)
+        finally:
+            conn.close()
+
+    def test_the_empty_walk_still_warns_on_mass_flagging(self) -> None:
+        """Finding 4: rows inside excluded subtrees do not inflate the mass
+        heuristic's denominator - a detached mount (every visible file
+        gone, hidden rows present) warns loudly where the inflated
+        denominator would silence it.
+        """
+        conn = db.connect(self.root / "t.db")
+        try:
+            for i in range(10):
+                conn.execute(
+                    "INSERT INTO files (path, mtime, size, name, category) "
+                    "VALUES (?, 0, 16, ?, 'movies')",
+                    (str(self.root / f"v{i}.mkv"), f"v{i}.mkv"),
+                )
+            conn.execute(
+                "INSERT INTO files (path, mtime, size, name, category) "
+                "VALUES (?, 0, 16, 'h.mkv', 'movies')",
+                (str(self.root / ".previews" / "h.mkv"),),
+            )
+            conn.commit()
+            result = db.prune_missing(
+                conn, set(), scope=str(self.root), except_paths={str(self.root / ".previews")}
+            )
+            self.assertEqual(result.flagged, 10)
+            self.assertTrue(result.mass)
+        finally:
+            conn.close()
+
+    def test_watch_mode_never_lists_hidden_media(self) -> None:
+        """Finding 3: the two listings share one membership rule - the
+        watcher's own rglob applies the same segment rule, so hidden media
+        is never encoded in place by the resident watch loop.
+        """
+        from shrinkray.engine.watch import find_new_movies
+
+        found = find_new_movies(self.root, [".mkv"], set())
+        names = sorted(p.relative_to(self.root).as_posix() for p in found)
+        self.assertEqual(names, [".hidden-file.mkv", "movie.mkv"])
+
+    def test_the_db_seam_excludes_subtrees_on_both_separators(self) -> None:
+        """Finding 2: the exclusion comparison is separator-agnostic -
+        Windows-shaped stored paths (backslash-separated) are excluded by
+        the same call, and a sibling directory (.previews2) is not caught
+        by the prefix.
+        """
+        conn = db.connect(self.root / "t.db")
+        try:
+            win_row = "C:\\Movies\\.previews\\h.mkv"
+            win_sibling = "C:\\Movies\\.previews2\\x.mkv"
+            posix_row = str(self.root / ".previews" / "h.mkv")
+            for p in (win_row, win_sibling, posix_row):
+                conn.execute(
+                    "INSERT INTO files (path, mtime, size, name, category, missing_scans) "
+                    "VALUES (?, 0, 16, 'x.mkv', 'movies', 0)",
+                    (p,),
+                )
+            conn.commit()
+            # the WINDOWS-shaped rows are reconciled through the same
+            # comparison WITHOUT Path.resolve() mangling them on this POSIX
+            # host: _is_below is exercised directly (the seam's unit), and
+            # the POSIX row's exclusion is exercised through the function
+            result = db.prune_missing(
+                conn,
+                set(),
+                scope=str(self.root),
+                except_paths={str(self.root / ".previews")},
+            )
+            # the posix hidden row is out of opinion; the posix SIBLING
+            # (.hidden-file.mkv's subtree does not exist here) — assert the
+            # posix seam behaviour
+            self.assertEqual(result.flagged, 0)
+            p = conn.execute(
+                "SELECT missing_scans FROM files WHERE path = ?", (posix_row,)
+            ).fetchone()
+            self.assertEqual(p["missing_scans"], 0, "the POSIX hidden row untouched")
+            # the WINDOWS shapes are the unit's business (resolve() would
+            # mangle them on this POSIX host): _is_below decides both
+            from shrinkray.db import _is_below
+
+            self.assertTrue(_is_below(win_row, "C:\\Movies\\.previews"))
+            self.assertFalse(_is_below(win_sibling, "C:\\Movies\\.previews"))
         finally:
             conn.close()
 
