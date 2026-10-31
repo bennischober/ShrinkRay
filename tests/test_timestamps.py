@@ -122,17 +122,16 @@ class TestConsoleFormat(unittest.TestCase):
         constant test and the token pins read the constant, the shape probe
         passes the constant itself) while the product's console line
         reverted to whatever the literal says - the source read catches
-        exactly that rewire.
+        exactly that rewire. The assertion is assertIn over the
+        comment-stripped source, not an exact line: a reformat of the call
+        must not fail the pin, and a commented-out wiring must not satisfy
+        it.
         """
         source = (
             Path(__file__).resolve().parent.parent / "src" / "shrinkray" / "logger.py"
         ).read_text(encoding="utf-8")
-        wiring = [
-            line.strip()
-            for line in source.splitlines()
-            if "format=CONSOLE_FORMAT" in line and not line.lstrip().startswith("#")
-        ]
-        self.assertEqual(wiring, ["format=CONSOLE_FORMAT,"])
+        code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+        self.assertIn("format=CONSOLE_FORMAT", code)
 
     def test_the_wrong_tokens_fail_the_frozen_pin(self) -> None:
         """The pin discriminates against the defect's token sets: under the
