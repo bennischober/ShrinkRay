@@ -135,7 +135,7 @@ components:
 
 **Creative North Star: "The ShrinkRay Console"**
 
-The console is a home-lab operator surface: a shell discipline borrowed from home-automation dashboards meets a media library's recognition, pointed at one measured movie library. Every domain is one click away in the sidebar rail; the overview answers "what needs me?" in five seconds (failures, missing files, what the last runs reclaimed, where work stands); the library is *recognized* at a glance in the poster grid and *operated* in bulk through the table and selection. The world is a deliberate 180° from round 1 (the Drafting Table sheet): the rejected single-page document arrangement is replaced by a console shell, and the previously rejected costume clichés are re-aimed — this is a console by structure and restraint, never by gaming-RGB, glow, or terminal cosplay.
+The console is a home-lab operator surface: a shell discipline borrowed from home-automation dashboards meets a media library's recognition, pointed at one measured movie library. Every domain is one click away in the sidebar rail; the overview answers "what needs me?" in five seconds (failures, missing files, what the last runs reclaimed, where work stands); the library is *recognized* at a glance in the table (the poster-grid experiment was demoted away after round 3) and *operated* in bulk through the table and selection. The world is a deliberate 180° from round 1 (the Drafting Table sheet): the rejected single-page document arrangement is replaced by a console shell, and the previously rejected costume clichés are re-aimed — this is a console by structure and restraint, never by gaming-RGB, glow, or terminal cosplay.
 
 The system is **dual-theme by token, not by layout**: a dark cinema ground (`#101216`, the default) and a light working bench (`#eef0f2`), switched by `[data-theme]` on `<html>` and persisted. Both themes render the *same* structure — components never branch on theme; they only consume tokens. Color stays meaning-first: teal = measured/confirmed/selected, amber = work in progress, red = failure/destruction only. State is still expressed as **density** — solid fill means done, hatching means in progress, an empty swatch means untouched, a dashed outline means missing.
 
@@ -176,13 +176,13 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 - **Rail** (`--rail`, dark `#0b0d10` / light `#dfe3e7`): The sidebar rail's darker ground — one step below the page, so navigation reads as chrome.
 - **Panel** (`--panel`, dark `#16191e` / light `#f8f9fa`): Cards, sheets, tables, chips, buttons at rest.
 - **Raised Panel** (`--panel-raised`, dark `#1b1f25` / light `#ffffff`): Hover/active cards and the default button fill — one step up from panel.
-- **Active Panel** (`--panel-active`, dark `#1c2a28` / light `#e2f0ee`): Teal-tinted ground for "under work" — active rail items, the armed bulk bar, selected poster cards.
+- **Active Panel** (`--panel-active`, dark `#1c2a28` / light `#e2f0ee`): Teal-tinted ground for "under work" — active rail items, the armed bulk bar, selected table rows.
 - **Seam** (`--seam`, dark `#262c34` / light `#c9ced3`): The hairline workhorse — container borders, control borders, dividers, scrollbar thumbs.
 - **Row Line** (`--row-line`, dark `#1f242b` / light `#dde1e4`): Inner rules between table rows and panel sections (lighter than seam, so structure reads inside a panel).
 - **Ink** (`--ink`, dark `#e6e9ec` / light `#1e2328`): Primary text.
 - **Dim Ink** (`--ink-dim`, dark `#9aa3ad` / light `#5b6470`): Secondary text, legend labels, quiet states, rail labels at rest.
 - **Faint Ink** (`--ink-faint`, dark `#838b93` / light `#565d66`): Disabled/ghost text, placeholders, job IDs. Chosen as the contrast floor in both themes. (Round-6: the light value darkened from `#6d757d` — it measured 3.62:1 on the light rail and 4.09:1 on the ground, below the 4.5:1 floor; `#565d66` clears it on every light ground while staying lighter than `--ink-dim` on panels.)
-- **Poster Ground / Poster Line** (`--poster-ground` dark `#1a1e24` / light `#ffffff`; `--poster-line` dark `#2a3138` / light `#c9ced3`): The typographic poster area of library cards and its bottom rule.
+- **Poster Ground / Poster Line** (`--poster-ground` dark `#1a1e24` / light `#ffffff`; `--poster-line` dark `#2a3138` / light `#c9ced3`): RESERVED with the poster spec (the typographic poster area of library cards and its bottom rule) — no component consumes these tokens today (the grid was demoted away; the catalog is a table).
 - **Row Alt** (`--row-alt`, dark `#14171b` / light `#f1f3f5`): Defined in `tokens.css` but currently unreferenced — tables separate rows with hairline rules, not zebra fills. Reserved; do not reach for it casually.
 
 ### Named Rules
@@ -200,18 +200,18 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 **Body Font:** IBM Plex Sans (same family — there is no separate display face)
 **Label/Mono Font:** IBM Plex Mono (self-hosted woff2, 400 and 500–600; fallbacks `Consolas, ui-monospace, monospace`)
 
-**Character:** An operator-console pairing. IBM Plex Sans speaks — page titles, labels, prose, poster titles — with labels in small tracked caps like equipment annotations; IBM Plex Mono measures — every byte, percent, CRF and VMAF score in tabular numerals so columns align like an instrument readout. Faces are self-hosted because a localhost tool must not depend on a CDN.
+**Character:** An operator-console pairing. IBM Plex Sans speaks — page titles, labels, prose — with labels in small tracked caps like equipment annotations; IBM Plex Mono measures — every byte, percent, CRF and VMAF score in tabular numerals so columns align like an instrument readout. Faces are self-hosted because a localhost tool must not depend on a CDN.
 
 ### Hierarchy
 - **Hero** (700, 22px, ~1.2): The movie-detail page title and the stat values' scale mate — the largest type in the console, used once per view.
 - **Page Title** (700, 19px, `--fs-page`): The `h2` heading of every page (Overview, Library, Jobs, Config), over a legend annotation line.
 - **Stat** (600, 22px, mono, tabular): The big number in overview stat cards — count, GB, mean VMAF, hours.
 - **Brand** (700, 16px, 3px letter-spacing, uppercase by content): `SHRINKRAY` in the rail, over the `LIBRARY CONSOLE` legend line.
-- **Poster Title** (700, 17px, 0.3px tracking, 1.3 line-height, dim ink): The typographic poster — the movie name set large and centered on the card's 2:3 field, clamped to 4 lines.
+- **Poster Title** (700, 17px, 0.3px tracking, 1.3 line-height, dim ink): RESERVED with the poster spec — the movie name set large and centered on the card's 2:3 field, clamped to 4 lines (no poster component renders today).
 - **Body** (400, 13px, 1.45): General UI text, empty-state sentences, rail labels (13px/500).
 - **Label** (400, 10.5px, 1.4px letter-spacing, uppercase — `.legend`): The annotation voice: figure headings, column headers, button text, key/value keys, badge counts' neighbors, the page-head annotation. Always dim or body ink; accent-colored only where meaning applies.
 - **Data** (400, 12px, `.mono`, `font-variant-numeric: tabular-nums`): All measurements — sizes in GB, percents, resolutions, CRF/VMAF, job IDs, elapsed times. **Data Strong** at 600 for names, selected counts, and emphasized values.
-- **Micro** (10px–9.5px): in-table HDR tags and job action buttons (10px). (The poster corner tag was 9.5px with 1px tracking — no poster component renders today; the size is reserved with the poster tokens.)
+- **Micro** (10px–9.5px): in-table HDR tags (10px) and job action buttons (`var(--fs-data)` = 12px at `JobsPage.svelte`'s rows). (The poster corner tag was 9.5px with 1px tracking — no poster component renders today; the size is reserved with the poster tokens.)
 
 ### Named Rules
 **The Two Voices Rule.** IBM Plex Sans talks, IBM Plex Mono measures. Anything that is a number, path, or machine value is mono tabular; anything addressed to the human is IBM Plex Sans. Never set measurements in the sans.
@@ -233,9 +233,9 @@ Pages are flex columns with a 12–14px gap sharing one anatomy: **page head** (
 
 The **table view**: wrapped in a seam-bordered scroll area, sticky header (`z-index: 1`, panel fill), header cells `8px 12px` in legend voice, body cells `7px 12px` separated by `--row-line`, checkbox column 34px, numeric columns right-aligned, name column max 340px with ellipsis. Selected rows fill with `--hatch-select`; the in-work row fills with `--hatch-progress`.
 
-Spacing clusters on the token steps (6/10/14/18/26px) plus in-context values: bulk bar `8px 14px`, stat cards `12px 14px`, panel heads `9px 14px`, table cells `7–8px 12px`, chips `2px 8px`, poster meta `9px 10px 10px`. Density is compact but airy — hairlines separate, padding never crowds.
+Spacing clusters on the token steps (6/10/14/18/26px) plus in-context values: bulk bar `8px 14px`, stat cards `12px 14px`, panel heads `9px 14px`, table cells `7–8px 12px`, chips `2px 8px`. (The poster meta's `9px 10px 10px` is reserved with the poster spec.) Density is compact but airy — hairlines separate, padding never crowds.
 
-Responsive: below **900px** the rail folds into a top bar (nav goes horizontal with scroll, the active item gains a 2px teal inset underline, main padding drops to 14px, the confirmation strip spans full width); the movie page's two-column fact panels stack below **820px**. There are no other breakpoints — this is a desktop console.
+Responsive: below **900px** the rail folds into a top bar (nav goes horizontal with scroll, the active item gains a 2px teal inset underline, main padding drops to 14px); the movie page's two-column fact panels stack below **820px**. (The confirmation strip's full-width rule is reserved with the ceremony spec - no confirmation strip renders today.) There are no other breakpoints — this is a desktop console.
 
 ### Named Rules
 **The One-Click-Away Rule.** Every domain lives in the rail and is reachable in one click from anywhere; the rail's badges surface counts (library size, running jobs, failures) so navigation carries status, not just labels.
@@ -249,7 +249,7 @@ Responsive: below **900px** the rail folds into a top bar (nav goes horizontal w
 - **Tonal layering**: rail → ground → panel → panel-raised, plus the teal-tinted `--panel-active` for "under work" — a lightness ladder, not a lighting model.
 - **Line weight**: 1px hairline seams for containers and controls; heavier *meaning* borders in accent colors (teal on the armed bulk bar, amber on in-work cards, red on confirmations).
 - **Density hatching**: the four repeating-linear-gradient hatch patterns (see Shapes) fill regions to signal state.
-- **Overlay scrim**: the deletion confirmation sits on `rgba(0, 0, 0, 0.5)` at `z-index: 60`; the sticky table header holds `z-index: 1`.
+- **Overlay scrim**: RESERVED with the ceremony spec (the deletion confirmation would sit on `rgba(0, 0, 0, 0.5)` at `z-index: 60`; no confirmation surface renders today). The sticky table header holds `z-index: 1`.
 
 ### Shadow Vocabulary
 None. Do not introduce box-shadows, glows or blur. The single sanctioned exception is the **inset rule**: below 900px the active rail item marks itself with `box-shadow: inset 0 -2px 0 var(--teal)` — an underline drawn as a rule, not a shadow cast.
@@ -265,7 +265,7 @@ The form language is small, consistent console chrome. Corners are **4px** (`--r
   - `--hatch-work` — neutral grey at 18% alpha: the empty progress-trace track.
   - `--hatch-progress` — amber at 22% alpha: running rows, `IN WORK` chips, the jobs-log trace fill (terminated by a 2px amber right edge).
   - `--hatch-skip` — amber at 18% alpha, vertical 90°, 6px/6px: skipped-state chips (deliberately coarser so skip reads differently from progress).
-  - `--hatch-select` — teal glow: selected rows, `PLANNED` chips, selected poster cards.
+  - `--hatch-select` — teal glow: selected rows, `PLANNED` chips.
   - Low-alpha accent hatches (6–8%) also tint failure/error strips and the running overview band.
 - **Dashed borders mean "not finished / not available"**: the jobs-log's empty strips and the overview's quiet strip, plus the missing chip's dashed swatch. A dashed seam is an absence — never a style accent.
 - **Path truncation**: long paths use `direction: rtl` so the *tail* of the path stays visible — the folder and file name are the information.
@@ -366,8 +366,8 @@ Two tiers, one discipline (the snapshot's own docstring is the contract):
 - **Don't** apply red to anything but failure/irreversible destruction, amber to anything but progress/warning, green to anything but done/keep.
 - **Don't** branch a component on theme or hardcode a theme's hex — one structure, two grounds.
 - **Don't** reintroduce the round-1 failures: no decorative empty figures (empty states are honest text in dashed panels), no exploding category-chip rows (filter with the select), no work area below its list, no settings buried off-page (config is a first-class page with a rail slot).
-- **Don't** dress the console in media-server or terminal costume — no poster artwork, no gaming-RGB, no CRT/scanline effects; recognition comes from the typographic poster grid, not imagery.
-- **Don't** round corners beyond the 4px chrome / 2px chip radii, or introduce gradients beyond the poster field and hatch patterns.
+- **Don't** dress the console in media-server or terminal costume — no poster artwork, no gaming-RGB, no CRT/scanline effects; recognition comes from the typographic table (the poster-grid experiment was demoted away; the reserved spec keeps the typographic principle).
+- **Don't** round corners beyond the 4px chrome / 2px chip radii, or introduce gradients beyond the hatch patterns (the poster field's gradient is reserved with the poster spec).
 - **Don't** round numbers into vagueness or spin a bad result — growth prints "+X% larger" in red, and a real 43 MB win never prints as "−0.0 GB (0%)"; sub-1 GB reclaimed reads in MB, a sub-1% share prints "<1%", and an extrapolated estimate names its sample basis.
 
 ## Accessibility
