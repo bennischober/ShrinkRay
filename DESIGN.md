@@ -211,7 +211,7 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 - **Body** (400, 13px, 1.45): General UI text, empty-state sentences, rail labels (13px/500).
 - **Label** (400, 10.5px, 1.4px letter-spacing, uppercase — `.legend`): The annotation voice: figure headings, column headers, button text, key/value keys, badge counts' neighbors, the page-head annotation. Always dim or body ink; accent-colored only where meaning applies.
 - **Data** (400, 12px, `.mono`, `font-variant-numeric: tabular-nums`): All measurements — sizes in GB, percents, resolutions, CRF/VMAF, job IDs, elapsed times. **Data Strong** at 600 for names, selected counts, and emphasized values.
-- **Micro** (10px): in-table HDR tags and job action buttons (`var(--fs-data)` = 12px at `JobsPage.svelte`'s rows). (The poster corner tag was 9.5px with 1px tracking — no poster component renders today; the size is reserved with the poster tokens.)
+- **Micro** (10px): the in-table HDR tag (`LibraryPage.svelte:467`'s 10px) and the poster corner tag (9.5px, 1px tracking — reserved). Job action buttons read at the data size (`var(--fs-data)` = 12px, `tokens.css:102`, applied at `JobsPage.svelte:306`) — interactive text sits at data size by the a11y pass, not at micro.(The poster corner tag was 9.5px with 1px tracking — no poster component renders today; the size is reserved with the poster tokens.)
 
 ### Named Rules
 **The Two Voices Rule.** IBM Plex Sans talks, IBM Plex Mono measures. Anything that is a number, path, or machine value is mono tabular; anything addressed to the human is IBM Plex Sans. Never set measurements in the sans.
