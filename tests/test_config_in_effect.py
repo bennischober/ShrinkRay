@@ -16,8 +16,8 @@ from fastapi.testclient import TestClient
 from shrinkray import config as config_module
 from shrinkray.config import reset_config
 from shrinkray.server import app as app_module
-from shrinkray.server.app import app as fast_app
 from shrinkray.server.app import AppState
+from shrinkray.server.app import app as fast_app
 
 
 class _ConfigCase(unittest.TestCase):

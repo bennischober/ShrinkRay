@@ -759,7 +759,6 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
     )
     from shrinkray import config as config_module
-    from shrinkray.tools.process import rss_mib
 
     rss = rss_mib()
     return {
