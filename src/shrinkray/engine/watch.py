@@ -55,12 +55,12 @@ from shrinkray.tools.process import Cancelled
 # documented operator surface, and $SHRINKRAY_SMOKE, which no product module
 # reads).
 #
-# The guard is TOTAL (review finding 1): a value that `float()` accepts but that
-# is not a usable duration — `nan`, `inf`, or a negative — must fall back to the
-# default, because `STABLE_MIN_AGE = -5` would make `is_stable()` answer True
-# for a file still being written (the exact #437 defect this witness exists to
-# prevent), and `nan`/`inf`/negative make `time.sleep`/`st_mtime` arithmetic
-# raise where no caller expects it.
+# The guard is TOTAL (review findings 1 and 2): a value that `float()` accepts
+# but that is not a usable duration — `nan`, `inf`, negative, or too large for
+# `time.sleep` — must fall back to the default, because `STABLE_MIN_AGE = -5`
+# would make `is_stable()` answer True for a file still being written (the exact
+# #437 defect this witness exists to prevent), and `nan`/`inf`/negative/1e10
+# make `time.sleep`/`st_mtime` arithmetic raise where no caller expects it.
 def _duration_env(var: str, default: float) -> float:
     """Reads a non-negative, finite duration from the environment.
 
@@ -78,8 +78,12 @@ def _duration_env(var: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         return default
-    # `float()` accepts nan/inf/negatives; a duration must be finite and >= 0
-    if not math.isfinite(value) or value < 0:
+    # `float()` accepts nan/inf/negatives; a duration must be finite, >= 0, and
+    # small enough that `time.sleep`/`st_mtime` arithmetic cannot overflow
+    # (1e10 passes isfinite and overflows sleep — round-2 review finding 1).
+    # A day is far past any real interval; larger values are a mistake or an
+    # attempt to disable the witness, and fall back to the default.
+    if not math.isfinite(value) or value < 0 or value > 86400.0:
         return default
     return value
 

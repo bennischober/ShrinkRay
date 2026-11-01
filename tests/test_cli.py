@@ -1378,3 +1378,29 @@ class TestStartupBacklog(unittest.TestCase):
         state = self._state()
         self.assertEqual(app_module.auto_backlog(state, [], enabled=True), [])
         self.assertFalse(state.queue.enqueue.called)
+
+
+class TestDurationEnvGuard(unittest.TestCase):
+    """`_duration_env`'s guard is total (issue #537's review): every
+    `float()`-accepted non-duration - nan, inf, negative, too large for
+    time.sleep, garbage - falls back to the default; a valid override wins.
+    The SIGHUP test depends on the `0` case; the resident watcher's safety
+    depends on the -5 case never reaching is_stable."""
+
+    def test_every_non_duration_falls_back_to_the_default(self) -> None:
+        from shrinkray.engine.watch import _duration_env
+
+        for raw in ("nan", "inf", "-inf", "-5", "1e10", "banana", ""):
+            with mock.patch.dict(os.environ, {"X": raw}):
+                self.assertEqual(
+                    _duration_env("X", 60.0),
+                    60.0,
+                    f"{raw!r} must fall back to the default",
+                )
+
+    def test_a_valid_override_wins(self) -> None:
+        from shrinkray.engine.watch import _duration_env
+
+        for raw, want in (("0", 0.0), ("0.5", 0.5), ("86400", 86400.0)):
+            with mock.patch.dict(os.environ, {"X": raw}):
+                self.assertEqual(_duration_env("X", 60.0), want)
