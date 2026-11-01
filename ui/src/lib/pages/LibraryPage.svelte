@@ -155,7 +155,7 @@
     <p class="legend">{filtered.length} OF {movies.length} TITLES · TARGET VMAF {targetVmaf}</p>
   </header>
 
-  <!-- ══ toolbar: search + category + view toggle + scan ══ -->
+  <!-- ══ toolbar: search + category + decision-state (the #539 demotion: no view toggle, no scan control) ══ -->
   <div class="toolbar">
     <input
       class="search mono"
