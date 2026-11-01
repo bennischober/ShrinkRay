@@ -360,6 +360,10 @@ class TestStatusShowsConfigError(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {}, clear=False)
         self.env.start()
         os.environ.pop(app_module.AUTH_TOKEN_ENV, None)
+        # finding 6 of issue #541: the dev image exports SHRINKRAY_CONFIG, and
+        # the route resolves it ahead of the app's own db directory, so an
+        # ambient value would redirect every test here at another file
+        os.environ.pop(CONFIG_ENV_VAR, None)
         app_module.state = AppState(Path(self.tmp.name) / "test.db")
 
     def tearDown(self) -> None:
@@ -388,17 +392,22 @@ class TestStatusShowsConfigError(unittest.TestCase):
         self.assertIn("config_error?: string | null", (REPO / "ui/src/lib/api.ts").read_text())
 
     def test_a_config_that_does_not_parse_says_why_not_500(self) -> None:
-        """A config.json that exists but does not parse (a half-written or
-        hand-mangled edit) must not surface as an opaque 500 body: the strip
-        gets the reason, the same honesty refresh_config() keeps in
-        config_error for /api/status (issue #535)."""
+        """A config.json that exists but does not parse must not surface as an
+        opaque 500 body (issue #535), and since #541 the route serves the
+        loader's in-effect settings plus the reason instead of parsing at all:
+        200, the last-good values, and `config_error` set."""
         client = TestClient(fast_app)
-        (Path(self.tmp.name) / "config.json").write_text("{ not json", encoding="utf-8")
+        path = Path(self.tmp.name) / "config.json"
+        path.write_text('{"quality": {"target_vmaf": 1}}'.replace("vmaf", "vmaf"), encoding="utf-8")
+        reset_config()
+        config_module.load_config(config_file=path)
+        path.write_text("{ not json", encoding="utf-8")
+        config_module.refresh_config()
+
         response = client.get("/api/config")
-        self.assertEqual(response.status_code, 500)
-        self.assertIn("could not be read", response.json()["detail"])
-        self.assertIn("config.json", response.json()["detail"])
-        self.assertIn("Expecting", response.json()["detail"])
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("not applied", response.json()["config_error"])
+        self.assertIn("config.json", response.json()["config_error"])
 
 
 class TestImageKeepsItsConfigOnTheVolume(unittest.TestCase):

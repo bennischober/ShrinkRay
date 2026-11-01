@@ -24,6 +24,11 @@
   let config = $state<Config | null>(null)
   let loadError = $state<string | null>(null)
 
+  // the loader's verdict travels WITH the config (issue #541): the page shows
+  // the settings in effect, and this banner says why they are not the ones on
+  // disk. The wording matches what `docker logs` prints, so the two agree.
+  const configError = $derived(config?.config_error ?? null)
+
   $effect(() => {
     api
       .config()
@@ -43,6 +48,16 @@
     <h2>Config</h2>
     <p class="legend">SOURCES, OUTPUT AND TOOL SETTINGS</p>
   </header>
+
+  {#if configError}
+    <div class="panel config-error">
+      <div class="pad">
+        <strong>config.json has an error and was not applied.</strong>
+        <span class="mono dim block">{configError}</span>
+        <span class="dim block">ShrinkRay keeps running with the previous settings shown below.</span>
+      </div>
+    </div>
+  {/if}
 
   <!-- ══ sources (read-only, issue #331): the watched roots are the
        resident app's argv/mount — editing them here wrote localStorage and
@@ -102,7 +117,11 @@
       <span class="mono dim">read-only</span>
     </div>
     {#if !config}
-      <div class="dim pad">loading…</div>
+      <div class="dim pad">{loadError ? loadError : 'loading…'}</div>
+    {:else if configError}
+      <div class="dim pad">
+        not shown: config.json has an error and was not applied — the settings above are the ones in effect
+      </div>
     {:else}
       <div class="pad groups">
         <div class="option-row">
