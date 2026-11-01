@@ -139,7 +139,7 @@ The console is a home-lab operator surface: a shell discipline borrowed from hom
 
 The system is **dual-theme by token, not by layout**: a dark cinema ground (`#101216`, the default) and a light working bench (`#eef0f2`), switched by `[data-theme]` on `<html>` and persisted. Both themes render the *same* structure — components never branch on theme; they only consume tokens. Color stays meaning-first: teal = measured/confirmed/selected, amber = work in progress, red = failure/destruction only. State is still expressed as **density** — solid fill means done, hatching means in progress, an empty swatch means untouched, a dashed outline means missing.
 
-The register is quiet, dense and honest. Numbers carry units and fixed precision, absent values are an em-dash, an encode that made the file *larger* is reported as "+X% larger" in red rather than spun, and irreversible work (bar cropping) interrupts with a confirmation ceremony instead of a toast. The surface serves one expert user on localhost; it optimizes for long operating sessions at readable density, not for marketing impressions.
+The register is quiet, dense and honest. Numbers carry units and fixed precision, absent values are an em-dash, an encode that made the file *larger* is reported as "+X% larger" in red rather than spun. Irreversible work carries a reserved confirmation ceremony (the alertdialog shape the Do's and Don'ts section describes; it renders nowhere today — the dashboard starts nothing). The surface serves one expert user on localhost; it optimizes for long operating sessions at readable density, not for marketing impressions.
 
 **Key Characteristics:**
 
@@ -166,10 +166,10 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 - **Work Amber** (`--amber`, dark `#e0a45e` / light `#8a4307`): The figure in progress. Running-row hatching, `IN WORK` chips and corner tags, the trace fill's leading edge, warning count badges on the rail, the HDR tag. Amber is a status, never a decoration. (Round-6: the light value darkened from `#b45309` — it measured 3.89:1 on the light rail, below the 4.5:1 floor; `#8a4307` clears it on every light ground.)
 
 ### Tertiary
-- **Alarm Red** (`--red`, dark `#f27265` / light `#b3382c`): Failed and destructive only. Failure badges, error strips and red hatch backgrounds, the confirmation ceremony borders, destructive-outline buttons (hover fills red), the missing-file chip's dashed swatch, and the accent on irreversible toggles.
+- **Alarm Red** (`--red`, dark `#f27265` / light `#b3382c`): Failed and destructive only. Failure badges, error strips and red hatch backgrounds, the confirmation ceremony borders (the reserved ceremony shape — it renders nowhere today), the missing-file chip's dashed swatch. No destructive-outline button style or red-accented toggle is defined in `ui/src` today; if a destructive control returns, it wears the reserved ceremony, not a new red costume.
 
 ### Confirmation Green
-- **Signal Green** (`--ok`, dark `#57c98a` / light `#15803d`): Encoded/done. The solid `done` swatch on decision chips and poster corner tags, and job states rendered as `done`. Green answers "is this title handled?"; teal answers "is it selected/measured?". They are not interchangeable.
+- **Signal Green** (`--ok`, dark `#57c98a` / light `#15803d`): Encoded/done — a token defined for the reserved done-state shape (solid `done` swatch on decision chips) that renders nowhere today: no poster/card component exists in `ui/src` (the catalog is a table, `LibraryPage.svelte`'s own comment), and a DONE job state renders teal via `JobsPage.svelte`'s `.ok { color: var(--teal-ink) }`, not green. Green answers "is this title handled?"; teal answers "is it selected/measured?". They are not interchangeable.
 
 ### Neutral
 - **Cinema Ground / Working Bench** (`--ground`, dark `#101216` / light `#eef0f2`): The page itself; also the text color on the primary button (inverted per theme).
@@ -211,7 +211,7 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 - **Body** (400, 13px, 1.45): General UI text, empty-state sentences, rail labels (13px/500).
 - **Label** (400, 10.5px, 1.4px letter-spacing, uppercase — `.legend`): The annotation voice: figure headings, column headers, button text, key/value keys, badge counts' neighbors, the page-head annotation. Always dim or body ink; accent-colored only where meaning applies.
 - **Data** (400, 12px, `.mono`, `font-variant-numeric: tabular-nums`): All measurements — sizes in GB, percents, resolutions, CRF/VMAF, job IDs, elapsed times. **Data Strong** at 600 for names, selected counts, and emphasized values.
-- **Micro** (10px–9.5px): poster corner tags (9.5px, 1px tracking), in-table HDR tags and job action buttons (10px).
+- **Micro** (10px–9.5px): in-table HDR tags and job action buttons (10px). (The poster corner tag was 9.5px with 1px tracking — no poster component renders today; the size is reserved with the poster tokens.)
 
 ### Named Rules
 **The Two Voices Rule.** IBM Plex Sans talks, IBM Plex Mono measures. Anything that is a number, path, or machine value is mono tabular; anything addressed to the human is IBM Plex Sans. Never set measurements in the sans.
@@ -259,7 +259,7 @@ None. Do not introduce box-shadows, glows or blur. The single sanctioned excepti
 
 ## Shapes
 
-The form language is small, consistent console chrome. Corners are **4px** (`--radius`) on every card, panel, button and input; the **2px** radius belongs to chips, poster corner tags and the HDR tag; the **5px** pill radius belongs to progress traces (a 10px-tall track fully rounded) and scrollbar thumbs. Nothing rounds further — no large radii, no circles except checkbox glyphs.
+The form language is small, consistent console chrome. Corners are **4px** (`--radius`) on every card, panel, button and input; the **2px** radius belongs to chips and the HDR tag (the poster corner tag wore it; no poster component renders today); the **5px** pill radius belongs to progress traces (a 10px-tall track fully rounded) and scrollbar thumbs. Nothing rounds further — no large radii, no circles except checkbox glyphs.
 
 - **Hatch patterns** (45° stripes, 4px on / 4px off unless noted):
   - `--hatch-work` — neutral grey at 18% alpha: the empty progress-trace track.
@@ -355,7 +355,7 @@ Two tiers, one discipline (the snapshot's own docstring is the contract):
 - **Do** show the leader-note estimate before any bulk verb, and keep bulk verbs in the bulk bar, per-movie verbs on the provenance page.
 - **Do** make the overview answer failures, missing files and active work in one glance — with honest empty states ("nothing failed", "no active work", "the library is clean").
 - **Do** theme through tokens only: both grounds must render the same structure, and `color-scheme` must follow `[data-theme]`.
-- **Do** gate irreversible work behind a per-run confirmation (`role="alertdialog"` ceremony — the reserved shape the Browser Surfaces section describes; it renders nowhere today because the dashboard starts nothing); the armed state must never persist, and bar removal must never be a per-run choice again (issue #128: every re-encode crops the bars it finds).
+- **Do** gate irreversible work behind a per-run confirmation (`role="alertdialog"` ceremony — the reserved shape the Dialogs & ceremonies bullet below describes; it renders nowhere today because the dashboard starts nothing); the armed state must never persist, and bar removal must never be a per-run choice again (issue #128: every re-encode crops the bars it finds).
 - **Do** brief the loudest verb: a whole-library encode gets a one-line preflight strip (scope, source size, measured-throughput estimate that names its sample basis) before it can fire; Escape and NOT NOW are the safe exits. An extrapolation from a single sample must also *say so in its voice* ("rough extrapolation from a single 0.19 GB title — real runs will differ"), not borrow the confident "measured throughput" phrasing — naming the basis is necessary, not sufficient. The preflight wears the **amber** ceremony with a teal primary confirm — red borders are for irreversible work only (bars crop, delete); a reversible verb in the destruction costume trains the eye to ignore red. When no time figure can be projected, say so: "basis too thin to project wall time" beats silence next to a multi-TB scope.
 - **Do** let reality overtake predictions: plan rows whose movies have since encoded read ENCODED and dim out, and the panel head stamps the plan's age — a stale plan must never present itself as the current queue.
 - **Do** mark persistence models in the UI: a command the page cannot run (config edits, issue #331) is not offered at all — the config page's panels are read-only mirrors of `config.json`, and editing happens on disk or via `shrinkray setup`; a page that shows values it cannot change must SAY read-only at the panel head rather than silently accepting clicks that change nothing. Identical silence with opposite truths is a trust bug.
