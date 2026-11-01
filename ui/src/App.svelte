@@ -284,10 +284,15 @@
 
 
 
-  // ── the encode-all confirmation: the single gate for a whole-library run ──
-  // Only ENCODE ALL asks, because it is the one action that can touch every
-  // title at once. Bar removal is not a choice any more (issue #128): every
-  // encode crops the bars it finds, so there is nothing to arm.
+  // ── the whole-library confirmation ──
+  // This block is reserved shape: the dashboard renders no encode control
+  // (issue #134 - it starts nothing; the resident app starts the backlog
+  // and the watcher itself, PRODUCT.md's deployment model). The pattern
+  // the DESIGN.md Do's and Don'ts section reserves ("Do gate irreversible
+  // work behind a per-run confirmation", "Do brief the loudest verb") is
+  // what a whole-library gate would wear if the product ever offers one.
+  // Bar removal is not a choice any more (issue #128): every encode crops
+  // the bars it finds, so there is nothing to arm.
 
 
   // retry: re-enqueue the job with ITS OWN scope and parameters (never the

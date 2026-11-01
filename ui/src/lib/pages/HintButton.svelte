@@ -2,7 +2,7 @@
   /** The hint pattern: a caps label whose meaning lives in a tooltip on
    * hover AND in a visible one-line explanation on focus (keyboard users
    * get the same text via focus + aria-describedby). Used on action
-   * buttons where the verb alone under-explains (PLAN, ENCODE). */
+   * buttons where the verb alone under-explains. */
 
   let {
     label,
@@ -22,8 +22,8 @@
   const hintId = `hint-${Math.random().toString(36).slice(2, 9)}`
 
   // placement awareness: a hint anchored left on a toolbar-end button
-  // overflows the viewport (the ENCODE ALL case) — measure at hover/
-  // focus time and anchor right instead
+  // overflows the viewport — measure at hover/focus time and anchor right
+  // instead
   let wrapEl: HTMLElement | null = $state(null)
   let alignEnd = $state(false)
   function measure() {
