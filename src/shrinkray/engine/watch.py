@@ -8,6 +8,7 @@ logic as the encode/plan commands and encodes them (source stays untouched
 
 import contextlib
 import ctypes
+import math
 import os
 import sqlite3
 import struct
@@ -40,27 +41,51 @@ from shrinkray.tools.ffprobe import probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 from shrinkray.tools.process import Cancelled
 
+
 # a file is stable when its size is unchanged between two checks ...
 # Test-only env overrides (issue #537): the SIGHUP test spawns the CLI as a
 # SUBPROCESS, so the suite's in-process patches (tests/test_cli.py's
-# `_toolchain_ok` and `_invoke`, which zero both constants) cannot reach it,
-# and its 60 s spawn deadline must not measure a 30 s sleep its subject never
-# exercises. The same shape the test-only env knobs already cover
-# ($SHRINKRAY_WATCH_OUTPUT, $SHRINKRAY_SMOKE): read once at import, honored
-# for the whole process, never a config key or a CLI flag — a user has no
-# reason to touch the stability witness's pacing.
-_STABLE_CHECK_INTERVAL_ENV = os.environ.get("SHRINKRAY_STABLE_CHECK_INTERVAL")
-_STABLE_MIN_AGE_ENV = os.environ.get("SHRINKRAY_STABLE_MIN_AGE")
-try:
-    STABLE_CHECK_INTERVAL = (
-        float(_STABLE_CHECK_INTERVAL_ENV) if _STABLE_CHECK_INTERVAL_ENV else 30.0
-    )
-except ValueError:
-    STABLE_CHECK_INTERVAL = 30.0
-try:
-    STABLE_MIN_AGE = float(_STABLE_MIN_AGE_ENV) if _STABLE_MIN_AGE_ENV else 60.0
-except ValueError:
-    STABLE_MIN_AGE = 60.0
+# `_toolchain_ok`, the inline block in `test_a_signal_after_the_final_encode_*
+# and the `_encode` helper, which zero both constants) cannot reach it, and its
+# 60 s spawn deadline must not measure a 30 s sleep its subject never
+# exercises. This is deliberately NOT the shape of an operator knob: it is read
+# once at import, has no config key and no CLI flag, and exists so a test can
+# reach a constant that lives in the child process (issue #537's review finding
+# 2 — the earlier comment wrongly cited $SHRINKRAY_WATCH_OUTPUT, which is
+# documented operator surface, and $SHRINKRAY_SMOKE, which no product module
+# reads).
+#
+# The guard is TOTAL (review finding 1): a value that `float()` accepts but that
+# is not a usable duration — `nan`, `inf`, or a negative — must fall back to the
+# default, because `STABLE_MIN_AGE = -5` would make `is_stable()` answer True
+# for a file still being written (the exact #437 defect this witness exists to
+# prevent), and `nan`/`inf`/negative make `time.sleep`/`st_mtime` arithmetic
+# raise where no caller expects it.
+def _duration_env(var: str, default: float) -> float:
+    """Reads a non-negative, finite duration from the environment.
+
+    Args:
+        var (str): The environment variable name.
+        default (float): The value when unset, unparsable, or unusable.
+
+    Returns:
+        float: The override, or the default.
+    """
+    raw = os.environ.get(var)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    # `float()` accepts nan/inf/negatives; a duration must be finite and >= 0
+    if not math.isfinite(value) or value < 0:
+        return default
+    return value
+
+
+STABLE_CHECK_INTERVAL = _duration_env("SHRINKRAY_STABLE_CHECK_INTERVAL", 30.0)
+STABLE_MIN_AGE = _duration_env("SHRINKRAY_STABLE_MIN_AGE", 60.0)
 # the bounded wait's ceiling for the one-shot CLI (issue #437): the watcher
 # has no ceiling (it reconsiders on its next pass); a one-shot run reports
 # and skips instead of waiting forever on a file that never settles
