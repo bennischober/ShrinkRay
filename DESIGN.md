@@ -121,7 +121,7 @@ components:
     backgroundColor: "{colors.panel}"
     textColor: "{colors.ink}"
     rounded: "{rounded.md}"
-    padding: "12px 14px"
+    padding: "9px 12px"
   rail-item-active:
     backgroundColor: "{colors.panel-active}"
     textColor: "{colors.ink}"
@@ -149,7 +149,7 @@ The register is quiet, dense and honest. Numbers carry units and fixed precision
 - Density-state system: solid / hatched / empty / dashed chips and row fills carry decision state
 - Overview stat band of button-cards; running-work band with progress trace; attention panels for failures, missing files and setup
 - Dense library table (the catalog's working view — sortable, selection-hatched, decision chips; the poster-grid experiment was demoted away after round 3: 354 near-identical typographic tiles differentiated state but not identity)
-- Bulk bar with the leader-note estimate ("→ EST. −38.2 GB · 210.4 GB BASE") drawn in as the annotation moment
+- Bulk bar with the leader-note estimate ("→ PLAN-PREDICTED −{n} GB · {n} BASE", `LibraryPage.svelte`'s copy) drawn in as the annotation moment
 - Movie provenance page carrying every schema-v5 encode metric (VMAF, CRF, presets, encode time, probes, toolchain)
 - IBM Plex Sans speaks, IBM Plex Mono measures (tabular numerals); 4px console chrome, hairline seams, no shadows
 
@@ -163,7 +163,7 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 - **Teal Glow** (`--teal-glow`, dark `rgba(45, 212, 191, 0.12)` / light `rgba(15, 118, 110, 0.1)`): The wash layer — text selection, the selection hatch (`--hatch-select`), the running-band hatch.
 
 ### Secondary
-- **Work Amber** (`--amber`, dark `#e0a45e` / light `#8a4307`): The figure in progress. Running-row hatching, `IN WORK` chips and corner tags, the trace fill's leading edge, warning count badges on the rail, the HDR tag. Amber is a status, never a decoration. (Round-6: the light value darkened from `#b45309` — it measured 3.89:1 on the light rail, below the 4.5:1 floor; `#8a4307` clears it on every light ground.)
+- **Work Amber** (`--amber`, dark `#e0a45e` / light `#8a4307`): The figure in progress. Running-row hatching, `IN WORK` chips, the trace fill's leading edge, warning count badges on the rail, the HDR tag. (The poster corner tag wore amber too — reserved with the poster spec.) Amber is a status, never a decoration. (Round-6: the light value darkened from `#b45309` — it measured 3.89:1 on the light rail, below the 4.5:1 floor; `#8a4307` clears it on every light ground.)
 
 ### Tertiary
 - **Alarm Red** (`--red`, dark `#f27265` / light `#b3382c`): Failed and destructive only. Failure badges, error strips and red hatch backgrounds, the confirmation ceremony borders (the reserved ceremony shape — it renders nowhere today), the missing-file chip's dashed swatch. No destructive-outline button style or red-accented toggle is defined in `ui/src` today; if a destructive control returns, it wears the reserved ceremony, not a new red costume.
@@ -233,7 +233,7 @@ Pages are flex columns with a 12–14px gap sharing one anatomy: **page head** (
 
 The **table view**: wrapped in a seam-bordered scroll area, sticky header (`z-index: 1`, panel fill), header cells `8px 12px` in legend voice, body cells `7px 12px` separated by `--row-line`, checkbox column 34px, numeric columns right-aligned, name column max 340px with ellipsis. Selected rows fill with `--hatch-select`; the in-work row fills with `--hatch-progress`.
 
-Spacing clusters on the token steps (6/10/14/18/26px) plus in-context values: bulk bar `8px 14px`, stat cards `12px 14px`, panel heads `9px 14px`, table cells `7–8px 12px`, chips `2px 8px`. (The poster meta's `9px 10px 10px` is reserved with the poster spec.) Density is compact but airy — hairlines separate, padding never crowds.
+Spacing clusters on the token steps (6/10/14/18/26px) plus in-context values: bulk bar `8px 14px`, stat cards `9px 12px`, panel heads `9px 14px`, table cells `7–8px 12px`, chips `2px 8px`. (The poster meta's `9px 10px 10px` is reserved with the poster spec.) Density is compact but airy — hairlines separate, padding never crowds.
 
 Responsive: below **900px** the rail folds into a top bar (nav goes horizontal with scroll, the active item gains a 2px teal inset underline, main padding drops to 14px); the movie page's two-column fact panels stack below **820px**. (The confirmation strip's full-width rule is reserved with the ceremony spec - no confirmation strip renders today.) There are no other breakpoints — this is a desktop console.
 
@@ -247,7 +247,7 @@ Responsive: below **900px** the rail folds into a top bar (nav goes horizontal w
 **No shadows — the system is flat and states it.** Depth is conveyed by four means only:
 
 - **Tonal layering**: rail → ground → panel → panel-raised, plus the teal-tinted `--panel-active` for "under work" — a lightness ladder, not a lighting model.
-- **Line weight**: 1px hairline seams for containers and controls; heavier *meaning* borders in accent colors (teal on the armed bulk bar, amber on in-work cards, red on confirmations).
+- **Line weight**: 1px hairline seams for containers and controls; heavier *meaning* borders in accent colors where a surface exists (teal on the armed bulk bar; the amber trace edge at `JobsPage.svelte`'s running rows). Cards and confirmations render no accent border today (no card component; the ceremony is reserved).
 - **Density hatching**: the four repeating-linear-gradient hatch patterns (see Shapes) fill regions to signal state.
 - **Overlay scrim**: RESERVED with the ceremony spec (the deletion confirmation would sit on `rgba(0, 0, 0, 0.5)` at `z-index: 60`; no confirmation surface renders today). The sticky table header holds `z-index: 1`.
 
@@ -292,7 +292,7 @@ The console's chrome spine. Width 190px, rail ground, right seam, sticky. **Bran
 - **Poster corner tags** carried the same states in micro (9.5px mono tags at the poster's bottom-right) — the poster grid was demoted away (`LibraryPage.svelte`'s own comment: "the catalog is a table; the grid was demoted away"); the spec is reserved with the poster tokens (`--poster-ground`/`--poster-line`, referenced by no component today).
 
 ### Overview Stat Band
-The overview's first answer. Button-cards (they navigate — TITLES and RECLAIMED go to the library) on panel fill with seam borders, padding `12px 14px`; each is a legend label over a 22px mono value over a 10.5px mono dim sub-line ("184.2 GB of 512 GB source", "{n} measured"). Two stats are **conditional**: MISSING appears only when files are absent (red value), ENCODE TIME only when schema-v5 durations exist. Warning values colorize: missing in red. MEAN VMAF renders an em-dash until something is measured — the band never fakes a figure. The band **hugs its cards** (`fit-content`, cards capped 220px): an auto-fit grid left unused tracks as dead seam ground (round-6). A fifth card, **RECLAIMABLE**, appears when the last plan still has open titles: the plan-predicted savings on them (`{GB}` over `{n} planned · plan #{id}`) — a plan figure that names its source, answering "what remains" beside "what was won".
+The overview's first answer. Button-cards (they navigate — TITLES and RECLAIMED go to the library) on panel fill with seam borders, padding `9px 12px` (`OverviewPage.svelte`'s `.stat`); each is a legend label over a 22px mono value over a 10.5px mono dim sub-line ("184.2 GB of 512 GB source", "{n} measured"). Two stats are **conditional**: MISSING appears only when files are absent (red value), ENCODE TIME only when schema-v5 durations exist. Warning values colorize: missing in red. MEAN VMAF renders an em-dash until something is measured — the band never fakes a figure. The band **hugs its cards** (`fit-content`, cards capped 220px): an auto-fit grid left unused tracks as dead seam ground (round-6). A fifth card, **RECLAIMABLE**, appears when the last plan still has open titles: the plan-predicted savings on them (`{GB}` over `{n} planned · plan #{id}`) — a plan figure that names its source, answering "what remains" beside "what was won".
 
 ### Running-Work Band & Trace
 The figure in progress, pinned between stat band and attention panels: teal-glow hatch over panel, seam border, padding `12px 16px`. Head: `IN WORK · {KIND}` in amber legend voice against a mono `3/12 · 41%` reading. Title (14px/600), then the **trace** — a 10px pill track on `--hatch-work` with a solid teal fill, `role="progressbar"` with live `aria-valuenow/min/max` — then the stage detail in dim mono plus `started {when}` and a live **ETA** (from measured throughput when schema-v5 data exists, proportional fallback otherwise). When nothing runs, the band is replaced by a **quiet strip**: dashed seam border, "no active work" in mono dim, and a `LIBRARY →` action — or, when a finished encode run exists, the **LAST RUN band** (solid teal-tinted): `LAST RUN #{id} · {n} encoded · −X GB · min VMAF · wall time`, the run's completion stated, never dissolved. Empty is honest, never decorative.
@@ -379,4 +379,4 @@ Baseline commitments observed in the built components (single-user localhost, bu
 - **Live status**: API errors use `role="alert"` with a labeled dismiss; both traces are `role="progressbar"` with `aria-valuenow/min/max` and labels ("encode progress", "{kind} progress").
 - **Navigation & data**: the rail nav is `aria-label="Sections"`; search, category select, and every checkbox carry `aria-label`s (including "Select {movie}"); icon-only ✕ buttons are labeled (the dismiss ✕ names what it dismisses); table sort headers carry `aria-sort`; page navigation is hash-routed (`#/library` etc.) with keyboard shortcuts `1`–`5` (pages) and `/` (search focus).
 - **Contrast**: accent text always goes through `--teal-ink` (dark `#2dd4bf`, light `#0b5952`); secondary text is `--ink-dim`; `--ink-faint` is the contrast floor chosen per theme (round-6: verified ≥ 4.5:1 on *every* ground of its own theme, not just the panel — light `#565d66` after the rail sweep caught `#6d757d` at 3.62:1); accent hues are deepened on light (`#8a4307`, `#b3382c`, `#15803d`) so they survive the bench.
-- **Motion**: both authored animations — `leader-draw` (240ms, the leader note) and `page-fade` (200ms, page entry) — are wrapped in `prefers-reduced-motion: no-preference` and degrade to plain appearance; card border transitions run 120ms ease.
+- **Motion**: both authored animations — `leader-draw` (240ms, the leader note) and `page-fade` (200ms, page entry) — are wrapped in `prefers-reduced-motion: no-preference` and degrade to plain appearance; the hint glyphs' opacity transitions run 120ms ease (`HintButton.svelte`/`HintMark.svelte`). No card border transition exists (no card component renders).
