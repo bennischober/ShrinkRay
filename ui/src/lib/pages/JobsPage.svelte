@@ -55,8 +55,9 @@
   }
 
   /** A DONE job whose per-movie outcomes failed is not a clean done: the
-   * lifecycle completed, but the work did not. The row says so in red and
-   * offers RETRY — a green DONE must never hide failed work. The helper
+   * lifecycle completed, but the work did not. The row says so in red — a
+   * green DONE must never hide failed work (the resident app owns job
+   * control, so the dashboard renders no RETRY). The helper
    * lives in api.ts (shared with the detail trail). */
   function stateClass(job: Job): string {
     if (job.state === 'done') {

@@ -36,7 +36,7 @@ describe('JobsPage render', () => {
     expect(screen.getAllByText('DETAIL').length).toBe(2)
   })
 
-  it('marks a done job with failed outcomes as PARTIAL and offers RETRY', () => {
+  it('marks a done job with failed outcomes as PARTIAL; the dashboard renders no RETRY', () => {
     const j = job({
       state: 'done',
       result: {
@@ -50,13 +50,14 @@ describe('JobsPage render', () => {
       history: [j],
       onopenMovie: () => {},
     })
-    // the state span says DONE · PARTIAL; the error note carries a RETRY
+    // the state span says DONE · PARTIAL (the amber state text is the
+    // assertion); the dashboard renders no RETRY - the absence pin below
     const stateSpan = container.querySelector('.state')!
     expect(stateSpan.textContent).toContain('PARTIAL')
     expect(screen.queryByText('RETRY')).toBeNull()
   })
 
-  it('a failed job offers RETRY', () => {
+  it('a failed job says so; the dashboard renders no RETRY', () => {
     render(JobsPage, {
       history: [job({ state: 'failed', error: 'API 503: unavailable' })],
       onopenMovie: () => {},
