@@ -267,7 +267,7 @@ The form language is small, consistent console chrome. Corners are **4px** (`--r
   - `--hatch-skip` — amber at 18% alpha, vertical 90°, 6px/6px: skipped-state chips (deliberately coarser so skip reads differently from progress).
   - `--hatch-select` — teal glow: selected rows, `PLANNED` chips, selected poster cards.
   - Low-alpha accent hatches (6–8%) also tint failure/error strips and the running overview band.
-- **Dashed borders mean "not finished / not available"**: the empty states ("no titles match…", "nothing failed") and the missing chip's dashed swatch. A dashed seam is an absence — never a style accent.
+- **Dashed borders mean "not finished / not available"**: the jobs-log's empty strips and the overview's quiet strip, plus the missing chip's dashed swatch. A dashed seam is an absence — never a style accent.
 - **Path truncation**: long paths use `direction: rtl` so the *tail* of the path stays visible — the folder and file name are the information.
 - **Scrollbars**: thin, `--seam` thumb on transparent track (10px, darkening to faint ink on hover).
 - **Toggles as glyphs**: the theme toggle prints `◐ DARK` / `◑ LIGHT`; the watcher prints `● WATCHER` / `○ WATCHER` — state as a typographic mark, not an icon font.
