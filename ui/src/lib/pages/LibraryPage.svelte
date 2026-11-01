@@ -1,6 +1,5 @@
 <script lang="ts">
   import { fmtGb, fmtSavedHonest, type Movie } from '../api'
-  import HintButton from './HintButton.svelte'
 
   let {
     movies,

@@ -284,10 +284,13 @@
 
 
 
-  // ── the encode-all confirmation: the single gate for a whole-library run ──
-  // Only ENCODE ALL asks, because it is the one action that can touch every
-  // title at once. Bar removal is not a choice any more (issue #128): every
-  // encode crops the bars it finds, so there is nothing to arm.
+  // ── the whole-library confirmation ──
+  // The resident app's CLI owns encode starts (the dashboard starts no
+  // work, issue #134); the confirmation component is gone with it - this
+  // comment block's subject is the pattern the DESIGN.md Buttons section
+  // reserves: one gate for the one action that can touch every title.
+  // Bar removal is not a choice any more (issue #128): every encode crops
+  // the bars it finds, so there is nothing to arm.
 
 
   // retry: re-enqueue the job with ITS OWN scope and parameters (never the
