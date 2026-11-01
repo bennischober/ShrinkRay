@@ -634,6 +634,17 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
 
             env = dict(os.environ)
             env["PATH"] = f"{stubs}:{env.get('PATH', '')}"
+            # the stability witness is a SUBPROCESS here (issue #537): the
+            # suite's in-process constant patches cannot reach the child, and
+            # the spawn deadline below must not measure the witness's 30 s
+            # size-check sleep (the fixture is aged past STABLE_MIN_AGE, so
+            # the age gate is already satisfied - only the interval sleep
+            # remains, and the test's subject is the signal, not stability).
+            # The test-only env override (watch.py's comment) zeroes both
+            # constants in the child; no retry wrapper, the wait stays
+            # bounded - it just stops measuring a sleep nobody is testing.
+            env["SHRINKRAY_STABLE_CHECK_INTERVAL"] = "0"
+            env["SHRINKRAY_STABLE_MIN_AGE"] = "0"
             proc = subprocess.Popen(
                 [
                     sys.executable,

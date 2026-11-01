@@ -41,9 +41,26 @@ from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 from shrinkray.tools.process import Cancelled
 
 # a file is stable when its size is unchanged between two checks ...
-STABLE_CHECK_INTERVAL = 30.0
-# ... and it is at least this old (grace period after the last modification)
-STABLE_MIN_AGE = 60.0
+# Test-only env overrides (issue #537): the SIGHUP test spawns the CLI as a
+# SUBPROCESS, so the suite's in-process patches (tests/test_cli.py's
+# `_toolchain_ok` and `_invoke`, which zero both constants) cannot reach it,
+# and its 60 s spawn deadline must not measure a 30 s sleep its subject never
+# exercises. The same shape the test-only env knobs already cover
+# ($SHRINKRAY_WATCH_OUTPUT, $SHRINKRAY_SMOKE): read once at import, honored
+# for the whole process, never a config key or a CLI flag — a user has no
+# reason to touch the stability witness's pacing.
+_STABLE_CHECK_INTERVAL_ENV = os.environ.get("SHRINKRAY_STABLE_CHECK_INTERVAL")
+_STABLE_MIN_AGE_ENV = os.environ.get("SHRINKRAY_STABLE_MIN_AGE")
+try:
+    STABLE_CHECK_INTERVAL = (
+        float(_STABLE_CHECK_INTERVAL_ENV) if _STABLE_CHECK_INTERVAL_ENV else 30.0
+    )
+except ValueError:
+    STABLE_CHECK_INTERVAL = 30.0
+try:
+    STABLE_MIN_AGE = float(_STABLE_MIN_AGE_ENV) if _STABLE_MIN_AGE_ENV else 60.0
+except ValueError:
+    STABLE_MIN_AGE = 60.0
 # the bounded wait's ceiling for the one-shot CLI (issue #437): the watcher
 # has no ceiling (it reconsiders on its next pass); a one-shot run reports
 # and skips instead of waiting forever on a file that never settles
