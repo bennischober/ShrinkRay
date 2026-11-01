@@ -190,6 +190,10 @@ export interface Status {
 }
 
 export interface Config {
+  /** why the config.json on disk is NOT in effect (issue #541): the loader
+   * rejected the file and keeps the previous settings, which are the ones this
+   * object carries. null when the file on disk IS what the engine runs. */
+  config_error?: string | null
   codec?: { hdr?: { color_space?: string[]; color_transfer?: string[] } }
   /** file.output.separator is the canonical key ('seperator' was a deprecated
    * alias the server normalizes away — the dump never carries the typo) */

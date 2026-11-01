@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
-from typing import Any, TypeVar, cast
+from typing import TypeVar
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -560,52 +560,29 @@ def ui_root_static(request: Request) -> Response:
 
 
 def get_config() -> dict:
-    """Returns the current configuration (as stored in config.json).
+    """Returns the configuration in effect, plus the loader's verdict.
+
+    One reader (issue #541, the maintainer's 2026-11-01 decision): the route
+    answers what the engine is actually running with - `refresh_config()`'s Conf
+    - and never parses config.json itself. Two readers of one file is how the
+    page came to show values the engine never applied: a byte-corrupted file
+    answered an opaque 500 (`UnicodeDecodeError` is a ValueError, not an
+    OSError), an unreadable directory answered differently per interpreter,
+    and a schema-rejected value was served as if it were live.
+
+    A file that does not parse, does not validate or no longer exists changes
+    nothing: the previous settings stay in effect and `config_error` carries the
+    reason for the page's banner. There is deliberately no fall-back to the code
+    defaults (hard invariant 5): the defaults can widen what gets encoded.
 
     Returns:
-        dict: The configuration data.
+        dict: The configuration in effect, plus `config_error` (null when the
+        file on disk is the one in effect).
     """
-    s = get_state()
-    config_path = _config_path(s)
-    if not config_path.is_file():
-        # return the effective defaults so the UI can edit them
-        from shrinkray.config import Conf
+    from shrinkray import config as config_module
 
-        conf = Conf()
-        return _conf_to_dict(conf)
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            return cast("dict[str, Any]", json.load(f))
-    except (OSError, json.JSONDecodeError) as e:
-        # a config that exists but does not parse (a half-written or
-        # hand-mangled edit) must not surface as an opaque 500: the strip
-        # gets the reason, the same honesty refresh_config() keeps in
-        # config_error for the status endpoint (issue #247)
-        raise HTTPException(
-            status_code=500,
-            detail=f"the config file '{config_path}' could not be read: {e}",
-        ) from e
-
-
-def _config_path(s: AppState) -> Path:
-    """Resolves the config.json path for the resident app.
-
-    One location for dashboard and engine (issue #58): the resolution
-    order is the app's explicit config file, then $SHRINKRAY_CONFIG, then
-    the db directory (the operator's chosen user-data location).
-
-    Args:
-        s (AppState): The app state.
-
-    Returns:
-        Path: The config.json path.
-    """
-    from shrinkray.config import resolve_config_path
-
-    return resolve_config_path(
-        config_file=s.config_file,
-        db_dir=s.db_file.parent,
-    )
+    conf = config_module.refresh_config()
+    return {**_conf_to_dict(conf), "config_error": config_module.config_error}
 
 
 def _conf_to_dict(conf: Conf) -> dict:
@@ -657,6 +634,7 @@ def _conf_to_dict(conf: Conf) -> dict:
             stall_minutes=conf.handbrake_stall_minutes,
         ),
         quality=QualitySection(
+            target_vmaf=conf.target_vmaf,
             sample_every=conf.sample_every,
             sample_count=conf.sample_count,
             sample_seconds=conf.sample_seconds,
@@ -701,10 +679,10 @@ def metrics(conn: sqlite3.Connection = Depends(db_access)) -> Response:
 
 @app.get("/api/config")
 def read_config() -> dict:
-    """Returns the current configuration (as stored in config.json).
+    """Returns the configuration in effect (issue #541).
 
     Returns:
-        dict: The configuration data.
+        dict: The settings the engine runs with, plus `config_error`.
     """
     return get_config()
 
@@ -768,6 +746,15 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         dict: The status summary.
     """
     s = get_state()
+    from shrinkray import config as config_module
+    from shrinkray.tools.process import rss_mib
+
+    # prompt detection (issue #541): the open dashboard polls this route every
+    # few seconds, so a broken config.json edit is judged HERE - one stat when
+    # nothing changed - instead of waiting for the watcher's next file boundary
+    # (60 s, up to 4 min idle). Applying a change stays at file boundaries:
+    # a running encode keeps the settings it started with.
+    config_module.refresh_config()
     running = s.with_lock(
         lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
     )
