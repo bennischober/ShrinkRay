@@ -573,8 +573,18 @@ def get_config() -> dict:
 
         conf = Conf()
         return _conf_to_dict(conf)
-    with open(config_path, encoding="utf-8") as f:
-        return cast("dict[str, Any]", json.load(f))
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            return cast("dict[str, Any]", json.load(f))
+    except (OSError, json.JSONDecodeError) as e:
+        # a config that exists but does not parse (a half-written or
+        # hand-mangled edit) must not surface as an opaque 500: the strip
+        # gets the reason, the same honesty refresh_config() keeps in
+        # config_error for the status endpoint (issue #247)
+        raise HTTPException(
+            status_code=500,
+            detail=f"the config file '{config_path}' could not be read: {e}",
+        ) from e
 
 
 def _config_path(s: AppState) -> Path:

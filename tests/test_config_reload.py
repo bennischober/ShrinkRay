@@ -387,6 +387,19 @@ class TestStatusShowsConfigError(unittest.TestCase):
         invisible to the dashboard."""
         self.assertIn("config_error?: string | null", (REPO / "ui/src/lib/api.ts").read_text())
 
+    def test_a_config_that_does_not_parse_says_why_not_500(self) -> None:
+        """A config.json that exists but does not parse (a half-written or
+        hand-mangled edit) must not surface as an opaque 500 body: the strip
+        gets the reason, the same honesty refresh_config() keeps in
+        config_error for /api/status (issue #535)."""
+        client = TestClient(fast_app)
+        (Path(self.tmp.name) / "config.json").write_text("{ not json", encoding="utf-8")
+        response = client.get("/api/config")
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("could not be read", response.json()["detail"])
+        self.assertIn("config.json", response.json()["detail"])
+        self.assertIn("Expecting", response.json()["detail"])
+
 
 class TestImageKeepsItsConfigOnTheVolume(unittest.TestCase):
     def test_the_image_points_the_config_at_data_and_seeds_it(self) -> None:

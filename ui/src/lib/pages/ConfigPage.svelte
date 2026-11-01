@@ -221,7 +221,6 @@
     display: flex;
     gap: 10px;
     align-items: flex-start;
-    cursor: pointer;
   }
   .option-row .block { display: block; margin-top: 2px; font-size: 11px; }
 
