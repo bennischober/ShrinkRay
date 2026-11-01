@@ -50,8 +50,8 @@ describe('JobsPage render', () => {
       history: [j],
       onopenMovie: () => {},
     })
-    // the state span says DONE · PARTIAL; the dashboard renders no RETRY
-    // (the resident app owns job control) - the red note is the pin
+    // the state span says DONE · PARTIAL (the amber state text is the
+    // assertion); the dashboard renders no RETRY - the absence pin below
     const stateSpan = container.querySelector('.state')!
     expect(stateSpan.textContent).toContain('PARTIAL')
     expect(screen.queryByText('RETRY')).toBeNull()

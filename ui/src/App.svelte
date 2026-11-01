@@ -285,12 +285,12 @@
 
 
   // ── the whole-library confirmation ──
-  // The resident app's CLI owns encode starts (the dashboard starts no
-  // work, issue #134); the confirmation component is gone with it - this
-  // comment block's subject is the pattern the DESIGN.md Do's and Don'ts
-  // section ("Do gate irreversible work behind a per-run confirmation",
-  // "Do brief the loudest verb") reserves: one gate for the one action
-  // that can touch every title.
+  // This block is reserved shape: the dashboard renders no encode control
+  // (issue #134 - it starts nothing; the resident app starts the backlog
+  // and the watcher itself, PRODUCT.md's deployment model). The pattern
+  // the DESIGN.md Do's and Don'ts section reserves ("Do gate irreversible
+  // work behind a per-run confirmation", "Do brief the loudest verb") is
+  // what a whole-library gate would wear if the product ever offers one.
   // Bar removal is not a choice any more (issue #128): every encode crops
   // the bars it finds, so there is nothing to arm.
 
