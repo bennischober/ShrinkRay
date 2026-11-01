@@ -59,4 +59,12 @@ describe('ConfigPage render (issue #239)', () => {
     expect(screen.getByText('svt_av1')).toBeTruthy()
     expect(screen.getByText('.mkv')).toBeTruthy()
   })
+
+  it('invites no click on the read-only rows (issue #535)', async () => {
+    // the page is a mirror (issue #331): a pointer cursor on a value that
+    // cannot change is an affordance that lies. The stylesheet must not
+    // declare one on .option-row.
+    const css = (await import('./ConfigPage.svelte?raw')).default
+    expect(css).not.toMatch(/\.option-row\s*{[^}]*cursor:\s*pointer/s)
+  })
 })
