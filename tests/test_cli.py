@@ -1436,8 +1436,25 @@ class TestStableSeamWiring(unittest.TestCase):
                 self.assertEqual(reloaded.STABLE_CHECK_INTERVAL, 30.0)
                 self.assertEqual(reloaded.STABLE_MIN_AGE, 60.0)
         finally:
-            os.environ["SHRINKRAY_STABLE_CHECK_INTERVAL"] = str(saved_interval)
-            os.environ["SHRINKRAY_STABLE_MIN_AGE"] = str(saved_age)
+            # restore ABSENCE, not the saved values: the suite isolates the
+            # vars (conftest's pytest_configure), so a test that leaves them
+            # set leaks a pin into every later test that asserts the defaults
+            # (round-5 review finding 3)
+            os.environ.pop("SHRINKRAY_STABLE_CHECK_INTERVAL", None)
+            os.environ.pop("SHRINKRAY_STABLE_MIN_AGE", None)
             importlib.reload(watch_mod)
             self.assertEqual(watch_mod.STABLE_CHECK_INTERVAL, saved_interval)
             self.assertEqual(watch_mod.STABLE_MIN_AGE, saved_age)
+
+    def test_the_constants_are_wired_through_the_guard(self) -> None:
+        """The initializer must run the constants through _duration_env
+        (round-5 review finding 2): an initializer that assigns a literal
+        bypasses the guard, and SHRLNK... -5 would reach is_stable as -5.0
+        with every value-assertion green."""
+        import inspect
+
+        from shrinkray.engine import watch as watch_mod
+
+        source = inspect.getsource(watch_mod)
+        self.assertIn('STABLE_CHECK_INTERVAL = _duration_env(', source)
+        self.assertIn('STABLE_MIN_AGE = _duration_env(', source)
