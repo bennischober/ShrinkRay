@@ -1456,5 +1456,5 @@ class TestStableSeamWiring(unittest.TestCase):
         from shrinkray.engine import watch as watch_mod
 
         source = inspect.getsource(watch_mod)
-        self.assertIn('STABLE_CHECK_INTERVAL = _duration_env(', source)
-        self.assertIn('STABLE_MIN_AGE = _duration_env(', source)
+        self.assertIn("STABLE_CHECK_INTERVAL = _duration_env(", source)
+        self.assertIn("STABLE_MIN_AGE = _duration_env(", source)

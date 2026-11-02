@@ -85,11 +85,13 @@ def _duration_env(var: str, default: float) -> float:
     # (1e10 passes isfinite and overflows sleep — round-2 review finding 1).
     # The cap bounds OVERFLOW ONLY, not the wait: `wait_for_stable`'s deadline
     # and its cancel event are both observed only BETWEEN sleeps, so a legal
-    # interval up to a day overruns the limit and delays a cancel by up to a
-    # day (round-3/4 reviews). At the default interval the #326 contract's
-    # "never absorbs a signal for minutes" still holds; the seam's values are
-    # a test's choice, never an operator's. Larger values are a mistake or an
-    # attempt to disable the witness, and fall back to the default.
+    # interval up to a day overruns the limit — and on the stable path the
+    # cancel is not delayed but DROPPED (is_stable's True return ends the
+    # wait; round-6 review finding 1). At the default interval the #326
+    # contract's "never absorbs a signal for minutes" still holds on the
+    # raising paths; the seam's values are a test's choice, never an
+    # operator's. Larger values are a mistake or an attempt to disable the
+    # witness, and fall back to the default.
     if not math.isfinite(value) or value < 0 or value > 86400.0:
         return default
     return value
@@ -322,10 +324,15 @@ def wait_for_stable(
             (a legal seam value up to a day makes one sleep that long), so
             the limit bounds the number of checks, not the wall clock.
         cancel (threading.Event | None): Cooperative cancellation; when set,
-            the wait raises instead of returning. Also only observed between
-            sleeps — a cancel that arrives DURING a sleep waits out that
-            sleep before raising (one interval at the seam's cap: up to a
-            day under the test-only override, 30 s at the default).
+            the wait raises instead of returning. Observed only between
+            sleeps, and NOT on every path: a cancel that arrives DURING a
+            sleep is honoured at the next check — except the witness's own
+            size-check sleep inside `is_stable`, whose True return ENDS the
+            wait before any check sees the cancel (measured, round-5 review
+            finding 1: the wait returns True with the cancel set). On the
+            age-sleep and direct-size-check paths the cancel raises after
+            one interval (up to a day under the test-only override, 30 s at
+            the default).
 
     Returns:
         bool: True when the file settled, False when the limit expired
