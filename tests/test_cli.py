@@ -1390,7 +1390,7 @@ class TestDurationEnvGuard(unittest.TestCase):
     def test_every_non_duration_falls_back_to_the_default(self) -> None:
         from shrinkray.engine.watch import _duration_env
 
-        for raw in ("nan", "inf", "-inf", "-5", "1e10", "banana", ""):
+        for raw in ("nan", "inf", "-inf", "-5", "1e10", "86401", "banana", ""):
             with mock.patch.dict(os.environ, {"X": raw}):
                 self.assertEqual(
                     _duration_env("X", 60.0),

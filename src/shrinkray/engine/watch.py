@@ -42,7 +42,9 @@ from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 from shrinkray.tools.process import Cancelled
 
 
-# a file is stable when its size is unchanged between two checks ...
+# a file is stable when its size is unchanged between two checks ... and it is
+# at least this old (grace period after the last modification) — the two
+# constants below, whose values the env seam can override (test-only, #537).
 # Test-only env overrides (issue #537): the SIGHUP test spawns the CLI as a
 # SUBPROCESS, so the suite's in-process patches (tests/test_cli.py's
 # `_toolchain_ok`, the inline block in `test_a_signal_after_the_final_encode_*
@@ -81,8 +83,11 @@ def _duration_env(var: str, default: float) -> float:
     # `float()` accepts nan/inf/negatives; a duration must be finite, >= 0, and
     # small enough that `time.sleep`/`st_mtime` arithmetic cannot overflow
     # (1e10 passes isfinite and overflows sleep — round-2 review finding 1).
-    # A day is far past any real interval; larger values are a mistake or an
-    # attempt to disable the witness, and fall back to the default.
+    # The cap bounds OVERFLOW ONLY, not the wait: `wait_for_stable`'s deadline
+    # is checked between sleeps, so one interval longer than its limit still
+    # overruns the bound (round-3 review finding 3) — a day is far past any
+    # real interval, and larger values are a mistake or an attempt to disable
+    # the witness, so they fall back to the default.
     if not math.isfinite(value) or value < 0 or value > 86400.0:
         return default
     return value
