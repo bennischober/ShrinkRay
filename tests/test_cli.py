@@ -1404,3 +1404,40 @@ class TestDurationEnvGuard(unittest.TestCase):
         for raw, want in (("0", 0.0), ("0.5", 0.5), ("86400", 86400.0)):
             with mock.patch.dict(os.environ, {"X": raw}):
                 self.assertEqual(_duration_env("X", 60.0), want)
+
+
+class TestStableSeamWiring(unittest.TestCase):
+    """The env seam's wiring: both REAL constant names take the override
+    (issue #537's round-4 review finding 2 — the guard tests use a
+    fabricated name, so a typo'd initializer left the suite green while
+    the SIGHUP test measured 30 s sleeps again). Reloads the module with
+    the vars set and restores it; the SIGHUP test's child reads the same
+    names at ITS import, so this pins the names the child depends on."""
+
+    def test_both_real_constant_names_take_the_override(self) -> None:
+        import importlib
+
+        from shrinkray.engine import watch as watch_mod
+
+        env = {
+            "SHRINKRAY_STABLE_CHECK_INTERVAL": "7",
+            "SHRINKRAY_STABLE_MIN_AGE": "13",
+        }
+        saved_interval, saved_age = watch_mod.STABLE_CHECK_INTERVAL, watch_mod.STABLE_MIN_AGE
+        try:
+            with mock.patch.dict(os.environ, env):
+                reloaded = importlib.reload(watch_mod)
+                self.assertEqual(reloaded.STABLE_CHECK_INTERVAL, 7.0)
+                self.assertEqual(reloaded.STABLE_MIN_AGE, 13.0)
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("SHRINKRAY_STABLE_CHECK_INTERVAL", None)
+                os.environ.pop("SHRINKRAY_STABLE_MIN_AGE", None)
+                reloaded = importlib.reload(watch_mod)
+                self.assertEqual(reloaded.STABLE_CHECK_INTERVAL, 30.0)
+                self.assertEqual(reloaded.STABLE_MIN_AGE, 60.0)
+        finally:
+            os.environ["SHRINKRAY_STABLE_CHECK_INTERVAL"] = str(saved_interval)
+            os.environ["SHRINKRAY_STABLE_MIN_AGE"] = str(saved_age)
+            importlib.reload(watch_mod)
+            self.assertEqual(watch_mod.STABLE_CHECK_INTERVAL, saved_interval)
+            self.assertEqual(watch_mod.STABLE_MIN_AGE, saved_age)

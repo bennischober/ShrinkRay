@@ -84,10 +84,12 @@ def _duration_env(var: str, default: float) -> float:
     # small enough that `time.sleep`/`st_mtime` arithmetic cannot overflow
     # (1e10 passes isfinite and overflows sleep — round-2 review finding 1).
     # The cap bounds OVERFLOW ONLY, not the wait: `wait_for_stable`'s deadline
-    # is checked between sleeps, so one interval longer than its limit still
-    # overruns the bound (round-3 review finding 3) — a day is far past any
-    # real interval, and larger values are a mistake or an attempt to disable
-    # the witness, so they fall back to the default.
+    # and its cancel event are both observed only BETWEEN sleeps, so a legal
+    # interval up to a day overruns the limit and delays a cancel by up to a
+    # day (round-3/4 reviews). At the default interval the #326 contract's
+    # "never absorbs a signal for minutes" still holds; the seam's values are
+    # a test's choice, never an operator's. Larger values are a mistake or an
+    # attempt to disable the witness, and fall back to the default.
     if not math.isfinite(value) or value < 0 or value > 86400.0:
         return default
     return value
@@ -315,9 +317,15 @@ def wait_for_stable(
 
     Args:
         path (Path): The file to wait for.
-        limit (float): Total seconds to wait before giving up.
+        limit (float): Total seconds to wait before giving up. Checked
+            BETWEEN sleeps: one interval longer than the limit overruns it
+            (a legal seam value up to a day makes one sleep that long), so
+            the limit bounds the number of checks, not the wall clock.
         cancel (threading.Event | None): Cooperative cancellation; when set,
-            the wait raises instead of returning.
+            the wait raises instead of returning. Also only observed between
+            sleeps — a cancel that arrives DURING a sleep waits out that
+            sleep before raising (one interval at the seam's cap: up to a
+            day under the test-only override, 30 s at the default).
 
     Returns:
         bool: True when the file settled, False when the limit expired
