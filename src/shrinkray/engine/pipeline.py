@@ -783,7 +783,13 @@ def _encode_with_command(
                 # raises `ResourceWarning: unclosed file` at the call site -
                 # one leak per clean streamed encode, test and product paths
                 # alike (issue #510). stdout is already closed above; stderr
-                # is the leak.
+                # is the leak. NORMALLY at EOF when we get here — but an
+                # orphan grandchild holding stderr's write end can keep the
+                # drain thread blocked in read() past this call (measured,
+                # review finding 2): the bounded join may time out, the
+                # close below still closes the FileIO (the warning is gone),
+                # and the blocked reader exits through its
+                # except (ValueError, OSError) without a sentinel.
                 stderr_thread.join(timeout=5)
                 popen.stderr.close()
             else:
