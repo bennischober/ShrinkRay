@@ -777,6 +777,15 @@ def _encode_with_command(
                 except subprocess.TimeoutExpired:
                     popen.kill()
                     returncode = popen.wait(timeout=10)
+                # wait() reaps the child but closes NO pipe object: the
+                # reader threads reached EOF (the loop ended on the
+                # sentinel), so their FileIO objects stay open and the GC
+                # raises `ResourceWarning: unclosed file` at the call site -
+                # one leak per clean streamed encode, test and product paths
+                # alike (issue #510). stdout is already closed above; stderr
+                # is the leak.
+                stderr_thread.join(timeout=5)
+                popen.stderr.close()
             else:
                 # terminated mid-stream: close our pipe ends so the reader
                 # threads unblock even if an orphan still holds the write

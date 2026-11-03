@@ -63,6 +63,12 @@ packages = ["src/shrinkray"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --cov=shrinkray --cov-report=term-missing"
+# an unclosed resource must fail the run, not warn into a scroll nobody reads
+# (issue #510, #488's criterion 2 decided 'the guard ships, but only after
+# this issue'): the sqlite-connection class (#480) and the pipe-file class
+# (#510) were both swept first, so the suite is green under the guard and the
+# class cannot return silently.
+filterwarnings = ["error::ResourceWarning"]
 
 [tool.mypy]
 python_version = "3.10"
