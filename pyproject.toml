@@ -67,7 +67,10 @@ addopts = "-ra --cov=shrinkray --cov-report=term-missing"
 # #510's acceptance criterion 3 records the #488 discussion's decision: 'the
 # guard ships, but only after this issue'. The sqlite-connection class (#480)
 # and the pipe-file class (#510) were both swept first, so the suite is green
-# under the guard and the class cannot return silently.
+# under the guard. Reach: a leak finalized BEFORE pytest exits fails the run
+# (even when its test stayed green - the unraisable plugin collects at
+# pytest_unconfigure); an object that survives to interpreter shutdown prints
+# its warning after the summary and cannot fail anything.
 # a GC-time unclosed resource does not warn where a filter can see it: the
 # unraisable plugin wraps the __del__ warning as
 # pytest.PytestUnraisableExceptionWarning, so BOTH categories must be errors
