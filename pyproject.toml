@@ -68,7 +68,15 @@ addopts = "-ra --cov=shrinkray --cov-report=term-missing"
 # guard ships, but only after this issue'. The sqlite-connection class (#480)
 # and the pipe-file class (#510) were both swept first, so the suite is green
 # under the guard and the class cannot return silently.
-filterwarnings = ["error::ResourceWarning"]
+# a GC-time unclosed resource does not warn where a filter can see it: the
+# unraisable plugin wraps the __del__ warning as
+# pytest.PytestUnraisableExceptionWarning, so BOTH categories must be errors
+# for the guard to bite (round-2 review finding 1: three leak shapes passed
+# under the single-category filter)
+filterwarnings = [
+    "error::ResourceWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.mypy]
 python_version = "3.10"

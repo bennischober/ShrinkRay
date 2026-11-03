@@ -788,8 +788,10 @@ def _encode_with_command(
                 # drain thread blocked in read() past this call (measured,
                 # review finding 2): the bounded join may time out, the
                 # close below still closes the FileIO (the warning is gone),
-                # and the blocked reader exits through its
-                # except (ValueError, OSError) without a sentinel.
+                # and the blocked reader then exits EITHER at its EOF
+                # sentinel (the orphan exits without writing) or through its
+                # except (ValueError, OSError) (the orphan writes after our
+                # close) — measured both shapes, round-2 review finding 3.
                 stderr_thread.join(timeout=5)
                 popen.stderr.close()
             else:
