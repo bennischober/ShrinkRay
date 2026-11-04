@@ -294,7 +294,11 @@
               </td>
             </tr>
           {:else}
-            <tr><td colspan="8" class="empty dim">no titles match — adjust the search</td></tr>
+            {#if movies.length === 0}
+              <tr><td colspan="8" class="empty dim">nothing scanned yet — the resident app's scan fills this library on its own</td></tr>
+            {:else}
+              <tr><td colspan="8" class="empty dim">no titles match — adjust the search</td></tr>
+            {/if}
           {/each}
         </tbody>
       </table>
