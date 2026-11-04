@@ -422,6 +422,9 @@ class TestEncodeWindow(unittest.TestCase):
             Conf({"app": {"encode_window_start": "09:00"}})  # both-or-neither: an error
         with self.assertRaises(ValueError):
             Conf({"app": {"encode_window_start": "09:00", "encode_window_end": "x"}})
+        with self.assertRaises(ValidationError):
+            # start == end holds nothing open: rejected (issue #434 round 2)
+            Conf({"app": {"encode_window_start": "09:00", "encode_window_end": "09:00"}})
         Conf({"app": {"encode_window_start": "09:00", "encode_window_end": "17:00"}})  # valid
         Conf({"app": {}})  # the empty pair: no window
 

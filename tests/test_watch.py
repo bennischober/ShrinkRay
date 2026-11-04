@@ -1084,29 +1084,37 @@ class TestWatchLibraryTree(unittest.TestCase):
 
 
 class TestWatcherEncodeWindow(unittest.TestCase):
-    """Issue #434: the watcher's pass defers outside the encode window —
-    nothing is encoded, nothing enters `known`, and the file stays eligible
-    for when the window opens."""
+    """Issue #434: the watcher defers outside the encode window — at the
+    pass level AND per file (a mid-pass crossing); a deferred file is never
+    entered into `known`, so it is reconsidered inside the window."""
 
-    def test_the_pass_defers_outside_the_window(self) -> None:
+    def test_the_window_gates_per_pass_and_per_file(self) -> None:
+        """One watch() run, two passes: pass 1 outside the window defers
+        (nothing encoded); pass 2 inside it encodes the first candidate but
+        the per-file check defers the second (the mid-pass crossing). The
+        first file being encoded EXACTLY ONCE pins the known-persistence
+        claim (a pass-1 encode would have put it in `known` and pass 2 would
+        have skipped it)."""
         import tempfile
         from contextlib import ExitStack
 
         from shrinkray.engine import watch as watch_mod
+        from shrinkray.engine.plan import QualityResult
         from shrinkray.engine.watch import WatchSettings
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            inbox = tmp_path / "inbox"
-            inbox.mkdir()
+            root = tmp_path / "inbox"
+            root.mkdir()
             out = tmp_path / "out"
-            movie = inbox / "good.mkv"
-            movie.write_bytes(b"movie")
-            old = time.time() - 7200
-            os.utime(movie, (old, old))
+            seen: list[str] = []
+            for name in ("one.mkv", "two.mkv"):
+                movie = root / name
+                movie.write_bytes(b"movie")
+                old = time.time() - 7200
+                os.utime(movie, (old, old))
 
-            processed: list[str] = []
-            settings = WatchSettings(
+            settings_obj = WatchSettings(
                 max_threads=None,
                 target_vmaf=95.0,
                 min_source_height=0,
@@ -1117,47 +1125,45 @@ class TestWatcherEncodeWindow(unittest.TestCase):
                 encode_window_start="09:00",
                 encode_window_end="17:00",
             )
+            window_calls: list[bool] = []
 
-            stack = ExitStack()
-            captured: list[str] = []
-            from loguru import logger
+            def window(start: str, end: str, now=None) -> bool:
+                window_calls.append(True)
+                # 1: pass 1's pass-level check (closed); 2: pass 2's pass-level
+                # check (open); 3: candidate 1's per-file check (open);
+                # 4: candidate 2's per-file check (closed - the crossing)
+                return [False, True, True, False][len(window_calls) - 1]
 
-            sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
-            try:
-                with (
-                    mock.patch("shrinkray.engine.watch.encode_window_open", return_value=False),
-                    mock.patch(
-                        "shrinkray.engine.watch.encode_with_quality",
-                        side_effect=lambda m, o, **kw: processed.append(m.name),
-                    ),
-                ):
-                    _isolated_lock(stack, tmp)
-                    with stack:
-                        watch_mod.watch([inbox], out, once=True, settings=lambda: settings)
-                text = "".join(captured)
-                self.assertEqual(processed, [], "the pass encoded outside the window")
-                self.assertIn("outside the encode window", text)
-
-                # the file stays eligible: it was never entered into `known`
-                # (a second pass inside the window encodes it)
-                def fake_encode(m, o, **kw):
-                    processed.append(m.name)
-                    from shrinkray.engine.plan import QualityResult
-
-                    return QualityResult(
-                        input=m, output=o, success=False, skipped_reason="no size gain"
-                    )
-
-                with (
-                    mock.patch("shrinkray.engine.watch.encode_window_open", return_value=True),
-                    mock.patch(
-                        "shrinkray.engine.watch.encode_with_quality",
-                        side_effect=fake_encode,
-                    ),
-                ):
-                    watch_mod.watch([inbox], out, once=True, settings=lambda: settings)
-                self.assertEqual(
-                    processed, ["good.mkv"], "the deferred file was never reconsidered"
+            def fake_encode(m, o, **kw):
+                seen.append(Path(m).name)
+                return QualityResult(
+                    input=m, output=o, success=False, skipped_reason="no size gain"
                 )
-            finally:
-                logger.remove(sink_id)
+
+            passes = [0]
+
+            def fake_sleep(interval, stop_event, **kwargs):
+                passes[0] += 1
+                if passes[0] >= 2 and stop_event is not None:
+                    stop_event.set()
+
+            stop = threading.Event()
+            stack = ExitStack()
+            with (
+                mock.patch("shrinkray.engine.watch.encode_window_open", side_effect=window),
+                mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_encode),
+                mock.patch("shrinkray.engine.watch._wait_or_stop", side_effect=fake_sleep),
+                mock.patch("shrinkray.engine.watch.STABLE_CHECK_INTERVAL", 0.0),
+                mock.patch("shrinkray.engine.watch.probe_duration_seconds", return_value=600.0),
+                mock.patch("shrinkray.engine.watch.find_handbrake", return_value="hb"),
+            ):
+                _isolated_lock(stack, tmp)
+                with stack:
+                    watch_mod.watch(
+                        [root], out, once=False, stop_event=stop, settings=lambda: settings_obj
+                    )
+            # the candidates' order is the readdir's, not mine: exactly ONE
+            # candidate is encoded (the first), the second is deferred by the
+            # per-file check, and pass 1 encoded nothing (the known pin)
+            self.assertEqual(len(seen), 1, f"the window gate misfired: {window_calls}")
+            self.assertEqual(len(window_calls), 4, "a check did not run as expected")
