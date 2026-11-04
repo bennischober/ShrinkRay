@@ -140,7 +140,7 @@
   </header>
 
   {#if history.length === 0}
-    <div class="empty dim">no jobs yet — enqueue a scan to open the log</div>
+    <div class="empty dim">no jobs yet — the resident app fills this page as it works</div>
   {:else if filteredHistory.length === 0}
     <div class="empty dim">no entries match this filter</div>
   {:else}
