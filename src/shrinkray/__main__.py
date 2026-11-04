@@ -1058,8 +1058,8 @@ def retained(
     if not db_file.is_file():
         log_error(
             f"Database '{db_file}' not found. It is created by the resident app"
-            " (shrinkray serve) or by any run given --db; a run without a"
-            " database records nothing, so its originals are the"
+            " (shrinkray serve) or by an encode or plan run given --db; a run"
+            " without a database records nothing, so its originals are the"
             " *.shrinkray-original files beside the sources."
         )
         raise typer.Exit(1)

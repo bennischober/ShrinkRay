@@ -1489,6 +1489,11 @@ class TestRetainedCommand(unittest.TestCase):
         self.assertIn("serve", text, "the resident command that creates the database is named")
         self.assertIn("--db", text, "the flag that makes a run record is named")
         self.assertIn(
+            "encode or plan",
+            text,
+            "the runs that create a database are named (doctor/setup do not)",
+        )
+        self.assertIn(
             ".shrinkray-original", text, "what a run without a database leaves behind is named"
         )
         self.assertNotIn("scan", text, "the CLI defines no scan command (issue #524)")
