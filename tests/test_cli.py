@@ -1497,3 +1497,32 @@ class TestRetainedCommand(unittest.TestCase):
             ".shrinkray-original", text, "what a run without a database leaves behind is named"
         )
         self.assertNotIn("scan", text, "the CLI defines no scan command (issue #524)")
+
+
+class TestThreadsHelp(unittest.TestCase):
+    """The --threads help states the fallback the code performs, and no help
+    string still advertises a "Quality mode" (issue #202 removed it; #528)."""
+
+    def test_the_threads_help_states_the_fallback(self) -> None:
+        runner = CliRunner()
+        for command in ("encode", "plan"):
+            result = runner.invoke(app, [command, "--help"])
+            self.assertEqual(result.exit_code, 0, result.output)
+            # rich wraps the help at spaces: assert on fragments that stay
+            # one token
+            self.assertIn(
+                "handbrake.max_threads",
+                result.output,
+                f"{command}'s --threads help names the fallback",
+            )
+            self.assertNotIn("(0 = all cores)", result.output)
+            self.assertNotIn("Quality", result.output, f"{command}'s help strings")
+
+    def test_cap_threads_config_value_semantics(self) -> None:
+        """The fallback's target: the config's cap is used as-is; its 0 means
+        all cores (cap_threads returns None, the encoder runs uncapped)."""
+        from shrinkray.engine.pipeline import cap_threads
+
+        self.assertEqual(cap_threads(4), 4)
+        self.assertIsNone(cap_threads(0))
+        self.assertIsNone(cap_threads(None))

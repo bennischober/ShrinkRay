@@ -265,7 +265,7 @@ def encode(
         False,
         "--verify",
         help=(
-            "Quality mode: measure the FULL output file against the source "
+            "Measure the FULL output file against the source "
             "after each encode (ground truth beyond the 10s probes; "
             "sub-sampled 1/10 for files > 2 GB). Slow for large libraries."
         ),
@@ -274,7 +274,7 @@ def encode(
         False,
         "--replan",
         help=(
-            "Quality mode: ignore stored plans and re-probe every movie "
+            "Ignore stored plans and re-probe every movie "
             "(a plan normally lets the encode skip probing)."
         ),
     ),
@@ -291,7 +291,7 @@ def encode(
         None,
         "--probe-encoder-preset",
         help=(
-            "Quality mode: encoder speed preset for the PROBE encodes "
+            "Encoder speed preset for the PROBE encodes "
             "(a measurement setting; SVT-AV1 speed -1 to 10, higher = faster - a lower preset is slower and compresses better). "
             "Default: the handbrake.probe_encoder_preset config value. "
             "Changing it invalidates stored plans "
@@ -302,7 +302,7 @@ def encode(
         None,
         "--encoder-preset",
         help=(
-            "Quality mode: encoder speed preset for the FINAL encode "
+            "Encoder speed preset for the FINAL encode "
             "(an output setting; SVT-AV1 speed -1 to 10, higher = faster; a lower preset is slower and better, "
             "e.g. 3). Default: the handbrake.encoder_preset config value. "
             "The probes "
@@ -314,7 +314,8 @@ def encode(
         "--threads",
         min=0,
         help=(
-            "Per-encode thread cap (0 = all cores). Keeps cores free for "
+            "Per-encode thread cap; 0 or omitted uses handbrake.max_threads "
+            "(whose 0 means all cores). Keeps cores free for "
             "a media server or desktop work during long encodes."
         ),
     ),
@@ -785,7 +786,7 @@ def plan(
         0,
         "--threads",
         min=0,
-        help="Per-encode thread cap for the probes (0 = all cores).",
+        help="Per-encode thread cap for the probes; 0 or omitted uses handbrake.max_threads (whose 0 means all cores).",
     ),
     no_table: bool = typer.Option(
         False, "--no-table", help="Do not print the results as table to the console."
