@@ -281,7 +281,7 @@ The console's chrome spine. Width 190px, rail ground, right seam, sticky. **Bran
 
 ### Buttons (`.act`)
 - **Shape:** 4px radius, 1px border, legend voice (10.5px, 1.4px tracking, uppercase). Two context sizes render: standard `5px 14px` (the library's CLEAR) and roomy `6px 16px` (MovieDetailPage's FOLDER). (The compact `4px 12px` size is reserved - the overview's strips render `.link`/`.nav-link`, not `.act`.)
-- **Secondary (default):** raised-panel fill, 1px seam border, ink text (the live `.act` rules at `LibraryPage.svelte`/`MovieDetailPage.svelte`; the ink border is the dead `.act.scan` rule's). Hover: teal border, teal-ink text.
+- **Secondary (default):** raised-panel fill, 1px seam border, ink text (the live `.act` rules at `LibraryPage.svelte`/`MovieDetailPage.svelte`). Hover: teal border, teal-ink text.
 - **Primary:** solid teal fill, ground-colored text (inverts per theme — dark ground text on bright teal, light ground text on deep teal). Hover: `brightness(1.08)`. No primary button exists in the current UI (the resident app renders no encode affordance — the library works on its own); the style is reserved for the loudest verb when one returns.
 - **Quiet:** seam border, dim ink (CLEAR and FOLDER render as `.act quiet`; the overview's DISMISS is a `.link`).
 - **Disabled:** 40% opacity, default cursor.
