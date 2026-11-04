@@ -242,3 +242,31 @@ class TestSubprocessTimeouts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFileCounterPrefix(unittest.TestCase):
+    """Issue #471: the [i/N] prefix rides every line emitted inside a
+    file_scope, and no line outside one."""
+
+    def test_the_prefix_rides_scoped_lines_only(self) -> None:
+        from loguru import logger
+
+        from shrinkray.logger import file_scope, log
+
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            log("outside")
+            with file_scope(1, 1):
+                log("inside single")
+            with file_scope(2, 5):
+                log("inside multi")
+            log("outside again")
+        finally:
+            logger.remove(sink_id)
+        text = "".join(captured)
+        self.assertIn("outside\n", text.replace("[1/1] ", "").replace("[2/5] ", ""), text)
+        self.assertIn("[1/1] inside single", text, text)
+        self.assertIn("[2/5] inside multi", text, text)
+        self.assertNotIn("[1/1] outside", text, text)
+        self.assertNotIn("[2/5] outside", text, text)

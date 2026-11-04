@@ -9,6 +9,7 @@ Run with `shrinkray serve` (the resident mode; `app` stays as a hidden alias).
 
 import hmac
 import json
+import logging
 import os
 import os.path
 import queue
@@ -202,7 +203,9 @@ async def log_requests(
         )
         raise
     duration = (_time.perf_counter() - start) * 1000
-    if request.url.path.startswith("/api"):
+    # the healthcheck polls /api/status every 30 s (issue #471): two lines
+    # per poll carried no operator signal and dominated docker logs
+    if request.url.path.startswith("/api") and request.url.path != "/api/status":
         log(f"{request.method} {request.url.path} -> {response.status_code} ({duration:.0f}ms)")
     return response
 
@@ -212,6 +215,18 @@ async def log_requests(
 # scanning, writing or exposing arbitrary filesystem locations. Set via
 # allow_roots() at startup, derived from the database location by default.
 _allowed_roots: list[Path] = []
+
+
+class _StatusAccessFilter(logging.Filter):
+    """Drops uvicorn's access lines for the healthcheck's /api/status polls.
+
+    The Dockerfile's 30-second healthcheck produced two lines per poll (the
+    middleware's and uvicorn's own); neither carries operator signal and
+    together they dominated every captured log (issue #471).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/api/status" not in record.getMessage()
 
 
 def allow_roots(roots: list[Path]) -> None:
@@ -376,6 +391,17 @@ class AppState:
         The result column stays NULL (live progress was never persisted):
         the row becomes a plain failed-trail entry.
         """
+        # announce each recovered row (issue #471): the one event that
+        # explains why the previous run's work stopped is the one event the
+        # transcript omitted
+        rows = self.connection.execute(
+            "SELECT id, kind, started_at FROM jobs WHERE state = ?", ("running",)
+        ).fetchall()
+        for row in rows:
+            log(
+                f"Recovering job #{row['id']} ({row['kind']}) started "
+                f"{row['started_at']}: interrupted by app restart"
+            )
         self.connection.execute(
             "UPDATE jobs SET state = ?, error = ?, result = NULL, "
             "finished_at = datetime('now') WHERE state = ?",
@@ -1410,6 +1436,9 @@ def _serve_forever(host: str, port: int) -> None:
     config = uvicorn.Config(
         app, host=host, port=port, log_level="info", timeout_graceful_shutdown=15
     )
+    # the healthcheck's /api/status polls must not dominate the transcript
+    # (issue #471): the middleware drops its own line, this drops uvicorn's
+    logging.getLogger("uvicorn.access").addFilter(_StatusAccessFilter())
     _ServerWithAppShutdown(config).run()
 
 

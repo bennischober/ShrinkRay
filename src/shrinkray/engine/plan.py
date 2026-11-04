@@ -484,6 +484,9 @@ def plan_quality(
     duration = probe_duration_seconds(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
     if duration is not None and duration < MIN_ENCODE_SECONDS:
+        # the plan's verdict line (issue #471): the decision exists in the
+        # row and the dashboard, but docker logs must say it too
+        log(f"Plan for '{input_file.name}': skip (too short)")
         # every return carries the run's identity (issue #436): a row that
         # commits a verdict must commit the facts of the bytes it decided
         # about, never a commit-time stat
@@ -519,6 +522,7 @@ def plan_quality(
             if width is not None and height is not None
             else (f"width {width}px" if width is not None else f"height {height}px")
         )
+        log(f"Plan for '{input_file.name}': skip (resolution too low)")
         return QualityResult(
             input=input_file,
             output=input_file,
@@ -544,6 +548,7 @@ def plan_quality(
     # the file's size
     size_gb = input_file.stat().st_size / (1024**3)
     if min_source_size_gb > 0 and size_gb < min_source_size_gb:
+        log(f"Plan for '{input_file.name}': skip (below min size)")
         return QualityResult(
             input=input_file,
             output=input_file,
@@ -573,6 +578,7 @@ def plan_quality(
 
     allowed = allowed_codecs(candidate_codecs)
     if codec is not None and codec not in allowed:
+        log(f"Plan for '{input_file.name}': skip (source codec not a candidate)")
         return QualityResult(
             input=input_file,
             output=input_file,
@@ -679,6 +685,8 @@ def plan_quality(
             # plans row and is trusted without re-probing later, so it must
             # not commit for bytes the run no longer sees. Loud abort, the
             # caller reports it (the entry points catch RuntimeError).
+            # NO verdict line here: the search layer already logged the
+            # would-not-shrink skip (issue #471's no-duplicate rule)
             ensure_unchanged(input_file, identity, "plan")
             return QualityResult(
                 input=input_file,
@@ -707,6 +715,7 @@ def plan_quality(
             # the unreachable verdict is recorded like a skip (issue #436):
             # the same record-time recheck applies
             ensure_unchanged(input_file, identity, "plan")
+            log(f"Plan for '{input_file.name}': skip (target unreachable)")
             return QualityResult(
                 input=input_file,
                 output=input_file,
@@ -738,6 +747,11 @@ def plan_quality(
         # chosen CRF and the size estimate are decisions about these bytes,
         # and the fingerprint they commit under must be the run-start stat
         ensure_unchanged(input_file, identity, "plan")
+        # worded as a prediction, never a promise (issue #471): the swap is
+        # a later, separately-reported step
+        log(
+            f"Plan for '{input_file.name}': encode at CRF {crf} (predicted {factor:.2f}x of source)"
+        )
         return QualityResult(
             input=input_file,
             output=input_file,

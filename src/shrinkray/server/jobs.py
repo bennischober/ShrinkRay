@@ -17,6 +17,7 @@ import queue
 import sqlite3
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -24,6 +25,7 @@ from pathlib import Path
 
 from shrinkray.config import Conf
 from shrinkray.engine.pipeline import cap_threads
+from shrinkray.logger import file_scope, log
 from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
 
@@ -789,24 +791,26 @@ def execute_plan(
                 }
             )
         try:
-            result = plan_quality(
-                movie,
-                target_vmaf=payload.get("target_vmaf", config.target_vmaf),
-                encoder=config.handbrake_encoder,
-                probe_encoder_preset=payload.get(
-                    "probe_encoder_preset", config.handbrake_probe_encoder_preset
-                ),
-                encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                cancel=cancel,
-                db_file=_db_file_of(connection),
-                encoder_threads=cap_threads(config.handbrake_max_threads),
-                progress=progress,
-                min_source_height=config.min_source_height,
-                min_source_width=config.min_source_width,
-                min_source_size_gb=config.min_source_size_gb,
-                candidate_codecs=tuple(config.candidate_codecs),
-                crop_sample_count=config.crop_sample_count,
-            )
+            # the [i/N] prefix on this file's decision lines (issue #471)
+            with file_scope(index + 1, total):
+                result = plan_quality(
+                    movie,
+                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                    encoder=config.handbrake_encoder,
+                    probe_encoder_preset=payload.get(
+                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                    ),
+                    encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
+                    cancel=cancel,
+                    db_file=_db_file_of(connection),
+                    encoder_threads=cap_threads(config.handbrake_max_threads),
+                    progress=progress,
+                    min_source_height=config.min_source_height,
+                    min_source_width=config.min_source_width,
+                    min_source_size_gb=config.min_source_size_gb,
+                    candidate_codecs=tuple(config.candidate_codecs),
+                    crop_sample_count=config.crop_sample_count,
+                )
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
             continue
@@ -1011,7 +1015,12 @@ def _encode_measured(
             # Two-directory mode keys on the output directory it writes into.
             # Per movie, never nested.
             lock_target = movie.parent if in_place else output_dir
-            with guard_encodes(lock_target, holder="encode-job"):
+            # the [i/N] prefix covers the record and swap lines too (issue
+            # #471 round 1, finding 4): they are per-file lines
+            with (
+                file_scope(index + 1, total),
+                guard_encodes(lock_target, holder="encode-job"),
+            ):
                 result = encode_with_quality(
                     movie,
                     output_dir / movie.name,
@@ -1215,6 +1224,14 @@ class JobWorker:
             cancel = threading.Event()
         self._running_cancel = cancel
         self.queue.register_cancel_event(job.id, cancel)
+        # the transcript's phase boundaries (issue #471): a job that runs for
+        # hours between two progress lines is invisible in docker logs
+        # without these
+        started = time.perf_counter()
+        log(f"Job #{job.id} ({job.kind.value}) started")
+        result: dict | None = None
+        failure: str | None = None
+        cancelled = False
 
         def progress(data: dict) -> None:
             """Persists live progress for the API/UI (worker thread only)."""
@@ -1234,12 +1251,14 @@ class JobWorker:
             if result.get("cancelled"):
                 # a graceful cancel carries the engine's partial result —
                 # the UI renders outcomes on cancelled encode rows
+                cancelled = True
                 self.queue.mark_cancelled(job, result)
             else:
                 self.queue.finish(job, result)
         except Cancelled:
             # the engine raised between checkpoints (subprocess terminated);
             # partial probe/output artifacts are cleaned by the engine
+            cancelled = True
             self.queue.mark_cancelled(job)
         except Exception as e:
             from shrinkray.telemetry import save_failure
@@ -1250,6 +1269,47 @@ class JobWorker:
                 context={"job_id": job.id, "payload": job.payload},
             )
             self.queue.fail(job, f"{type(e).__name__}: {e}")
+            failure = f"{type(e).__name__}: {e}"
         finally:
             self._running_cancel = None
             self.queue.unregister_cancel_event(job.id)
+            # one end line per job, whatever the outcome (issue #471): the
+            # duration is measured, never subtracted from console stamps; the
+            # line carries the outcome counts and, on failure, the error - a
+            # failed job's transcript must not read like success
+            log(
+                f"Job #{job.id} ({job.kind.value}) finished in "
+                f"{time.perf_counter() - started:.0f}s"
+                + (f" - {self._outcome_counts(result)}" if result else "")
+                + (", cancelled" if cancelled else "")
+                + (f" - FAILED: {failure}" if failure else "")
+            )
+
+    @staticmethod
+    def _outcome_counts(result: dict) -> str:
+        """Counts the result's per-item outcomes for the job end line.
+
+        Args:
+            result (dict): The executor's result dict.
+
+        Returns:
+            str: A short summary like ``6 to encode, 2 skipped, 0 failed``.
+        """
+        items = result.get("plans") or result.get("outcomes") or []
+        if not items:
+            movies = result.get("movies")
+            errors = result.get("errors") or []
+            if movies is not None:
+                return f"{movies} scanned, {len(errors)} errors"
+            return ""
+        encode_like = sum(
+            1 for x in items if x.get("state") in ("encode", "encoded", "already_encoded")
+        )
+        skipped = sum(1 for x in items if x.get("state") in ("skip", "skipped"))
+        failed = sum(1 for x in items if x.get("state") in ("error", "failed"))
+        cancelled = sum(1 for x in items if x.get("state") == "cancelled")
+        if "plans" in result:
+            summary = f"{encode_like} to encode, {skipped} skipped, {failed} failed"
+        else:
+            summary = f"{encode_like} encoded, {skipped} skipped, {failed} failed"
+        return summary + (f", {cancelled} cancelled" if cancelled else "")

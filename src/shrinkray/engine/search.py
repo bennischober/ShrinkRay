@@ -710,7 +710,7 @@ def find_optimal_crf(
         # search the operator saw only 'Probing ...' for minutes with no
         # sign of convergence - the progress event reaches the CLI's bar
         # (transient) and the daemon log, but neither is a transcript line
-        log(f"probe CRF {crf}: VMAF {round(vmaf, 2)} (probe {len(probes)})")
+        log(f"'{movie.name}' probe CRF {crf}: VMAF {round(vmaf, 2)} (probe {len(probes)})")
         if progress:
             progress(
                 {
@@ -817,8 +817,8 @@ def find_optimal_crf_and_skip(
     )
     if factor >= 1.0:
         log(
-            f"Skipping '{movie.name}': re-encode would not shrink it "
-            f"(probe factor {factor:.2f} at CRF {crf_range[1]})."
+            f"Skipping '{movie.name}': no size gain (re-encode would not "
+            f"shrink it, probe factor {factor:.2f} at CRF {crf_range[1]})."
         )
         return crf_range[1], 0.0, [], True
 
@@ -866,8 +866,8 @@ def find_optimal_crf_and_skip(
     )
     if chosen_factor >= 1.0:
         log(
-            f"Skipping '{movie.name}': re-encode would not shrink it "
-            f"(probe factor {chosen_factor:.2f} at the chosen CRF {chosen})."
+            f"Skipping '{movie.name}': no size gain (re-encode would not "
+            f"shrink it, probe factor {chosen_factor:.2f} at the chosen CRF {chosen})."
         )
         return chosen, achieved, probes, True
     return chosen, achieved, probes, False
