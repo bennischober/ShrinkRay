@@ -1131,8 +1131,10 @@ class TestWatcherEncodeWindow(unittest.TestCase):
                 window_calls.append(True)
                 # 1: pass 1's pass-level check (closed); 2: pass 2's pass-level
                 # check (open); 3: candidate 1's per-file check (open);
-                # 4: candidate 2's per-file check (closed - the crossing)
-                return [False, True, True, False][len(window_calls) - 1]
+                # 4: candidate 2's per-file check (closed - the crossing);
+                # 5: pass 3's pass-level check (open); 6: the deferred
+                # candidate's per-file check (open - it is reconsidered)
+                return [False, True, True, False, True, True][len(window_calls) - 1]
 
             def fake_encode(m, o, **kw):
                 seen.append(Path(m).name)
@@ -1144,7 +1146,7 @@ class TestWatcherEncodeWindow(unittest.TestCase):
 
             def fake_sleep(interval, stop_event, **kwargs):
                 passes[0] += 1
-                if passes[0] >= 2 and stop_event is not None:
+                if passes[0] >= 3 and stop_event is not None:
                     stop_event.set()
 
             stop = threading.Event()
@@ -1162,8 +1164,14 @@ class TestWatcherEncodeWindow(unittest.TestCase):
                     watch_mod.watch(
                         [root], out, once=False, stop_event=stop, settings=lambda: settings_obj
                     )
-            # the candidates' order is the readdir's, not mine: exactly ONE
-            # candidate is encoded (the first), the second is deferred by the
-            # per-file check, and pass 1 encoded nothing (the known pin)
-            self.assertEqual(len(seen), 1, f"the window gate misfired: {window_calls}")
-            self.assertEqual(len(window_calls), 4, "a check did not run as expected")
+            # the candidates' order is the readdir's, not mine. Pass 1
+            # encoded nothing (the pass-level deferral); pass 2 encoded the
+            # first candidate and deferred the second (the per-file check);
+            # pass 3 encoded the deferred one (it was never in `known` - the
+            # starvation pin: had the per-file deferral entered it into
+            # `known`, pass 3 would have skipped it and seen would hold one
+            # name) and skipped the first (already in `known`).
+            self.assertEqual(
+                sorted(seen), ["one.mkv", "two.mkv"], f"the window gate misfired: {window_calls}"
+            )
+            self.assertEqual(len(window_calls), 6, "a check did not run as expected")
