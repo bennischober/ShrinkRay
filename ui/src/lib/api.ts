@@ -301,7 +301,7 @@ const ERROR_TRANSLATIONS: [RegExp, (m: RegExpMatchArray) => string][] = [  [
   ],
   [
     /interrupted by app restart/,
-    () => 'the run was interrupted by an app restart — RETRY resumes it',
+    () => 'the run was interrupted by an app restart',
   ],
 ]
 
