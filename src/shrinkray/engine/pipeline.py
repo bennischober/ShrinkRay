@@ -208,8 +208,8 @@ def cap_threads(max_threads: int | None) -> int | None:
             negative values are also treated as no cap).
 
     Returns:
-        int | None: The thread count for HandBrake's --encopts threads=N,
-            None when uncapped.
+        int | None: The thread count for HandBrake's ``--encopts pin=N``
+            option (the SVT-AV1 pin; None when uncapped).
     """
     if max_threads is None or max_threads <= 0:
         return None
