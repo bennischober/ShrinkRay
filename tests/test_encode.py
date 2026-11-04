@@ -906,8 +906,12 @@ class TestEncodeLock(unittest.TestCase):
         acquisition — not on a wall-clock guess that the daemon thread got
         scheduled (issue #545: under full-suite CPU stress a 0.2 s sleep
         guaranteed nothing, the lock aged stale and the rival legitimately
-        stole the slot). A heartbeat that beats once and then stops fails
-        here: the beat that matters is the one inside/after the window."""
+        stole the slot). The wait exits only on a beat strictly past the
+        window: a heartbeat that beats once BEFORE the window and then
+        stops fails here; what the wait proves is that a fresh beat exists
+        at assertion time even after the window elapsed — not a cadence
+        guarantee (a continuity assertion would be load-fragile by
+        nature)."""
         from shrinkray.engine import lock as lock_mod
 
         with (
@@ -927,8 +931,8 @@ class TestEncodeLock(unittest.TestCase):
                 if time.monotonic() >= deadline:
                     self.fail("the heartbeat did not keep the slot alive past the stale window")
                 time.sleep(0.005)
-            # a beat landed inside/after the window: the slot provably
-            # survived the stale window, so a rival's acquisition must be
+            # a beat landed strictly past the window: the lock is provably
+            # fresh at assertion time, so a rival's acquisition must be
             # refused
             with self.assertRaises(lock_mod.EncodeBusyError):
                 lock_mod.acquire_encode_slot(self.out, holder="rival")
