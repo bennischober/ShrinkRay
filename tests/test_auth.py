@@ -319,3 +319,32 @@ class TestStatusPollSilence(unittest.TestCase):
         text = "".join(captured)
         self.assertNotIn("GET /api/status", text, text)
         self.assertIn("GET /api/library", text, text)
+
+    def test_the_uvicorn_access_filter_drops_status_polls(self) -> None:
+        """Issue #471: the filter drops uvicorn's own /api/status access line
+        (the second of the two lines per healthcheck poll) and keeps the rest."""
+        import logging
+
+        from shrinkray.server.app import _StatusAccessFilter
+
+        f = _StatusAccessFilter()
+        status = logging.LogRecord(
+            "uvicorn.access",
+            logging.INFO,
+            "p",
+            1,
+            '%s - "%s %s HTTP/1.1" %d',
+            ("x", "GET", "/api/status", 200),
+            None,
+        )
+        library = logging.LogRecord(
+            "uvicorn.access",
+            logging.INFO,
+            "p",
+            1,
+            '%s - "%s %s HTTP/1.1" %d',
+            ("x", "GET", "/api/library", 200),
+            None,
+        )
+        self.assertFalse(f.filter(status))
+        self.assertTrue(f.filter(library))

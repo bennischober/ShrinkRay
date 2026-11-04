@@ -1475,7 +1475,7 @@ def encode_with_quality(
         crf_source = "probe"
         probe_seconds = _time.perf_counter() - run_started
 
-    log(f"Chosen CRF {crf} (VMAF {achieved})")
+    log(f"'{input_file.name}': chosen CRF {crf} (VMAF {achieved})")
     # the encode-start recheck (issue #436): a CRF chosen from bytes-A and
     # applied to bytes-B is an UNMEASURED decision for bytes-B (no fixed
     # preset path to fall into, #202) and costs hours - one stat is the
@@ -1635,11 +1635,14 @@ def encode_with_quality(
             verified_subsample = None
 
     # the encode's outcome line (issue #471): the transcript is silent from
-    # 'Chosen CRF n' until the verification line hours later without it
+    # 'chosen CRF' until the verification line hours later without it; a
+    # verification finding rides the line (issue #471 round 1, finding 1: the
+    # CLI's duplicate yellow print is gone, the finding must not vanish)
     log(
         f"Encode result for '{input_file.name}': CRF {crf}, output "
         f"{final_output_size / (1024**3):.2f} GB "
         f"({100 * final_output_size / final_input_size:.0f}% of source)"
+        + (f" (finding: {tracks_detail})" if not tracks_ok else "")
     )
     return QualityResult(
         input=input_file,

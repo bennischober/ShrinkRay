@@ -683,12 +683,10 @@ def _record_encodes(
                                     assert saved >= 0, (
                                         f"success with saved={saved}%: {result.error}"
                                     )
-                                    console.print(
-                                        f"[green]Encoded '{movie.name}': "
-                                        f"{result.input_size / (1024**3):.2f} GB -> "
-                                        f"{result.output_size / (1024**3):.2f} GB ({saved}% saved) "
-                                        f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
-                                    )
+                                    # NO per-file green line here (issue #471 round 1,
+                                    # finding 1): the engine's outcome line says the same
+                                    # thing on stderr; two lines per event in docker logs
+                                    # violated the one-line property
                                     if connection is not None:
                                         outcome = record_quality_results(
                                             connection,
@@ -712,20 +710,14 @@ def _record_encodes(
                                             outcome.encode_id if outcome else None,
                                             error=result.error,
                                         )
-                                    if result.error is not None:
-                                        # a verification finding must not hide behind
-                                        # the green line (review finding 1: an error
-                                        # the user cannot see is a bug); with replace,
-                                        # the swap above declined and kept the original
-                                        console.print(
-                                            f"[yellow]Encoded '{movie.name}' with a finding: "
-                                            f"{result.error}[/yellow]"
-                                        )
+                                    # a verification finding rides the engine's outcome
+                                    # line now (issue #471 round 1, finding 1); with
+                                    # replace, the swap above declined and kept the
+                                    # original
                                 elif result.skipped_reason is not None:
-                                    # guardrail skip => record it so future runs do not re-probe
-                                    console.print(
-                                        f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]"
-                                    )
+                                    # NO per-file yellow line here (issue #471 round 1,
+                                    # finding 1): the engine's skip line says it; record
+                                    # so future runs do not re-probe
                                     if connection is not None:
                                         record_quality_results(connection, movie, result, config)
                                 else:

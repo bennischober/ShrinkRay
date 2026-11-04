@@ -1015,9 +1015,10 @@ def _encode_measured(
             # Two-directory mode keys on the output directory it writes into.
             # Per movie, never nested.
             lock_target = movie.parent if in_place else output_dir
-            with guard_encodes(lock_target, holder="encode-job"):
-                # the [i/N] prefix on this file's decision lines (issue #471)
-                with file_scope(index + 1, total):
+            # the [i/N] prefix covers the record and swap lines too (issue
+            # #471 round 1, finding 4): they are per-file lines
+            with file_scope(index + 1, total):
+                with guard_encodes(lock_target, holder="encode-job"):
                     result = encode_with_quality(
                         movie,
                         output_dir / movie.name,
@@ -1228,6 +1229,9 @@ class JobWorker:
         # without these
         started = time.perf_counter()
         log(f"Job #{job.id} ({job.kind.value}) started")
+        result: dict | None = None
+        failure: str | None = None
+        cancelled = False
 
         def progress(data: dict) -> None:
             """Persists live progress for the API/UI (worker thread only)."""
@@ -1247,12 +1251,14 @@ class JobWorker:
             if result.get("cancelled"):
                 # a graceful cancel carries the engine's partial result —
                 # the UI renders outcomes on cancelled encode rows
+                cancelled = True
                 self.queue.mark_cancelled(job, result)
             else:
                 self.queue.finish(job, result)
         except Cancelled:
             # the engine raised between checkpoints (subprocess terminated);
             # partial probe/output artifacts are cleaned by the engine
+            cancelled = True
             self.queue.mark_cancelled(job)
         except Exception as e:
             from shrinkray.telemetry import save_failure
@@ -1263,11 +1269,42 @@ class JobWorker:
                 context={"job_id": job.id, "payload": job.payload},
             )
             self.queue.fail(job, f"{type(e).__name__}: {e}")
+            failure = f"{type(e).__name__}: {e}"
         finally:
             self._running_cancel = None
             self.queue.unregister_cancel_event(job.id)
             # one end line per job, whatever the outcome (issue #471): the
-            # duration is measured, never subtracted from console stamps
+            # duration is measured, never subtracted from console stamps; the
+            # line carries the outcome counts and, on failure, the error - a
+            # failed job's transcript must not read like success
             log(
-                f"Job #{job.id} ({job.kind.value}) finished in {time.perf_counter() - started:.0f}s"
+                f"Job #{job.id} ({job.kind.value}) finished in "
+                f"{time.perf_counter() - started:.0f}s"
+                + (f" - {self._outcome_counts(result)}" if result else "")
+                + (", cancelled" if cancelled else "")
+                + (f" - FAILED: {failure}" if failure else "")
             )
+
+    @staticmethod
+    def _outcome_counts(result: dict) -> str:
+        """Counts the result's per-item outcomes for the job end line.
+
+        Args:
+            result (dict): The executor's result dict.
+
+        Returns:
+            str: A short summary like ``6 to encode, 2 skipped, 0 failed``.
+        """
+        items = result.get("plans") or result.get("outcomes") or []
+        if not items:
+            movies = result.get("movies")
+            errors = result.get("errors") or []
+            if movies is not None:
+                return f"{movies} scanned, {len(errors)} errors"
+            return ""
+        encode_like = sum(
+            1 for x in items if x.get("state") in ("encode", "encoded", "already_encoded")
+        )
+        skipped = sum(1 for x in items if x.get("state") in ("skip", "skipped"))
+        failed = sum(1 for x in items if x.get("state") in ("error", "failed"))
+        return f"{encode_like} to encode, {skipped} skipped, {failed} failed"
