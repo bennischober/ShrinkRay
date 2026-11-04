@@ -155,14 +155,8 @@ class TestVmafParityAgainstAbAv1(_AbAv1Mixin):
         reference: Path,
         distorted: Path,
         crop: tuple | None = None,
-        hold: bool = True,
-        why: str = "",
     ) -> None:
-        """Runs both measurements, records the report line, holds the tolerance.
-
-        hold=False reports the pair without asserting (a documented deviation
-        or a known bug with its own issue, named in `why`).
-        """
+        """Runs both measurements, records the report line, holds the tolerance."""
         ours = measure_vmaf(distorted, reference, self.workdir, crop=crop)
         theirs = self._ab_av1_vmaf(
             reference,
@@ -174,14 +168,13 @@ class TestVmafParityAgainstAbAv1(_AbAv1Mixin):
                 else None
             ),
         )
-        self.report.append((name + (f" [{why}]" if why else ""), ours, theirs))
-        if hold:
-            self.assertLessEqual(
-                abs(ours - theirs),
-                TOLERANCE,
-                f"{name}: ShrinkRay {ours:.4f} vs ab-av1 {theirs:.4f} "
-                f"(delta {abs(ours - theirs):.4f} > {TOLERANCE})",
-            )
+        self.report.append((name, ours, theirs))
+        self.assertLessEqual(
+            abs(ours - theirs),
+            TOLERANCE,
+            f"{name}: ShrinkRay {ours:.4f} vs ab-av1 {theirs:.4f} "
+            f"(delta {abs(ours - theirs):.4f} > {TOLERANCE})",
+        )
 
     # -- the pairs (issue #306) ---------------------------------------------
 

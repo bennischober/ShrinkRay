@@ -246,8 +246,9 @@ class VmafRecipe:
         model and scale follow. Those two are still covered: the model and scale
         depend only on the source dimensions (the file's identity, already in the
         fingerprint) and the crop (a function of the file and the crop sample
-        count, also already there). What is left is the recipe version, the pixel
-        format and the recipe version.
+        count, also already there). What is left is the recipe version, the
+        pixel format and the legacy hdr marker (always 'no' since issue #518;
+        the field keeps old SDR fingerprints matching).
 
         Returns:
             str: e.g. 'vmaf=2;fmt=yuv420p;hdr=no'.

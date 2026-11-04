@@ -1340,7 +1340,9 @@ class TestProbeCache(unittest.TestCase):
         """The same rule for the plan: a stored plan measured with one recipe is
         never reused under another (issue #308). The recipe part the fingerprint
         carries is the crop-independent half (the plan lookup runs before bar
-        detection), so the pixel format and the model must each invalidate it.
+        detection), so the pixel format must invalidate it (the model follows
+        the source's dimensions, which the lookup covers through the file
+        identity).
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()

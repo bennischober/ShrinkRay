@@ -2,7 +2,7 @@
 
 The manual leg of the VMAF parity check: `tests/test_vmaf_parity.py` proves the
 recipe on synthetic clips generated at test time, this script runs the SAME
-comparison on real content from `test_media/` - grain, letterboxing, HDR, an
+comparison on real content from `test_media/` - grain, letterboxing, an
 open-GOP source, the things a lavfi clip cannot show. The procedure it serves is
 docs/vmaf-parity.md.
 
