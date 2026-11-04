@@ -713,6 +713,12 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
             finally:
                 if proc.poll() is None:
                     proc.kill()
+                    # reap: an unreaped kill leaves returncode None and the
+                    # Popen's __del__ warns "still running" - the resource
+                    # guard (issue #510/#548) turns that into an error at
+                    # the NEXT test's setup (measured in the 32-spinner
+                    # round on the 545 branch, 2026-11-04)
+                    proc.wait()
                 # a failed run must not leave the stub encoding in its own
                 # session: find it by its unique path and end it by pid
                 leftover = subprocess.run(
