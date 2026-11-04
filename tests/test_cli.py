@@ -1464,3 +1464,31 @@ class TestStableSeamWiring(unittest.TestCase):
         source = inspect.getsource(watch_mod)
         self.assertIn("STABLE_CHECK_INTERVAL = _duration_env(", source)
         self.assertIn("STABLE_MIN_AGE = _duration_env(", source)
+
+
+class TestRetainedCommand(unittest.TestCase):
+    """The retained command's missing-database error (issue #524): the CLI
+    defines no scan command, so the error names what actually creates the
+    database and what a run without one leaves behind."""
+
+    def test_a_missing_database_names_the_real_producers(self) -> None:
+        from loguru import logger
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "fresh.db"
+            captured: list[str] = []
+            sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+            try:
+                runner = CliRunner()
+                result = runner.invoke(app, ["retained", "list", "--db", str(missing)])
+            finally:
+                logger.remove(sink_id)
+        text = "".join(captured)
+        self.assertEqual(result.exit_code, 1, text)
+        self.assertIn("not found", text)
+        self.assertIn("serve", text, "the resident command that creates the database is named")
+        self.assertIn("--db", text, "the flag that makes a run record is named")
+        self.assertIn(
+            ".shrinkray-original", text, "what a run without a database leaves behind is named"
+        )
+        self.assertNotIn("scan", text, "the CLI defines no scan command (issue #524)")
