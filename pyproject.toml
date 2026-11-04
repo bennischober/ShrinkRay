@@ -63,6 +63,23 @@ packages = ["src/shrinkray"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --cov=shrinkray --cov-report=term-missing"
+# an unclosed resource must fail the run, not warn into a scroll nobody reads.
+# #510's acceptance criterion 3 records the #488 discussion's decision: 'the
+# guard ships, but only after this issue'. The sqlite-connection class (#480)
+# and the pipe-file class (#510) were both swept first, so the suite is green
+# under the guard. Reach: a leak finalized BEFORE pytest's LAST unraisable
+# collection fails the run (even when its test stayed green); an object
+# released after that final collection prints through the default hook and
+# the run exits 0.
+# a GC-time unclosed resource does not warn where a filter can see it: the
+# unraisable plugin wraps the __del__ warning as
+# pytest.PytestUnraisableExceptionWarning, so BOTH categories must be errors
+# for the guard to bite (round-2 review finding 1: three leak shapes passed
+# under the single-category filter)
+filterwarnings = [
+    "error::ResourceWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.mypy]
 python_version = "3.10"
