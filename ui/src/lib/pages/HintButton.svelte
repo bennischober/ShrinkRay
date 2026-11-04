@@ -1,8 +1,9 @@
 <script lang="ts">
   /** The hint pattern: a caps label whose meaning lives in a tooltip on
    * hover AND in a visible one-line explanation on focus (keyboard users
-   * get the same text via focus + aria-describedby). Used on action
-   * buttons where the verb alone under-explains. */
+   * get the same text via focus + aria-describedby). Used on buttons whose
+   * label alone under-explains — currently the retained page's
+   * "WHY KEEP THEM?" explainer, a non-action button. */
 
   let {
     label,

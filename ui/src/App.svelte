@@ -275,15 +275,6 @@
     pollTimer = setTimeout(poll, hidden ? 10000 : interval)
   }
 
-  // pending: global click-guard + per-kind queue guard (no job spam: a kind
-  // already queued/running disables its enqueue buttons)
-  const kindQueued = $derived(
-    (kind: 'scan' | 'plan' | 'encode') =>
-      history.some((j) => j.kind === kind && (j.state === 'queued' || j.state === 'running'))
-  )
-
-
-
   // ── the whole-library confirmation ──
   // This block is reserved shape: the dashboard renders no encode control
   // (issue #134 - it starts nothing; the resident app starts the backlog
@@ -295,9 +286,12 @@
   // the bars it finds, so there is nothing to arm.
 
 
-  // retry: re-enqueue the job with ITS OWN scope and parameters (never the
-  // current form — a failed single-movie encode must not become a
-  // whole-library run)
+  // retry, like the confirmation above, is reserved shape: the dashboard
+  // renders no retry control (issue #134 — it starts nothing; a failed
+  // job's row is its trail, and the terminal is the recovery path). The
+  // pattern a retry would wear if the product ever offers one: re-enqueue
+  // the job with ITS OWN scope and parameters (never the current form — a
+  // failed single-movie encode must not become a whole-library run)
   // per-movie actions (encode/plan a single title from its page)
   // jobs → movie: a single-movie job row links to its title's detail page.
   // The movie must be in the snapshot's library (the detail page's props
