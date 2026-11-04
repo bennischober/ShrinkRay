@@ -79,20 +79,19 @@ Nothing is guessed: every decision is measured, and movies that cannot profit
 the resident app) every decision is also recorded, so it is not measured twice.
 
 > [!NOTE]
-> **HDR10 sources are processed, not guaranteed** (issue
-> [#358](https://github.com/bennischober/ShrinkRay/issues/358)). They are
-> neither blocked nor validated: by default (`codec.hdr`) a file whose colour
-> space is bt2020nc or whose transfer is PQ (smpte2084) is treated as HDR, is
-> re-encoded only to 10-bit, and — because VMAF has no HDR model — is measured
-> on a tone-mapped SDR copy of both files against a fixed HDR target of 95.5,
-> which `--target-vmaf` and `quality.target_vmaf` do not change ([#361](https://github.com/bennischober/ShrinkRay/issues/361)). That
-> score is an approximation — on the one real HDR10 pair compared so far it
-> read ~2.9 below the reference tool's, which errs toward larger files, not
-> worse ones ([#340](https://github.com/bennischober/ShrinkRay/issues/340)).
-> Carrying the HDR10 metadata into the output is left to HandBrake's defaults;
-> nothing verifies it survives an encode. Dolby Vision is not handled
-> ([#104](https://github.com/bennischober/ShrinkRay/issues/104)). The original
-> is always kept aside, so check an HDR result before removing it.
+> **HDR sources are not supported yet** (issue
+> [#518](https://github.com/bennischober/ShrinkRay/issues/518), the maintainer's
+> [#340](https://github.com/bennischober/ShrinkRay/issues/340) decision of
+> 2026-10-31). A source whose transfer characteristic is HDR — PQ (`smpte2084`)
+> or HLG (`arib-std-b67`), fixed in code — is skipped as `hdr not supported`:
+> the tone-mapped SDR measurement was not valid for HDR (VMAF has no HDR
+> model; libvmaf's docs say an SDR model on HDR pictures "is not meaningful").
+> 10-bit SDR sources stay fully supported — bit depth is not the problem, the
+> HDR transfer is. Support returns with libvmaf's HDR models
+> ([#519](https://github.com/bennischober/ShrinkRay/issues/519)). Dolby Vision
+> is not handled ([#104](https://github.com/bennischober/ShrinkRay/issues/104)).
+> HDR files encoded by earlier versions keep their originals as
+> `<name>.shrinkray-original`, recoverable with `shrinkray retained`.
 
 ## Quickstart
 
@@ -308,13 +307,13 @@ size estimate comes from the short probe samples, so treat it as a ballpark;
 the probing predicts the decision, the encode measures it — the chosen CRF
 can differ by ±1 between runs.
 
-**HDR estimates are biased optimistic.** The plan's size estimate encodes one
-early window (`estimate_size_factor`, `engine/search.py`), and HDR samples skew
-toward easy content (dark, static shots), so the predicted savings land far
-above the real ones — measured on an HDR 4K title:
-19.1% real vs 78% predicted. Every surface that shows an HDR estimate (the
-`plan` command, the dashboard's plan display) carries this note; plan an HDR
-title expecting the real number to be much smaller than the prediction.
+**HDR estimates (historical rows only) are biased optimistic.** HDR sources are
+skipped since issue #518, so no new HDR estimate is made; plan rows recorded by
+earlier versions still show theirs, and those carry a measured bias (the plan's
+size estimate encodes one early window and HDR samples skew toward easy content,
+so the prediction lands far above the real savings — measured on an HDR 4K
+title: 19.1% real vs 78% predicted). Every surface that shows such an estimate
+carries the note.
 
 ### `setup` — configure, pause and resume
 

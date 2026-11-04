@@ -255,7 +255,6 @@ class VmafRecipe:
 
 def vmaf_recipe(
     crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
     width: int | None = None,
     height: int | None = None,
     bit_depth: int | None = None,
@@ -265,7 +264,6 @@ def vmaf_recipe(
     Args:
         crop (tuple | None): Crop bars (top, bottom, left, right) the encode
             applies, so the analysis dimensions are the cropped ones.
-        hdr (bool): Whether both inputs are tone-mapped to SDR.
         width (int | None): The SOURCE frame width, None when unknown.
         height (int | None): The SOURCE frame height, None when unknown.
         bit_depth (int | None): The source's bit depth, None when unknown.
@@ -285,11 +283,12 @@ def vmaf_recipe(
     return VmafRecipe(
         model=model,
         scale=vmaf_auto_scale(model, cropped_width, cropped_height),
-        # PQ content is 10-bit by definition, so a tone-mapped comparison is
-        # analysed at 10 bits whatever the source's depth reads (a 10-bit
-        # intermediate flattened into 8 bits would score the flattening).
-        pix_fmt="yuv420p10le" if hdr else vmaf_pix_fmt(bit_depth),
-        hdr=hdr,
+        pix_fmt=vmaf_pix_fmt(bit_depth),
+        # the hdr field stays for the fingerprint's stability: it is always
+        # False now (issue #518 - HDR sources are skipped before any
+        # measurement), and an OLD stored plan whose fingerprint says
+        # hdr=hable therefore never matches again
+        hdr=False,
     )
 
 
@@ -299,7 +298,6 @@ def build_vmaf_command(
     threads: int = 0,
     style: str | None = None,
     crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
     subsample: int | None = None,
     recipe: VmafRecipe | None = None,
 ) -> list[str]:
@@ -329,7 +327,6 @@ def build_vmaf_command(
             tests. None detects the local ffmpeg.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             the reference input to match the distorted geometry.
-        hdr (bool): Tone-map both inputs to SDR (PQ/bt2020 sources).
         subsample (int | None): libvmaf n_subsample divisor: measure only
             every Nth frame (None/0/1 = every frame). Full-file verification
             of a 2-hour movie decodes EVERYTHING (hours); a sub-sampled pass
@@ -344,7 +341,7 @@ def build_vmaf_command(
         list[str]: The command as argument list (run with cwd=workdir).
     """
     if recipe is None:
-        recipe = vmaf_recipe(crop=crop, hdr=hdr)
+        recipe = vmaf_recipe(crop=crop)
     if style is None:
         style = detect_vmaf_style()
     if style == VMAF_STYLE_MODERN:
@@ -375,33 +372,20 @@ def build_vmaf_command(
         suffix += f"scale={recipe.scale[0]}:{recipe.scale[1]}:flags=bicubic,"
     suffix += "setpts=PTS-STARTPTS,settb=AVTB"
 
-    # the tone-map chain: linear light -> bt709 primaries -> hable tonemap
-    # -> back to video levels. libvmaf's models are SDR-trained, so HDR is
-    # flattened into a comparable space before scoring; the chain is an
-    # approximation, not a validated reference - #340 measured its footprint
-    # at ~2.9 VMAF on one real HDR10 pair (ShrinkRay scores lower than
-    # ab-av1's PQ-direct path, which errs safe: quality is overshot, never
-    # undershot). No end-to-end HDR verification against reference tooling
-    # exists yet; until one does, treat HDR scores as chain-relative.
-    tonemap = (
-        "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
-        "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv"
-    )
-
     # Both sides get the same chain, in one order: the reference's crop first
-    # (issue #307: the bars must not influence the tone-map, and the analysis
-    # dimensions are the post-crop ones), then the tone-map when HDR, then the
-    # shared analysis prefix. The distorted input arrives already cropped by
-    # HandBrake (--crop), so only the reference is cropped here.
+    # (issue #307: the bars must not influence the measurement, and the
+    # analysis dimensions are the post-crop ones), then the shared analysis
+    # prefix. The distorted input arrives already cropped by HandBrake
+    # (--crop), so only the reference is cropped here. HDR sources never
+    # reach a measurement: the skip gate (issue #518) refuses them first,
+    # so there is no tone-map chain to maintain.
     ref_chain: list[str] = []
     if crop is not None:
         top, bottom, left, right = crop
         ref_chain.append(f"crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}")
-    if hdr:
-        ref_chain.append(tonemap)
     ref_chain.append(suffix)
 
-    dis_chain = [tonemap, suffix] if hdr else [suffix]
+    dis_chain = [suffix]
     filtergraph = f"[0:v]{','.join(dis_chain)}[d];[1:v]{','.join(ref_chain)}[r];[d][r]{vmaf}"
     return [
         FFMPEG_BINARY,
@@ -441,7 +425,6 @@ def parse_vmaf_log(text: str) -> float:
 def _recipe_for_file(
     distorted: Path,
     crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
 ) -> VmafRecipe:
     """Derives the recipe from a file's own geometry and bit depth.
 
@@ -455,7 +438,6 @@ def _recipe_for_file(
         distorted (Path): The encoded file to measure.
         crop (tuple | None): Crop bars applied to the REFERENCE (the distorted
             side is already cropped).
-        hdr (bool): Whether both inputs are tone-mapped.
 
     Returns:
         VmafRecipe: The derived recipe.
@@ -478,7 +460,7 @@ def _recipe_for_file(
         # model cannot be chosen, and the 1080p model at native size is the
         # documented fallback (the pre-#308 behaviour)
         pass
-    return vmaf_recipe(crop=crop, hdr=hdr, width=width, height=height, bit_depth=depth)
+    return vmaf_recipe(crop=crop, width=width, height=height, bit_depth=depth)
 
 
 def measure_vmaf(
@@ -486,7 +468,6 @@ def measure_vmaf(
     reference: Path,
     workdir: Path,
     crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     subsample: int | None = None,
@@ -504,7 +485,6 @@ def measure_vmaf(
         workdir (Path): Working directory for the model and log files.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             the reference so it matches the distorted geometry.
-        hdr (bool): Tone-map both sides for the measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file, used to locate the logs
             directory for failure evidence (None => no failure bundle; the
@@ -526,7 +506,7 @@ def measure_vmaf(
         Cancelled: When the cancel event fires.
     """
     if recipe is None:
-        recipe = _recipe_for_file(distorted, crop=crop, hdr=hdr)
+        recipe = _recipe_for_file(distorted, crop=crop)
     distorted = distorted.resolve()
     reference = reference.resolve()
     shutil.copyfile(MODELS_DIR / recipe.model, workdir / recipe.model)
@@ -536,7 +516,7 @@ def measure_vmaf(
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0
     command = build_vmaf_command(
-        distorted, reference, threads, crop=crop, hdr=hdr, subsample=subsample, recipe=recipe
+        distorted, reference, threads, crop=crop, subsample=subsample, recipe=recipe
     )
     # watchdog=False (issue #431): libvmaf is silent by design until the whole
     # file is scored - a full-precision measurement of a large movie produces
@@ -571,7 +551,6 @@ def measure_vmaf(
             context={
                 "distorted": str(distorted),
                 "reference": str(reference),
-                "hdr": hdr,
                 "crop": crop,
                 "subsample": subsample,
                 "recipe": recipe.identifier(),

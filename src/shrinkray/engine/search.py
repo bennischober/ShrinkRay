@@ -51,7 +51,6 @@ VMAF_STATISTIC = "mean"
 # trusted. The search clamps to this band, so an over-wide range only
 # costs probes - it cannot make the decision wrong in the safe direction.
 DEFAULT_CRF_RANGE = (14, 45)
-DEFAULT_HDR_CRF_RANGE = (10, 45)
 
 
 @dataclass
@@ -73,7 +72,6 @@ def probe_cache_key(
     encoder: str,
     encoder_preset: str,
     crop: tuple[int, int, int, int] | None,
-    hdr: bool,
     encoder_threads: int | None,
     tool_versions: str,
     recipe: str,
@@ -100,7 +98,6 @@ def probe_cache_key(
         encoder (str): The effective video encoder.
         encoder_preset (str): The PROBE's speed preset (a measurement
             setting, issue #22).
-        hdr (bool): Whether the VMAF measurement tone-maps both sides.
         encoder_threads (int | None): The thread cap of the probe encode.
         tool_versions (str): The tool version string (HandBrake, libvmaf).
         recipe (str): The measurement recipe identifier
@@ -123,7 +120,6 @@ def probe_cache_key(
         encoder,
         encoder_preset,
         "none" if crop is None else ",".join(str(v) for v in crop),
-        "hdr" if hdr else "sdr",
         "threads:" + ("all" if encoder_threads is None else str(encoder_threads)),
         tool_versions,
         recipe,
@@ -384,7 +380,6 @@ def probe_crf(
     probe_encoder_preset: str,
     recipe: VmafRecipe | None = None,
     crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
@@ -426,7 +421,6 @@ def probe_crf(
             pre-#308 measurement; every engine caller passes a real one.
         crop (tuple | None): Crop bars applied to probes and measurements,
             so the decision matches the final encode.
-        hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file (caching and failure
             evidence; None => uncached probing).
@@ -443,7 +437,7 @@ def probe_crf(
         Cancelled: When the cancel event fires.
     """
     if recipe is None:
-        recipe = vmaf_recipe(crop=crop, hdr=hdr)
+        recipe = vmaf_recipe(crop=crop)
     tool_versions = _tool_versions(handbrake)
     scores: list[float] = []
     for index, (sample, offset) in enumerate(samples):
@@ -456,7 +450,6 @@ def probe_crf(
             encoder,
             probe_encoder_preset,
             crop,
-            hdr,
             encoder_threads,
             tool_versions,
             recipe.identifier(),
@@ -501,7 +494,6 @@ def probe_crf(
                 sample,
                 workdir,
                 crop=crop,
-                hdr=hdr,
                 cancel=cancel,
                 db_file=db_file,
                 recipe=recipe,
@@ -585,7 +577,6 @@ def estimate_size_factor(
         encoder,
         probe_encoder_preset,
         crop,
-        hdr=False,
         encoder_threads=encoder_threads,
         tool_versions=_tool_versions(handbrake),
         recipe="",
@@ -641,7 +632,6 @@ def find_optimal_crf(
     probe_encoder_preset: str = "5",
     recipe: VmafRecipe | None = None,
     crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
@@ -667,7 +657,6 @@ def find_optimal_crf(
             is the pre-#308 measurement.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             probes and the decision, matching the final encode.
-        hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encodes
@@ -697,7 +686,7 @@ def find_optimal_crf(
 
     probes: list[SampleProbe] = []
     if recipe is None:
-        recipe = vmaf_recipe(crop=crop, hdr=hdr)
+        recipe = vmaf_recipe(crop=crop)
 
     def check(crf: int) -> float:
         _check_cancel(cancel)
@@ -714,7 +703,6 @@ def find_optimal_crf(
             probe_encoder_preset,
             recipe,
             crop=crop,
-            hdr=hdr,
             cancel=cancel,
             db_file=db_file,
             encoder_threads=encoder_threads,
@@ -755,7 +743,6 @@ def find_optimal_crf_and_skip(
     probe_encoder_preset: str = "5",
     recipe: VmafRecipe | None = None,
     crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
@@ -784,7 +771,6 @@ def find_optimal_crf_and_skip(
             pixel format); None derives the pre-#308 one.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             probes and the decision, matching the final encode.
-        hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encodes
@@ -809,7 +795,7 @@ def find_optimal_crf_and_skip(
             )
         ]
     if recipe is None:
-        recipe = vmaf_recipe(crop=crop, hdr=hdr)
+        recipe = vmaf_recipe(crop=crop)
 
     # highest CRF (smallest size) of the search range as the pessimistic
     # bound: if even the most aggressive setting cannot shrink the file,
@@ -850,7 +836,6 @@ def find_optimal_crf_and_skip(
         recipe=recipe,
         samples=samples,
         crop=crop,
-        hdr=hdr,
         cancel=cancel,
         db_file=db_file,
         encoder_threads=encoder_threads,
@@ -872,7 +857,6 @@ def find_optimal_crf_and_skip(
         probe_encoder_preset,
         recipe,
         crop=crop,
-        hdr=hdr,
         cancel=cancel,
         db_file=db_file,
         encoder_threads=encoder_threads,
@@ -899,7 +883,6 @@ def check_chosen_crf_shrinks(
     probe_encoder_preset: str,
     recipe: VmafRecipe | None = None,
     crop: tuple[int, int, int, int] | None = None,
-    hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
@@ -937,7 +920,6 @@ def check_chosen_crf_shrinks(
             cache key the probe rows were stored under). None derives one with
             no dimensions known, which cannot match a row the search stored.
         crop (tuple | None): Crop bars applied to the probe encode.
-        hdr (bool): True when the source is HDR (part of the cache key).
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encode.
@@ -948,7 +930,7 @@ def check_chosen_crf_shrinks(
         float: The encoded/source size ratio at the chosen CRF.
     """
     if recipe is None:
-        recipe = vmaf_recipe(crop=crop, hdr=hdr)
+        recipe = vmaf_recipe(crop=crop)
     # issue #314: the chosen-CRF size decision comes from ALL windows' probe
     # encodes - the VMAF probes already encoded every window at the chosen
     # CRF and the cache now records each encoded byte count beside its
@@ -971,7 +953,6 @@ def check_chosen_crf_shrinks(
                 encoder,
                 probe_encoder_preset,
                 crop,
-                hdr,
                 encoder_threads,
                 tool_versions,
                 recipe.identifier(),

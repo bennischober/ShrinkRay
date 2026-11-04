@@ -23,7 +23,6 @@ from shrinkray.engine.crop import (
 )
 from shrinkray.engine.encoders import (
     DEFAULT_ENCODER,
-    DEFAULT_HDR_TARGET_VMAF,
     encoder_for,
 )
 from shrinkray.engine.identity import capture_run_identity, ensure_unchanged, probe_scratch_prefix
@@ -36,7 +35,6 @@ from shrinkray.engine.samples import (
 )
 from shrinkray.engine.search import (
     DEFAULT_CRF_RANGE,
-    DEFAULT_HDR_CRF_RANGE,
     DEFAULT_TARGET_VMAF,
     VMAF_STATISTIC,
     SampleProbe,
@@ -248,31 +246,6 @@ def is_1080p_class(
     if width is not None and width >= width_floor:
         return True
     return height is not None and height >= height_floor
-
-
-def is_hdr_transfer_file(movie: Path) -> bool:
-    """Checks whether a movie's TRANSFER characteristic is HDR (issue #518).
-
-    The skip gate's detection: the transfer alone decides (a bt2020nc SDR
-    master is not HDR; PQ and HLG are). Reuses the scan's probe data path so
-    both detections agree on the facts.
-
-    Args:
-        movie (Path): The movie file.
-
-    Returns:
-        bool: True if the video's transfer characteristic is HDR.
-    """
-    from shrinkray.config import load_config
-
-    try:
-        data = get_data(movie, load_config())
-    except (RuntimeError, OSError, ValueError):
-        return False
-    video = (data.get("streams") or [{}])[0] if isinstance(data, dict) else {}
-    from shrinkray.tools.ffprobe import is_hdr_transfer
-
-    return is_hdr_transfer(video, load_config())
 
 
 def is_hdr_file(movie: Path) -> bool:
@@ -500,16 +473,11 @@ def plan_quality(
     # call and the result's fingerprint fields carry these OVERRIDDEN values
     # The encoder follows the SOURCE's bit depth now (issue #234): a 10-bit
     # SDR master keeps its depth; HDR alone no longer decides it.
-    effective_encoder = encoder_for(source_bit_depth(input_file), hdr)
-    if hdr:
-        # the tone-mapped measurement scale sits slightly lower; use the
-        # calibrated target and the deeper CRF range for 4K headroom
-        target_vmaf = DEFAULT_HDR_TARGET_VMAF
-        crf_range = DEFAULT_HDR_CRF_RANGE
+    effective_encoder = encoder_for(source_bit_depth(input_file))
 
     duration = probe_duration_seconds(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
-    if is_hdr_transfer_file(input_file):
+    if is_hdr_file(input_file):
         # the maintainer's decision (issue #340, 2026-10-31; issue #518): HDR
         # is not supported yet - the tone-mapped SDR measurement is not valid
         # for HDR (libvmaf's docs: an SDR model on HDR pictures "is not
@@ -676,7 +644,6 @@ def plan_quality(
         # probes and the recorded fingerprint cannot disagree (issue #308).
         recipe = vmaf_recipe(
             crop=crop,
-            hdr=hdr,
             width=width,
             height=height,
             bit_depth=source_bit_depth(input_file),
@@ -703,7 +670,6 @@ def plan_quality(
             probe_encoder_preset=probe_encoder_preset,
             recipe=recipe,
             crop=crop,
-            hdr=hdr,
             cancel=cancel,
             db_file=db_file,
             encoder_threads=encoder_threads,

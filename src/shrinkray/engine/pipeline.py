@@ -45,9 +45,6 @@ from shrinkray.engine.encoders import (
     DEFAULT_ENCODER as DEFAULT_ENCODER,
 )
 from shrinkray.engine.encoders import (
-    DEFAULT_HDR_TARGET_VMAF as DEFAULT_HDR_TARGET_VMAF,
-)
-from shrinkray.engine.encoders import (
     HDR_ENCODER as HDR_ENCODER,
 )
 from shrinkray.engine.encoders import (
@@ -90,9 +87,6 @@ from shrinkray.engine.plan import (
     is_hdr_file as is_hdr_file,
 )
 from shrinkray.engine.plan import (
-    is_hdr_transfer_file as is_hdr_transfer_file,
-)
-from shrinkray.engine.plan import (
     plan_quality as plan_quality,
 )
 from shrinkray.engine.plan import (
@@ -115,9 +109,6 @@ from shrinkray.engine.samples import (
 )
 from shrinkray.engine.search import (
     DEFAULT_CRF_RANGE as DEFAULT_CRF_RANGE,
-)
-from shrinkray.engine.search import (
-    DEFAULT_HDR_CRF_RANGE as DEFAULT_HDR_CRF_RANGE,
 )
 from shrinkray.engine.search import (
     DEFAULT_TARGET_VMAF as DEFAULT_TARGET_VMAF,
@@ -1056,7 +1047,6 @@ def _probe_movie(
         # format) and the HDR flag (the tone-map) - issue #308
         recipe = vmaf_recipe(
             crop=crop,
-            hdr=hdr,
             width=source_width,
             height=source_height,
             bit_depth=source_bit_depth,
@@ -1074,7 +1064,6 @@ def _probe_movie(
             probe_encoder_preset=probe_encoder_preset,
             recipe=recipe,
             crop=crop,
-            hdr=hdr,
             cancel=cancel,
             db_file=db_file,
             encoder_threads=encoder_threads,
@@ -1215,16 +1204,13 @@ def encode_with_quality(
     # plan_quality, so a stored HDR plan is found under its real encoder).
     # The encoder follows the SOURCE's bit depth now (issue #234): a 10-bit
     # SDR master keeps its depth; HDR alone no longer decides it.
-    effective_encoder = encoder_for(source_bit_depth(input_file), hdr)
-    if hdr:
-        target_vmaf = DEFAULT_HDR_TARGET_VMAF
-        crf_range = DEFAULT_HDR_CRF_RANGE
+    effective_encoder = encoder_for(source_bit_depth(input_file))
 
     from shrinkray.tools.ffprobe import probe_duration_seconds as _probe_duration
 
     duration = _probe_duration(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
-    if is_hdr_transfer_file(input_file):
+    if is_hdr_file(input_file):
         # the maintainer's decision (issue #340, 2026-10-31; issue #518): HDR
         # is not supported yet - the tone-mapped SDR measurement is not valid
         # for HDR. Support returns with libvmaf's HDR models (#519).
@@ -1375,7 +1361,6 @@ def encode_with_quality(
             sample_seconds=sample_seconds,
             crop_sample_count=crop_sample_count,
             vmaf_recipe=vmaf_recipe(
-                hdr=hdr,
                 width=snapshot["width"],
                 height=snapshot["height"],
                 bit_depth=snapshot["bit_depth"],
@@ -1621,7 +1606,6 @@ def encode_with_quality(
         # be comparable with the target it is checked against
         verify_recipe = vmaf_recipe(
             crop=crop,
-            hdr=hdr,
             width=(snapshot or {}).get("width"),
             height=(snapshot or {}).get("height"),
             bit_depth=(snapshot or {}).get("bit_depth"),
@@ -1638,7 +1622,6 @@ def encode_with_quality(
                     input_file,
                     verify_workdir,
                     crop=crop,
-                    hdr=hdr,
                     cancel=cancel,
                     db_file=db_file,
                     subsample=verified_subsample,

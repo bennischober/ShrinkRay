@@ -100,7 +100,7 @@ class TestVmafMeasurementOutlivesTheWatchdog(unittest.TestCase):
                 mock.patch.object(
                     vmaf_mod,
                     "_recipe_for_file",
-                    return_value=vmaf_mod.vmaf_recipe(crop=None, hdr=False),
+                    return_value=vmaf_mod.vmaf_recipe(crop=None),
                 ),
                 tempfile.TemporaryDirectory() as t,
             ):

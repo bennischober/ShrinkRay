@@ -31,11 +31,10 @@ HandBrakeCLI.
 
 ## Tolerance
 
-`|ShrinkRay - ab-av1| <= 0.1` VMAF per pair (issue #306's proposal). One exception,
-documented rather than waived: an HDR pair measured through ShrinkRay's tone-map is
-**reported, not held** (the deviation in `docs/encode-decision.md`, measured at
-~2.9 VMAF on a real HDR10 pair by #340). The same pair with tone-mapping off is
-held, and that is what proves the rest of the pipeline matches.
+`|ShrinkRay - ab-av1| <= 0.1` VMAF per pair (issue #306's proposal). The historical
+HDR exception (the tone-map's ~2.9 VMAF footprint, measured by #340) is moot since
+issue #518: HDR sources are skipped before any measurement, so there is no HDR pair
+to compare until libvmaf's HDR models exist (#519).
 
 ## What you need
 
@@ -220,10 +219,9 @@ structure is untested; treat it as the candidate, not a documented working route
 
 ### 5. An HDR10 pair
 
-```sh
-uv run scripts/vmaf_parity.py --pair "/path/to/hdr_source.mkv" "/path/to/hdr_encoded.mkv" \
-  --label "HDR10" --hdr true
-```
+Not applicable since issue #518: HDR sources are skipped before any measurement
+(the tone-map chain is removed; support returns with libvmaf's HDR models, #519).
+The `--hdr` flag is gone.
 
 This measures the pair twice:
 
