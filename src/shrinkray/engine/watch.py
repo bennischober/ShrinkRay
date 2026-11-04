@@ -8,6 +8,7 @@ logic as the encode/plan commands and encodes them (source stays untouched
 
 import contextlib
 import ctypes
+import math
 import os
 import sqlite3
 import struct
@@ -40,10 +41,64 @@ from shrinkray.tools.ffprobe import probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 from shrinkray.tools.process import Cancelled
 
-# a file is stable when its size is unchanged between two checks ...
-STABLE_CHECK_INTERVAL = 30.0
-# ... and it is at least this old (grace period after the last modification)
-STABLE_MIN_AGE = 60.0
+
+# a file is stable when its size is unchanged between two checks ... and it is
+# at least this old (grace period after the last modification) — the two
+# constants below, whose values the env seam can override (test-only, #537).
+# Test-only env overrides (issue #537): the SIGHUP test spawns the CLI as a
+# SUBPROCESS, so the suite's in-process patches (tests/test_cli.py's
+# `_toolchain_ok`, the inline block in `test_a_signal_after_the_final_encode_*
+# and the `_encode` helper, which zero both constants) cannot reach it, and its
+# 60 s spawn deadline must not measure a 30 s sleep its subject never
+# exercises. This is deliberately NOT the shape of an operator knob: it is read
+# once at import, has no config key and no CLI flag, and exists so a test can
+# reach a constant that lives in the child process (issue #537's review finding
+# 2 — the earlier comment wrongly cited $SHRINKRAY_WATCH_OUTPUT, which is
+# documented operator surface, and $SHRINKRAY_SMOKE, which no product module
+# reads).
+#
+# The guard is TOTAL (review findings 1 and 2): a value that `float()` accepts
+# but that is not a usable duration — `nan`, `inf`, negative, or too large for
+# `time.sleep` — must fall back to the default, because `STABLE_MIN_AGE = -5`
+# would make `is_stable()` answer True for a file still being written (the exact
+# #437 defect this witness exists to prevent), and `nan`/`inf`/negative/1e10
+# make `time.sleep`/`st_mtime` arithmetic raise where no caller expects it.
+def _duration_env(var: str, default: float) -> float:
+    """Reads a non-negative, finite duration from the environment.
+
+    Args:
+        var (str): The environment variable name.
+        default (float): The value when unset, unparsable, or unusable.
+
+    Returns:
+        float: The override, or the default.
+    """
+    raw = os.environ.get(var)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    # `float()` accepts nan/inf/negatives; a duration must be finite, >= 0, and
+    # small enough that `time.sleep`/`st_mtime` arithmetic cannot overflow
+    # (1e10 passes isfinite and overflows sleep — round-2 review finding 1).
+    # The cap bounds OVERFLOW ONLY, not the wait: `wait_for_stable`'s deadline
+    # and its cancel event are both observed only BETWEEN sleeps, so a legal
+    # interval up to a day overruns the limit — and on the stable path the
+    # cancel is not delayed but DROPPED (is_stable's True return ends the
+    # wait; round-6 review finding 1). At the default interval the #326
+    # contract's "never absorbs a signal for minutes" still holds on the
+    # raising paths; the seam's values are a test's choice, never an
+    # operator's. Larger values are a mistake or an attempt to disable the
+    # witness, and fall back to the default.
+    if not math.isfinite(value) or value < 0 or value > 86400.0:
+        return default
+    return value
+
+
+STABLE_CHECK_INTERVAL = _duration_env("SHRINKRAY_STABLE_CHECK_INTERVAL", 30.0)
+STABLE_MIN_AGE = _duration_env("SHRINKRAY_STABLE_MIN_AGE", 60.0)
 # the bounded wait's ceiling for the one-shot CLI (issue #437): the watcher
 # has no ceiling (it reconsiders on its next pass); a one-shot run reports
 # and skips instead of waiting forever on a file that never settles
@@ -264,9 +319,20 @@ def wait_for_stable(
 
     Args:
         path (Path): The file to wait for.
-        limit (float): Total seconds to wait before giving up.
+        limit (float): Total seconds to wait before giving up. Checked
+            BETWEEN sleeps: one interval longer than the limit overruns it
+            (a legal seam value up to a day makes one sleep that long), so
+            the limit bounds the number of checks, not the wall clock.
         cancel (threading.Event | None): Cooperative cancellation; when set,
-            the wait raises instead of returning.
+            the wait raises instead of returning. Observed only between
+            sleeps, and NOT on every path: a cancel that arrives DURING a
+            sleep is honoured at the next check — except the witness's own
+            size-check sleep inside `is_stable`, whose True return ENDS the
+            wait before any check sees the cancel (measured, round-5 review
+            finding 1: the wait returns True with the cancel set). On the
+            age-sleep and direct-size-check paths the cancel raises after
+            one interval (up to a day under the test-only override, 30 s at
+            the default).
 
     Returns:
         bool: True when the file settled, False when the limit expired
