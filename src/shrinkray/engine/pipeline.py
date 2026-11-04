@@ -1059,7 +1059,7 @@ def _probe_movie(
             bit_depth=source_bit_depth,
         )
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
-        crf, achieved, probes, skip = find_optimal_crf_and_skip(
+        crf, achieved, probes, skip, _chosen_factor = find_optimal_crf_and_skip(
             input_file,
             workdir,
             handbrake,

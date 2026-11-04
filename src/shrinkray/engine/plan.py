@@ -40,7 +40,6 @@ from shrinkray.engine.search import (
     DEFAULT_TARGET_VMAF,
     VMAF_STATISTIC,
     SampleProbe,
-    estimate_size_factor,
     find_optimal_crf_and_skip,
     sample_count_for,
 )
@@ -645,7 +644,7 @@ def plan_quality(
                 input_file, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
             )
         ]
-        crf, achieved, probes, skip = find_optimal_crf_and_skip(
+        crf, achieved, probes, skip, factor = find_optimal_crf_and_skip(
             input_file,
             workdir,
             handbrake,
@@ -664,23 +663,6 @@ def plan_quality(
             progress=progress,
             use_probe_cache=use_probe_cache,
             samples=samples,
-        )
-
-        factor = estimate_size_factor(
-            samples,
-            workdir,
-            handbrake,
-            crf,
-            input_file,
-            sample_seconds,
-            effective_encoder,
-            probe_encoder_preset,
-            crop=crop,
-            cancel=cancel,
-            db_file=db_file,
-            encoder_threads=encoder_threads,
-            progress=progress,
-            use_probe_cache=use_probe_cache,
         )
 
         if skip:

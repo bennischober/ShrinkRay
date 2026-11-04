@@ -8,7 +8,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from shrinkray import db, service
 from shrinkray.engine import crop as engine_crop
@@ -2102,7 +2102,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         file at CRF 22 and made it bigger.
         """
         result, seen = self._run_search({45: 0.5, 22: 1.2})
-        _crf, _vmaf, _probes, skip = result
+        _crf, _vmaf, _probes, skip, _factor = result
         self.assertTrue(skip, "a grown chosen CRF must be skipped")
         self.assertIn(45, seen, "the bound probe must still run")
         self.assertIn(22, seen, "the chosen CRF must be checked")
@@ -2110,7 +2110,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
     def test_a_shrink_at_both_points_is_encoded(self):
         """The regression guard: the new gate must not reject a normal file."""
         result, seen = self._run_search({45: 0.4, 22: 0.7})
-        _crf, _vmaf, _probes, skip = result
+        _crf, _vmaf, _probes, skip, _factor = result
         self.assertFalse(skip, "a file that shrinks at the chosen CRF must encode")
         self.assertIn(22, seen)
 
@@ -2280,6 +2280,75 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         )
 
 
+class TestPlanReportsTheDecisionFactor(unittest.TestCase):
+    """Issue #388 (the maintainer's 2026-10-31 decision): the plan's savings
+    estimate is the factor the size decision already computed — the same
+    all-window number `check_chosen_crf_shrinks` returned — not a noisier
+    one-window re-probe of its own."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workdir = Path(self.tmp.name) / "work"
+        self.workdir.mkdir()
+        self.movie = Path(self.tmp.name) / "movie.mkv"
+        self.movie.write_bytes(b"x" * 1000)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _plan(self, extra_seams):
+        """Runs plan_quality with the plan's non-search seams mocked to a
+        small h264 file plus the caller's extra patches."""
+        patches = [
+            patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+            patch.object(
+                engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
+            ),
+            patch.object(engine_plan, "source_codec", return_value="h264"),
+            patch.object(engine_plan, "source_bit_depth", return_value=None),
+            patch.object(engine_plan, "find_handbrake", return_value="hb"),
+            patch.object(engine_plan, "detect_crop_summary_cached", return_value=None),
+            patch.object(engine_plan, "detect_crop_rect", return_value=None),
+            patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            *extra_seams,
+        ]
+        with contextlib.ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            return engine_plan.plan_quality(self.movie, target_vmaf=95.0, db_file=None)
+
+    def test_the_plan_reports_the_decisions_factor(self):
+        """The reported output_size is identity.size x the factor the search
+        returned — the decision's own number, not a re-derived one."""
+        result = self._plan(
+            [
+                patch.object(
+                    engine_plan,
+                    "find_optimal_crf_and_skip",
+                    return_value=(20, 96.0, [], False, 0.42),
+                ),
+            ]
+        )
+        self.assertTrue(result.success, result.error)
+        self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.42))
+
+    def test_the_plan_makes_no_extra_size_probe(self):
+        """The search computes the factor twice by design (the top-of-range
+        bound, then the chosen-CRF check) — a plan adds NO third call."""
+        size_estimates = Mock(return_value=0.5)
+        result = self._plan(
+            [
+                patch.object(engine_search, "estimate_size_factor", size_estimates),
+                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+            ]
+        )
+        self.assertTrue(result.success, result.error)
+        # the bound probe + the chosen-CRF check: exactly the decision's own
+        self.assertEqual(size_estimates.call_count, 2)
+        # and the report carries the decision's factor (the same mock's value)
+        self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.5))
+
+
 class TestSubprocessTimeouts(unittest.TestCase):
     """The short-lived ffprobe/ffmpeg calls turn a TimeoutExpired into their
     documented failure path instead of hanging the thread forever (issue
@@ -2385,7 +2454,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(
                     engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
                 ) as fake_extract,
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
@@ -2571,7 +2639,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "source_codec", return_value="vp9"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
@@ -2606,7 +2673,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                         patch.object(
                             engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
                         ),
-                        patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                         patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                         patch.object(
                             engine_search,
@@ -2656,7 +2722,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "source_codec", return_value="mpeg4"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
@@ -2690,7 +2755,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "source_codec", return_value="h264"),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
@@ -2723,7 +2787,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_crop, "detect_crop_rect", return_value=None),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
@@ -2757,8 +2820,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "detect_crop_rect", return_value=bars) as fake_crop,
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5) as fake_size,
-                patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+                patch.object(engine_search, "estimate_size_factor", return_value=0.5) as fake_size,
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
                 ),
@@ -2792,7 +2854,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_crop, "detect_crop_rect", return_value=None),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=1.3),
                 patch.object(engine_search, "estimate_size_factor", return_value=1.3),
             ):
                 result = engine_plan.plan_quality(src)
@@ -2842,7 +2903,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
@@ -2897,7 +2957,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
@@ -2962,7 +3021,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
@@ -3072,7 +3130,6 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
