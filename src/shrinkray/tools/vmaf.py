@@ -203,17 +203,19 @@ def vmaf_auto_scale(model: str, width: int | None, height: int | None) -> tuple[
 class VmafRecipe:
     """How one VMAF score is measured - every input that moves the number.
 
-    The measurement itself, not the encode: the model, the analysis scale, the
-    pixel format both inputs are converted to, the sync options and the HDR
-    tone-map. It is the identifier the probe cache and the plan fingerprint key
-    on (issue #308), so a change to any of these re-measures instead of
-    reusing a score the old recipe produced.
+    The measurement itself, not the encode: the model, the analysis scale and
+    the pixel format both inputs are converted to. It is the identifier the
+    probe cache and the plan fingerprint key on (issue #308), so a change to
+    any of these re-measures instead of reusing a score the old recipe
+    produced.
 
     Attributes:
         model (str): The model's file name, e.g. 'vmaf_v0.6.1.json'.
         scale (tuple[int, int] | None): The bicubic upscale target, or None.
         pix_fmt (str): The explicit pixel format for both inputs.
-        hdr (bool): Whether both inputs are tone-mapped to SDR first.
+        hdr (bool): Always False since issue #518 (the tone-map is removed;
+            the field survives so old SDR fingerprints keep matching while
+            every historical hdr=hable fingerprint stops matching).
     """
 
     model: str

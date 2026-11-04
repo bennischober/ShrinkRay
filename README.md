@@ -498,9 +498,6 @@ Example [config.json](config.json):
     "resources": {
         "idle_priority": true       // encodes run below normal priority
     },
-    "codec": {
-        "hdr": { "color_space": ["bt2020nc"], "color_transfer": ["smpte2084"] }  // the defaults; an empty list means "nothing is HDR"
-    },
     "app": {
         "auto_backlog": false,     // start scan -> plan -> encode on boot
         "encode_window_start": "", // daily encode window, local HH:MM; both keys set = resident automation encodes only inside it

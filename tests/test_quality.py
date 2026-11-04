@@ -3124,6 +3124,50 @@ class TestHdrSkip(unittest.TestCase):
         self.assertIsNone(result.skipped_reason)
         probed.assert_called()
 
+    def test_the_encode_path_skips_pq_without_probing(self) -> None:
+        """The encode path runs the SAME gate (finding 8's coverage): a PQ
+        source reaches encode_with_quality and comes back skipped before the
+        search - the plan and the encode can never disagree."""
+        from unittest.mock import Mock
+
+        from shrinkray import config as config_helper
+        from shrinkray.engine.pipeline import encode_with_quality
+
+        probed = Mock(return_value=(20, 96.0, [], False))
+        raw = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "color_transfer": "smpte2084",
+                }
+            ]
+        }
+        with (
+            patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.pipeline.capture_run_identity") as ident,
+            patch("shrinkray.engine.pipeline._source_snapshot", return_value={}),
+            patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.pipeline.find_optimal_crf_and_skip", probed),
+            patch("shrinkray.engine.pipeline._encode_with_command", probed),
+            patch("shrinkray.config.load_config", return_value=config_helper.Conf({})),
+        ):
+            ident.size = 64
+            ident.mtime = 1.0
+            result = encode_with_quality(
+                self.movie,
+                self.movie.with_suffix(".enc.mkv"),
+                target_vmaf=95.0,
+                encoder="svt_av1",
+                db_file=None,
+            )
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "hdr not supported")
+        self.assertIn("not supported yet", result.error)
+        probed.assert_not_called()
+
     def test_an_old_config_with_codec_hdr_still_skips_pq(self) -> None:
         """The codec.hdr section is GONE from the schema (issue #518
         criterion 2): an old config that sets it loads with a warning and the

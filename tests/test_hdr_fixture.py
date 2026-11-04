@@ -38,15 +38,6 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CLIP = FIXTURES / "hdr10_gradient_320x180_2s.mp4"
 RECORDED = FIXTURES / "hdr10_probe.json"
 
-# the shipped config.json's codec.hdr markers (the documented HDR signature):
-# an empty config means "no HDR markers configured", so the tests construct the
-# Conf explicitly instead of relying on defaults
-HDR_CONF_DATA = {"codec": {"hdr": {"color_space": ["bt2020nc"], "color_transfer": ["smpte2084"]}}}
-
-
-def _hdr_conf():
-    return config_helper.Conf(HDR_CONF_DATA)
-
 
 class TestHdrFixture(unittest.TestCase):
     """The committed HDR10 clip anchors HDR detection and the encoder path."""

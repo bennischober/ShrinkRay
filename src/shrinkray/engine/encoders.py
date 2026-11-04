@@ -35,8 +35,8 @@ def encoder_for(bit_depth: int | None) -> str:
     stays 10-bit (``svt_av1_10bit``), an 8-bit source keeps ``svt_av1`` —
     10-bit is not an HDR property, and dropping the two extra bits of a
     10-bit SDR master is a quality loss the product's own rules forbid. An
-    unknown depth falls back to the 10-bit answer (8-bit would silently
-    truncate a depth the probe failed to read). HDR sources never reach
+    unknown depth keeps the default encoder - that is what the code always
+    did (a behaviour change needs its own issue). HDR sources never reach
     this choice: the skip gate (issue #518) refuses them before any
     measurement.
 

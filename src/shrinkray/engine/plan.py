@@ -120,8 +120,8 @@ def _lookup_plan(
         input_file (Path): The movie to encode.
         encoder (str): The pending encode's effective encoder.
         encoder_preset (str): The pending encode's preset.
-        target_vmaf (float): The pending encode's (HDR-overridden) target.
-        crf_range (tuple[int, int]): The pending encode's (HDR-overridden) range.
+        target_vmaf (float): The encode's target VMAF.
+        crf_range (tuple[int, int]): The encode's CRF range.
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
         crop_sample_count (int): The pending encode's crop sample count.
@@ -252,7 +252,7 @@ def is_hdr_file(movie: Path) -> bool:
     """Checks whether a movie file is HDR.
 
     Reuses the scan's detection (media.get_data computes the hdr flag from
-    the configured codec.hdr markers) so both paths always agree.
+    the code-fixed transfer set, issue #518) so both paths always agree.
 
     Args:
         movie (Path): The movie file.
@@ -301,7 +301,7 @@ class QualityResult:
         output (Path): The output file.
         success (bool): True if the encode succeeded.
         target_vmaf (float): The effective VMAF quality floor that was met:
-            the requested one, or the HDR override when the movie is HDR.
+            the requested one.
         chosen_crf (int | None): The CRF selected by the bisect.
         achieved_vmaf (float | None): The mean per-sample VMAF measured at
             the chosen CRF (None if no probe was possible). Not the worst
@@ -346,8 +346,7 @@ class QualityResult:
     output_bitrate: float | None = None
     input_bit_depth: int | None = None
     # the probing pipeline's effective decision inputs (fingerprint of a
-    # stored plan): HDR overrides target/range before probing, so these
-    # carry the OVERRIDDEN values
+    # stored plan): the effective values the decision was made against
     crop: tuple[int, int, int, int] | None = None
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE
     sample_count: int = DEFAULT_SAMPLE_COUNT
@@ -365,9 +364,8 @@ class QualityResult:
     # plan, 'probe' when measured now, None when not applicable)
     crf_source: str | None = None
     plan_created_at: str | None = None
-    # the encoder the decision was made against: the requested one, or the
-    # HDR override (svt_av1_10bit) - one source of truth for the record and
-    # the plan cache (a plan of an HDR movie is only valid under 10-bit)
+    # the encoder the decision was made against - one source of truth for
+    # the record and the plan cache
     encoder: str = DEFAULT_ENCODER
 
     @property
@@ -477,7 +475,7 @@ def plan_quality(
 
     duration = probe_duration_seconds(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
-    if is_hdr_file(input_file):
+    if hdr:
         # the maintainer's decision (issue #340, 2026-10-31; issue #518): HDR
         # is not supported yet - the tone-mapped SDR measurement is not valid
         # for HDR (libvmaf's docs: an SDR model on HDR pictures "is not

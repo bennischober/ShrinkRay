@@ -99,7 +99,7 @@ class TestRealProbeRoundTrip(unittest.TestCase):
             self.assertEqual(data["bit_depth"], 10)
             self.assertFalse(data["hdr"], "a 10-bit SDR clip must not be flagged HDR")
             # the decision: this source gets the 10-bit encoder although SDR
-            self.assertEqual(encoder_for(data["bit_depth"], data["hdr"]), "svt_av1_10bit")
+            self.assertEqual(encoder_for(data["bit_depth"]), "svt_av1_10bit")
 
     @skipUnless(shutil.which("ffmpeg"), "ffmpeg not on PATH")
     def test_a_synthetic_8bit_clip_probes_as_8bit(self):
@@ -129,7 +129,7 @@ class TestRealProbeRoundTrip(unittest.TestCase):
             )
             data = get_data(clip)
             self.assertEqual(data["bit_depth"], 8)
-            self.assertEqual(encoder_for(data["bit_depth"], data["hdr"]), DEFAULT_ENCODER)
+            self.assertEqual(encoder_for(data["bit_depth"]), DEFAULT_ENCODER)
 
 
 if __name__ == "__main__":
