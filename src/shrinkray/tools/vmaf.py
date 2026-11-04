@@ -314,11 +314,9 @@ def build_vmaf_command(
     distorted input, otherwise libvmaf fails on the dimension/SAR mismatch
     (e.g. PAL DVD content with uneven side bars).
 
-    With HDR, both inputs are tone-mapped to SDR inside the filtergraph
-    before the comparison: the VMAF model is SDR-trained and PQ content
-    would score misleadingly. Both sides get the identical chain; what the
-    number then measures is quality-within-this-chain, not PQ-direct
-    quality - see the tone-map chain's note below.
+    HDR sources never reach this function (issue #518's skip gate): the
+    tone-map chain is removed, so both inputs are compared in the SDR pixel
+    format directly.
 
     Args:
         distorted (Path): The encoded file (libvmaf 'main' input).
@@ -367,8 +365,8 @@ def build_vmaf_command(
     # timebase. A probe sample is a stream copy cut before -i, so an open-GOP
     # source can start at a non-zero PTS while HandBrake's output starts at 0;
     # without the rebase the two sides pair frames one or two apart and every
-    # score drops (issue #308). It follows the tone-map so the tone-mapped
-    # intermediate is not converted back to 8-bit before the model sees it.
+    # score drops (issue #308). It matches the analysis pixel format the model
+    # was built for (10-bit for a 10-bit source).
     suffix = f"format={recipe.pix_fmt},"
     if recipe.scale is not None:
         suffix += f"scale={recipe.scale[0]}:{recipe.scale[1]}:flags=bicubic,"

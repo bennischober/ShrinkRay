@@ -87,6 +87,7 @@ path through this table.
 | J | any | above floor | bars, would grow | skipped at gate 8 — **with the crop applied to the estimate** |
 | K | any | above floor | bars, target unreachable | skipped at gate 7 |
 | L | any | above floor | bars, shrinks | encoded **with the crop**, original retained |
+| M | any HDR transfer (PQ/HLG) | any | any | skipped at gate 1 — `hdr not supported` (issue #518) |
 
 Scenario E is the case the old rules forbade: a large HEVC file with no bars is probed and encoded.
 Scenario J is why gate 6 runs before gate 8 — the estimate must reflect the crop, or a file that

@@ -356,7 +356,7 @@ class QualityResult:
     # statistic (issue #15), "min" marks a plan measured before it
     vmaf_statistic: str = "mean"
     # how the VMAF scores were measured (issue #308): model, scale, pixel
-    # format, tone-map and the recipe version. Part of the plan fingerprint, so
+    # format and the recipe version. Part of the plan fingerprint, so
     # a changed measurement re-probes instead of reusing stored scores. None for
     # a plan that measured nothing (a gate skip).
     vmaf_recipe: str | None = None
@@ -466,11 +466,9 @@ def plan_quality(
     identity = capture_run_identity(input_file)
 
     hdr = is_hdr_file(input_file)
-    # the effective decision inputs: for HDR the engine overrides the
-    # target/range and switches to the 10-bit encoder — every downstream
-    # call and the result's fingerprint fields carry these OVERRIDDEN values
-    # The encoder follows the SOURCE's bit depth now (issue #234): a 10-bit
-    # SDR master keeps its depth; HDR alone no longer decides it.
+    # The encoder follows the SOURCE's bit depth (issue #234): a 10-bit
+    # SDR master keeps its depth; an HDR source never reaches this choice
+    # (the skip gate below, issue #518).
     effective_encoder = encoder_for(source_bit_depth(input_file))
 
     duration = probe_duration_seconds(input_file)
@@ -637,9 +635,9 @@ def plan_quality(
             lambda: detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel),
         )
         # the measurement recipe follows the source's dimensions (for the model
-        # and the scale, through the crop), its bit depth (the analysis pixel
-        # format) and the HDR flag (the tone-map). Derived once here so the
-        # probes and the recorded fingerprint cannot disagree (issue #308).
+        # and the scale, through the crop) and its bit depth (the analysis pixel
+        # format). Derived once here so the probes and the recorded fingerprint
+        # cannot disagree (issue #308).
         recipe = vmaf_recipe(
             crop=crop,
             width=width,

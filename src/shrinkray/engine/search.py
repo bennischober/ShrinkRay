@@ -83,7 +83,7 @@ def probe_cache_key(
     score belongs in the key: the sample's content identity (source size
     + mtime, window offset/length, extraction recipe), the encode
     (encoder, preset, CRF, crop rect, thread cap) and the measurement
-    (HDR tone-mapping, tool versions, the measurement recipe). The source
+    (tool versions, the measurement recipe). The source
     PATH is deliberately not part of the key: a moved-but-unmodified
     file's probes stay valid (a move preserves mtime and size).
 
@@ -416,7 +416,7 @@ def probe_crf(
             measurement setting; the final encode's preset is a separate
             value, issue #22).
         recipe (VmafRecipe | None): The measurement recipe (model, scale,
-            pixel format, tone-map) - part of the cache key and of the
+            pixel format) - part of the cache key and of the
             measurement. None derives one with no dimensions known, which is the
             pre-#308 measurement; every engine caller passes a real one.
         crop (tuple | None): Crop bars applied to probes and measurements,

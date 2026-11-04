@@ -1443,7 +1443,7 @@ class TestDb(unittest.TestCase):
                 achieved_vmaf=94.6,
                 input_size=1000,
                 output_size=400,
-                hdr=True,  # historical rows carry the old HDR flag; the field is fingerprint-stability only
+                hdr=True,  # recorded to encodes.hdr for historical rows; new rows are always 0
                 encoder="svt_av1_10bit",
             )
             outcome = service.record_quality_results(
@@ -1455,9 +1455,9 @@ class TestDb(unittest.TestCase):
             self.assertEqual(row["encoder"], "svt_av1_10bit")
 
     def test_records_config_encoder_for_non_hdr(self):
-        """A result whose effective encoder is the config's records the config
-        encoder (the effective-encoder field names what the decision was made
-        against, whatever decided it)."""
+        """A result whose effective encoder equals the config's records the
+        config encoder (the effective-encoder field names what the decision
+        was made against, whatever decided it)."""
 
         from shrinkray import service
         from shrinkray.engine.plan import QualityResult
