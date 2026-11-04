@@ -5,7 +5,6 @@
     movies,
     selectedPaths,
     targetVmaf,
-    pending = false,
     runningMovie = null,
     runningPercent = null,
     plannedPaths = [],
@@ -18,7 +17,6 @@
     movies: Movie[]
     selectedPaths: Set<string>
     targetVmaf: number
-    pending?: boolean
     runningMovie?: string | null
     runningPercent?: number | null
     plannedPaths?: string[]
