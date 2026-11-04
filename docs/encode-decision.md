@@ -109,13 +109,20 @@ The CRF search brackets and interpolates in VMAF space (issue #23) and spends on
 every encode. Two deliberate shapes keep that cost down (issues **#313**, **#395**), and their measured
 trade follows them:
 
-- **The round structure is ab-av1's** (`crf_search`, read at ab-av1 `ed5f5461f0aa`): the first probe is
-the range's midpoint; while only one side of the target is known, round two moves to the 20%/80% point of
-the range and round three to its end; once a passing and a failing probe bracket the target, each round
-interpolates between them (with issue #23's safeguards). The range's ends are probed only when the
-search heads there, so "target unreachable" costs three rounds (midpoint, 20% point, lowest CRF) where
-the old shape spent one, and the SkipEncode evidence is the lowest CRF's probe, as before. The old shape
-probed CRF 14 - the slowest, largest probe - upfront on every file, passing or not.
+- **The round structure is ab-av1's, with one deliberate deviation** (`crf_search`, read at ab-av1
+`ed5f5461f0aa`): the first probe is the range's midpoint; while only one side of the target is known,
+round two moves to the 20%/80% point of the range and round three to its end; once a passing and a
+failing probe bracket the target, each round interpolates between them (with issue #23's safeguards).
+The deviation (issue #399, the maintainer's 2026-10-31 decision): the round-two cut is applied on EVERY
+range, where ab-av1's cut_on_iter2 skips it when the range is narrower than half its libsvtav1 default
+(5..70) - which the SDR default (14, 45) is; there ab-av1 would probe the range end on round two
+(measured 29 -> 14 -> 22, where ours probes 29 -> 20). The measured trade-off: the cut saves ~0.4-0.5
+rounds per reachable file and costs 1 round per unreachable one, so it wins unless roughly 30% or more
+of eligible files are unreachable (11 real final CRFs: SDR cut 4.82 vs no-cut 5.09 rounds; HDR 5.00 vs
+5.64). The range's ends are probed only when the search heads there, so "target unreachable" costs
+three rounds (midpoint, 20% point, lowest CRF) where the old shape spent one, and the SkipEncode
+evidence is the lowest CRF's probe, as before. The old shape probed CRF 14 - the slowest, largest
+probe - upfront on every file, passing or not.
 - **An early stop accepts a passing CRF whose score is less than a tolerance above the target**, the
 tolerance doubling per round from 0.1 (0.1, 0.2, 0.4, 0.8, ...): ab-av1's formula for an encoder whose
 CRF moves in whole steps. A probe below the target is never accepted, and the stop fires only once the

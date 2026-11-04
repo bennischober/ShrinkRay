@@ -242,10 +242,18 @@ def _round_two_cut(crf: int, end: int) -> int:
     """Returns ab-av1's round-two guess: 60% of the way from crf to end.
 
     After the first (midpoint) probe only one side of the bracket is known,
-    so ab-av1's crf_search moves to the 20%/80% point of the range instead
-    of the far end: a search heading for an edge reaches it on round three,
-    one heading for the middle gets both bounds by round two. When crf is
-    adjacent to end there is nothing in between, so the end itself is next.
+    so the search moves to the 20%/80% point of the range instead of the far
+    end: a search heading for an edge reaches it on round three, one heading
+    for the middle gets both bounds by round two. When crf is adjacent to
+    end there is nothing in between, so the end itself is next. (ab-av1
+    moves the same way only when the range is wide enough; see below.)
+
+    This cut is applied on EVERY range - a deliberate deviation from ab-av1,
+    whose cut_on_iter2 skips it when the range is narrower than half its
+    libsvtav1 default (issue #399's measured trade-off: the cut saves
+    ~0.4-0.5 rounds per reachable file and costs 1 round per unreachable
+    one - 11 real final CRFs: SDR 4.82 vs 5.09 rounds, HDR 5.00 vs 5.64 -
+    so it wins unless roughly 30% of eligible files are unreachable).
     """
     if abs(end - crf) <= 1:
         return end
@@ -277,13 +285,20 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
     """Finds the largest CRF whose probe still meets the quality target.
 
     The search follows ab-av1's crf_search (issue #313, read at ab-av1
-    ed5f5461f0aa): the first probe is the range's midpoint; while only one
-    side is known, round two moves to the 20%/80% point (_round_two_cut) and
-    later rounds to the range's end; once a passing and a failing probe
-    bracket the target, each round interpolates between them (_interpolate,
-    issue #23). The range's ends are therefore probed only when the search
-    heads there: "target unreachable" costs three rounds (midpoint, 20%
-    point, lo), not a CRF-14 round on every file.
+    ed5f5461f0aa) with ONE deliberate deviation (issue #399, the maintainer's
+    2026-10-31 decision): while only one side is known, round two moves to
+    the 20%/80% point (_round_two_cut) on EVERY range - ab-av1 skips that
+    cut when the range is narrower than half its libsvtav1 default (5..70),
+    which the SDR default (14, 45) is, and goes straight to the range end.
+    The measured trade-off (issue #399): the cut saves ~0.4-0.5 rounds per
+    reachable file and costs 1 round per unreachable one, so it wins unless
+    roughly 30% or more of eligible files are unreachable (the maintainer's
+    11 real final CRFs: SDR cut 4.82 vs no-cut 5.09 rounds; HDR 5.00 vs
+    5.64). Later rounds go to the range's end; once a passing and a failing
+    probe bracket the target, each round interpolates between them
+    (_interpolate, issue #23). The range's ends are therefore probed only
+    when the search heads there: "target unreachable" costs three rounds
+    (midpoint, 20% point, lo), not a CRF-14 round on every file.
 
     An early stop accepts a passing probe whose score sits less than a
     tolerance above the target, where the tolerance doubles each round from
