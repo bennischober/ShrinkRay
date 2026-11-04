@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi>=0.143.0",
+    "fastapi>=0.162.0",
     "loguru>=0.7.3",
     "pydantic>=2.14.1",
     "rich>=15.0.0",
@@ -26,11 +26,11 @@ dev = [
     "httpx2>=2.14.0",
     "import-linter>=2.15",
     "mypy>=2.4.0",
-    "playwright>=1.64.0",
-    "pytest>=8.4",
+    "playwright>=1.64.1",
+    "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
     "requests>=2.34.2",
-    "ruff>=0.14",
+    "ruff>=0.17.3",
 ]
 
 [project.urls]
