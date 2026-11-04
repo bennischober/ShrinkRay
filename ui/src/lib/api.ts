@@ -301,7 +301,7 @@ const ERROR_TRANSLATIONS: [RegExp, (m: RegExpMatchArray) => string][] = [  [
   ],
   [
     /interrupted by app restart/,
-    () => 'the run was interrupted by an app restart — the source is untouched; re-run the encode from the terminal',
+    () => 'the run was interrupted by an app restart — the watcher resumes its work on its own; a one-shot command can just be re-run',
   ],
 ]
 
