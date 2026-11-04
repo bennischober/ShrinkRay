@@ -1056,7 +1056,12 @@ def retained(
         log_error(f"Unknown action '{action}': use 'list' or 'recover'.")
         raise typer.Exit(1)
     if not db_file.is_file():
-        log_error(f"Database '{db_file}' not found! Run a scan first.")
+        log_error(
+            f"Database '{db_file}' not found. It is created by the resident app"
+            " (shrinkray serve) or by an encode or plan run given --db; a run"
+            " without a database records nothing, so its originals are the"
+            " *.shrinkray-original files beside the sources."
+        )
         raise typer.Exit(1)
     connection = db.connect(db_file)
     try:
