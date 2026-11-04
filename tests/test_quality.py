@@ -3216,3 +3216,86 @@ class TestRoundTwoCutOnTheDefaultRanges(unittest.TestCase):
         # a passing midpoint: 27 -> round(0.4*27 + 0.6*44) = 37 -> the top
         self.assertEqual(engine_search.bisect_crf(passing, 10, 45, target_vmaf=95.0), 44)
         self.assertEqual(hdr_calls, [27, 37, 44])
+
+
+class TestHdrSkip(unittest.TestCase):
+    """Issue #518 (the maintainer's #340 decision): HDR sources are skipped
+    with a visible reason - the tone-mapped SDR measurement is not valid for
+    HDR. 10-bit SDR stays fully supported; the transfer alone decides."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.movie = Path(self.tmp.name) / "movie.mkv"
+        self.movie.write_bytes(b"x" * 64)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _plan_with_transfer(self, stream: dict) -> "tuple[object, object]":
+        from unittest.mock import Mock
+
+        from shrinkray import config as config_helper
+        from shrinkray.engine.plan import plan_quality
+
+        probed = Mock(return_value=(20, 96.0, [], False))
+        with (
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+            patch("shrinkray.config.load_config", return_value=config_helper.Conf({})),
+            patch("shrinkray.engine.plan.get_data", return_value={"streams": [stream]}),
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
+            patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
+        ):
+            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+        return result, probed
+
+    def test_a_pq_source_is_skipped_without_a_probe(self) -> None:
+        result, probed = self._plan_with_transfer({"color_transfer": "smpte2084"})
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "hdr not supported")
+        self.assertIn("not supported yet", result.error)
+        probed.assert_not_called()
+
+    def test_an_hlg_source_is_skipped_without_a_probe(self) -> None:
+        result, probed = self._plan_with_transfer({"color_transfer": "arib-std-b67"})
+        self.assertEqual(result.skipped_reason, "hdr not supported")
+        probed.assert_not_called()
+
+    def test_a_bt2020_sdr_master_is_not_skipped(self) -> None:
+        result, probed = self._plan_with_transfer(
+            {"color_space": "bt2020nc", "color_transfer": "bt709"}
+        )
+        self.assertIsNone(result.skipped_reason)
+        probed.assert_called()
+
+    def test_a_10bit_sdr_source_is_not_skipped(self) -> None:
+        result, probed = self._plan_with_transfer(
+            {"color_transfer": "bt709", "pix_fmt": "yuv420p10le"}
+        )
+        self.assertIsNone(result.skipped_reason)
+        probed.assert_called()
+
+    def test_an_omitted_hdr_section_still_skips_pq(self) -> None:
+        """The config's codec.hdr key OMITTED: the code defaults apply (the
+        #236 decision), so PQ is still detected and skipped."""
+        from unittest.mock import Mock
+
+        from shrinkray import config as config_helper
+        from shrinkray.engine.plan import plan_quality
+
+        probed = Mock(return_value=(20, 96.0, [], False))
+        with (
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.config.load_config", return_value=config_helper.Conf({})),
+            patch(
+                "shrinkray.engine.plan.get_data",
+                return_value={"streams": [{"color_transfer": "smpte2084"}]},
+            ),
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
+            patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
+        ):
+            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+        self.assertEqual(result.skipped_reason, "hdr not supported")
+        probed.assert_not_called()

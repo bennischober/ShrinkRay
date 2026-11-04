@@ -331,7 +331,10 @@ class HdrSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     color_space: list[str] = ["bt2020nc"]
-    color_transfer: list[str] = ["smpte2084"]
+    # the transfers that make a source HDR: PQ (smpte2084) and HLG
+    # (arib-std-b67) - issue #518's skip keys on the TRANSFER (a bt2020nc
+    # SDR master carries an SDR transfer and is not HDR)
+    color_transfer: list[str] = ["smpte2084", "arib-std-b67"]
 
 
 class CodecSection(BaseModel):

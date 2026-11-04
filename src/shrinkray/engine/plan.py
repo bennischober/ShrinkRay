@@ -250,6 +250,31 @@ def is_1080p_class(
     return height is not None and height >= height_floor
 
 
+def is_hdr_transfer_file(movie: Path) -> bool:
+    """Checks whether a movie's TRANSFER characteristic is HDR (issue #518).
+
+    The skip gate's detection: the transfer alone decides (a bt2020nc SDR
+    master is not HDR; PQ and HLG are). Reuses the scan's probe data path so
+    both detections agree on the facts.
+
+    Args:
+        movie (Path): The movie file.
+
+    Returns:
+        bool: True if the video's transfer characteristic is HDR.
+    """
+    from shrinkray.config import load_config
+
+    try:
+        data = get_data(movie, load_config())
+    except (RuntimeError, OSError, ValueError):
+        return False
+    video = (data.get("streams") or [{}])[0] if isinstance(data, dict) else {}
+    from shrinkray.tools.ffprobe import is_hdr_transfer
+
+    return is_hdr_transfer(video, load_config())
+
+
 def is_hdr_file(movie: Path) -> bool:
     """Checks whether a movie file is HDR.
 
@@ -484,6 +509,27 @@ def plan_quality(
 
     duration = probe_duration_seconds(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
+    if is_hdr_transfer_file(input_file):
+        # the maintainer's decision (issue #340, 2026-10-31; issue #518): HDR
+        # is not supported yet - the tone-mapped SDR measurement is not valid
+        # for HDR (libvmaf's docs: an SDR model on HDR pictures "is not
+        # meaningful"). Support returns with libvmaf's HDR models (#519).
+        log(f"Plan for '{input_file.name}': skip (hdr not supported)")
+        return QualityResult(
+            input=input_file,
+            output=input_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error="HDR: not supported yet (no validated quality measurement); tracked in issue #519",
+            skipped_reason="hdr not supported",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
     if duration is not None and duration < MIN_ENCODE_SECONDS:
         # the plan's verdict line (issue #471): the decision exists in the
         # row and the dashboard, but docker logs must say it too

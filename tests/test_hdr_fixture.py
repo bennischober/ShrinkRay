@@ -88,7 +88,9 @@ class TestHdrFixture(unittest.TestCase):
         must not depend on its baked config.json for detection."""
         conf = config_helper.Conf({})
         self.assertEqual(conf.hdr_color_spaces, ["bt2020nc"])
-        self.assertEqual(conf.hdr_color_transfers, ["smpte2084"])
+        # HLG (arib-std-b67) joined the defaults with issue #518's skip: the
+        # transfer list must catch both HDR transfer forms
+        self.assertEqual(conf.hdr_color_transfers, ["smpte2084", "arib-std-b67"])
         self.assertTrue(read_media.is_hdr(dict(self.recorded), conf))
 
     def test_an_explicitly_empty_marker_list_flags_nothing(self):

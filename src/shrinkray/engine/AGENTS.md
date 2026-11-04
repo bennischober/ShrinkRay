@@ -28,8 +28,10 @@ then bar detection, then sample extraction, then the CRF search. The only
 difference is the tail: `plan` returns a prediction, `encode` runs the full encode
 and optionally verifies. Sizing permission is a skip, never an error:
 `skipped_reason` is one of `too short`, `resolution too low`, `below min size`,
-`source codec not a candidate`, `no size gain`, `target unreachable`,
-`output not smaller` (`pipeline.py`).
+`source codec not a candidate`, `hdr not supported` (issue #518: the maintainer's
+#340 decision — HDR is not supported until libvmaf's HDR models, #519; the gate keys
+on the TRANSFER characteristic, so a bt2020nc SDR master and 10-bit SDR stay eligible),
+`no size gain`, `target unreachable`, `output not smaller` (`pipeline.py`).
 
 HDR is an override, not a branch: `encoder_for(bit_depth, hdr)` switches to `svt_av1_10bit`
 when the source is 10-bit or HDR and `plan.py` replaces the target and CRF range

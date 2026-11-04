@@ -320,6 +320,26 @@ def bit_depth(video: dict) -> int | None:
     return None
 
 
+def is_hdr_transfer(video: dict, config: Conf) -> bool:
+    """Checks if the video's TRANSFER characteristic is HDR (issue #518).
+
+    Unlike is_hdr (either a colour-space or a transfer match — the scan's
+    HDR classification), the skip gate keys on the transfer alone: a
+    bt2020nc SDR master carries an SDR transfer and is not HDR, while PQ
+    (smpte2084) and HLG (arib-std-b67) transfers are HDR regardless of the
+    colour space.
+
+    Args:
+        video (dict): The video stream data from ffprobe.
+        config (Conf): The config settings.
+
+    Returns:
+        bool: True if the video's transfer characteristic is HDR.
+    """
+    color_transfer = str(video.get("color_transfer") or "")
+    return any(transfer and transfer in color_transfer for transfer in config.hdr_color_transfers)
+
+
 def is_hdr(video: dict, config: Conf) -> bool:
     """Checks if the video stream is HDR by comparing its color data with the config.
 

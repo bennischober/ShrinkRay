@@ -90,6 +90,9 @@ from shrinkray.engine.plan import (
     is_hdr_file as is_hdr_file,
 )
 from shrinkray.engine.plan import (
+    is_hdr_transfer_file as is_hdr_transfer_file,
+)
+from shrinkray.engine.plan import (
     plan_quality as plan_quality,
 )
 from shrinkray.engine.plan import (
@@ -1221,6 +1224,23 @@ def encode_with_quality(
 
     duration = _probe_duration(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
+    if is_hdr_transfer_file(input_file):
+        # the maintainer's decision (issue #340, 2026-10-31; issue #518): HDR
+        # is not supported yet - the tone-mapped SDR measurement is not valid
+        # for HDR. Support returns with libvmaf's HDR models (#519).
+        log(f"Encode for '{input_file.name}': skip (hdr not supported)")
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error="HDR: not supported yet (no validated quality measurement); tracked in issue #519",
+            skipped_reason="hdr not supported",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
     if duration is not None and duration < MIN_ENCODE_SECONDS:
         log(f"Encode for '{input_file.name}': skip (too short)")
         return QualityResult(

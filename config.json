@@ -5,7 +5,8 @@
         "bt2020nc"
       ],
       "color_transfer": [
-        "smpte2084"
+        "smpte2084",
+        "arib-std-b67"
       ]
     }
   },
