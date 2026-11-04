@@ -23,6 +23,7 @@ import re
 import sqlite3
 import subprocess
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -553,6 +554,35 @@ def detect_crop_summary_cached(
     finally:
         if connection is not None:
             connection.close()
+
+
+def crop_bars_or_fallback(
+    summary: CropSummary | None,
+    fallback: Callable[[], tuple[int, int, int, int] | None],
+) -> tuple[int, int, int, int] | None:
+    """Decides the bars: a measured "no common bars" stands (issue #525).
+
+    The timeline pass's verdict is the one bar measurement. When it MEASURED
+    no safe crop — the full-frame veto, noise-sized bars, or readings with no
+    sustained run — that verdict stands and the sampled detector never runs:
+    ten windows of a variable-aspect film can miss its full-frame sections
+    and cut picture the verdict protected. The sampled fallback runs only
+    for a pass that learned nothing: the summary is absent (a failed pass)
+    or cropdetect produced no readings.
+
+    Args:
+        summary (CropSummary | None): The timeline pass's summary (None: the
+            pass failed or was skipped).
+        fallback (callable): The sampled detector, called only when the pass
+            learned nothing.
+
+    Returns:
+        tuple | None: The (top, bottom, left, right) bars to crop, or None
+            for no bars.
+    """
+    if summary is not None and summary.readings > 0:
+        return summary.bars
+    return fallback()
 
 
 def detect_crop_rect(

@@ -25,6 +25,7 @@ from shrinkray import db
 from shrinkray.engine.crop import (
     CropReading,
     CropSummary,
+    crop_bars_or_fallback,
     crop_summary_from_timeline,
     detect_crop_summary_cached,
     sustained_runs,
@@ -685,3 +686,46 @@ def _config():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCropBarsOrFallback(unittest.TestCase):
+    """Issue #525: a measured "no common bars" verdict stands; the sampled
+    detector runs only for a pass that learned nothing."""
+
+    @staticmethod
+    def _summary(readings: int, sustained: int) -> CropSummary:
+        return CropSummary(
+            bars=None,
+            frame_width=1920,
+            frame_height=1080,
+            readings=readings,
+            sustained_readings=sustained,
+            ratios={},
+        )
+
+    def test_a_measured_veto_stands(self) -> None:
+        from unittest.mock import Mock
+
+        fallback = Mock(return_value=(100, 100, 0, 0))
+        # readings exist and the veto fired (full-frame, noise-sized bars, or
+        # no sustained run): the verdict is the decision
+        for summary in (self._summary(10, 3), self._summary(10, 0)):
+            self.assertIsNone(crop_bars_or_fallback(summary, fallback))
+        fallback.assert_not_called()
+
+    def test_an_empty_pass_falls_back(self) -> None:
+        from unittest.mock import Mock
+
+        fallback = Mock(return_value=(100, 100, 0, 0))
+        self.assertEqual(
+            crop_bars_or_fallback(self._summary(0, 0), fallback),
+            (100, 100, 0, 0),
+        )
+        fallback.assert_called_once_with()
+
+    def test_a_failed_pass_falls_back(self) -> None:
+        from unittest.mock import Mock
+
+        fallback = Mock(return_value=None)
+        self.assertIsNone(crop_bars_or_fallback(None, fallback))
+        fallback.assert_called_once_with()
