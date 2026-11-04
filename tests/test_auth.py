@@ -348,3 +348,13 @@ class TestStatusPollSilence(unittest.TestCase):
         )
         self.assertFalse(f.filter(status))
         self.assertTrue(f.filter(library))
+
+
+class TestEncodeWindowStatusField(unittest.TestCase):
+    """Issue #434: the status payload carries the window's state."""
+
+    def test_the_field_reflects_the_configured_window(self) -> None:
+        from shrinkray.server.app import _encode_window_state
+
+        # no window configured: None
+        self.assertIsNone(_encode_window_state())

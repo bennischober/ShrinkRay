@@ -1081,3 +1081,83 @@ class TestWatchLibraryTree(unittest.TestCase):
         seen: list = []
         self._encode_once(seen, roots=[self.root, second])
         self.assertIn(movie, seen, "the second root was not walked")
+
+
+class TestWatcherEncodeWindow(unittest.TestCase):
+    """Issue #434: the watcher's pass defers outside the encode window —
+    nothing is encoded, nothing enters `known`, and the file stays eligible
+    for when the window opens."""
+
+    def test_the_pass_defers_outside_the_window(self) -> None:
+        import tempfile
+        from contextlib import ExitStack
+
+        from shrinkray.engine import watch as watch_mod
+        from shrinkray.engine.watch import WatchSettings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            inbox = tmp_path / "inbox"
+            inbox.mkdir()
+            out = tmp_path / "out"
+            movie = inbox / "good.mkv"
+            movie.write_bytes(b"movie")
+            old = time.time() - 7200
+            os.utime(movie, (old, old))
+
+            processed: list[str] = []
+            settings = WatchSettings(
+                max_threads=None,
+                target_vmaf=95.0,
+                min_source_height=0,
+                min_source_width=0,
+                min_source_size_gb=0.0,
+                candidate_codecs=("h264", "hevc", "vp9", "av1"),
+                crop_sample_count=10,
+                encode_window_start="09:00",
+                encode_window_end="17:00",
+            )
+
+            stack = ExitStack()
+            captured: list[str] = []
+            from loguru import logger
+
+            sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+            try:
+                with (
+                    mock.patch("shrinkray.engine.watch.encode_window_open", return_value=False),
+                    mock.patch(
+                        "shrinkray.engine.watch.encode_with_quality",
+                        side_effect=lambda m, o, **kw: processed.append(m.name),
+                    ),
+                ):
+                    _isolated_lock(stack, tmp)
+                    with stack:
+                        watch_mod.watch([inbox], out, once=True, settings=lambda: settings)
+                text = "".join(captured)
+                self.assertEqual(processed, [], "the pass encoded outside the window")
+                self.assertIn("outside the encode window", text)
+
+                # the file stays eligible: it was never entered into `known`
+                # (a second pass inside the window encodes it)
+                def fake_encode(m, o, **kw):
+                    processed.append(m.name)
+                    from shrinkray.engine.plan import QualityResult
+
+                    return QualityResult(
+                        input=m, output=o, success=False, skipped_reason="no size gain"
+                    )
+
+                with (
+                    mock.patch("shrinkray.engine.watch.encode_window_open", return_value=True),
+                    mock.patch(
+                        "shrinkray.engine.watch.encode_with_quality",
+                        side_effect=fake_encode,
+                    ),
+                ):
+                    watch_mod.watch([inbox], out, once=True, settings=lambda: settings)
+                self.assertEqual(
+                    processed, ["good.mkv"], "the deferred file was never reconsidered"
+                )
+            finally:
+                logger.remove(sink_id)
