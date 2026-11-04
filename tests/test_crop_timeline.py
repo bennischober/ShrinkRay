@@ -767,7 +767,11 @@ class TestCropBarsOrFallback(unittest.TestCase):
             self.assertIsNone(result.crop, "the measured veto must stand")
 
     def test_the_encode_call_site_honours_the_veto(self) -> None:
-        """The encode path's crop decision runs through the helper too."""
+        """The encode path's crop decision lives INSIDE _probe_movie, so this
+        test drives the real probe pipeline (only the search and the encode
+        are mocked): a measured veto stands and the sampled detector is never
+        called (issue #525 round 2, finding 1 — reverting the call site fails
+        this)."""
         import tempfile
         from unittest.mock import Mock, patch
 
@@ -794,8 +798,15 @@ class TestCropBarsOrFallback(unittest.TestCase):
                 )
 
             with (
-                patch("shrinkray.engine.pipeline.detect_crop_summary_cached", return_value=veto),
+                patch(
+                    "shrinkray.engine.pipeline.detect_crop_summary_cached",
+                    return_value=veto,
+                ),
                 patch("shrinkray.engine.pipeline.detect_crop_rect", sampled),
+                patch(
+                    "shrinkray.engine.pipeline.find_optimal_crf_and_skip",
+                    return_value=(20, 96.0, [], False),
+                ),
                 patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=6000.0),
                 patch.object(
                     engine_pipeline,
@@ -811,13 +822,14 @@ class TestCropBarsOrFallback(unittest.TestCase):
                 ),
                 patch.object(engine_pipeline, "source_codec", return_value="h264"),
                 patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
-                patch.object(engine_pipeline, "_probe_movie", return_value=(20, 96.0, [], None)),
                 patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode),
             ):
-                engine_pipeline.encode_with_quality(
+                result = engine_pipeline.encode_with_quality(
                     src, out, target_vmaf=95.0, encoder="svt_av1", verify=False
                 )
             sampled.assert_not_called()
+            self.assertIsNone(result.crop, "the measured veto must stand")
+            self.assertTrue(result.success, result.error)
 
 
 if __name__ == "__main__":
