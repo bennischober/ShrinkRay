@@ -790,8 +790,10 @@ class TestCropBarsOrFallback(unittest.TestCase):
                 ratios={},
             )
             sampled = Mock(return_value=(100, 100, 0, 0))
+            seen_commands: list[list[str]] = []
 
             def fake_encode(input_file, output_file, command, progress=None, **kwargs):
+                seen_commands.append(list(command))
                 output_file.write_bytes(b"x" * 32)
                 return engine_pipeline.EncodeResult(
                     input=input_file, output=output_file, success=True
@@ -828,8 +830,13 @@ class TestCropBarsOrFallback(unittest.TestCase):
                     src, out, target_vmaf=95.0, encoder="svt_av1", verify=False
                 )
             sampled.assert_not_called()
-            self.assertIsNone(result.crop, "the measured veto must stand")
+            # the veto's observable effect: the encode runs UNCROPPED — the
+            # command's crop is the zero form (no picture removed; issue #525
+            # round 3, finding 1: result.crop is never set on an encode
+            # result, so that assertion could not fail)
             self.assertTrue(result.success, result.error)
+            self.assertEqual(len(seen_commands), 1)
+            self.assertIn("--crop 0:0:0:0", " ".join(seen_commands[0]))
 
 
 if __name__ == "__main__":
