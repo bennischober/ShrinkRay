@@ -298,7 +298,7 @@
               </td>
             </tr>
           {:else}
-            <tr><td colspan="8" class="empty dim">no titles match — adjust the search or run a scan</td></tr>
+            <tr><td colspan="8" class="empty dim">no titles match — adjust the search</td></tr>
           {/each}
         </tbody>
       </table>
