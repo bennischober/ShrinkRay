@@ -1,9 +1,11 @@
 # this module loads the config.json file and provides the settings to the other modules => provides default values
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -286,6 +288,33 @@ class AppSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     auto_backlog: bool = False
+    # the daily encode window (issue #434): resident automation holds back
+    # new files while outside it. Local HH:MM each; both keys set or neither
+    # (an empty pair = no window: automation runs always). The window is
+    # fixed and operator-picked (seasonally revisited), never computed from
+    # sunrise/sunset - that would need a location ShrinkRay does not collect.
+    encode_window_start: str = ""
+    encode_window_end: str = ""
+
+    @model_validator(mode="after")
+    def _window_pair_is_valid(self) -> "AppSection":
+        """Both window keys set or neither, and each a local HH:MM."""
+        start, end = self.encode_window_start, self.encode_window_end
+        if bool(start) != bool(end):
+            raise ValueError(
+                "app.encode_window_start and app.encode_window_end must be "
+                "set together (an empty pair means no window)"
+            )
+        if start:
+            _parse_hhmm(start, "app.encode_window_start")
+            _parse_hhmm(end, "app.encode_window_end")
+            if start.strip() == end.strip():
+                raise ValueError(
+                    "app.encode_window_start and app.encode_window_end must "
+                    "differ (a window that starts and ends at the same minute "
+                    "holds nothing open)"
+                )
+        return self
 
 
 class HdrSection(BaseModel):
@@ -311,6 +340,41 @@ class CodecSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     hdr: HdrSection = Field(default_factory=HdrSection)
+
+
+def _parse_hhmm(value: str, key: str) -> time:
+    """Parses a local HH:MM string into a time, naming the key on error."""
+    m = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", value.strip())
+    if m is None:
+        raise ValueError(f"{key}: '{value}' is not a local HH:MM time")
+    return time(int(m.group(1)), int(m.group(2)))
+
+
+def encode_window_open(start: str, end: str, now: time | None = None) -> bool:
+    """True when resident automation may START encode work (issue #434).
+
+    The window is the operator-picked local HH:MM pair from
+    app.encode_window_start/end (the config validator enforces both-or-neither
+    and the format). An empty pair means no window: automation runs always.
+    A start after end crosses midnight. Deterministic: now is injectable for
+    tests.
+
+    Args:
+        start (str): The window's local HH:MM start (empty: no window).
+        end (str): The window's local HH:MM end.
+        now (time | None): The current local time (None: the real clock).
+
+    Returns:
+        bool: True when encode work may start now.
+    """
+    if not start and not end:
+        return True
+    now = now or datetime.now().time()
+    start_t = _parse_hhmm(start, "app.encode_window_start")
+    end_t = _parse_hhmm(end, "app.encode_window_end")
+    if start_t <= end_t:
+        return start_t <= now <= end_t
+    return now >= start_t or now <= end_t
 
 
 class ConfigModel(BaseModel):
@@ -413,6 +477,10 @@ class Conf:
 
         # app => whether the resident app starts the backlog on boot
         self.auto_backlog: bool = model.app.auto_backlog
+        # the daily encode window (issue #434): resident automation holds
+        # back new files while outside it (empty pair = no window)
+        self.encode_window_start: str = model.app.encode_window_start
+        self.encode_window_end: str = model.app.encode_window_end
 
 
 _config: Conf | None = None

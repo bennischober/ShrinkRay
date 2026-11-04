@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from shrinkray.config import Conf
+from shrinkray.config import Conf, encode_window_open, refresh_config
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.logger import file_scope, log
 from shrinkray.replace import STAGING_DIR_PREFIX
@@ -303,16 +303,29 @@ class JobQueue:
         self._wake.set()
         return job
 
-    def take_next(self) -> Job | None:
+    def take_next(self, only_kinds: set[JobKind] | None = None) -> Job | None:
         """Returns the next queued job and marks it running.
 
+        Args:
+            only_kinds (set[JobKind] | None): When set, only jobs of these
+                kinds are taken; other queued jobs stay queued (issue #434's
+                encode window holds plan/encode work while scan proceeds).
+
         Returns:
-            Job | None: The job, or None if the queue is empty.
+            Job | None: The job, or None if the queue is empty (or holds no
+                job of the requested kinds).
         """
         with self._lock:
             if not self._pending:
                 return None
-            job = self._pending.pop(0)
+            index = None
+            for i, job in enumerate(self._pending):
+                if only_kinds is None or job.kind in only_kinds:
+                    index = i
+                    break
+            if index is None:
+                return None
+            job = self._pending.pop(index)
             job.state = JobState.RUNNING
         self._connection.execute(
             "UPDATE jobs SET state = ?, started_at = datetime('now') WHERE id = ?",
@@ -1201,7 +1214,16 @@ class JobWorker:
             # publish would otherwise miss a multi-hour job entirely
             cancel = threading.Event()
             self._running_cancel = cancel
-            job = self.queue.take_next()
+            # the daily encode window (issue #434): plan and encode jobs are
+            # held back while outside it - scan jobs (cheap cataloging)
+            # proceed, and an in-flight job always runs to completion. The
+            # config is re-read each tick, so the queue resumes when the
+            # window opens.
+            conf = refresh_config()
+            if not encode_window_open(conf.encode_window_start, conf.encode_window_end):
+                job = self.queue.take_next(only_kinds={JobKind.SCAN})
+            else:
+                job = self.queue.take_next()
             if job is None:
                 self._running_cancel = None
                 self.queue.wait_for_work(timeout=1.0)

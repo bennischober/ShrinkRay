@@ -410,5 +410,41 @@ class TestImageKeepsItsConfigOnTheVolume(unittest.TestCase):
         self.assertIn("COPY container-config.json /app/config.json", runtime)
 
 
+class TestEncodeWindow(unittest.TestCase):
+    """Issue #434: the daily encode window's config validation and helper."""
+
+    def test_the_validator_requires_both_keys_and_the_format(self) -> None:
+        from pydantic import ValidationError
+
+        from shrinkray.config import Conf
+
+        with self.assertRaises(ValidationError):
+            Conf({"app": {"encode_window_start": "09:00"}})  # both-or-neither: an error
+        with self.assertRaises(ValueError):
+            Conf({"app": {"encode_window_start": "09:00", "encode_window_end": "x"}})
+        with self.assertRaises(ValidationError):
+            # start == end holds nothing open: rejected (issue #434 round 2)
+            Conf({"app": {"encode_window_start": "09:00", "encode_window_end": "09:00"}})
+        Conf({"app": {"encode_window_start": "09:00", "encode_window_end": "17:00"}})  # valid
+        Conf({"app": {}})  # the empty pair: no window
+
+    def test_the_helper_covers_same_day_midnight_crossing_and_no_window(self) -> None:
+        from datetime import time
+
+        from shrinkray.config import encode_window_open
+
+        self.assertTrue(encode_window_open("", ""))
+        self.assertTrue(encode_window_open("09:00", "17:00", now=time(12, 0)))
+        self.assertFalse(encode_window_open("09:00", "17:00", now=time(8, 0)))
+        self.assertFalse(encode_window_open("09:00", "17:00", now=time(17, 1)))
+        # midnight-crossing: 22:00-06:00 is open at 23:30 and at 05:00
+        self.assertTrue(encode_window_open("22:00", "06:00", now=time(23, 30)))
+        self.assertTrue(encode_window_open("22:00", "06:00", now=time(5, 0)))
+        self.assertFalse(encode_window_open("22:00", "06:00", now=time(12, 0)))
+        # the boundaries: start and end are inclusive
+        self.assertTrue(encode_window_open("09:00", "17:00", now=time(9, 0)))
+        self.assertTrue(encode_window_open("09:00", "17:00", now=time(17, 0)))
+
+
 if __name__ == "__main__":
     unittest.main()

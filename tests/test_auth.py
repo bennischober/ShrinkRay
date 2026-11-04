@@ -348,3 +348,30 @@ class TestStatusPollSilence(unittest.TestCase):
         )
         self.assertFalse(f.filter(status))
         self.assertTrue(f.filter(library))
+
+
+class TestEncodeWindowStatusField(unittest.TestCase):
+    """Issue #434: the status payload carries the window's state."""
+
+    def test_the_field_reflects_the_configured_window(self) -> None:
+        from unittest.mock import patch
+
+        from shrinkray import config as config_helper
+        from shrinkray.server.app import _encode_window_state
+
+        empty = config_helper.Conf({})
+        configured = config_helper.Conf(
+            {"app": {"encode_window_start": "09:00", "encode_window_end": "17:00"}}
+        )
+        with patch("shrinkray.server.app.refresh_config", return_value=empty):
+            self.assertIsNone(_encode_window_state())
+        with (
+            patch("shrinkray.server.app.refresh_config", return_value=configured),
+            patch("shrinkray.server.app.encode_window_open", return_value=True),
+        ):
+            self.assertEqual(_encode_window_state(), "open")
+        with (
+            patch("shrinkray.server.app.refresh_config", return_value=configured),
+            patch("shrinkray.server.app.encode_window_open", return_value=False),
+        ):
+            self.assertEqual(_encode_window_state(), "closed")

@@ -431,6 +431,10 @@
       <!-- not dismissible: it clears once the file is fixed (issue #247) -->
       <div class="api-error mono" role="alert">{status.config_error}</div>
     {/if}
+    {#if status?.encode_window === 'closed'}
+      <!-- read-only: the window is set in config.json (issue #434) -->
+      <div class="api-notice mono" role="status">Outside the encode window — no new file starts</div>
+    {/if}
     {#if status?.paused}
       <!-- read-only: pausing and resuming happen in the terminal (issue #250) -->
       <div class="api-notice mono" role="status">Paused — no new file starts: {status.paused}</div>
