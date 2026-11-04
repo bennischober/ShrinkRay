@@ -51,6 +51,11 @@ VMAF_STATISTIC = "mean"
 # trusted. The search clamps to this band, so an over-wide range only
 # costs probes - it cannot make the decision wrong in the safe direction.
 DEFAULT_CRF_RANGE = (14, 45)
+
+# ab-av1's libsvtav1 default CRF range (its src/command/args/encode.rs, read at
+# ed5f5461f0aa): the round-two cut's threshold is half this range's width
+# (issue #399)
+AB_AV1_DEFAULT_CRF_RANGE = (5, 70)
 DEFAULT_HDR_CRF_RANGE = (10, 45)
 
 
@@ -278,12 +283,16 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
 
     The search follows ab-av1's crf_search (issue #313, read at ab-av1
     ed5f5461f0aa): the first probe is the range's midpoint; while only one
-    side is known, round two moves to the 20%/80% point (_round_two_cut) and
-    later rounds to the range's end; once a passing and a failing probe
-    bracket the target, each round interpolates between them (_interpolate,
-    issue #23). The range's ends are therefore probed only when the search
-    heads there: "target unreachable" costs three rounds (midpoint, 20%
-    point, lo), not a CRF-14 round on every file.
+    side is known, round two moves to the 20%/80% point (_round_two_cut) on
+    ranges wider than half ab-av1's libsvtav1 default (5..70) - the HDR
+    range; the SDR default (14, 45) goes straight to the range end, as
+    ab-av1's cut_on_iter2 decides (issue #399) - and later rounds to the
+    range's end; once a passing and a failing probe bracket the target, each
+    round interpolates between them (_interpolate, issue #23). The range's
+    ends are therefore probed only when the search heads there: "target
+    unreachable" costs two rounds on the SDR default (midpoint, lo) and
+    three on the HDR range (midpoint, 20% point, lo), not a CRF-14 round on
+    every file.
 
     An early stop accepts a passing probe whose score sits less than a
     tolerance above the target, where the tolerance doubles each round from
@@ -320,6 +329,11 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
     if hi <= lo:
         raise ValueError(f"empty CRF range [{lo}, {hi})")
     top = hi - 1  # the highest CRF the search may return
+    # ab-av1's cut_on_iter2 (issue #399): the 20%/80% round-two cut exists
+    # only for ranges wider than half the encoder's default (libsvtav1
+    # 5..70, so a width above 32.5). On the SDR default (14, 45) ab-av1
+    # goes straight to the range end on round two - measured in #395.
+    cut_on_iter2 = (hi - lo) > (AB_AV1_DEFAULT_CRF_RANGE[1] - AB_AV1_DEFAULT_CRF_RANGE[0]) * 0.5
     passing: tuple[int, float] | None = None  # the highest passing probe
     failing: tuple[int, float] | None = None  # the lowest failing probe
     crf = (lo + hi) // 2
@@ -345,7 +359,7 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
             elif crf == top:
                 return crf
             else:
-                crf = _round_two_cut(crf, top) if round_number == 1 else top
+                crf = _round_two_cut(crf, top) if round_number == 1 and cut_on_iter2 else top
         else:
             failing = (crf, value)
             if crf == lo:
@@ -355,7 +369,7 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
                     return passing[0]
                 crf = _interpolate(passing, failing, target_vmaf)
             else:
-                crf = _round_two_cut(crf, lo) if round_number == 1 else lo
+                crf = _round_two_cut(crf, lo) if round_number == 1 and cut_on_iter2 else lo
 
 
 def probe_crf(

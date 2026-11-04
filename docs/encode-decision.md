@@ -111,11 +111,14 @@ trade follows them:
 
 - **The round structure is ab-av1's** (`crf_search`, read at ab-av1 `ed5f5461f0aa`): the first probe is
 the range's midpoint; while only one side of the target is known, round two moves to the 20%/80% point of
-the range and round three to its end; once a passing and a failing probe bracket the target, each round
-interpolates between them (with issue #23's safeguards). The range's ends are probed only when the
-search heads there, so "target unreachable" costs three rounds (midpoint, 20% point, lowest CRF) where
-the old shape spent one, and the SkipEncode evidence is the lowest CRF's probe, as before. The old shape
-probed CRF 14 - the slowest, largest probe - upfront on every file, passing or not.
+the range — on ranges wider than half ab-av1's libsvtav1 default (5..70), which the HDR range (10, 45) is;
+the SDR default (14, 45) is not, and there ab-av1's cut_on_iter2 sends round two straight to the range's
+end (measured in #395, issue #399) — and round three to its end; once a passing and a failing probe
+bracket the target, each round interpolates between them (with issue #23's safeguards). The range's ends
+are probed only when the search heads there, so "target unreachable" costs two rounds on the SDR default
+(midpoint, lowest CRF) and three on the HDR range (midpoint, 20% point, lowest CRF) where the old shape
+spent one, and the SkipEncode evidence is the lowest CRF's probe, as before. The old shape probed CRF 14 -
+the slowest, largest probe - upfront on every file, passing or not.
 - **An early stop accepts a passing CRF whose score is less than a tolerance above the target**, the
 tolerance doubling per round from 0.1 (0.1, 0.2, 0.4, 0.8, ...): ab-av1's formula for an encoder whose
 CRF moves in whole steps. A probe below the target is never accepted, and the stop fires only once the

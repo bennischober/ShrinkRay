@@ -199,8 +199,9 @@ class TestQuality(unittest.TestCase):
 
     def test_bisect_crf_does_not_probe_the_low_end_upfront(self):
         """Issue #313: the range's lowest CRF is probed only when the
-        search actually heads there - the unconditional CRF-14 round spent
-        the search's most expensive probe on nearly every file."""
+        search actually heads there - the first probe is the midpoint, never
+        CRF-14 (issue #399: on the SDR default a failing midpoint DOES send
+        round two to lo, ab-av1's measured shape)."""
         calls: list[int] = []
 
         def score(c: int) -> float:
@@ -209,13 +210,16 @@ class TestQuality(unittest.TestCase):
 
         chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
         self.assertEqual(chosen, 22)
-        self.assertNotIn(14, calls, "the low end was probed without the search heading there")
+        self.assertEqual(calls[0], 23, "the first probe is the midpoint")
+        self.assertNotEqual(calls[0], 14, "the low end was the upfront probe")
 
-    def test_bisect_crf_unreachable_costs_three_rounds(self):
-        """The unreachable case follows ab-av1's round structure: the
-        midpoint, the 20% point of the range, then lo - whose probe is the
-        SkipEncode evidence. The PR's first shape walked down by midpoints
-        and spent five rounds here (review of #339)."""
+    def test_bisect_crf_unreachable_goes_straight_to_lo_on_the_sdr_range(self):
+        """Issue #399: on the SDR default (14, 32) the round-two cut is off
+        (the range is narrower than half ab-av1's libsvtav1 default), so the
+        unreachable case costs two rounds: the midpoint, then lo - whose
+        probe is the SkipEncode evidence. The three-round shape (midpoint,
+        20% point, lo) is the HDR range's (issue #313's original complaint
+        was the unconditional CRF-14 round; review of #339)."""
         calls: list[int] = []
 
         def score(c: int) -> float:
@@ -224,56 +228,63 @@ class TestQuality(unittest.TestCase):
 
         chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
         self.assertEqual(chosen, 14)
-        self.assertEqual(calls, [23, 18, 14])
+        self.assertEqual(calls, [23, 14])
 
     def test_bisect_crf_round_two_moves_to_the_eighty_percent_point(self):
         """A passing midpoint moves round two to the 80% point of the range
-        (ab-av1's cut), not to the range's end."""
+        (ab-av1's cut_on_iter2: the HDR range (10, 45) is wider than half
+        the libsvtav1 default), not to the range's end (issue #399)."""
         calls: list[int] = []
 
         def score(c: int) -> float:
             calls.append(c)
             return 99.0
 
-        chosen = engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0)
-        # midpoint 23, then round(0.4*23 + 0.6*31) = 28, then the top (31)
-        self.assertEqual(calls, [23, 28, 31])
-        self.assertEqual(chosen, 31)
+        chosen = engine_search.bisect_crf(score, 10, 45, target_vmaf=95.0)
+        # midpoint 27, then round(0.4*27 + 0.6*44) = 37, then the top (44)
+        self.assertEqual(calls, [27, 37, 44])
+        self.assertEqual(chosen, 44)
 
     def test_bisect_crf_early_stop_tolerance_doubles_per_round(self):
         """Issue #313's early stop uses ab-av1's tolerance, 0.1 * 2**(round-1),
-        and fires only on a bracket at most 2 CRF wide (issue #395). Here round
-        3 lands on a 2-wide bracket (21 passing, 23 failing) at +0.35: inside
-        the doubled 0.4, where a linear 0.3 would probe 22 as well."""
+        and fires only on a bracket at most 2 CRF wide (issue #395). On the
+        SDR default (where round two goes to lo, issue #399) round four lands
+        on a 2-wide bracket (21 passing, 23 failing) at +0.1: inside round 4's
+        0.8, and the round-3 pass at +0.35 was inside 0.4 yet could not stop
+        (the bracket was 4 wide)."""
         calls: list[int] = []
-        # 23 fails; 18 passes; interpolation between them lands on 21
-        scores = {23: 94.333, 18: 96.0, 21: 95.35, 22: 80.0}
+        # 23 fails; 14 (round two's range end) passes; the interpolation lands
+        # on 19, its midpoint safeguard moves to 21, which stops the search
+        scores = {23: 94.333, 14: 96.0, 19: 95.35, 21: 95.1}
 
         def score(c: int) -> float:
             calls.append(c)
             return scores[c]
 
         self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 21)
-        self.assertEqual(calls, [23, 18, 21])
+        self.assertEqual(calls, [23, 14, 19, 21])
 
-        # the same bracket at +0.45 is outside round 3's 0.4 => 22 is probed
+        # 21 at +0.45 over the target still stops (round 4's 0.8), but a
+        # failing 21 sends the search one probe further (20)
         calls.clear()
-        scores[21] = 95.45
-        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 21)
-        self.assertEqual(calls, [23, 18, 21, 22])
+        scores[19] = 95.45
+        scores[21] = 94.9
+        scores[20] = 95.2
+        self.assertEqual(engine_search.bisect_crf(score, 14, 32, target_vmaf=95.0), 20)
+        self.assertEqual(calls, [23, 14, 19, 21, 20])
 
     def test_bisect_crf_early_stop_waits_for_a_narrow_bracket(self):
         """Issue #395 (the 22:21 review of #339): a pass inside the tolerance
         must not stop the search while the failing bound is far above it. On
-        this plateau-then-knee curve the midpoint (29) fails and the 20% point
-        (20) passes at +0.19, inside round 2's 0.2; stopping there returned 20
-        while CRF 28 still passes - 8 CRF given away, and a file that shrinks
-        at 28 but grows at 20 turned into a 'would not shrink' skip."""
+        this plateau-then-knee curve the midpoint (27) fails and the cut point
+        (17) passes at +0.17, inside round 2's 0.2; stopping there returned 17
+        while CRF 24 still passes - 7 CRF given away. The bracket is 10 wide,
+        so the search continues (issue #399: the HDR range keeps the cut)."""
 
         def score(c: int) -> float:
-            return 94.367 - 0.0232 * (c - 14) if c <= 30 else 80.0
+            return 94.367 - 0.0232 * (c - 10) if c <= 30 else 80.0
 
-        self.assertEqual(engine_search.bisect_crf(score, 14, 45, target_vmaf=94.034), 28)
+        self.assertEqual(engine_search.bisect_crf(score, 10, 45, target_vmaf=94.034), 24)
 
     def test_bisect_crf_early_stop_gives_away_at_most_one_crf(self):
         """Issue #395: the early stop fires only on a bracket at most 2 wide,
@@ -3167,3 +3178,35 @@ class TestSubprocessTimeouts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_bisect_crf_round_two_cut_follows_ab_av1s_condition(self):
+        """Issue #399: the 20%/80% cut exists only for ranges wider than half
+        ab-av1's libsvtav1 default (5..70). The SDR default (14, 45) goes
+        straight to the range end on round two (ab-av1's measured shape:
+        29 -> 14); the HDR range (10, 45) cuts (27 -> 17)."""
+        sdr_calls: list[int] = []
+
+        def sdr_score(c: int) -> float:
+            sdr_calls.append(c)
+            return 80.0  # everything fails => unreachable
+
+        engine_search.bisect_crf(sdr_score, 14, 45, target_vmaf=95.0)
+        self.assertEqual(sdr_calls, [29, 14])
+
+        hdr_calls: list[int] = []
+
+        def hdr_score(c: int) -> float:
+            hdr_calls.append(c)
+            return 80.0
+
+        engine_search.bisect_crf(hdr_score, 10, 45, target_vmaf=95.0)
+        self.assertEqual(hdr_calls, [27, 17, 10])
+
+        # a passing midpoint: SDR goes to the range's top (44 = hi - 1); HDR
+        # cuts toward it (0.4*27 + 0.6*44 = 38)
+        sdr_calls.clear()
+        engine_search.bisect_crf(lambda c: (sdr_calls.append(c), 99.0)[1], 14, 45, target_vmaf=95.0)
+        self.assertEqual(sdr_calls, [29, 44])
+        hdr_calls.clear()
+        engine_search.bisect_crf(lambda c: (hdr_calls.append(c), 99.0)[1], 10, 45, target_vmaf=95.0)
+        self.assertEqual(hdr_calls, [27, 38, 44])
