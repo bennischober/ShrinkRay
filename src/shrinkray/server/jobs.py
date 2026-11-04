@@ -1307,6 +1307,9 @@ class JobWorker:
         )
         skipped = sum(1 for x in items if x.get("state") in ("skip", "skipped"))
         failed = sum(1 for x in items if x.get("state") in ("error", "failed"))
+        cancelled = sum(1 for x in items if x.get("state") == "cancelled")
         if "plans" in result:
-            return f"{encode_like} to encode, {skipped} skipped, {failed} failed"
-        return f"{encode_like} encoded, {skipped} skipped, {failed} failed"
+            summary = f"{encode_like} to encode, {skipped} skipped, {failed} failed"
+        else:
+            summary = f"{encode_like} encoded, {skipped} skipped, {failed} failed"
+        return summary + (f", {cancelled} cancelled" if cancelled else "")

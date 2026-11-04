@@ -708,10 +708,11 @@ def _record_encodes(
                                             outcome.encode_id if outcome else None,
                                             error=result.error,
                                         )
-                                    # a verification finding rides the engine's outcome
-                                    # line now (issue #471 round 1, finding 1); with
-                                    # replace, the swap above declined and kept the
-                                    # original
+                                    # a verification finding is logged by the engine's
+                                    # tracks check (its own error line) and rides
+                                    # result.error (issue #471 round 3, finding 1);
+                                    # with replace, the swap above declined and kept
+                                    # the original
                                 elif result.skipped_reason is not None:
                                     # NO per-file yellow line here (issue #471 round 1,
                                     # finding 1): the engine's skip line says it; record

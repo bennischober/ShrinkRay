@@ -1635,9 +1635,10 @@ def encode_with_quality(
             verified_subsample = None
 
     # the encode's outcome line (issue #471): the transcript is silent from
-    # 'chosen CRF' until the verification line hours later without it; a
-    # verification finding rides the line (issue #471 round 1, finding 1: the
-    # CLI's duplicate yellow print is gone, the finding must not vanish)
+    # 'chosen CRF' until the verification line hours later without it. A
+    # verification finding is NOT repeated here: the tracks check logs its
+    # own error line above and the finding rides result.error (issue #471
+    # round 3, finding 1 — do not re-add a suffix here)
     log(
         f"Encode result for '{input_file.name}': CRF {crf}, output "
         f"{final_output_size / (1024**3):.2f} GB "

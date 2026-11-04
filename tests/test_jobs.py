@@ -913,3 +913,40 @@ class TestTranscriptBoundaries(unittest.TestCase):
         # the plan's verdict line, counter-prefixed over the 1-movie payload
         self.assertIn("[1/1] Plan for 'movie.mkv': skip (too short)", text, text)
         self.assertIn(f"Job #{job.id} (plan) finished in", text, text)
+
+    def test_the_end_line_counts_use_each_paths_own_words(self) -> None:
+        """Issue #471 round 3, finding 2: the counts branch is pinned — a plan
+        job's already-planned files read 'to encode', an encode job's read
+        'encoded', and cancelled files get their own bucket."""
+        counts = jobs.JobWorker._outcome_counts
+        self.assertEqual(
+            counts(
+                {
+                    "plans": [
+                        {"state": "encode"},
+                        {"state": "skip"},
+                        {"state": "error"},
+                        {"state": "cancelled"},
+                    ]
+                }
+            ),
+            "1 to encode, 1 skipped, 1 failed, 1 cancelled",
+        )
+        self.assertEqual(
+            counts(
+                {
+                    "outcomes": [
+                        {"state": "encoded"},
+                        {"state": "already_encoded"},
+                        {"state": "skipped"},
+                        {"state": "cancelled"},
+                        {"state": "cancelled"},
+                    ]
+                }
+            ),
+            "2 encoded, 1 skipped, 0 failed, 2 cancelled",
+        )
+        self.assertEqual(
+            counts({"movies": 3, "errors": ["a", "b"]}),
+            "3 scanned, 2 errors",
+        )
