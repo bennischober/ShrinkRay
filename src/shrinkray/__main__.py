@@ -38,7 +38,7 @@ from shrinkray.engine.scan import (
     scan_movies,
 )
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
-from shrinkray.logger import log, log_error
+from shrinkray.logger import file_scope, log, log_error
 from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import (
     Cancelled as _EncodeCancelled,
@@ -593,140 +593,143 @@ def _record_encodes(
                 with Progress(*progress_columns, console=console, transient=True) as progress:
                     progress_task = progress.add_task("Waiting for the first movie...", total=100)
                     quality_progress = _quality_progress_callback(progress, progress_task)
-                    for movie in movies:
-                        if str(movie) in encoded_paths:
-                            log(f"Skipping '{movie.name}': already encoded (use --overwrite).")
-                            continue
-                        # the stability witness the watcher uses, before any
-                        # gate or sample (issue #437): a one-shot CLI run on a
-                        # file a mover is still writing must not decide on it
-                        # - torn probes and a cache entry under a torn identity
-                        # are the cost. The wait is bounded and logged; a file
-                        # that never settles is reported and skipped (NOT
-                        # marked encoded - a later run re-decides it).
-                        if not wait_for_stable(movie, cancel=cancel):
-                            log_error(
-                                f"'{movie.name}' did not settle within "
-                                f"{int(STABLE_WAIT_LIMIT)}s (still copying?) - "
-                                "skipped; run the encode again once the file is complete"
+                    for i, movie in enumerate(movies, 1):
+                        with file_scope(i, len(movies)):
+                            if str(movie) in encoded_paths:
+                                log(f"Skipping '{movie.name}': already encoded (use --overwrite).")
+                                continue
+                            # the stability witness the watcher uses, before any
+                            # gate or sample (issue #437): a one-shot CLI run on a
+                            # file a mover is still writing must not decide on it
+                            # - torn probes and a cache entry under a torn identity
+                            # are the cost. The wait is bounded and logged; a file
+                            # that never settles is reported and skipped (NOT
+                            # marked encoded - a later run re-decides it).
+                            if not wait_for_stable(movie, cancel=cancel):
+                                log_error(
+                                    f"'{movie.name}' did not settle within "
+                                    f"{int(STABLE_WAIT_LIMIT)}s (still copying?) - "
+                                    "skipped; run the encode again once the file is complete"
+                                )
+                                continue
+                            progress.update(
+                                progress_task, description=f"Probing '{movie.name}'...", completed=0
                             )
-                            continue
-                        progress.update(
-                            progress_task, description=f"Probing '{movie.name}'...", completed=0
-                        )
-                        # the slot is keyed on the MOVIE'S OWN DIRECTORY in place:
-                        # the staging copy and the swap's two renames happen there,
-                        # so it is the key the job and the watcher can agree on
-                        # (#379); two-directory mode keys on the output directory.
-                        # `--output-dir X --replace` writes into X and swaps into the
-                        # movie's folder, so BOTH are contended and both are taken
-                        # (in sorted path order, never nested per directory).
-                        # one lock order, so two CLI runs cannot deadlock; the
-                        # paths are RESOLVED before deduping, or two spellings of one
-                        # directory (relative, a symlink) would take the same lock
-                        # twice and the run would refuse itself
-                        if in_place:
-                            # the staging directory is this run's own private
-                            # temp dir: nothing else ever locks it, so guarding it
-                            # excludes no one - only the movie's folder is contended
-                            targets = [movie.parent.resolve()]
-                        elif replace:
-                            targets = sorted({movie.parent.resolve(), output_dir.resolve()})
-                        else:
-                            targets = [output_dir]
-                        with contextlib.ExitStack() as slots:
-                            for target in targets:
-                                slots.enter_context(guard_encodes(target, holder="encode-cli"))
-                            result = encode_with_quality(
-                                movie,
-                                output_dir / movie.name,
-                                target_vmaf=target_vmaf,
-                                encoder=config.handbrake_encoder,
-                                db_file=db_file,
-                                encoder_threads=cap_threads(
-                                    threads or config.handbrake_max_threads
-                                ),
-                                progress=quality_progress,
-                                verify=verify,
-                                force_reprobe=replan,
-                                probe_encoder_preset=probe_encoder_preset,
-                                encoder_preset=encoder_preset,
-                                min_source_height=config.min_source_height,
-                                min_source_width=config.min_source_width,
-                                min_source_size_gb=config.min_source_size_gb,
-                                candidate_codecs=tuple(config.candidate_codecs),
-                                crop_sample_count=crop_samples,
-                                sample_every=sample_every,
-                                sample_count=sample_count,
-                                sample_seconds=sample_seconds,
-                                cancel=cancel,
-                                audio_languages=config.handbrake_audio_languages,
-                                subtitle_languages=config.handbrake_subtitle_languages,
-                            )
-                            if cancel is not None and cancel.is_set():
-                                # a signal after the engine's last check (the
-                                # encode finished, or a short probe it killed in
-                                # our process group): honour it before anything
-                                # is recorded or swapped - the source stays as is
-                                raise _EncodeCancelled("cancelled by user")
-                            if result.success and result.verified_vmaf is not None:
-                                console.print(
-                                    f"[green]Verified '{movie.name}': full-file VMAF "
-                                    f"{result.verified_vmaf:.2f}[/green]"
-                                )
-                            if result.success:
-                                saved = result.saved_percent
-                                # a successful encode is always a shrink (the engine
-                                # refuses a grown output, issue #130), so this cannot
-                                # read as a gain; assert it rather than print a lie
-                                assert saved >= 0, f"success with saved={saved}%: {result.error}"
-                                console.print(
-                                    f"[green]Encoded '{movie.name}': "
-                                    f"{result.input_size / (1024**3):.2f} GB -> "
-                                    f"{result.output_size / (1024**3):.2f} GB ({saved}% saved) "
-                                    f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
-                                )
-                                if connection is not None:
-                                    outcome = record_quality_results(
-                                        connection,
-                                        movie,
-                                        result,
-                                        config,
-                                        # in place the artifact's real location is the
-                                        # source's own path once the swap succeeds
-                                        # (issue #232); the row records it up front and
-                                        # a DECLINED swap clears it, because the encode
-                                        # is then discarded with its staging directory
-                                        final_output=movie if replace else None,
-                                    )
-                                else:
-                                    outcome = None
-                                if replace:
-                                    _swap_into_place(
-                                        connection,
-                                        movie,
-                                        output_dir / movie.name,
-                                        outcome.encode_id if outcome else None,
-                                        error=result.error,
-                                    )
-                                if result.error is not None:
-                                    # a verification finding must not hide behind
-                                    # the green line (review finding 1: an error
-                                    # the user cannot see is a bug); with replace,
-                                    # the swap above declined and kept the original
-                                    console.print(
-                                        f"[yellow]Encoded '{movie.name}' with a finding: "
-                                        f"{result.error}[/yellow]"
-                                    )
-                            elif result.skipped_reason is not None:
-                                # guardrail skip => record it so future runs do not re-probe
-                                console.print(
-                                    f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]"
-                                )
-                                if connection is not None:
-                                    record_quality_results(connection, movie, result, config)
+                            # the slot is keyed on the MOVIE'S OWN DIRECTORY in place:
+                            # the staging copy and the swap's two renames happen there,
+                            # so it is the key the job and the watcher can agree on
+                            # (#379); two-directory mode keys on the output directory.
+                            # `--output-dir X --replace` writes into X and swaps into the
+                            # movie's folder, so BOTH are contended and both are taken
+                            # (in sorted path order, never nested per directory).
+                            # one lock order, so two CLI runs cannot deadlock; the
+                            # paths are RESOLVED before deduping, or two spellings of one
+                            # directory (relative, a symlink) would take the same lock
+                            # twice and the run would refuse itself
+                            if in_place:
+                                # the staging directory is this run's own private
+                                # temp dir: nothing else ever locks it, so guarding it
+                                # excludes no one - only the movie's folder is contended
+                                targets = [movie.parent.resolve()]
+                            elif replace:
+                                targets = sorted({movie.parent.resolve(), output_dir.resolve()})
                             else:
-                                log_error(f"Encoding '{movie.name}' failed: {result.error}")
+                                targets = [output_dir]
+                            with contextlib.ExitStack() as slots:
+                                for target in targets:
+                                    slots.enter_context(guard_encodes(target, holder="encode-cli"))
+                                result = encode_with_quality(
+                                    movie,
+                                    output_dir / movie.name,
+                                    target_vmaf=target_vmaf,
+                                    encoder=config.handbrake_encoder,
+                                    db_file=db_file,
+                                    encoder_threads=cap_threads(
+                                        threads or config.handbrake_max_threads
+                                    ),
+                                    progress=quality_progress,
+                                    verify=verify,
+                                    force_reprobe=replan,
+                                    probe_encoder_preset=probe_encoder_preset,
+                                    encoder_preset=encoder_preset,
+                                    min_source_height=config.min_source_height,
+                                    min_source_width=config.min_source_width,
+                                    min_source_size_gb=config.min_source_size_gb,
+                                    candidate_codecs=tuple(config.candidate_codecs),
+                                    crop_sample_count=crop_samples,
+                                    sample_every=sample_every,
+                                    sample_count=sample_count,
+                                    sample_seconds=sample_seconds,
+                                    cancel=cancel,
+                                    audio_languages=config.handbrake_audio_languages,
+                                    subtitle_languages=config.handbrake_subtitle_languages,
+                                )
+                                if cancel is not None and cancel.is_set():
+                                    # a signal after the engine's last check (the
+                                    # encode finished, or a short probe it killed in
+                                    # our process group): honour it before anything
+                                    # is recorded or swapped - the source stays as is
+                                    raise _EncodeCancelled("cancelled by user")
+                                if result.success and result.verified_vmaf is not None:
+                                    console.print(
+                                        f"[green]Verified '{movie.name}': full-file VMAF "
+                                        f"{result.verified_vmaf:.2f}[/green]"
+                                    )
+                                if result.success:
+                                    saved = result.saved_percent
+                                    # a successful encode is always a shrink (the engine
+                                    # refuses a grown output, issue #130), so this cannot
+                                    # read as a gain; assert it rather than print a lie
+                                    assert saved >= 0, (
+                                        f"success with saved={saved}%: {result.error}"
+                                    )
+                                    console.print(
+                                        f"[green]Encoded '{movie.name}': "
+                                        f"{result.input_size / (1024**3):.2f} GB -> "
+                                        f"{result.output_size / (1024**3):.2f} GB ({saved}% saved) "
+                                        f"at CRF {result.chosen_crf}, VMAF {result.achieved_vmaf}[/green]"
+                                    )
+                                    if connection is not None:
+                                        outcome = record_quality_results(
+                                            connection,
+                                            movie,
+                                            result,
+                                            config,
+                                            # in place the artifact's real location is the
+                                            # source's own path once the swap succeeds
+                                            # (issue #232); the row records it up front and
+                                            # a DECLINED swap clears it, because the encode
+                                            # is then discarded with its staging directory
+                                            final_output=movie if replace else None,
+                                        )
+                                    else:
+                                        outcome = None
+                                    if replace:
+                                        _swap_into_place(
+                                            connection,
+                                            movie,
+                                            output_dir / movie.name,
+                                            outcome.encode_id if outcome else None,
+                                            error=result.error,
+                                        )
+                                    if result.error is not None:
+                                        # a verification finding must not hide behind
+                                        # the green line (review finding 1: an error
+                                        # the user cannot see is a bug); with replace,
+                                        # the swap above declined and kept the original
+                                        console.print(
+                                            f"[yellow]Encoded '{movie.name}' with a finding: "
+                                            f"{result.error}[/yellow]"
+                                        )
+                                elif result.skipped_reason is not None:
+                                    # guardrail skip => record it so future runs do not re-probe
+                                    console.print(
+                                        f"[yellow]Skipped '{movie.name}': {result.error}[/yellow]"
+                                    )
+                                    if connection is not None:
+                                        record_quality_results(connection, movie, result, config)
+                                else:
+                                    log_error(f"Encoding '{movie.name}' failed: {result.error}")
         except _EncodeCancelled as e:
             # the disk watchdog fired (free space hit the floor mid-encode)
             # or the job/user cancel event set in - the partial output is

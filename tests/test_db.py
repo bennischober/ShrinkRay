@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 from shrinkray import config as config_helper
 from shrinkray import db
+from shrinkray.server import jobs
+from shrinkray.server.jobs import JobQueue
 
 
 class TestDb(unittest.TestCase):
@@ -2159,3 +2161,39 @@ class TestInPlaceAuditTrail(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStaleJobRecoveryAnnouncement(unittest.TestCase):
+    """Issue #471: the boot announces every recovered row, one line each,
+    naming the job id, its kind and its stored start time."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_a_recovered_row_is_announced(self) -> None:
+        from shrinkray.logger import logger
+        from shrinkray.server.app import AppState
+
+        db_file = Path(self.tmp.name) / "recover.db"
+        connection = db.connect(db_file)
+        queue = JobQueue(connection)
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["D:/Movies"]}))
+        connection.execute(
+            "UPDATE jobs SET state = 'running', started_at = '2026-01-01 00:00:00' WHERE id = ?",
+            (job.id,),
+        )
+        connection.commit()
+        connection.close()
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            state = AppState(db_file)
+        finally:
+            logger.remove(sink_id)
+        state.shutdown()
+        text = "".join(captured)
+        self.assertIn(f"Recovering job #{job.id} (plan)", text, text)
+        self.assertIn("interrupted by app restart", text)

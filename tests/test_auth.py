@@ -285,3 +285,37 @@ class TestGeneratedToken(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStatusPollSilence(unittest.TestCase):
+    """Issue #471: the healthcheck's /api/status polls produce no transcript
+    line; other /api routes still do."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = mock.patch.dict(os.environ, {}, clear=False)
+        self.env.start()
+        os.environ.pop(AUTH_TOKEN_ENV, None)
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+
+    def tearDown(self) -> None:
+        if app_module.state is not None:
+            app_module.state.shutdown()
+        app_module.state = None
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_status_polls_are_silent_other_routes_are_not(self) -> None:
+        from loguru import logger
+
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            client = TestClient(fast_app)
+            self.assertEqual(client.get("/api/status").status_code, 200)
+            self.assertEqual(client.get("/api/library").status_code, 200)
+        finally:
+            logger.remove(sink_id)
+        text = "".join(captured)
+        self.assertNotIn("GET /api/status", text, text)
+        self.assertIn("GET /api/library", text, text)

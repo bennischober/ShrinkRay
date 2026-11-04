@@ -877,3 +877,39 @@ class TestPayloadPaths(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTranscriptBoundaries(unittest.TestCase):
+    """Issue #471: job start/finish lines with a measured duration, the
+    plan's verdict line, and the [i/N] counter on a single-file payload."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.connection = db.connect(Path(self.tmp.name) / "test.db")
+        self.queue = jobs.JobQueue(self.connection)
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def test_boundaries_verdict_and_counter(self) -> None:
+        from loguru import logger
+
+        movie = Path(self.tmp.name) / "movie.mkv"
+        movie.write_bytes(b"x" * 64)
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        worker = jobs.JobWorker(self.connection, self.queue)
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            # the too-short gate fires on a mocked small duration: no probe
+            # subprocess runs, the verdict line is the plan's own
+            with mock.patch("shrinkray.engine.plan.probe_duration_seconds", return_value=10.0):
+                worker._execute(job)
+        finally:
+            logger.remove(sink_id)
+        text = "".join(captured)
+        self.assertIn(f"Job #{job.id} (plan) started", text, text)
+        # the plan's verdict line, counter-prefixed over the 1-movie payload
+        self.assertIn("[1/1] Plan for 'movie.mkv': skip (too short)", text, text)
+        self.assertIn(f"Job #{job.id} (plan) finished in", text, text)

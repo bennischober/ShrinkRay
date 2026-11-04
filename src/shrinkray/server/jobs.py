@@ -17,6 +17,7 @@ import queue
 import sqlite3
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -24,6 +25,7 @@ from pathlib import Path
 
 from shrinkray.config import Conf
 from shrinkray.engine.pipeline import cap_threads
+from shrinkray.logger import file_scope, log
 from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
 
@@ -789,24 +791,26 @@ def execute_plan(
                 }
             )
         try:
-            result = plan_quality(
-                movie,
-                target_vmaf=payload.get("target_vmaf", config.target_vmaf),
-                encoder=config.handbrake_encoder,
-                probe_encoder_preset=payload.get(
-                    "probe_encoder_preset", config.handbrake_probe_encoder_preset
-                ),
-                encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                cancel=cancel,
-                db_file=_db_file_of(connection),
-                encoder_threads=cap_threads(config.handbrake_max_threads),
-                progress=progress,
-                min_source_height=config.min_source_height,
-                min_source_width=config.min_source_width,
-                min_source_size_gb=config.min_source_size_gb,
-                candidate_codecs=tuple(config.candidate_codecs),
-                crop_sample_count=config.crop_sample_count,
-            )
+            # the [i/N] prefix on this file's decision lines (issue #471)
+            with file_scope(index + 1, total):
+                result = plan_quality(
+                    movie,
+                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                    encoder=config.handbrake_encoder,
+                    probe_encoder_preset=payload.get(
+                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                    ),
+                    encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
+                    cancel=cancel,
+                    db_file=_db_file_of(connection),
+                    encoder_threads=cap_threads(config.handbrake_max_threads),
+                    progress=progress,
+                    min_source_height=config.min_source_height,
+                    min_source_width=config.min_source_width,
+                    min_source_size_gb=config.min_source_size_gb,
+                    candidate_codecs=tuple(config.candidate_codecs),
+                    crop_sample_count=config.crop_sample_count,
+                )
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
             continue
@@ -1012,34 +1016,38 @@ def _encode_measured(
             # Per movie, never nested.
             lock_target = movie.parent if in_place else output_dir
             with guard_encodes(lock_target, holder="encode-job"):
-                result = encode_with_quality(
-                    movie,
-                    output_dir / movie.name,
-                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
-                    encoder=config.handbrake_encoder,
-                    probe_encoder_preset=payload.get(
-                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
-                    ),
-                    encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    progress=progress,
-                    cancel=cancel,
-                    db_file=_db_file_of(connection),
-                    encoder_threads=cap_threads(config.handbrake_max_threads),
-                    # the resident mode verifies every encode (issue
-                    # #235): the job worker is Mode B's other arm, same
-                    # reasoning as the watcher - nobody watches the log,
-                    # the verification number is the only evidence the
-                    # encode met the target. A payload can still opt out
-                    # with verify=false explicitly.
-                    verify=payload.get("verify", True),
-                    min_source_height=config.min_source_height,
-                    min_source_width=config.min_source_width,
-                    min_source_size_gb=config.min_source_size_gb,
-                    candidate_codecs=tuple(config.candidate_codecs),
-                    crop_sample_count=config.crop_sample_count,
-                    audio_languages=config.handbrake_audio_languages,
-                    subtitle_languages=config.handbrake_subtitle_languages,
-                )
+                # the [i/N] prefix on this file's decision lines (issue #471)
+                with file_scope(index + 1, total):
+                    result = encode_with_quality(
+                        movie,
+                        output_dir / movie.name,
+                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                        encoder=config.handbrake_encoder,
+                        probe_encoder_preset=payload.get(
+                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                        ),
+                        encoder_preset=payload.get(
+                            "encoder_preset", config.handbrake_encoder_preset
+                        ),
+                        progress=progress,
+                        cancel=cancel,
+                        db_file=_db_file_of(connection),
+                        encoder_threads=cap_threads(config.handbrake_max_threads),
+                        # the resident mode verifies every encode (issue
+                        # #235): the job worker is Mode B's other arm, same
+                        # reasoning as the watcher - nobody watches the log,
+                        # the verification number is the only evidence the
+                        # encode met the target. A payload can still opt out
+                        # with verify=false explicitly.
+                        verify=payload.get("verify", True),
+                        min_source_height=config.min_source_height,
+                        min_source_width=config.min_source_width,
+                        min_source_size_gb=config.min_source_size_gb,
+                        candidate_codecs=tuple(config.candidate_codecs),
+                        crop_sample_count=config.crop_sample_count,
+                        audio_languages=config.handbrake_audio_languages,
+                        subtitle_languages=config.handbrake_subtitle_languages,
+                    )
                 # the ledger write and the swap stay INSIDE the slot
                 # (issue #230): stage() copies into the deterministic
                 # '<source>.shrinkray-staging' and swap() renames it over
@@ -1215,6 +1223,11 @@ class JobWorker:
             cancel = threading.Event()
         self._running_cancel = cancel
         self.queue.register_cancel_event(job.id, cancel)
+        # the transcript's phase boundaries (issue #471): a job that runs for
+        # hours between two progress lines is invisible in docker logs
+        # without these
+        started = time.perf_counter()
+        log(f"Job #{job.id} ({job.kind.value}) started")
 
         def progress(data: dict) -> None:
             """Persists live progress for the API/UI (worker thread only)."""
@@ -1253,3 +1266,8 @@ class JobWorker:
         finally:
             self._running_cancel = None
             self.queue.unregister_cancel_event(job.id)
+            # one end line per job, whatever the outcome (issue #471): the
+            # duration is measured, never subtracted from console stamps
+            log(
+                f"Job #{job.id} ({job.kind.value}) finished in {time.perf_counter() - started:.0f}s"
+            )

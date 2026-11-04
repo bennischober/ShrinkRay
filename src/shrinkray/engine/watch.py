@@ -1005,7 +1005,11 @@ def watch(
                             # same root race on - the job path covers them
                             # inside its guard, the watcher must too
                             if result.skipped_reason:
-                                log(f"Skipping '{movie.name}': {result.skipped_reason}.")
+                                # NO line here (issue #471's no-duplicate rule):
+                                # the decision line came from the engine site
+                                # that decided it (plan.py's verdict or the
+                                # pipeline's gate/skip lines); this branch only
+                                # records
                                 if record is not None:
                                     record(movie, result, None)
                             elif result.success:

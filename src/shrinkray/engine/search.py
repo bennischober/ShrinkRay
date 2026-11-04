@@ -710,7 +710,7 @@ def find_optimal_crf(
         # search the operator saw only 'Probing ...' for minutes with no
         # sign of convergence - the progress event reaches the CLI's bar
         # (transient) and the daemon log, but neither is a transcript line
-        log(f"probe CRF {crf}: VMAF {round(vmaf, 2)} (probe {len(probes)})")
+        log(f"'{movie.name}' probe CRF {crf}: VMAF {round(vmaf, 2)} (probe {len(probes)})")
         if progress:
             progress(
                 {

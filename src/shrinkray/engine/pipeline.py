@@ -1217,6 +1217,7 @@ def encode_with_quality(
     duration = _probe_duration(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
     if duration is not None and duration < MIN_ENCODE_SECONDS:
+        log(f"Encode for '{input_file.name}': skip (too short)")
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1247,6 +1248,7 @@ def encode_with_quality(
             if width is not None and height is not None
             else (f"width {width}px" if width is not None else f"height {height}px")
         )
+        log(f"Encode for '{input_file.name}': skip (resolution too low)")
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1266,6 +1268,7 @@ def encode_with_quality(
 
     size_gb = input_file.stat().st_size / (1024**3)
     if min_source_size_gb > 0 and size_gb < min_source_size_gb:
+        log(f"Encode for '{input_file.name}': skip (below min size)")
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1288,6 +1291,7 @@ def encode_with_quality(
 
     allowed = allowed_codecs(candidate_codecs)
     if codec is not None and codec not in allowed:
+        log(f"Encode for '{input_file.name}': skip (source codec not a candidate)")
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1440,6 +1444,12 @@ def encode_with_quality(
             # must not commit for bytes the run no longer sees. Loud abort,
             # the caller reports it (the entry points catch RuntimeError).
             ensure_unchanged(input_file, identity, "encode")
+            skip_reason = "target unreachable" if "unreachable" in str(e) else "no size gain"
+            # the line only for the case no existing line covers (issue #471's
+            # no-duplicate rule): the would-not-shrink skip is logged in the
+            # search layer (find_optimal_crf_and_skip / check_chosen_crf_shrinks)
+            if skip_reason == "target unreachable":
+                log(f"Encode for '{input_file.name}': skip (target unreachable)")
             return QualityResult(
                 input=input_file,
                 output=output_file,
@@ -1451,9 +1461,7 @@ def encode_with_quality(
                 probes=[],
                 input_size=identity.size,
                 output_size=identity.size,
-                skipped_reason=(
-                    "target unreachable" if "unreachable" in str(e) else "no size gain"
-                ),
+                skipped_reason=skip_reason,
                 input_mtime=identity.mtime,
                 encoder_preset=encoder_preset,
                 probe_encoder_preset=probe_encoder_preset,
@@ -1530,6 +1538,7 @@ def encode_with_quality(
     final_output_size = output_file.stat().st_size
     if final_output_size >= final_input_size:
         output_file.unlink(missing_ok=True)
+        log(f"Encode for '{input_file.name}': skip (output not smaller)")
         return QualityResult(
             input=input_file,
             output=input_file,
@@ -1625,6 +1634,13 @@ def encode_with_quality(
             verified_vmaf = None
             verified_subsample = None
 
+    # the encode's outcome line (issue #471): the transcript is silent from
+    # 'Chosen CRF n' until the verification line hours later without it
+    log(
+        f"Encode result for '{input_file.name}': CRF {crf}, output "
+        f"{final_output_size / (1024**3):.2f} GB "
+        f"({100 * final_output_size / final_input_size:.0f}% of source)"
+    )
     return QualityResult(
         input=input_file,
         output=output_file,

@@ -1807,3 +1807,67 @@ class TestSubprocessTimeouts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEncodeOutcomeLine(unittest.TestCase):
+    """Issue #471: the transcript is silent from 'Chosen CRF n' until the
+    verification line hours later; the outcome line names the file, the CRF
+    and the output size."""
+
+    def test_the_outcome_line_names_the_result(self) -> None:
+        import tempfile
+        from unittest.mock import patch
+
+        from loguru import logger
+
+        from shrinkray.engine import pipeline as engine_pipeline
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 64)
+            out = Path(tmp) / "out.mkv"
+
+            def fake_encode(input_file, output_file, command, progress=None, **kwargs):
+                output_file.write_bytes(b"x" * 32)
+                return engine_pipeline.EncodeResult(
+                    input=input_file, output=output_file, success=True
+                )
+
+            captured: list[str] = []
+            sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+            try:
+                with (
+                    patch.object(
+                        engine_pipeline,
+                        "_source_snapshot",
+                        return_value={
+                            "width": 1920,
+                            "height": 1080,
+                            "codec": "h264",
+                            "duration": 6000.0,
+                            "bit_depth": 8,
+                            "bitrate": None,
+                        },
+                    ),
+                    patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=6000.0),
+                    patch.object(engine_pipeline, "source_codec", return_value="h264"),
+                    patch.object(
+                        engine_pipeline, "_probe_movie", return_value=(20, 96.0, [], None)
+                    ),
+                    patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode),
+                    patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+                ):
+                    result = engine_pipeline.encode_with_quality(
+                        src,
+                        out,
+                        target_vmaf=95.0,
+                        encoder="svt_av1",
+                        verify=False,
+                    )
+            finally:
+                logger.remove(sink_id)
+            self.assertTrue(result.success, result.error)
+            text = "".join(captured)
+            self.assertIn("Encode result for 'movie.mkv'", text, text)
+            self.assertIn("CRF 20", text, text)
+            self.assertIn("50% of source", text, text)
