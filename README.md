@@ -503,7 +503,9 @@ Example [config.json](config.json):
         "hdr": { "color_space": ["bt2020nc"], "color_transfer": ["smpte2084"] }  // the defaults; an empty list means "nothing is HDR"
     },
     "app": {
-        "auto_backlog": false      // start scan -> plan -> encode on boot
+        "auto_backlog": false,     // start scan -> plan -> encode on boot
+        "encode_window_start": "", // daily encode window, local HH:MM; both keys set = resident automation encodes only inside it
+        "encode_window_end": ""    // empty pair = no window; a start after end crosses midnight
     },
     "language": "en"
 }

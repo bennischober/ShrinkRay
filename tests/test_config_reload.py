@@ -410,10 +410,6 @@ class TestImageKeepsItsConfigOnTheVolume(unittest.TestCase):
         self.assertIn("COPY container-config.json /app/config.json", runtime)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestEncodeWindow(unittest.TestCase):
     """Issue #434: the daily encode window's config validation and helper."""
 
@@ -445,3 +441,7 @@ class TestEncodeWindow(unittest.TestCase):
         # the boundaries: start and end are inclusive
         self.assertTrue(encode_window_open("09:00", "17:00", now=time(9, 0)))
         self.assertTrue(encode_window_open("09:00", "17:00", now=time(17, 0)))
+
+
+if __name__ == "__main__":
+    unittest.main()

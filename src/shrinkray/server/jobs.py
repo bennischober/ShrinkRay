@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from shrinkray.config import Conf, encode_window_open, load_config
+from shrinkray.config import Conf, encode_window_open, refresh_config
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.logger import file_scope, log
 from shrinkray.replace import STAGING_DIR_PREFIX
@@ -1219,7 +1219,7 @@ class JobWorker:
             # proceed, and an in-flight job always runs to completion. The
             # config is re-read each tick, so the queue resumes when the
             # window opens.
-            conf = load_config()
+            conf = refresh_config()
             if not encode_window_open(conf.encode_window_start, conf.encode_window_end):
                 job = self.queue.take_next(only_kinds={JobKind.SCAN})
             else:

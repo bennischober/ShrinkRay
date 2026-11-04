@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
-from shrinkray.config import Conf, encode_window_open, load_config
+from shrinkray.config import Conf, encode_window_open, load_config, refresh_config
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import cap_threads
@@ -771,7 +771,7 @@ def _encode_window_state() -> str | None:
         str | None: "open" or "closed" when a window is configured, None
             when no window is set (the dashboard renders nothing then).
     """
-    config = load_config()
+    config = refresh_config()
     if not config.encode_window_start:
         return None
     return (

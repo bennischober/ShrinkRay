@@ -875,10 +875,6 @@ class TestPayloadPaths(unittest.TestCase):
         self.assertEqual(resolved, [Path("/m/a")])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestTranscriptBoundaries(unittest.TestCase):
     """Issue #471: job start/finish lines with a measured duration, the
     plan's verdict line, and the [i/N] counter on a single-file payload."""
@@ -1006,16 +1002,23 @@ class TestEncodeWindowGate(unittest.TestCase):
             reloaded.state, jobs.JobState.QUEUED, "the encode job was taken outside the window"
         )
 
-        # inside the window: the job is taken and executed (its outcome is
-        # the toolchain's business; the assertion is that it was taken). A
-        # fresh worker: the first phase's request_stop latched its stop event
+        # inside the window: the job is taken (its execution is patched out —
+        # the assertion is the TAKE, not the toolchain's outcome). A fresh
+        # worker: the first phase's request_stop latched its stop event
         worker = jobs.JobWorker(self.connection, self.queue)
         with (
             patch("shrinkray.server.jobs.encode_window_open", return_value=True),
             patch.object(self.queue, "wait_for_work", side_effect=stop_after_first_wait),
+            patch.object(jobs.JobWorker, "_execute", lambda self, job, cancel=None: None),
         ):
             worker._run()
         reloaded = self.queue.get(job.id)
-        self.assertNotEqual(
-            reloaded.state, jobs.JobState.QUEUED, "the encode job was never taken inside the window"
+        self.assertEqual(
+            reloaded.state,
+            jobs.JobState.RUNNING,
+            "the encode job was never taken inside the window",
         )
+
+
+if __name__ == "__main__":
+    unittest.main()

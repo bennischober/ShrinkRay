@@ -308,6 +308,12 @@ class AppSection(BaseModel):
         if start:
             _parse_hhmm(start, "app.encode_window_start")
             _parse_hhmm(end, "app.encode_window_end")
+            if start.strip() == end.strip():
+                raise ValueError(
+                    "app.encode_window_start and app.encode_window_end must "
+                    "differ (a window that starts and ends at the same minute "
+                    "holds nothing open)"
+                )
         return self
 
 

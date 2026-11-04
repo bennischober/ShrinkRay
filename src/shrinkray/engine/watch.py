@@ -926,9 +926,14 @@ def watch(
                         # at it again, starving every normal copy arrival)
                         log(f"'{movie.name}' is not stable yet (still copying?) => later.")
                         continue
-                    # a manual encode or a pause can begin mid-pass: hold this
-                    # file and the rest back; the next pass reports the pause
+                    # a manual encode, a pause, or the encode window can begin
+                    # mid-pass: hold this file and the rest back; the next pass
+                    # reports it (issue #434)
                     if pause_reason(state_dir) is not None:
+                        break
+                    if not encode_window_open(
+                        current.encode_window_start, current.encode_window_end
+                    ):
                         break
                     try:
                         known.add(_identity(movie))
