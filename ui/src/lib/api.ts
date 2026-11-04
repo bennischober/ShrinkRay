@@ -185,6 +185,10 @@ export interface Status {
    * manual encode is running (issue #250) — null while it works normally.
    * Pausing happens in the terminal, never here: the dashboard only reports. */
   paused?: string | null
+  /** the daily encode window's state (issue #434): "open" or "closed" when
+   * a window is configured, null when none is — resident automation holds
+   * back new files while closed; the dashboard only reports. */
+  encode_window?: string | null
   /** the host can open a file-manager window (false in a container) */
   reveal_available?: boolean
 }

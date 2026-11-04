@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
-from shrinkray.config import Conf, load_config
+from shrinkray.config import Conf, encode_window_open, load_config
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import cap_threads
@@ -764,6 +764,23 @@ def retained_list(conn: sqlite3.Connection = Depends(db_access)) -> list[dict]:
     ]
 
 
+def _encode_window_state() -> str | None:
+    """The daily encode window's state for the status payload (issue #434).
+
+    Returns:
+        str | None: "open" or "closed" when a window is configured, None
+            when no window is set (the dashboard renders nothing then).
+    """
+    config = load_config()
+    if not config.encode_window_start:
+        return None
+    return (
+        "open"
+        if encode_window_open(config.encode_window_start, config.encode_window_end)
+        else "closed"
+    )
+
+
 def _reveal_available() -> bool:
     """Whether this host can open a file manager window (issue #239).
 
@@ -812,6 +829,9 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         # why no new file starts (the operator's pause or a manual encode,
         # issue #250), or None while the app works normally
         "paused": pause_reason(s.db_file.resolve().parent),
+        # the daily encode window (issue #434): the dashboard must not be
+        # unaware of why nothing starts (open/closed, or None unconfigured)
+        "encode_window": _encode_window_state(),
         # the reveal capability (issue #239): a container has no desktop and
         # no opener binary, so the button hides instead of promising a
         # folder window that would end in a 500
@@ -991,6 +1011,7 @@ def snapshot(
             # (#250) and the reveal button (#239)
             "config_error": config_module.config_error,
             "paused": pause_reason(s.db_file.resolve().parent),
+            "encode_window": _encode_window_state(),
             "reveal_available": _reveal_available(),
         },
         "jobs": None if jobs_unchanged else [j.to_dict() for j in data["jobs"]],
@@ -1641,6 +1662,8 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
             crop_sample_count=config.crop_sample_count,
             audio_languages=list(config.handbrake_audio_languages),
             subtitle_languages=list(config.handbrake_subtitle_languages),
+            encode_window_start=config.encode_window_start,
+            encode_window_end=config.encode_window_end,
         )
 
     def submit_watch_candidate(movie: Path) -> bool:

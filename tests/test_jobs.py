@@ -950,3 +950,72 @@ class TestTranscriptBoundaries(unittest.TestCase):
             counts({"movies": 3, "errors": ["a", "b"]}),
             "3 scanned, 2 errors",
         )
+
+
+class TestEncodeWindowGate(unittest.TestCase):
+    """Issue #434: the worker holds plan/encode jobs while outside the
+    window; scan jobs proceed; the queue's kind filter does the holding."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.connection = db.connect(Path(self.tmp.name) / "test.db")
+        self.queue = jobs.JobQueue(self.connection)
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def test_the_kind_filter_holds_plan_and_encode(self) -> None:
+        plan_job = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["D:/Movies"]})
+        )
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": "D:/Movies"}))
+        # gated: only scan jobs are taken
+        taken = self.queue.take_next(only_kinds={jobs.JobKind.SCAN})
+        self.assertIsNotNone(taken)
+        self.assertEqual(taken.kind, jobs.JobKind.SCAN)
+        # the plan job is still queued
+        self.assertEqual(self.queue.take_next(only_kinds={jobs.JobKind.SCAN}), None)
+        # ungated: the plan job comes out
+        taken = self.queue.take_next()
+        self.assertEqual(taken.id, plan_job.id)
+
+    def test_the_worker_holds_encode_jobs_outside_the_window(self) -> None:
+        from unittest.mock import patch
+
+        movie = Path(self.tmp.name) / "movie.mkv"
+        movie.write_bytes(b"x" * 64)
+        job = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.ENCODE, payload={"paths": [str(movie)], "quality": True})
+        )
+        worker = jobs.JobWorker(self.connection, self.queue)
+
+        def stop_after_first_wait(timeout: float) -> bool:
+            worker.request_stop()
+            return True
+
+        # outside the window: the worker takes only scan jobs - the encode
+        # job stays queued (issue #434)
+        with (
+            patch("shrinkray.server.jobs.encode_window_open", return_value=False),
+            patch.object(self.queue, "wait_for_work", side_effect=stop_after_first_wait),
+        ):
+            worker._run()
+        reloaded = self.queue.get(job.id)
+        self.assertEqual(
+            reloaded.state, jobs.JobState.QUEUED, "the encode job was taken outside the window"
+        )
+
+        # inside the window: the job is taken and executed (its outcome is
+        # the toolchain's business; the assertion is that it was taken). A
+        # fresh worker: the first phase's request_stop latched its stop event
+        worker = jobs.JobWorker(self.connection, self.queue)
+        with (
+            patch("shrinkray.server.jobs.encode_window_open", return_value=True),
+            patch.object(self.queue, "wait_for_work", side_effect=stop_after_first_wait),
+        ):
+            worker._run()
+        reloaded = self.queue.get(job.id)
+        self.assertNotEqual(
+            reloaded.state, jobs.JobState.QUEUED, "the encode job was never taken inside the window"
+        )

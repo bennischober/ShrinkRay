@@ -21,7 +21,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
+from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH, encode_window_open
 from shrinkray.config import Conf as Conf
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.engine.pause import pause_reason
@@ -669,6 +669,11 @@ class WatchSettings:
     crop_sample_count: int
     audio_languages: list[str] | None = None
     subtitle_languages: list[str] | None = None
+    # the daily encode window (issue #434): resident automation holds back
+    # new files while outside it (an empty pair = no window; a stateless
+    # run constructs without these and is never gated)
+    encode_window_start: str = ""
+    encode_window_end: str = ""
 
 
 def watch(
@@ -781,6 +786,7 @@ def watch(
     # no resident app to pause
     state_dir = db_file.resolve().parent if db_file is not None else None
     paused_reason: str | None = None
+    window_reason: str | None = None
     known: set[str] = set()
     if db_file is not None:
         # the scanned library IS the memory (issue #231): every file row holds
@@ -867,6 +873,27 @@ def watch(
                 if paused_reason is not None:
                     log("Watcher resumed.")
                     paused_reason = None
+                # the daily encode window (issue #434): outside it the pass
+                # defers - nothing enters `known`, so every file stays
+                # eligible, and the base interval notices the window opening
+                window_open = encode_window_open(
+                    current.encode_window_start, current.encode_window_end
+                )
+                if not window_open:
+                    if window_reason is None:
+                        log(
+                            f"Watcher outside the encode window "
+                            f"({current.encode_window_start}-"
+                            f"{current.encode_window_end}): files stay eligible."
+                        )
+                        window_reason = "outside the encode window"
+                    if once:
+                        return
+                    _wait_or_stop(poll_interval, stop_event, waiter=waiter)
+                    continue
+                if window_reason is not None:
+                    log("Watcher inside the encode window: resuming.")
+                    window_reason = None
                 # pass-level disk guard: a full output drive would burn a full
                 # CRF probe per candidate per pass (probe, watchdog cancel,
                 # retry next pass, repeat). Skipping the pass BEFORE anything
