@@ -102,7 +102,7 @@ def probe_cache_key(
         tool_versions (str): The tool version string (HandBrake, libvmaf).
         recipe (str): The measurement recipe identifier
             (`tools.vmaf.VmafRecipe.identifier`): model, scale, pixel
-            format, tone-map and the recipe version.
+            format and the recipe version.
         kind (str): 'vmaf' (a VMAF score) or 'size' (an encoded-size ratio).
 
     Returns:

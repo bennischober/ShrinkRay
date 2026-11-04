@@ -467,8 +467,8 @@ def plan_quality(
 
     hdr = is_hdr_file(input_file)
     # The encoder follows the SOURCE's bit depth (issue #234): a 10-bit
-    # SDR master keeps its depth; an HDR source never reaches this choice
-    # (the skip gate below, issue #518).
+    # SDR master keeps its depth. The choice runs for every file - the
+    # skip result below still records it (issue #518).
     effective_encoder = encoder_for(source_bit_depth(input_file))
 
     duration = probe_duration_seconds(input_file)

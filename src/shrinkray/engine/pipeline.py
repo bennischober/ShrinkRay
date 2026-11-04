@@ -1035,8 +1035,8 @@ def _probe_movie(
                 f"top {crop[0]}, bottom {crop[1]}, left {crop[2]}, right {crop[3]}"
             )
         # the measurement recipe follows the source's dimensions (for the model
-        # and the scale, through the crop), its bit depth (the analysis pixel
-        # format) and the HDR flag (the tone-map) - issue #308
+        # and the scale, through the crop) and its bit depth (the analysis
+        # pixel format) - issue #308
         recipe = vmaf_recipe(
             crop=crop,
             width=source_width,
