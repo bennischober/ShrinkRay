@@ -17,6 +17,7 @@ from pathlib import Path
 from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
 from shrinkray.engine.crop import (
     DEFAULT_CROP_SAMPLE_COUNT,
+    crop_bars_or_fallback,
     detect_crop_rect,
     detect_crop_summary_cached,
 )
@@ -614,13 +615,15 @@ def plan_quality(
         # (docs/encode-decision.md). No bars is a normal outcome, not a skip.
         # The timeline detector is the one bar measurement (issue #181): it is
         # cached per file version in the db, so the keyframe-only pass runs
-        # once per file. Without a database (stateless runs) the sampled
-        # fallback keeps bar detection working.
+        # once per file. The sampled fallback runs only for a pass that
+        # learned nothing (issue #525), stateless or not.
         summary = detect_crop_summary_cached(input_file, db_file, cancel=cancel)
-        if summary is None or summary.bars is None:
-            crop = detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel)
-        else:
-            crop = summary.bars
+        # the measured "no common bars" verdict stands (issue #525): the
+        # sampled detector runs only for a pass that learned nothing
+        crop = crop_bars_or_fallback(
+            summary,
+            lambda: detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel),
+        )
         # the measurement recipe follows the source's dimensions (for the model
         # and the scale, through the crop), its bit depth (the analysis pixel
         # format) and the HDR flag (the tone-map). Derived once here so the

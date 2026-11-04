@@ -25,6 +25,7 @@ from shrinkray import db
 from shrinkray.engine.crop import (
     CropReading,
     CropSummary,
+    crop_bars_or_fallback,
     crop_summary_from_timeline,
     detect_crop_summary_cached,
     sustained_runs,
@@ -681,6 +682,161 @@ def _config():
     from shrinkray.config import load_config
 
     return load_config()
+
+
+class TestCropBarsOrFallback(unittest.TestCase):
+    """Issue #525: a measured "no common bars" verdict stands; the sampled
+    detector runs only for a pass that learned nothing."""
+
+    @staticmethod
+    def _summary(readings: int, sustained: int) -> CropSummary:
+        return CropSummary(
+            bars=None,
+            frame_width=1920,
+            frame_height=1080,
+            readings=readings,
+            sustained_readings=sustained,
+            ratios={},
+        )
+
+    def test_a_measured_veto_stands(self) -> None:
+        from unittest.mock import Mock
+
+        fallback = Mock(return_value=(100, 100, 0, 0))
+        # readings exist and the veto fired (full-frame, noise-sized bars, or
+        # no sustained run): the verdict is the decision
+        for summary in (self._summary(10, 3), self._summary(10, 0)):
+            self.assertIsNone(crop_bars_or_fallback(summary, fallback))
+        fallback.assert_not_called()
+
+    def test_an_empty_pass_falls_back(self) -> None:
+        from unittest.mock import Mock
+
+        fallback = Mock(return_value=(100, 100, 0, 0))
+        self.assertEqual(
+            crop_bars_or_fallback(self._summary(0, 0), fallback),
+            (100, 100, 0, 0),
+        )
+        fallback.assert_called_once_with()
+
+    def test_a_failed_pass_falls_back(self) -> None:
+        from unittest.mock import Mock
+
+        fallback = Mock(return_value=None)
+        self.assertIsNone(crop_bars_or_fallback(None, fallback))
+        fallback.assert_called_once_with()
+
+    def test_the_plan_call_site_honours_the_veto(self) -> None:
+        """The plan path's crop decision runs through the helper: a measured
+        veto stands and the sampled detector is never called (issue #525
+        round 1, finding 4 — reverting the call site must fail this)."""
+        import tempfile
+        from unittest.mock import Mock, patch
+
+        from shrinkray.engine.plan import plan_quality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 64)
+            veto = CropSummary(
+                bars=None,
+                frame_width=1920,
+                frame_height=1080,
+                readings=10,
+                sustained_readings=3,
+                ratios={},
+            )
+            sampled = Mock(return_value=(100, 100, 0, 0))
+            with (
+                patch("shrinkray.engine.plan.detect_crop_summary_cached", return_value=veto),
+                patch("shrinkray.engine.plan.detect_crop_rect", sampled),
+                patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+                patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
+                patch(
+                    "shrinkray.engine.plan.get_data", return_value={"width": 1920, "height": 1080}
+                ),
+                patch(
+                    "shrinkray.engine.plan.find_optimal_crf_and_skip",
+                    return_value=(20, 96.0, [], False),
+                ),
+                patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+                patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
+            ):
+                result = plan_quality(movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+            sampled.assert_not_called()
+            self.assertIsNone(result.crop, "the measured veto must stand")
+
+    def test_the_encode_call_site_honours_the_veto(self) -> None:
+        """The encode path's crop decision lives INSIDE _probe_movie, so this
+        test drives the real probe pipeline (only the search and the encode
+        are mocked): a measured veto stands and the sampled detector is never
+        called (issue #525 round 2, finding 1 — reverting the call site fails
+        this)."""
+        import tempfile
+        from unittest.mock import Mock, patch
+
+        from shrinkray.engine import pipeline as engine_pipeline
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 64)
+            out = Path(tmp) / "out.mkv"
+            veto = CropSummary(
+                bars=None,
+                frame_width=1920,
+                frame_height=1080,
+                readings=10,
+                sustained_readings=3,
+                ratios={},
+            )
+            sampled = Mock(return_value=(100, 100, 0, 0))
+            seen_commands: list[list[str]] = []
+
+            def fake_encode(input_file, output_file, command, progress=None, **kwargs):
+                seen_commands.append(list(command))
+                output_file.write_bytes(b"x" * 32)
+                return engine_pipeline.EncodeResult(
+                    input=input_file, output=output_file, success=True
+                )
+
+            with (
+                patch(
+                    "shrinkray.engine.pipeline.detect_crop_summary_cached",
+                    return_value=veto,
+                ),
+                patch("shrinkray.engine.pipeline.detect_crop_rect", sampled),
+                patch(
+                    "shrinkray.engine.pipeline.find_optimal_crf_and_skip",
+                    return_value=(20, 96.0, [], False),
+                ),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=6000.0),
+                patch.object(
+                    engine_pipeline,
+                    "_source_snapshot",
+                    return_value={
+                        "width": 1920,
+                        "height": 1080,
+                        "codec": "h264",
+                        "duration": 6000.0,
+                        "bit_depth": 8,
+                        "bitrate": None,
+                    },
+                ),
+                patch.object(engine_pipeline, "source_codec", return_value="h264"),
+                patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+                patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode),
+            ):
+                result = engine_pipeline.encode_with_quality(
+                    src, out, target_vmaf=95.0, encoder="svt_av1", verify=False
+                )
+            sampled.assert_not_called()
+            # the veto's observable effect: the encode runs UNCROPPED — the
+            # command's crop is the zero form (no picture removed; issue #525
+            # round 3, finding 1: result.crop is never set on an encode
+            # result, so that assertion could not fail)
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(len(seen_commands), 1)
+            self.assertIn("--crop 0:0:0:0", " ".join(seen_commands[0]))
 
 
 if __name__ == "__main__":
