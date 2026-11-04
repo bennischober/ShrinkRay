@@ -410,23 +410,24 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 
 | # | Gate | Question | Default | If it fails |
 |---|---|---|---|---|
-| 1 | Duration | At least 90 s? | fixed | skip — not a movie |
-| 2 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
-| 3 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
-| 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
-| 5 | Bar detection | Which bars does every sustained segment share? (sampled fallback: only when the pass learned nothing, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
-| 6 | CRF search | Largest CRF (or one step below it) that meets the VMAF target? | 96 | skip — target unreachable |
-| 7 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
-| 8 | Encode | One full encode at the chosen CRF, with the crop | — | — |
+| 1 | HDR | Is the source's transfer characteristic HDR (PQ/HLG, fixed in code — [#518](https://github.com/bennischober/ShrinkRay/issues/518))? | not supported yet | skip — `hdr not supported` (returns with libvmaf's HDR models, [#519](https://github.com/bennischober/ShrinkRay/issues/519)) |
+| 2 | Duration | At least 90 s? | fixed | skip — not a movie |
+| 3 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
+| 4 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
+| 5 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
+| 6 | Bar detection | Which bars does every sustained segment share? (sampled fallback: only when the pass learned nothing, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
+| 7 | CRF search | Largest CRF (or one step below it) that meets the VMAF target? | 96 | skip — target unreachable |
+| 8 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
+| 9 | Encode | One full encode at the chosen CRF, with the crop | — | — |
 
 The two rows people ask about:
 
-- **Rows 2-4 are the "not worth it" gates**: a 480p DVD rip
-  fails row 2 today, an MPEG-2/Xvid/VC-1 rip fails row 4, and a small file
-  fails row 3 the moment you set a floor. All three are config keys under
+- **Rows 3-5 are the "not worth it" gates**: a 480p DVD rip
+  fails row 3 today, an MPEG-2/Xvid/VC-1 rip fails row 5, and a small file
+  fails row 4 the moment you set a floor. All three are config keys under
   `eligibility`, and all three are checked before any ffmpeg probe runs — a
   skipped file costs one `ffprobe`, not an encode.
-- **Row 7 is the real answer to "is this file already efficient?"**: the
+- **Row 8 is the real answer to "is this file already efficient?"**: the
   search measures a size probe at the most aggressive CRF, then decides at
   the chosen CRF from the encoded byte counts the VMAF probes already
   recorded for every window (a pre-#314 cache falls back to one encoded

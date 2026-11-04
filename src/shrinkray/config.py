@@ -422,8 +422,6 @@ class Conf:
 
         model = ConfigModel.model_validate(data)
 
-        # codec => hdr detection
-
         # file => extensions and output settings
         self.extensions: list[str] = model.file.extensions
         self.separator: str = model.file.output.separator
