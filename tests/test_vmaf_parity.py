@@ -7,9 +7,9 @@ encodes with ffmpeg's libsvtav1, ShrinkRay with HandBrakeCLI, so chosen CRFs
 would differ for reasons unrelated to VMAF.
 
 Tolerance (the issue's proposal): |ShrinkRay - ab-av1| <= 0.1 VMAF per pair.
-The HDR pair is REPORTED but not held to the tolerance: ShrinkRay tone-maps
-both inputs to SDR before scoring (tools/vmaf.py, documented deviation #310),
-ab-av1 scores the PQ signal directly.
+HDR pairs are not applicable since issue #518: HDR sources are skipped before
+any measurement (the tone-map chain is removed; support returns with libvmaf's
+HDR models, #519), so there is no ShrinkRay HDR score to compare.
 
 Skipped by default everywhere: SHRINKRAY_SMOKE=1 AND ffmpeg (libvmaf, zscale)
 AND ab-av1 on PATH. ab-av1 is a development/test tool only - nothing under
@@ -155,7 +155,6 @@ class TestVmafParityAgainstAbAv1(_AbAv1Mixin):
         reference: Path,
         distorted: Path,
         crop: tuple | None = None,
-        hdr: bool = False,
         hold: bool = True,
         why: str = "",
     ) -> None:
@@ -164,7 +163,7 @@ class TestVmafParityAgainstAbAv1(_AbAv1Mixin):
         hold=False reports the pair without asserting (a documented deviation
         or a known bug with its own issue, named in `why`).
         """
-        ours = measure_vmaf(distorted, reference, self.workdir, crop=crop, hdr=hdr)
+        ours = measure_vmaf(distorted, reference, self.workdir, crop=crop)
         theirs = self._ab_av1_vmaf(
             reference,
             distorted,
@@ -244,59 +243,6 @@ class TestVmafParityAgainstAbAv1(_AbAv1Mixin):
         dis = self.root / "dis4k.mkv"
         self._encode(ref, dis, crf="28")
         self._check("2160p (ab-av1's 4k model)", ref, dis)
-
-    def test_hdr10_reported_not_held(self) -> None:
-        # a PQ/bt2020 clip; ShrinkRay tone-maps both inputs, ab-av1 scores PQ
-        # a PQ/bt2020 clip (libx265: libx264 rejects the bt2020 colorprim
-        # values); ShrinkRay tone-maps both inputs, ab-av1 scores PQ
-        ref = self.root / "refhdr.mkv"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-v",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                "testsrc2=size=1920x1080:rate=25:duration=20",
-                "-f",
-                "lavfi",
-                "-i",
-                "sine=frequency=440:duration=20",
-                "-c:v",
-                "libx265",
-                "-preset",
-                "fast",
-                "-crf",
-                "18",
-                "-pix_fmt",
-                "yuv420p10le",
-                "-x265-params",
-                "hdr10=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc",
-                "-c:a",
-                "aac",
-                str(ref),
-            ],
-            check=True,
-            timeout=600,
-        )
-        dis = self.root / "dishdr.mkv"
-        self._encode(ref, dis, crf="28", pix_fmt="yuv420p10le")
-        # the tone-map deviation is #310's documented behaviour, REPORTED
-        self._check(
-            "HDR10 tone-mapped (reported, not held)",
-            ref,
-            dis,
-            hdr=True,
-            hold=False,
-            why="tone-map deviation, #310",
-        )
-        # Issue #312's HDR criterion: with tone-mapping OFF both sides score the
-        # PQ signal directly, which is exactly ab-av1's comparison. HELD - it
-        # proves the rest of the pipeline (model, scale, pixel format, sync)
-        # matches on an HDR pair, so the tone-map is the only remaining gap.
-        self._check("HDR10 PQ-direct (tone-map off)", ref, dis, hdr=False)
 
 
 @unittest.skipUnless(SMOKE_ENV, "smoke: opt-in (SHRINKRAY_SMOKE=1)")

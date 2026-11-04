@@ -1215,8 +1215,8 @@ class TestProbeCache(unittest.TestCase):
         re-measures instead of reusing the old number.
 
         A stored probe measured with the 1080p model must not answer a 4K
-        measurement of the same window: the model, the scale, the pixel format and
-        the tone-map each move the score, and none of them used to be in the key.
+        measurement of the same window: the model, the scale and the pixel format
+        each move the score, and none of them used to be in the key.
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1340,7 +1340,7 @@ class TestProbeCache(unittest.TestCase):
         """The same rule for the plan: a stored plan measured with one recipe is
         never reused under another (issue #308). The recipe part the fingerprint
         carries is the crop-independent half (the plan lookup runs before bar
-        detection), so the pixel format and the tone-map must each invalidate it.
+        detection), so the pixel format and the model must each invalidate it.
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()

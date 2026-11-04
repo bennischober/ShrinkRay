@@ -247,7 +247,7 @@ class VmafRecipe:
         depend only on the source dimensions (the file's identity, already in the
         fingerprint) and the crop (a function of the file and the crop sample
         count, also already there). What is left is the recipe version, the pixel
-        format and the tone-map.
+        format and the recipe version.
 
         Returns:
             str: e.g. 'vmaf=2;fmt=yuv420p;hdr=no'.
