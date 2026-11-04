@@ -2761,7 +2761,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                         "bit_depth": None,
                     },
                 ),
-                patch.object(engine_pipeline, "is_hdr_file", return_value=False),
+                patch.object(engine_plan, "is_hdr_file", return_value=False),
                 patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
                 patch.object(engine_pipeline, "check_disk_space", return_value=(True, "")),
@@ -2887,7 +2887,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                     "_source_snapshot",
                     return_value={"width": 3840, "height": 2160},
                 ),
-                patch.object(engine_pipeline, "is_hdr_file", return_value=False),
+                patch.object(engine_plan, "is_hdr_file", return_value=False),
                 patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_pipeline, "_probe_movie") as fake_probe,
             ):
