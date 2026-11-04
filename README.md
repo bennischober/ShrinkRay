@@ -311,13 +311,14 @@ about the size they measured ([#388](https://github.com/bennischober/ShrinkRay/i
 runs at the probe preset, the encode at the final one, and the chosen CRF can
 differ by ±1 between runs.
 
-**HDR estimates are biased optimistic.** The plan's size estimate encodes one
-early window (`estimate_size_factor`, `engine/search.py`), and HDR samples skew
-toward easy content (dark, static shots), so the predicted savings land far
-above the real ones — measured on an HDR 4K title:
-19.1% real vs 78% predicted. Every surface that shows an HDR estimate (the
-`plan` command, the dashboard's plan display) carries this note; plan an HDR
-title expecting the real number to be much smaller than the prediction.
+**HDR estimates are biased optimistic.** The plan's size estimate comes from
+the probe windows (all of them when the plan cache carries their encoded
+sizes, one window otherwise), and HDR samples skew toward easy content (dark,
+static shots), so the predicted savings land far above the real ones —
+measured on an HDR 4K title: 19.1% real vs 78% predicted. Every surface that
+shows an HDR estimate (the `plan` command, the dashboard's plan display)
+carries this note; plan an HDR title expecting the real number to be much
+smaller than the prediction.
 
 ### `setup` — configure, pause and resume
 

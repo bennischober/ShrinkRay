@@ -426,8 +426,7 @@ def probe_crf(
             pre-#308 measurement; every engine caller passes a real one.
         crop (tuple | None): Crop bars applied to probes and measurements,
             so the decision matches the final encode.
-        hdr (bool): Part of the probe cache key (always False since issue
-            #518; the field is fingerprint-stability only).
+        hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file (caching and failure
             evidence; None => uncached probing).
@@ -668,8 +667,7 @@ def find_optimal_crf(
             is the pre-#308 measurement.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             probes and the decision, matching the final encode.
-        hdr (bool): Part of the probe cache key (always False since issue
-            #518; the field is fingerprint-stability only).
+        hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encodes
@@ -786,8 +784,7 @@ def find_optimal_crf_and_skip(
             pixel format); None derives the pre-#308 one.
         crop (tuple | None): Crop bars (top, bottom, left, right) applied to
             probes and the decision, matching the final encode.
-        hdr (bool): Part of the probe cache key (always False since issue
-            #518; the field is fingerprint-stability only).
+        hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encodes

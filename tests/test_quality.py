@@ -2296,7 +2296,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _plan(self, extra_seams):
+    def _plan(self, extra_seams, db_file=None):
         """Runs plan_quality with the plan's non-search seams mocked to a
         small h264 file plus the caller's extra patches."""
         patches = [
@@ -2315,7 +2315,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             for item in patches:
                 stack.enter_context(item)
-            return engine_plan.plan_quality(self.movie, target_vmaf=95.0, db_file=None)
+            return engine_plan.plan_quality(self.movie, target_vmaf=95.0, db_file=db_file)
 
     def test_the_plan_reports_the_decisions_factor(self):
         """The reported output_size is identity.size x the factor the search
@@ -2332,9 +2332,32 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         self.assertTrue(result.success, result.error)
         self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.42))
 
-    def test_the_plan_makes_no_extra_size_probe(self):
-        """The search computes the factor twice by design (the top-of-range
-        bound, then the chosen-CRF check) — a plan adds NO third call."""
+    def test_the_plan_reports_the_chosen_factor_not_the_bound(self):
+        """The reported factor is the CHOSEN CRF's factor — the number the
+        size decision used — not the top-of-range bound's (a mutation
+        returning the bound factor instead of chosen_factor fails here)."""
+        seen: list[int] = []
+
+        def keyed_estimate(*args, **kwargs):
+            crf = args[3]
+            seen.append(crf)
+            return 0.4 if crf == 45 else 0.7
+
+        result = self._plan(
+            [
+                patch.object(engine_search, "estimate_size_factor", side_effect=keyed_estimate),
+                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+            ]
+        )
+        self.assertTrue(result.success, result.error)
+        # the bound (45) + the chosen check (22): exactly the decision's own
+        self.assertEqual(seen, [45, 22])
+        # the report carries the CHOSEN factor (0.7), never the bound's (0.4)
+        self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.7))
+
+    def test_the_plan_makes_no_extra_size_probe_without_a_database(self):
+        """No database: the decision's own count is two (the bound probe, then
+        the chosen-CRF fallback encode) — a plan adds NO third call."""
         size_estimates = Mock(return_value=0.5)
         result = self._plan(
             [
@@ -2347,6 +2370,55 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         self.assertEqual(size_estimates.call_count, 2)
         # and the report carries the decision's factor (the same mock's value)
         self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.5))
+
+    def test_the_complete_cache_size_decision_encodes_nothing_extra(self):
+        """A complete cache (every window's encoded size recorded): the
+        chosen-CRF decision reads the cached sizes and calls NO size probe at
+        all — the plan's run performs exactly one (the bound), and the report
+        carries the all-window factor."""
+        from shrinkray import db as db_mod
+        from shrinkray.tools import vmaf as tools_vmaf
+
+        root = self.tmp.name
+        sample = Path(root) / "s0.mkv"
+        sample.write_bytes(b"m" * 100)  # the all-window factor stats the sample
+        db_file = Path(root) / "meta.db"
+        connection = db_mod.connect(db_file)
+        recipe = tools_vmaf.vmaf_recipe(
+            crop=None, hdr=False, width=1920, height=1080, bit_depth=None
+        )
+        key = engine_search.probe_cache_key(
+            self.movie,
+            10.0,
+            10.0,
+            22,
+            "svt_av1",
+            "5",
+            None,
+            False,
+            None,
+            ("hb", "1.6"),
+            recipe.identifier(),
+        )
+        db_mod.save_probe_score(connection, key, 95.0, 40)  # 40 encoded / 100 sample bytes
+        connection.commit()  # the plan opens its own connection to read this
+        connection.close()
+
+        size_estimates = Mock(return_value=0.5)
+        result = self._plan(
+            [
+                patch.object(engine_plan, "extract_samples", return_value=[(sample, 10.0)]),
+                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
+                patch.object(engine_search, "estimate_size_factor", size_estimates),
+                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+            ],
+            db_file=Path(root) / "meta.db",
+        )
+        self.assertTrue(result.success, result.error)
+        # only the bound probe ran; the chosen-CRF decision read the cache
+        self.assertEqual(size_estimates.call_count, 1)
+        # the all-window factor: 40 / 100 = 0.4
+        self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.4))
 
 
 class TestSubprocessTimeouts(unittest.TestCase):
