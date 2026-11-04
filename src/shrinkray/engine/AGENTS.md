@@ -12,7 +12,7 @@ answers — is this file bigger than its quality requires, and does it carry bar
 | The CRF search | `search.py` | `bisect_crf`, `probe_crf`, `find_optimal_crf_and_skip`, `SkipEncode`, `DEFAULT_TARGET_VMAF` (re-exported from `config.py`, #252), `DEFAULT_CRF_RANGE = (14, 45)` |
 | The plan: gates, HDR override, reuse | `plan.py` | `plan_quality`, `_lookup_plan`, `SOURCE_CODECS` whitelist, `is_1080p_class`, `MIN_ENCODE_SECONDS = 90.0` |
 | Encode + verify + batch loop | `pipeline.py` | `encode_with_quality`, `_encode_with_command`, `check_disk_space` |
-| Black bars, one detector | `crop.py` | keyframe timeline pass + `sustained_runs` + `intersect_crop_rects`; DB-cached; `detect_crop_rect` is the no-database fallback |
+| Black bars, one detector | `crop.py` | keyframe timeline pass + `sustained_runs` + `intersect_crop_rects`; DB-cached; `detect_crop_rect` is the fallback for a pass that learned nothing (issue #525) |
 | Sample windows | `samples.py` | `sample_offsets`, `extract_samples`, `DEFAULT_SAMPLE_EVERY = 600.0` |
 | HDR/SDR encoder choice | `encoders.py` | `encoder_for`, `DEFAULT_ENCODER`/`HDR_ENCODER` |
 | Scan -> DB rows | `scan.py` | `scan_movies`, `process_movie`, `resolve_input_paths`; pool `min(8, cpu)` |
@@ -46,7 +46,7 @@ OVERRIDDEN values.
   passes `True` so it stays independent of plan staleness.
 - One bar measurement per file version: `detect_crop_summary_cached` caches in the
   `crops` table; `scan` only projects the cached flag and never runs the timeline
-  pass (`scan.py`); the sampled fallback keeps runs without a DB working.
+  pass (`scan.py`); the sampled fallback runs only for a pass that learned nothing (issue #525), stateless or not.
 - A hung child is a FAILURE, not a cancel (`pipeline.py`): a stall is
   self-terminated and must not be retried by the watch loop.
 

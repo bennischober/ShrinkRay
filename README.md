@@ -234,10 +234,10 @@ other services keep their cores.
 3. **Black-bar detection** — `cropdetect` runs over the whole runtime, reading
    only keyframes, and only bars that every sustained stretch of the film agrees
    on are cropped. With a database the result is cached per file version. When
-   that pass yields no bars, a sampled detector (`--crop-samples` windows, bars
-   common to every window) decides instead — including, today, when the pass
-   *measured* a full-frame stretch, which can crop a film whose aspect ratio
-   changes ([#525](https://github.com/bennischober/ShrinkRay/issues/525)).
+   that pass measures no bars, that verdict stands; the sampled detector
+   (`--crop-samples` windows, bars common to every window) runs only when the
+   pass learned nothing — a failed pass, or no readings at all
+   ([#525](https://github.com/bennischober/ShrinkRay/issues/525)).
 4. **Quality search** — 10-second samples are encoded at a few CRF values and
    scored with VMAF against their source: 3 samples for `encode` and `plan`, one
    per 10 minutes of runtime in the resident app (the modes differ today —
@@ -415,7 +415,7 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 | 2 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
 | 3 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
 | 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
-| 5 | Bar detection | Which bars does every sustained segment share? (sampled fallback: every sampled window, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
+| 5 | Bar detection | Which bars does every sustained segment share? (sampled fallback: only when the pass learned nothing, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
 | 6 | CRF search | Largest CRF (or one step below it) that meets the VMAF target? | 96 | skip — target unreachable |
 | 7 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
 | 8 | Encode | One full encode at the chosen CRF, with the crop | — | — |

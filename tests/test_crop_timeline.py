@@ -684,10 +684,6 @@ def _config():
     return load_config()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestCropBarsOrFallback(unittest.TestCase):
     """Issue #525: a measured "no common bars" verdict stands; the sampled
     detector runs only for a pass that learned nothing."""
@@ -729,3 +725,100 @@ class TestCropBarsOrFallback(unittest.TestCase):
         fallback = Mock(return_value=None)
         self.assertIsNone(crop_bars_or_fallback(None, fallback))
         fallback.assert_called_once_with()
+
+    def test_the_plan_call_site_honours_the_veto(self) -> None:
+        """The plan path's crop decision runs through the helper: a measured
+        veto stands and the sampled detector is never called (issue #525
+        round 1, finding 4 — reverting the call site must fail this)."""
+        import tempfile
+        from unittest.mock import Mock, patch
+
+        from shrinkray.engine.plan import plan_quality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 64)
+            veto = CropSummary(
+                bars=None,
+                frame_width=1920,
+                frame_height=1080,
+                readings=10,
+                sustained_readings=3,
+                ratios={},
+            )
+            sampled = Mock(return_value=(100, 100, 0, 0))
+            with (
+                patch("shrinkray.engine.plan.detect_crop_summary_cached", return_value=veto),
+                patch("shrinkray.engine.plan.detect_crop_rect", sampled),
+                patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+                patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
+                patch(
+                    "shrinkray.engine.plan.get_data", return_value={"width": 1920, "height": 1080}
+                ),
+                patch(
+                    "shrinkray.engine.plan.find_optimal_crf_and_skip",
+                    return_value=(20, 96.0, [], False),
+                ),
+                patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+                patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
+            ):
+                result = plan_quality(movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+            sampled.assert_not_called()
+            self.assertIsNone(result.crop, "the measured veto must stand")
+
+    def test_the_encode_call_site_honours_the_veto(self) -> None:
+        """The encode path's crop decision runs through the helper too."""
+        import tempfile
+        from unittest.mock import Mock, patch
+
+        from shrinkray.engine import pipeline as engine_pipeline
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 64)
+            out = Path(tmp) / "out.mkv"
+            veto = CropSummary(
+                bars=None,
+                frame_width=1920,
+                frame_height=1080,
+                readings=10,
+                sustained_readings=3,
+                ratios={},
+            )
+            sampled = Mock(return_value=(100, 100, 0, 0))
+
+            def fake_encode(input_file, output_file, command, progress=None, **kwargs):
+                output_file.write_bytes(b"x" * 32)
+                return engine_pipeline.EncodeResult(
+                    input=input_file, output=output_file, success=True
+                )
+
+            with (
+                patch("shrinkray.engine.pipeline.detect_crop_summary_cached", return_value=veto),
+                patch("shrinkray.engine.pipeline.detect_crop_rect", sampled),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=6000.0),
+                patch.object(
+                    engine_pipeline,
+                    "_source_snapshot",
+                    return_value={
+                        "width": 1920,
+                        "height": 1080,
+                        "codec": "h264",
+                        "duration": 6000.0,
+                        "bit_depth": 8,
+                        "bitrate": None,
+                    },
+                ),
+                patch.object(engine_pipeline, "source_codec", return_value="h264"),
+                patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+                patch.object(engine_pipeline, "_probe_movie", return_value=(20, 96.0, [], None)),
+                patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode),
+            ):
+                engine_pipeline.encode_with_quality(
+                    src, out, target_vmaf=95.0, encoder="svt_av1", verify=False
+                )
+            sampled.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

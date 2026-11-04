@@ -596,7 +596,8 @@ def detect_crop_rect(
     Runs cropdetect on several segments and keeps the bars common to all of
     them, so only bars that are present throughout the movie are removed.
     The FALLBACK detector: the timeline pass (detect_crop_summary_cached) is
-    the primary, this one keeps runs without a database working.
+    the primary; this one runs only when that pass learned nothing — a failed
+    pass, or no readings (issue #525) — not merely when a database is absent.
 
     Args:
         movie (Path): The source movie file.
