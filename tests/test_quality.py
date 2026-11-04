@@ -3167,3 +3167,52 @@ class TestSubprocessTimeouts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRoundTwoCutOnTheDefaultRanges(unittest.TestCase):
+    """Issue #399's maintainer decision (2026-10-31): the round-two cut stays
+    unconditional - a deliberate deviation from ab-av1's cut_on_iter2, which
+    would skip it on the SDR default. The cut is pinned on both DEFAULT
+    ranges, both directions."""
+
+    def test_the_sdr_default_cuts_both_ways(self) -> None:
+        sdr_calls: list[int] = []
+
+        def failing(c: int) -> float:
+            sdr_calls.append(c)
+            return 80.0
+
+        # a failing midpoint: 29 -> the 20%/80% point 20 -> lo (unreachable)
+        self.assertEqual(engine_search.bisect_crf(failing, 14, 45, target_vmaf=95.0), 14)
+        self.assertEqual(sdr_calls, [29, 20, 14])
+
+        sdr_calls.clear()
+
+        def passing(c: int) -> float:
+            sdr_calls.append(c)
+            return 99.0
+
+        # a passing midpoint: 29 -> round(0.4*29 + 0.6*44) = 38 -> the top
+        self.assertEqual(engine_search.bisect_crf(passing, 14, 45, target_vmaf=95.0), 44)
+        self.assertEqual(sdr_calls, [29, 38, 44])
+
+    def test_the_hdr_default_cuts_both_ways(self) -> None:
+        hdr_calls: list[int] = []
+
+        def failing(c: int) -> float:
+            hdr_calls.append(c)
+            return 80.0
+
+        # a failing midpoint: 27 -> _round_two_cut(27, 10) = 17 -> lo
+        self.assertEqual(engine_search.bisect_crf(failing, 10, 45, target_vmaf=95.0), 10)
+        self.assertEqual(hdr_calls, [27, 17, 10])
+
+        hdr_calls.clear()
+
+        def passing(c: int) -> float:
+            hdr_calls.append(c)
+            return 99.0
+
+        # a passing midpoint: 27 -> round(0.4*27 + 0.6*44) = 37 -> the top
+        self.assertEqual(engine_search.bisect_crf(passing, 10, 45, target_vmaf=95.0), 44)
+        self.assertEqual(hdr_calls, [27, 37, 44])
