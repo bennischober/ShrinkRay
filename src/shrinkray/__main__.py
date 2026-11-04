@@ -670,11 +670,9 @@ def _record_encodes(
                                     # our process group): honour it before anything
                                     # is recorded or swapped - the source stays as is
                                     raise _EncodeCancelled("cancelled by user")
-                                if result.success and result.verified_vmaf is not None:
-                                    console.print(
-                                        f"[green]Verified '{movie.name}': full-file VMAF "
-                                        f"{result.verified_vmaf:.2f}[/green]"
-                                    )
+                                # NO green Verified print here (issue #471 round 2,
+                                # finding 2): the engine's verification line says the
+                                # same thing on stderr
                                 if result.success:
                                     saved = result.saved_percent
                                     # a successful encode is always a shrink (the engine

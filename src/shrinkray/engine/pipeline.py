@@ -1642,7 +1642,6 @@ def encode_with_quality(
         f"Encode result for '{input_file.name}': CRF {crf}, output "
         f"{final_output_size / (1024**3):.2f} GB "
         f"({100 * final_output_size / final_input_size:.0f}% of source)"
-        + (f" (finding: {tracks_detail})" if not tracks_ok else "")
     )
     return QualityResult(
         input=input_file,

@@ -1017,38 +1017,38 @@ def _encode_measured(
             lock_target = movie.parent if in_place else output_dir
             # the [i/N] prefix covers the record and swap lines too (issue
             # #471 round 1, finding 4): they are per-file lines
-            with file_scope(index + 1, total):
-                with guard_encodes(lock_target, holder="encode-job"):
-                    result = encode_with_quality(
-                        movie,
-                        output_dir / movie.name,
-                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
-                        encoder=config.handbrake_encoder,
-                        probe_encoder_preset=payload.get(
-                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
-                        ),
-                        encoder_preset=payload.get(
-                            "encoder_preset", config.handbrake_encoder_preset
-                        ),
-                        progress=progress,
-                        cancel=cancel,
-                        db_file=_db_file_of(connection),
-                        encoder_threads=cap_threads(config.handbrake_max_threads),
-                        # the resident mode verifies every encode (issue
-                        # #235): the job worker is Mode B's other arm, same
-                        # reasoning as the watcher - nobody watches the log,
-                        # the verification number is the only evidence the
-                        # encode met the target. A payload can still opt out
-                        # with verify=false explicitly.
-                        verify=payload.get("verify", True),
-                        min_source_height=config.min_source_height,
-                        min_source_width=config.min_source_width,
-                        min_source_size_gb=config.min_source_size_gb,
-                        candidate_codecs=tuple(config.candidate_codecs),
-                        crop_sample_count=config.crop_sample_count,
-                        audio_languages=config.handbrake_audio_languages,
-                        subtitle_languages=config.handbrake_subtitle_languages,
-                    )
+            with (
+                file_scope(index + 1, total),
+                guard_encodes(lock_target, holder="encode-job"),
+            ):
+                result = encode_with_quality(
+                    movie,
+                    output_dir / movie.name,
+                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                    encoder=config.handbrake_encoder,
+                    probe_encoder_preset=payload.get(
+                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                    ),
+                    encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
+                    progress=progress,
+                    cancel=cancel,
+                    db_file=_db_file_of(connection),
+                    encoder_threads=cap_threads(config.handbrake_max_threads),
+                    # the resident mode verifies every encode (issue
+                    # #235): the job worker is Mode B's other arm, same
+                    # reasoning as the watcher - nobody watches the log,
+                    # the verification number is the only evidence the
+                    # encode met the target. A payload can still opt out
+                    # with verify=false explicitly.
+                    verify=payload.get("verify", True),
+                    min_source_height=config.min_source_height,
+                    min_source_width=config.min_source_width,
+                    min_source_size_gb=config.min_source_size_gb,
+                    candidate_codecs=tuple(config.candidate_codecs),
+                    crop_sample_count=config.crop_sample_count,
+                    audio_languages=config.handbrake_audio_languages,
+                    subtitle_languages=config.handbrake_subtitle_languages,
+                )
                 # the ledger write and the swap stay INSIDE the slot
                 # (issue #230): stage() copies into the deterministic
                 # '<source>.shrinkray-staging' and swap() renames it over
@@ -1307,4 +1307,6 @@ class JobWorker:
         )
         skipped = sum(1 for x in items if x.get("state") in ("skip", "skipped"))
         failed = sum(1 for x in items if x.get("state") in ("error", "failed"))
-        return f"{encode_like} to encode, {skipped} skipped, {failed} failed"
+        if "plans" in result:
+            return f"{encode_like} to encode, {skipped} skipped, {failed} failed"
+        return f"{encode_like} encoded, {skipped} skipped, {failed} failed"
