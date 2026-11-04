@@ -900,8 +900,18 @@ class TestEncodeLock(unittest.TestCase):
 
     def test_the_heartbeat_keeps_a_held_slot_alive(self):
         """The holder touches the lock while it runs, so the stale window
-        measures silence: a slot held past the window is still ours
-        (issue #383)."""
+        measures silence: a slot held PAST the window is still ours
+        (issue #383). The wait proceeds on the BEAT the test is waiting
+        for — a beat landing AFTER the stale window has elapsed since
+        acquisition — not on a wall-clock guess that the daemon thread got
+        scheduled (issue #545: under full-suite CPU stress a 0.2 s sleep
+        guaranteed nothing, the lock aged stale and the rival legitimately
+        stole the slot). The wait exits only on a beat strictly past the
+        window: a heartbeat that beats once BEFORE the window and then
+        stops fails here; what the wait proves is that a fresh beat exists
+        at assertion time even after the window elapsed — not a cadence
+        guarantee (a continuity assertion would be load-fragile by
+        nature)."""
         from shrinkray.engine import lock as lock_mod
 
         with (
@@ -909,7 +919,21 @@ class TestEncodeLock(unittest.TestCase):
             mock.patch.object(lock_mod, "_LOCK_STALE_SECONDS", 0.05),
             lock_mod.guard_encodes(self.out, holder="test") as held,
         ):
-            time.sleep(0.2)
+            acquired = held.stat().st_mtime
+            # the assertion must hold the slot PAST the stale window (the
+            # #383 contract): wait for a beat whose mtime is later than
+            # acquisition + the window. 0.01 s beats against a 0.05 s window
+            # put that beat at ~0.06 s; allow ~100x scheduling slack and
+            # fail loudly if the heartbeat stopped before then (that is the
+            # defect this test exists to catch, not something to wait out)
+            deadline = time.monotonic() + 1.0
+            while held.stat().st_mtime <= acquired + lock_mod._LOCK_STALE_SECONDS:
+                if time.monotonic() >= deadline:
+                    self.fail("the heartbeat did not keep the slot alive past the stale window")
+                time.sleep(0.005)
+            # a beat landed strictly past the window: the lock is provably
+            # fresh at assertion time, so a rival's acquisition must be
+            # refused
             with self.assertRaises(lock_mod.EncodeBusyError):
                 lock_mod.acquire_encode_slot(self.out, holder="rival")
         self.assertFalse(held.exists())
