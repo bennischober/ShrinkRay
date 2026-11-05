@@ -398,7 +398,7 @@ class TestStatusShowsConfigError(unittest.TestCase):
         200, the last-good values, and `config_error` set."""
         client = TestClient(fast_app)
         path = Path(self.tmp.name) / "config.json"
-        path.write_text('{"quality": {"target_vmaf": 1}}'.replace("vmaf", "vmaf"), encoding="utf-8")
+        path.write_text('{"quality": {"target_vmaf": 1}}', encoding="utf-8")
         reset_config()
         config_module.load_config(config_file=path)
         path.write_text("{ not json", encoding="utf-8")

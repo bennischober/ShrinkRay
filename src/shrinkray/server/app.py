@@ -332,7 +332,6 @@ class AppState:
             db_file (Path): The sqlite database file.
         """
         self.db_file = db_file
-        self.config_file: Path | None = None  # the app command's --config
         self.db_lock = threading.RLock()
         self.connection = db.connect(db_file)
         try:
@@ -758,7 +757,6 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     running = s.with_lock(
         lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
     )
-    from shrinkray import config as config_module
 
     rss = rss_mib()
     return {
@@ -844,6 +842,13 @@ def snapshot(
     import hashlib
 
     from shrinkray import config as config_module
+
+    # prompt detection (issue #541): THIS is the poll the open dashboard
+    # actually makes (App.svelte's snapshot loop), so a broken config.json
+    # edit is judged here - one stat when nothing changed - and the status
+    # block below carries the fresh config_error. /api/status keeps the same
+    # call for its own consumers; applying a change stays at file boundaries.
+    config_module.refresh_config()
     from shrinkray.tools.process import rss_mib
 
     s = get_state()
@@ -1486,7 +1491,6 @@ def run_app(
     global state
     allow_roots(allowed_roots or _default_roots())
     state = AppState(db_file)
-    state.config_file = config_file
     # the process policy is applied EXPLICITLY at the entry point (issue #97
     # phase 2): loading config.py no longer mutates process state as a side
     # effect

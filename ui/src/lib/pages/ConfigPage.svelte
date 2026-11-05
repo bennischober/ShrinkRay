@@ -118,10 +118,6 @@
     </div>
     {#if !config}
       <div class="dim pad">{loadError ? loadError : 'loading…'}</div>
-    {:else if configError}
-      <div class="dim pad">
-        not shown: config.json has an error and was not applied — the settings above are the ones in effect
-      </div>
     {:else}
       <div class="pad groups">
         <div class="option-row">

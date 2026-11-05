@@ -43,10 +43,6 @@ class _ConfigCase(unittest.TestCase):
         app_module.state = None
 
     def _load(self, text: str) -> None:
-        # AppState's construction loads the config once; drop that cache so this
-        # fixture's file is the one in effect (the route under test then reads
-        # `config_file_used`, exactly as it does in production).
-        config_module.reset_config()
         self.path.write_text(text, encoding="utf-8")
         config_module.load_config(config_file=self.path)
 
@@ -95,6 +91,23 @@ class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
         self.assertEqual(response.json()["quality"]["target_vmaf"], 91)
         self.assertIn("not applied", response.json()["config_error"])
 
+    def test_an_unreadable_directory_answers_last_good_and_the_reason(self) -> None:
+        """Review finding 1 of #541: a directory without execute permission
+        makes `path.stat()` raise PermissionError - which the old code let
+        escape `refresh_config` (its stat ran outside the judging try), 500ing
+        both routes and, on some interpreters, silently falling back to the
+        code defaults. The judged answer: 200, last-good, the reason."""
+        if os.name == "nt":
+            self.skipTest("POSIX permission bits")
+        self._load('{"quality": {"target_vmaf": 94}}')
+        self.path.parent.chmod(0o000)
+        self.addCleanup(self.path.parent.chmod, 0o755)
+
+        response = TestClient(fast_app).get("/api/config")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["quality"]["target_vmaf"], 94)
+        self.assertIn("not applied", response.json()["config_error"])
+
     def test_a_valid_edit_shows_the_new_values_after_the_refresh(self) -> None:
         self._load('{"quality": {"target_vmaf": 92}}')
         # a DIFFERENT LENGTH so the file signature changes (same-size writes
@@ -111,6 +124,8 @@ class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
         settings in memory, then the file becomes unreadable. A route that
         parses the file answers 500 or the defaults; the loader's answer is 200
         with the in-effect value."""
+        if os.name == "nt":
+            self.skipTest("POSIX permission bits")
         self._load('{"quality": {"target_vmaf": 94}}')
         self.path.chmod(0o000)
         self.addCleanup(self.path.chmod, 0o644)

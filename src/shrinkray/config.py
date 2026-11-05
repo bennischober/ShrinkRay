@@ -529,7 +529,23 @@ def refresh_config() -> Conf:
         if _config is None or config_file_used is None:
             return load_config()
         path = config_file_used
-        signature = _file_signature(path)
+        try:
+            signature = _file_signature(path)
+        except OSError as e:
+            # the path cannot even be statted (a directory without execute
+            # permission): judged like a file that does not parse - last-good
+            # stays in effect and the reason is reported (issue #541, review
+            # finding 1; the old route answered an opaque 500 here, and the
+            # answer differed per interpreter). Recording None as the judged
+            # signature keeps the report once-per-state: the next poll's stat
+            # fails the same way and returns the cached config silently, and
+            # a restored permission re-judges the file normally.
+            if _config_signature is None:
+                return _config
+            _config_signature = None
+            config_error = f"'{path}' was not applied, the previous settings stay in effect: {e}"
+            log_error(config_error)
+            return _config
         if signature == _config_signature:
             return _config
         # this version of the file is judged now, good or bad: a bad one is
