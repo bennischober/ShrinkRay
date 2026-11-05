@@ -656,7 +656,6 @@ def _conf_to_dict(conf: Conf) -> dict:
         FfmpegSection,
         FileSection,
         HandbrakeSection,
-        HdrSection,
         OutputSection,
         QualitySection,
         ResourcesSection,
@@ -688,12 +687,7 @@ def _conf_to_dict(conf: Conf) -> dict:
             sample_seconds=conf.sample_seconds,
         ),
         resources=ResourcesSection(idle_priority=conf.idle_priority),
-        codec=CodecSection(
-            hdr=HdrSection(
-                color_space=conf.hdr_color_spaces,
-                color_transfer=conf.hdr_color_transfers,
-            )
-        ),
+        codec=CodecSection(),
         eligibility=EligibilitySection(
             min_source_height=conf.min_source_height,
             min_source_width=conf.min_source_width,

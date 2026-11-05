@@ -317,29 +317,10 @@ class AppSection(BaseModel):
         return self
 
 
-class HdrSection(BaseModel):
-    """codec.hdr: the markers that flag a source as HDR.
-
-    The defaults ARE the documented HDR signature (issue #236, the
-    maintainer's decision: HDR detection defaults in code): a config that
-    says nothing about HDR still classifies bt2020nc/smpte2084 streams
-    correctly, because the shipped config.json's values — the repo's own
-    working setup — are now the code's defaults. An operator can still
-    narrow or extend the lists; an empty list means "nothing is HDR".
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    color_space: list[str] = ["bt2020nc"]
-    color_transfer: list[str] = ["smpte2084"]
-
-
 class CodecSection(BaseModel):
     """The codec section of config.json."""
 
     model_config = ConfigDict(extra="forbid")
-
-    hdr: HdrSection = Field(default_factory=HdrSection)
 
 
 def _parse_hhmm(value: str, key: str) -> time:
@@ -422,12 +403,24 @@ class Conf:
                 "integration was removed (issue #43); the key is ignored."
             )
             data.pop("integrations")
+        if "codec" in data and isinstance(data["codec"], dict) and "hdr" in data["codec"]:
+            # the codec.hdr markers drove the HDR classification until issue
+            # #518 (the maintainer's #340 decision): HDR sources are skipped
+            # as not supported, on a FIXED transfer set in code - a config
+            # key that no longer drives anything is removed, and an old
+            # config that sets it still loads with this one-time warning
+            # (the integrations-key pattern, issue #43)
+            log_warning(
+                "config.json contains 'codec.hdr' - the HDR marker lists no "
+                "longer drive anything (issue #518: HDR sources are skipped "
+                "as not supported yet, on a fixed transfer set in code); "
+                "the key is ignored."
+            )
+            data["codec"] = {k: v for k, v in data["codec"].items() if k != "hdr"}
+            if not data["codec"]:
+                data.pop("codec")
 
         model = ConfigModel.model_validate(data)
-
-        # codec => hdr detection
-        self.hdr_color_spaces: list[str] = model.codec.hdr.color_space
-        self.hdr_color_transfers: list[str] = model.codec.hdr.color_transfer
 
         # file => extensions and output settings
         self.extensions: list[str] = model.file.extensions

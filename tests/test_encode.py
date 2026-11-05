@@ -273,8 +273,8 @@ class TestEncode(unittest.TestCase):
         lives in one function and every caller reads it from there. Since
         issue #234 the source's bit depth joins the decision.
         """
-        self.assertEqual(engine_encoders.encoder_for(8, False), "svt_av1")
-        self.assertEqual(engine_encoders.encoder_for(10, True), "svt_av1_10bit")
+        self.assertEqual(engine_encoders.encoder_for(8), "svt_av1")
+        self.assertEqual(engine_encoders.encoder_for(10), "svt_av1_10bit")
 
     def test_no_handbrake_command_emits_h264_or_h265(self):
         """No code path emits H.264 or H.265 any more (issue #21).
@@ -290,7 +290,7 @@ class TestEncode(unittest.TestCase):
                 Path("in.mkv"),
                 Path("out.mkv"),
                 30,
-                engine_encoders.encoder_for(8, False),
+                engine_encoders.encoder_for(8),
                 "3",
             ),
             tools_handbrake.build_encode_command(
@@ -298,7 +298,7 @@ class TestEncode(unittest.TestCase):
                 Path("in.mkv"),
                 Path("out.mkv"),
                 30,
-                engine_encoders.encoder_for(10, True),
+                engine_encoders.encoder_for(10),
                 "3",
             ),
         ):
@@ -1488,10 +1488,9 @@ class TestEncodeLock(unittest.TestCase):
         self.assertIn("model=vmaf_v0.6.1.json", base.identifier())
         self.assertIn("fmt=yuv420p", base.identifier())
         self.assertIn("hdr=no", base.identifier())
-        # a different model / pixel format / tone-map => a different identifier
+        # a different model / pixel format => a different identifier
         self.assertNotEqual(base.identifier(), vmaf_recipe(width=3840, height=2160).identifier())
         self.assertNotEqual(base.identifier(), vmaf_recipe(bit_depth=10).identifier())
-        self.assertNotEqual(base.identifier(), vmaf_recipe(hdr=True).identifier())
         # the plan fingerprint ignores the crop-dependent model/scale: the plan
         # lookup runs before bar detection and cannot know them
         self.assertEqual(
