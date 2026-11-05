@@ -329,7 +329,7 @@ The low real-title readings that opened #258 and stayed unexplained as #443 were
 |---|---|---|---|
 | the real `plan` pipeline | the image's installed shrinkray (pre-#410) | **69.25** | skip, "target unreachable" |
 | the real `plan` pipeline | current main (with `ts_sync_mode=nearest`, #410) | **96.07** (probes 29→92.05, 20→94.75, 17→95.33, 15→95.91) | **encode at CRF 14** |
-| ab-av1 `crf-search`, preset 5 | ab-av1 0.11.7 | 97.47 (the #395 run) | encode at CRF 21 |
+| ab-av1 `crf-search`, preset 5 | ab-av1 0.11.7 | 97.47 (the #258 2026-10-26 table) | encode at CRF 21 |
 
 Before #410 (`dd8a0d8`, 2026-10-26) the measurement paired frames by arrival order (framesync's default). On the VFR-rounded timestamps of a real title that pairing drifts and re-locks: a **pixel-identical pair** (a lossless crop of a clip measured against the clip itself) reads **72.84 with 80 of 247 frames below 60** through it, and **99.88 with zero low frames** through the current graph — deterministic, three runs each. That drift is what the 2026-10-26 numbers (87.23, and the flat VMAF-vs-CRF curve that looked like a colour error) recorded: they were measured hours before #410 merged.
 
