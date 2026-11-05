@@ -20,6 +20,81 @@ from shrinkray import db
 from shrinkray.server import jobs
 
 
+class TestCacheHitKeepsTheStoredHash(unittest.TestCase):
+    """Issue #573: a scan's cache-hit write-back must not null the stored
+    content hash - record_from_cache returns the row's own hash, so the
+    upsert preserves it."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve() / "library"
+        self.root.mkdir()
+        self.movie = self.root / "film.mkv"
+        self.movie.write_bytes(b"x" * 64)
+        self.connection = db.connect(Path(self.tmp.name) / "test.db")
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def _record_with_hash(self, hash_value: "str | None") -> None:
+        self.connection.execute(
+            "INSERT INTO files (path, mtime, size, name, category, hash, scanned_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(self.movie),
+                self.movie.stat().st_mtime,
+                self.movie.stat().st_size,
+                "film",
+                "Uncategorized",
+                hash_value,
+                "2026-01-01T00:00:00",
+            ),
+        )
+        self.connection.commit()
+
+    def _stored_hash(self) -> "str | None":
+        row = self.connection.execute(
+            "SELECT hash FROM files WHERE path = ?", (str(self.movie),)
+        ).fetchone()
+        return row["hash"] if row is not None else None
+
+    def _scan(self) -> None:
+        from shrinkray.config import Conf
+        from shrinkray.engine.scan import scan_movies
+
+        scan_movies(self.root, Conf(), connection=self.connection, db_file=None)
+
+    def test_a_cache_hit_keeps_the_stored_hash(self) -> None:
+        self._record_with_hash("abc123")
+        self._scan()  # the file is unchanged: the cache path, no re-probe
+        self.assertEqual(self._stored_hash(), "abc123")
+
+    def test_a_real_reprobe_overwrites_with_the_fresh_hash(self) -> None:
+        """The fix must not freeze a stale hash: a re-probe's record (rescan
+        bypasses the cache) carries the fresh hash and the write-back stores
+        it - the upsert's overwrite is the re-probe's own path."""
+        from unittest.mock import patch
+
+        from shrinkray.config import Conf
+        from shrinkray.engine.scan import scan_movies
+
+        self._record_with_hash("abc123")
+        # rescan=True bypasses the cache branch entirely (scan_movies skips
+        # the lookup when rescan is set); the changed bytes make the scenario
+        # the realistic one (a file that changed since its last scan)
+        self.movie.write_bytes(b"CHANGED" * 32)
+
+        def fake_process_movie(movie, root, config, db_file=None, **kwargs):
+            data = TestScanJobCategoryRoot._fake_data(movie, root)
+            data["hash"] = "fresh-hash"
+            return data, None
+
+        with patch("shrinkray.engine.scan.process_movie", side_effect=fake_process_movie):
+            scan_movies(self.root, Conf(), connection=self.connection, rescan=True, db_file=None)
+        self.assertEqual(self._stored_hash(), "fresh-hash")
+
+
 class TestScanJobCategoryRoot(unittest.TestCase):
     """Issue #489: a single-file scan job RECORDS the category the watch path
     records — the row goes through scan_movies's write-back with the most
