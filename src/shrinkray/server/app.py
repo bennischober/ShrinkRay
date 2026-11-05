@@ -667,6 +667,8 @@ def _conf_to_dict(conf: Conf) -> dict:
             encoder_preset=conf.handbrake_encoder_preset,
             max_threads=conf.handbrake_max_threads,
             stall_minutes=conf.handbrake_stall_minutes,
+            audio_languages=conf.handbrake_audio_languages,
+            subtitle_languages=conf.handbrake_subtitle_languages,
         ),
         quality=QualitySection(
             target_vmaf=conf.target_vmaf,

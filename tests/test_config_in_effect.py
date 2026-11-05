@@ -108,6 +108,19 @@ class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
         self.assertEqual(response.json()["quality"]["target_vmaf"], 94)
         self.assertIn("not applied", response.json()["config_error"])
 
+    def test_the_handbrake_language_filters_ride_the_route(self) -> None:
+        """Round-3 finding 1: _conf_to_dict omitted the handbrake audio/subtitle
+        language filters, so the route served [] while the loader held the
+        configured filters - a regression against the pre-one-reader answer,
+        which mirrored the file."""
+        self._load(
+            '{"handbrake": {"audio_languages": ["ger", "deu"], "subtitle_languages": ["eng"]}}'
+        )
+
+        body = TestClient(fast_app).get("/api/config").json()
+        self.assertEqual(body["handbrake"]["audio_languages"], ["ger", "deu"])
+        self.assertEqual(body["handbrake"]["subtitle_languages"], ["eng"])
+
     def test_the_app_section_is_served_not_the_schema_defaults(self) -> None:
         """Round-2 finding 1: the merge brought the app section (#434's encode
         window, auto_backlog) and _conf_to_dict did not pass it, so the route
@@ -121,6 +134,22 @@ class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
         self.assertEqual(body["app"]["auto_backlog"], True)
         self.assertEqual(body["app"]["encode_window_start"], "01:00")
         self.assertEqual(body["app"]["encode_window_end"], "02:00")
+
+    def test_the_dashboard_poll_judges_a_broken_edit(self) -> None:
+        """Round-3 finding: nothing pinned that /api/snapshot - the poll the
+        dashboard actually makes - triggers refresh_config(); removing the call
+        left every test green. The pin: a broken edit surfaces in the NEXT
+        snapshot's status block with no watcher pass in between."""
+        self._load('{"quality": {"target_vmaf": 92}}')
+        client = TestClient(fast_app)
+        self.assertIsNone(client.get("/api/snapshot").json()["status"]["config_error"])
+
+        self.path.write_text("{ broken", encoding="utf-8")
+        body = client.get("/api/snapshot").json()
+        self.assertIsNotNone(
+            body["status"]["config_error"], "snapshot must refresh the config itself"
+        )
+        self.assertIn("not applied", body["status"]["config_error"])
 
     def test_a_valid_edit_shows_the_new_values_after_the_refresh(self) -> None:
         self._load('{"quality": {"target_vmaf": 92}}')
