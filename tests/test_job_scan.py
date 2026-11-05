@@ -1,4 +1,5 @@
-"""Tests for the encode job's payload scan (issue #374).
+"""Tests for the encode job's payload scan (issue #374) and the scan job's
+category root (issue #489).
 
 `execute_encode` used to resolve the payload's movies and pass the result
 to `_encode_measured`, which ignored its `movies` argument and resolved the
@@ -20,9 +21,10 @@ from shrinkray.server import jobs
 
 
 class TestScanJobCategoryRoot(unittest.TestCase):
-    """Issue #489: a single-file scan job records the category the WATCH path
-    would record — the configured watch root is the category root, so a file
-    in a Title subfolder groups under its folder, not Uncategorized."""
+    """Issue #489: a single-file scan job RECORDS the category the watch path
+    records — the row goes through scan_movies's write-back with the most
+    specific allowed root as the category root, so a file in a Title subfolder
+    lands in the files table under its folder, not Uncategorized."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -37,57 +39,82 @@ class TestScanJobCategoryRoot(unittest.TestCase):
         self.connection.close()
         self.tmp.cleanup()
 
-    def _scan(self, roots: "list[Path] | None"):
+    @staticmethod
+    def _fake_data(movie: Path, root: Path) -> dict:
+        """The get_data shape movie_record_from_data persists, with the
+        category the real get_category computes from the passed root."""
+        from shrinkray.engine.scan import get_category
+
+        return {
+            "name": movie.stem,
+            "category": get_category(movie, root),
+            "duration": 12.0,
+            "duration_raw": 12.0,
+            "fps": 25.0,
+            "codec": "h264",
+            "bitrate": 1000,
+            "aspect_ratio": "16:9",
+            "dimensions": {"width": 1920, "height": 1080},
+            "crop": None,
+            "hdr": False,
+            "other_codecs": "",
+            "audio_languages": "",
+            "hash": None,
+        }
+
+    def _scan(self, roots: "list[Path]"):
         import contextlib
         from unittest.mock import patch
 
-        from shrinkray.engine.scan import get_category
         from shrinkray.server import app as server_app
 
         captured: dict = {}
 
-        def fake_process_movie(movie, root, config, db_file=None):
+        def fake_process_movie(movie, root, config, db_file=None, **kwargs):
             captured["root"] = root
-            data = {"name": movie.name, "category": get_category(movie, root)}
-            return data, None
+            return self._fake_data(movie, root), None
 
         job = jobs.Job(kind=jobs.JobKind.SCAN, payload={"paths": [str(self.movie)]})
-        patches = [patch("shrinkray.engine.scan.process_movie", side_effect=fake_process_movie)]
-        if roots is None:
-            # pin the branch's fallback: the app's roots list is forced empty
-            # (the accessor reads the module global)
-            patches.append(patch.object(server_app, "_allowed_roots", [], create=True))
-        else:
-            patches.append(patch.object(server_app, "allowed_roots", return_value=roots))
+        patches = [
+            patch("shrinkray.engine.scan.process_movie", side_effect=fake_process_movie),
+            patch.object(server_app, "allowed_roots", return_value=roots),
+        ]
         with contextlib.ExitStack() as stack:
             for item in patches:
                 stack.enter_context(item)
             result = jobs.execute_scan(job, self.connection, threading.Event())
         return result, captured
 
-    def test_a_title_subfolder_file_groups_under_title(self) -> None:
-        """The watch root is the category root: the recorded category is the
-        file's folder relative to it (Title), as the watch path records."""
+    def _recorded_category(self) -> "str | None":
+        row = self.connection.execute(
+            "SELECT category FROM files WHERE path = ?", (str(self.movie.resolve()),)
+        ).fetchone()
+        return row["category"] if row is not None else None
+
+    def test_a_title_subfolder_file_records_title(self) -> None:
+        """The watch root is the category root AND the row is recorded: the
+        files table's category is the folder, as the watch path records."""
         result, captured = self._scan([self.root])
-        # the ROOT is the watch root (the pin); the category the real
-        # get_category computes from it is the folder - the watch path's answer
+        # the root the recording used is the allowed root (the seam)
         self.assertEqual(captured["root"], self.root)
         self.assertEqual(result["movies"], 1)
-        self.assertEqual(result["categories"], 1)
-        from shrinkray.engine.scan import get_category
+        self.assertEqual(self._recorded_category(), "Title")
 
-        self.assertEqual(get_category(self.movie, captured["root"]), "Title")
+    def test_the_most_specific_root_wins_when_roots_nest(self) -> None:
+        """Nested --allow roots: the branch picks the deepest containing root
+        (the watcher's deepest pass is the reference), not the first."""
+        outer = self.root
+        inner = self.root / "Title"
+        _result, captured = self._scan([outer, inner])
+        self.assertEqual(captured["root"], inner)
+        self.assertEqual(self._recorded_category(), "Uncategorized")
 
     def test_a_file_outside_every_root_keeps_parent_as_root(self) -> None:
         """The ad-hoc branch's original semantics stay for a file the resident
         app does not watch: parent-as-root (documented CLI behaviour)."""
-        result, captured = self._scan([])
+        _result, captured = self._scan([])
         self.assertEqual(captured["root"], self.movie.parent)
-        self.assertEqual(result["movies"], 1)
-        self.assertEqual(result["categories"], 1)
-        from shrinkray.engine.scan import get_category
-
-        self.assertEqual(get_category(self.movie, captured["root"]), "Uncategorized")
+        self.assertEqual(self._recorded_category(), "Uncategorized")
 
 
 class TestEncodeJobSingleScan(unittest.TestCase):

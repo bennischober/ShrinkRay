@@ -242,9 +242,9 @@ def allow_roots(roots: list[Path]) -> None:
 def allowed_roots() -> list[Path]:
     """Returns the folder roots the API may operate on (a copy).
 
-    The resident app's category-root contract (issue #489): these are the
-    same roots the watcher scans, so a server-side scan records a file's
-    category against the root the watcher would have used.
+    These are the same roots the watcher is started with, so a server-side
+    scan can derive a file's category root from the same root the watcher
+    scans under (issue #489).
     """
     return list(_allowed_roots)
 
