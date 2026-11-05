@@ -224,6 +224,11 @@ class QualitySection(BaseModel):
     # the required VMAF every entry point uses unless a --target-vmaf flag
     # says otherwise (issue #252); part of the stored plan fingerprint
     target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
+    # the minimum predicted saving (percent of the source size) the decision
+    # to encode demands (issue #316, the maintainer's 2026-10-31 decision,
+    # default 15 = the calculated break-even with margin); 0 reproduces the
+    # old any-real-shrink rule; part of the stored plan fingerprint
+    min_saving_percent: int = Field(15, ge=0, le=99)
     sample_every: float = Field(DEFAULT_SAMPLE_EVERY, ge=0)
     sample_count: int = Field(DEFAULT_SAMPLE_COUNT, ge=1)
     sample_seconds: float = Field(DEFAULT_SAMPLE_SECONDS, gt=0)
@@ -464,6 +469,7 @@ class Conf:
         self.sample_count: int = model.quality.sample_count
         self.sample_seconds: float = model.quality.sample_seconds
         self.target_vmaf: float = model.quality.target_vmaf
+        self.min_saving_percent: int = model.quality.min_saving_percent
 
         # resources => how politely the engine behaves on a shared machine
         self.idle_priority: bool = model.resources.idle_priority

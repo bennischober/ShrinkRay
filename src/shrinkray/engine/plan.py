@@ -107,6 +107,7 @@ def _lookup_plan(
     sample_seconds: float,
     crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
     vmaf_recipe: str = "",
+    min_saving_percent: int = 0,
 ) -> sqlite3.Row | None:
     """Consults the plan cache for a valid plan of this movie+settings.
 
@@ -152,6 +153,7 @@ def _lookup_plan(
             crop_sample_count=crop_sample_count,
             vmaf_statistic=VMAF_STATISTIC,
             vmaf_recipe=vmaf_recipe,
+            min_saving_percent=min_saving_percent,
         )
     except (OSError, sqlite3.Error) as e:
         # a damaged or unopenable metadata.db must not stop the job: no
@@ -382,6 +384,7 @@ class QualityResult:
 def plan_quality(
     input_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
+    min_saving_percent: int = 15,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
@@ -665,6 +668,48 @@ def plan_quality(
             samples=samples,
         )
 
+        # the minimum-saving threshold (issue #316, the maintainer's
+        # 2026-10-31 decision): the decision to SPEND the encode demands more
+        # than "smaller" - the all-window factor the search decided with (the
+        # fifth element above) is the prediction, and a saving below the
+        # configured threshold is not worth the encode's cost. 0 reproduces
+        # the old rule. The search's own would-not-shrink skip (factor >= 1.0)
+        # needs no threshold.
+        saving_percent = (1.0 - factor) * 100.0
+        if not skip and saving_percent < min_saving_percent:
+            ensure_unchanged(input_file, identity, "plan")
+            log(
+                f"Plan for '{input_file.name}': skip (predicted saving "
+                f"{saving_percent:.1f}% < required {min_saving_percent}%)"
+            )
+            return QualityResult(
+                input=input_file,
+                output=input_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                min_saving_percent=min_saving_percent,
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probes=probes,
+                input_size=identity.size,
+                output_size=identity.size,
+                error=(
+                    f"skipped: predicted saving {saving_percent:.1f}% "
+                    f"< required {min_saving_percent}%"
+                ),
+                skipped_reason="saving below minimum",
+                input_mtime=identity.mtime,
+                encoder_preset=encoder_preset,
+                probe_encoder_preset=probe_encoder_preset,
+                crop=crop,
+                crf_range=crf_range,
+                sample_count=sample_count,
+                sample_seconds=sample_seconds,
+                hdr=hdr,
+                encoder=effective_encoder,
+                vmaf_recipe=recipe.fingerprint(),
+            )
+
         if skip:
             # the record-time recheck (issue #436): the skip verdict rides the
             # plans row and is trusted without re-probing later, so it must
@@ -678,6 +723,7 @@ def plan_quality(
                 output=input_file,
                 success=False,
                 target_vmaf=target_vmaf,
+                min_saving_percent=min_saving_percent,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probes=probes,
@@ -706,6 +752,7 @@ def plan_quality(
                 output=input_file,
                 success=False,
                 target_vmaf=target_vmaf,
+                min_saving_percent=min_saving_percent,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probes=probes,
@@ -742,6 +789,7 @@ def plan_quality(
             output=input_file,
             success=True,
             target_vmaf=target_vmaf,
+            min_saving_percent=min_saving_percent,
             chosen_crf=crf,
             achieved_vmaf=achieved,
             probes=probes,

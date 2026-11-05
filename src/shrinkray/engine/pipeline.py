@@ -971,6 +971,7 @@ def _output_bitrate(output_file: Path, duration: float | None) -> float | None:
 def _probe_movie(
     input_file: Path,
     target_vmaf: float,
+    min_saving_percent: int,
     crf_range: tuple[int, int],
     sample_count: int,
     sample_seconds: float,
@@ -992,6 +993,8 @@ def _probe_movie(
     Args:
         input_file (Path): The file to probe.
         target_vmaf (float): The VMAF quality floor to meet.
+        min_saving_percent (int): The minimum predicted saving (percent) the
+            decision demands (issue #316; 0 = any real shrink).
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
@@ -1085,6 +1088,17 @@ def _probe_movie(
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
             )
+        # the minimum-saving threshold (issue #316): the decision to SPEND
+        # the encode demands more than "smaller" - the same gate the plan
+        # applies, on the same factor the decision computed
+        saving_percent = (1.0 - chosen_factor) * 100.0
+        if saving_percent < min_saving_percent:
+            raise SkipEncode(
+                f"predicted saving {saving_percent:.1f}% < required {min_saving_percent}%",
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probe_count=len(probes),
+            )
         if achieved < target_vmaf and crf == crf_range[0]:
             raise SkipEncode(
                 f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})",
@@ -1115,6 +1129,7 @@ def encode_with_quality(
     input_file: Path,
     output_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
+    min_saving_percent: int = 15,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
@@ -1360,6 +1375,7 @@ def encode_with_quality(
                 height=snapshot["height"],
                 bit_depth=snapshot["bit_depth"],
             ).fingerprint(),
+            min_saving_percent=min_saving_percent,
         )
     crf_source: str | None = None
     plan_created_at: str | None = None
@@ -1421,6 +1437,7 @@ def encode_with_quality(
             crf, achieved, probes, crop = _probe_movie(
                 input_file,
                 target_vmaf,
+                min_saving_percent,
                 crf_range,
                 sample_count,
                 sample_seconds,
