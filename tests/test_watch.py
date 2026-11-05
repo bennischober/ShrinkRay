@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -18,6 +19,30 @@ from shrinkray.engine import watch as watch_mod
 # the module's own value, read before any test patches it: _isolated_lock
 # compares against it to tell "a test set its own interval" from "unpatched"
 _REAL_STABLE_CHECK_INTERVAL = watch_mod.STABLE_CHECK_INTERVAL
+
+
+def _watch_scan_data(movie: Path, root: Path) -> dict:
+    """The get_data shape movie_record_from_data persists (issue #574: the
+    watcher's scan records the row, so a scan fake must return the full
+    shape), with the category the real get_category computes from the root."""
+    from shrinkray.engine.scan import get_category
+
+    return {
+        "name": movie.stem,
+        "category": get_category(movie, root),
+        "duration": 12.0,
+        "duration_raw": 12.0,
+        "fps": 25.0,
+        "codec": "h264",
+        "bitrate": 1000,
+        "aspect_ratio": "16:9",
+        "dimensions": {"width": 1920, "height": 1080},
+        "crop": None,
+        "hdr": False,
+        "other_codecs": "",
+        "audio_languages": "",
+        "hash": None,
+    }
 
 
 def _isolated_lock(stack, tmp) -> None:
@@ -419,7 +444,6 @@ class TestWatch(unittest.TestCase):
         whatever get_category(root_a, movie) produced)."""
 
         from shrinkray import db
-        from shrinkray.engine import scan as scan_mod
         from shrinkray.engine import watch as watch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -457,19 +481,11 @@ class TestWatch(unittest.TestCase):
                     # ValueError inside this fake, and the recorded row is a
                     # pin on production behavior, not this test's arithmetic
                     scan_roots.append((movie, root))
-                    category = scan_mod.get_category(movie, root)
-                    db.upsert_file(
-                        connection,
-                        db.MovieRecord(
-                            path=movie,
-                            mtime=movie.stat().st_mtime,
-                            size=movie.stat().st_size,
-                            name=movie.name,
-                            category=category,
-                        ),
-                    )
-                    connection.commit()
-                    return {"category": category}, None
+                    # the scan RECORDS now (issue #574): the fake returns the
+                    # full data shape and _scan_into_db's write-back makes the
+                    # row - the fake's own manual upsert was the stand-in for
+                    # the recording this fix adds
+                    return _watch_scan_data(movie, root), None
 
                 stack = ExitStack()
                 with (
@@ -681,6 +697,73 @@ class TestAdaptivePoll(unittest.TestCase):
         self.assertEqual(next_poll_interval(20.0, 5.0, True), 5.0)
 
 
+class TestScanIntoDbRecords(unittest.TestCase):
+    """Issue #574: the watcher's scan-into-db half RECORDS the row - a file
+    the watchdog saw but whose encode job never ran is still catalogued,
+    under the watch root's category (the #231 contract's scan half)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve() / "library"
+        self.root.mkdir()
+        (self.root / "Title").mkdir()
+        self.movie = self.root / "Title" / "film.mkv"
+        self.movie.write_bytes(b"x" * 64)
+        self.db_file = Path(self.tmp.name) / "test.db"
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    _full_data = staticmethod(_watch_scan_data)
+
+    def _recorded(self) -> "sqlite3.Row | None":
+        from shrinkray import db
+
+        connection = db.connect(self.db_file)
+        try:
+            return connection.execute(
+                "SELECT category FROM files WHERE path = ?", (str(self.movie.resolve()),)
+            ).fetchone()
+        finally:
+            connection.close()
+
+    def test_a_scanned_file_is_catalogued_under_its_folder(self) -> None:
+        """The scan records the row even though no encode job ever runs."""
+        from unittest.mock import patch
+
+        from shrinkray.engine import watch as watch_mod
+
+        with patch(
+            "shrinkray.engine.watch.process_movie",
+            side_effect=lambda m, r, c, db_file=None: (self._full_data(m, r), None),
+        ):
+            ok = watch_mod._scan_into_db(self.movie, self.root, self.db_file)
+        self.assertTrue(ok)
+        row = self._recorded()
+        self.assertIsNotNone(row, "the watchdog's scan must leave a catalog row")
+        self.assertEqual(row["category"], "Title")
+
+    def test_a_failed_recording_does_not_fail_the_scan(self) -> None:
+        """The #507/#517 rule: a failed write costs the shortcut, never the
+        measurement - the scan still reports success (the encode job's payload
+        scan records the row instead)."""
+        import sqlite3
+        from unittest.mock import patch
+
+        from shrinkray.engine import watch as watch_mod
+
+        with (
+            patch(
+                "shrinkray.engine.watch.process_movie",
+                side_effect=lambda m, r, c, db_file=None: (self._full_data(m, r), None),
+            ),
+            patch("shrinkray.db.connect", side_effect=sqlite3.DatabaseError("not a database")),
+        ):
+            ok = watch_mod._scan_into_db(self.movie, self.root, self.db_file)
+        self.assertTrue(ok, "a recording failure must not fail the scan")
+        self.assertIsNone(self._recorded())
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -864,7 +947,7 @@ class TestWatchInPlace(unittest.TestCase):
         def failing_scan(movie, root, config, db_file=None):
             if movie.name == "scanfail.mkv":
                 raise OSError("Input/output error")
-            return {"path": str(movie)}, None
+            return _watch_scan_data(movie, root), None
 
         with (
             mock.patch("shrinkray.engine.watch.process_movie", side_effect=failing_scan),
