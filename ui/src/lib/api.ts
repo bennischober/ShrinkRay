@@ -194,6 +194,15 @@ export interface Status {
 }
 
 export interface Config {
+  /** app: how the resident app behaves on boot (issue #434): whether the
+   * boot backlog scan runs, and the daily encode window (both keys set or
+   * neither; empty strings = no window). The route serves the loader's
+   * values, never schema defaults (issue #541). */
+  app?: { auto_backlog?: boolean; encode_window_start?: string; encode_window_end?: string }
+  /** why the config.json on disk is NOT in effect (issue #541): the loader
+   * rejected the file and keeps the previous settings, which are the ones this
+   * object carries. null when the file on disk IS what the engine runs. */
+  config_error?: string | null
   codec?: { hdr?: { color_space?: string[]; color_transfer?: string[] } }
   /** file.output.separator is the canonical key ('seperator' was a deprecated
    * alias the server normalizes away — the dump never carries the typo) */

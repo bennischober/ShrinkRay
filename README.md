@@ -313,10 +313,11 @@ differ by ±1 between runs.
 **HDR estimates (historical rows only) are biased optimistic.** HDR sources are
 skipped since issue #518, so no new HDR estimate is made; plan rows recorded by
 earlier versions still show theirs, and those carry a measured bias (the plan's
-size estimate encodes one early window and HDR samples skew toward easy content,
-so the prediction lands far above the real savings — measured on an HDR 4K
-title: 19.1% real vs 78% predicted). Every surface that shows such an estimate
-carries the note.
+size estimate comes from the probe windows — all of them when the probe cache
+carries their encoded sizes, one window otherwise — and HDR samples skew toward
+easy content, so the prediction lands far above the real savings — measured on an
+HDR 4K title: 19.1% real vs 78% predicted). Every surface that shows such an
+estimate carries the note.
 
 ### `setup` — configure, pause and resume
 
@@ -468,7 +469,13 @@ package-relative lookup: in an installed wheel that directory is not a
 user-writable location. The resident app (`serve`) re-reads the file between
 files, so a saved change applies at the next file without a restart; an edit
 that fails validation is not applied, is logged, and is shown on the dashboard
-while the previous settings stay in effect (issue #247).
+while the previous settings stay in effect (issue #247). The dashboard's Config
+page shows the settings **in effect** — the loader's own values, never a second
+parse of the file (issue #541): a broken `config.json` renders as a banner naming
+the reason (the same sentence `docker logs` carries) above those values, and the
+open dashboard's poll notices a broken edit within seconds rather than waiting for
+the watcher's next file boundary. There is deliberately no fall-back to the code
+defaults on a broken file: the defaults can widen what gets encoded.
 
 **Every value is validated** against a schema (issue #61): an unknown key, a
 string where a boolean belongs, an out-of-range number — each is an **error
