@@ -14,7 +14,7 @@ from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 DEFAULT_ENCODER = "svt_av1"
 HDR_ENCODER = "svt_av1_10bit"
 # HDR size estimates carry a measured, systematic bias (issue #98): the size
-# estimate comes from the probe windows (all of them when the plan cache
+# estimate comes from the probe windows (all of them when the probe cache
 # carries their encoded sizes, one window otherwise — issue #388), and HDR
 # samples skew toward easy content (dark, static), so the predicted ratio
 # lands far below the real one — measured on an HDR 4K title: 19.1% real
@@ -24,8 +24,10 @@ HDR_ENCODER = "svt_av1_10bit"
 # same numbers. Quoted, never recomputed: the factor itself is a
 # measurement this codebase cannot remake without the original title.
 HDR_ESTIMATE_NOTE = (
-    "HDR estimate: measured on one easy-content window; real savings run "
-    "much lower (measured 19.1% real vs 78% predicted on an HDR 4K title)"
+    "HDR estimate: the prediction comes from easy-content probe windows "
+    "(all of them when the probe cache carries their encoded sizes, one "
+    "window otherwise); real savings run much lower (measured 19.1% real vs "
+    "78% predicted on an HDR 4K title)"
 )
 # HDR measurement runs on tone-mapped SDR twins, whose scale sits slightly
 # below the SDR-native one (a Mandalorian sample: CRF 14 = 94.78, CRF 10 =
