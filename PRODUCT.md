@@ -411,12 +411,13 @@ to its quality** and whether its **frame matches its content**.
   plain HTTP, so on an untrusted network put a TLS-terminating reverse proxy in
   front. See the auth roadmap for what is deliberately still out of scope
   (per-user sessions).
-- HDR10 is processed, not supported (issue #358): HDR sources (by default a
-  bt2020nc colour space or a PQ transfer, `codec.hdr`) are neither blocked nor
-  validated. Quality is measured on a tone-mapped SDR
-  copy (VMAF has no HDR model) against a fixed 95.5 target the configured
-  required VMAF does not change (#361), HDR10 metadata survival is not verified
-  per file, and Dolby Vision is not handled (#104).
+- HDR10/HLG is not supported yet (issue #518, the maintainer's #340 decision
+  of 2026-10-31): a source whose transfer characteristic is HDR (PQ or HLG) is
+  skipped as `hdr not supported` — the tone-mapped SDR measurement was not
+  valid for HDR (VMAF has no HDR model; libvmaf's docs say an SDR model on HDR
+  pictures "is not meaningful"). Support returns with libvmaf's HDR models
+  (#519). Dolby Vision is not handled (#104); HDR files encoded by earlier
+  versions keep their originals, recoverable with `shrinkray retained`.
 - VMAF scores are only comparable within one libvmaf version.
 
 ## Brand Commitments

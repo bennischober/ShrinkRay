@@ -239,6 +239,16 @@ def allow_roots(roots: list[Path]) -> None:
     _allowed_roots = [root.resolve() for root in roots]
 
 
+def allowed_roots() -> list[Path]:
+    """Returns the folder roots the API may operate on (a copy).
+
+    These are the same roots the watcher is started with, so a server-side
+    scan can derive a file's category root from the same root the watcher
+    scans under (issue #489).
+    """
+    return list(_allowed_roots)
+
+
 def validate_path(path_str: str, what: str = "path") -> Path:
     """Validates a user-provided path against the allowed roots.
 
@@ -656,7 +666,6 @@ def _conf_to_dict(conf: Conf) -> dict:
         FfmpegSection,
         FileSection,
         HandbrakeSection,
-        HdrSection,
         OutputSection,
         QualitySection,
         ResourcesSection,
@@ -688,12 +697,7 @@ def _conf_to_dict(conf: Conf) -> dict:
             sample_seconds=conf.sample_seconds,
         ),
         resources=ResourcesSection(idle_priority=conf.idle_priority),
-        codec=CodecSection(
-            hdr=HdrSection(
-                color_space=conf.hdr_color_spaces,
-                color_transfer=conf.hdr_color_transfers,
-            )
-        ),
+        codec=CodecSection(),
         eligibility=EligibilitySection(
             min_source_height=conf.min_source_height,
             min_source_width=conf.min_source_width,

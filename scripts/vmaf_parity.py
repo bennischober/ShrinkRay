@@ -2,7 +2,7 @@
 
 The manual leg of the VMAF parity check: `tests/test_vmaf_parity.py` proves the
 recipe on synthetic clips generated at test time, this script runs the SAME
-comparison on real content from `test_media/` - grain, letterboxing, HDR, an
+comparison on real content from `test_media/` - grain, letterboxing, an
 open-GOP source, the things a lavfi clip cannot show. The procedure it serves is
 docs/vmaf-parity.md.
 
@@ -15,16 +15,15 @@ Usage (from the repository root, with the pinned tools on PATH):
     uv run scripts/vmaf_parity.py --pair ref.mkv dis.mkv
     uv run scripts/vmaf_parity.py --pair ref.mkv dis.mkv --label "10-bit"
     uv run scripts/vmaf_parity.py --pair ref.mkv dis.mkv --crop 140,140,0,0
-    uv run scripts/vmaf_parity.py --pair ref.mkv dis.mkv --hdr
 
 Each pair measures ShrinkRay's score and ab-av1's score on the same two files and
 prints the delta. Before scoring, both sides' video frame counts are compared: a
 pair whose counts differ is not comparing the same frames, so it is reported as
 unmeasured and fails the run instead of printing a meaningless number (issue #408).
-The tolerance is |delta| <= 0.1 VMAF (issue #306); an HDR pair is
-measured TWICE - with tone-mapping on (the shipped ShrinkRay path, REPORTED against
-ab-av1's PQ-direct score as the documented deviation in docs/encode-decision.md)
-and with tone-mapping off (the like-for-like comparison, HELD). Results append to
+The tolerance is |delta| <= 0.1 VMAF (issue #306). HDR pairs are not applicable
+since issue #518: HDR sources are skipped before any measurement, so there is no
+ShrinkRay HDR score to compare (the old twice-measured tone-map procedure is
+gone with the chain). Results append to
 test_media/scratch/vmaf_parity.md, so a long run keeps what finished.
 
 ab-av1 is a development tool only: nothing under src/ invokes it, and it is no
@@ -288,7 +287,6 @@ def measure_ours(
     reference: Path,
     distorted: Path,
     crop: tuple[int, int, int, int] | None,
-    hdr: bool,
     cancel: threading.Event | None = None,
 ) -> tuple[float, str]:
     """Measures the pair with ShrinkRay's own measurement boundary.
@@ -297,7 +295,6 @@ def measure_ours(
         reference (Path): The pristine source.
         distorted (Path): The encoded file.
         crop (tuple | None): Crop bars applied to the reference.
-        hdr (bool): Tone-map both inputs to SDR before scoring.
 
     Returns:
         tuple: The score and the recipe identifier it was measured with (the
@@ -306,14 +303,13 @@ def measure_ours(
     """
     with _signal_default_during():
         width, height, bit_depth = pair_dimensions(reference, distorted)
-    recipe = vmaf_recipe(crop=crop, hdr=hdr, width=width, height=height, bit_depth=bit_depth)
+    recipe = vmaf_recipe(crop=crop, width=width, height=height, bit_depth=bit_depth)
     with tempfile.TemporaryDirectory(prefix="shrinkray_parity_") as tmp:
         score = measure_vmaf(
             distorted,
             reference,
             Path(tmp),
             crop=crop,
-            hdr=hdr,
             recipe=recipe,
             cancel=cancel,
         )
@@ -344,19 +340,11 @@ def main() -> int:
         type=parse_crop,
         help="top,bottom,left,right per --pair, in order (omit to keep none)",
     )
-    parser.add_argument(
-        "--hdr",
-        action="append",
-        default=[],
-        type=lambda v: v.lower() in ("1", "true", "yes", "y"),
-        help="true/false per --pair, in order (default false)",
-    )
     args = parser.parse_args()
 
     pairs = [(Path(ref), Path(dis)) for ref, dis in args.pair]
     labels = list(args.label) + [f"pair {i + 1}" for i in range(len(args.pair))]
     crops = list(args.crop) + [None] * len(args.pair)
-    hdrs = list(args.hdr) + [False] * len(args.pair)
 
     for reference, distorted in pairs:
         for path in (reference, distorted):
@@ -378,7 +366,6 @@ def main() -> int:
     for index, (reference, distorted) in enumerate(pairs):
         label = labels[index]
         crop = crops[index]
-        hdr = hdrs[index]
         print(f"\n=== {label} ===")
         # the ffprobe children are not cancel-event aware (a plain
         # subprocess.run) and can run for minutes on a large pair: under
@@ -418,7 +405,7 @@ def main() -> int:
             _append_result_row(RESULT_FILE, rows[-1])
             continue
         try:
-            ours, recipe = measure_ours(reference, distorted, crop, hdr, cancel=cancel)
+            ours, recipe = measure_ours(reference, distorted, crop, cancel=cancel)
         except Cancelled:
             # Ctrl+C during the measurement: the tree is terminated; every
             # earlier pair's row is already appended (issue #431)
@@ -433,26 +420,6 @@ def main() -> int:
         delta = abs(ours - theirs)
         print(f"{label}: ShrinkRay {ours:.4f} vs ab-av1 {theirs:.4f} (delta {delta:.4f})")
         print(f"  recipe: {recipe}")
-        if hdr:
-            # the tone-map is #310's documented deviation: REPORTED, not held
-            rows.append((f"{label} [tone-mapped, reported]", ours, theirs, "reported", recipe))
-            _append_result_row(RESULT_FILE, rows[-1])
-            # the like-for-like comparison: both sides score the PQ signal directly
-            try:
-                ours_pq, recipe_pq = measure_ours(reference, distorted, crop, False, cancel=cancel)
-            except Cancelled:
-                print("cancelled; measured pairs are in the results file")
-                raise SystemExit(130) from None
-            delta_pq = abs(ours_pq - theirs)
-            print(
-                f"{label} [PQ-direct]: ShrinkRay {ours_pq:.4f} vs ab-av1 {theirs:.4f} "
-                f"(delta {delta_pq:.4f})"
-            )
-            rows.append((f"{label} [PQ-direct]", ours_pq, theirs, "", recipe_pq))
-            _append_result_row(RESULT_FILE, rows[-1])
-            if delta_pq > TOLERANCE:
-                failures += 1
-            continue
         rows.append((label, ours, theirs, "", recipe))
         _append_result_row(RESULT_FILE, rows[-1])
         if delta > TOLERANCE:

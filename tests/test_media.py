@@ -2,7 +2,6 @@
 
 import unittest
 
-from shrinkray import config as config_helper
 from shrinkray.tools import ffprobe as read_media
 
 
@@ -78,14 +77,13 @@ class TestReadMedia(unittest.TestCase):
         self.assertEqual(read_media.get_aspect_ratio(3840, 2160), "16x9")
 
     def test_is_hdr(self):
-        config = config_helper.Conf(
-            {"codec": {"hdr": {"color_space": ["bt2020nc"], "color_transfer": ["smpte2084"]}}}
-        )
+        """Issue #518: the detection is code-fixed on the transfer set - no
+        config reaches it; a bt2020nc SDR stream (an SDR transfer) is not HDR."""
         hdr_stream = {"color_space": "bt2020nc", "color_transfer": "smpte2084"}
         sdr_stream = {"color_space": "bt709", "color_transfer": "bt709"}
-        self.assertTrue(read_media.is_hdr(hdr_stream, config))
-        self.assertFalse(read_media.is_hdr(sdr_stream, config))
-        self.assertFalse(read_media.is_hdr({}, config))
+        self.assertTrue(read_media.is_hdr(hdr_stream))
+        self.assertFalse(read_media.is_hdr(sdr_stream))
+        self.assertFalse(read_media.is_hdr({}))
 
 
 if __name__ == "__main__":

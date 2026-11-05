@@ -10,11 +10,11 @@ answers — is this file bigger than its quality requires, and does it carry bar
 | Question | Module | Notes |
 |---|---|---|
 | The CRF search | `search.py` | `bisect_crf`, `probe_crf`, `find_optimal_crf_and_skip`, `SkipEncode`, `DEFAULT_TARGET_VMAF` (re-exported from `config.py`, #252), `DEFAULT_CRF_RANGE = (14, 45)` |
-| The plan: gates, HDR override, reuse | `plan.py` | `plan_quality`, `_lookup_plan`, `SOURCE_CODECS` whitelist, `is_1080p_class`, `MIN_ENCODE_SECONDS = 90.0` |
+| The plan: gates, reuse | `plan.py` | `plan_quality`, `_lookup_plan`, `SOURCE_CODECS` whitelist, `is_1080p_class`, `MIN_ENCODE_SECONDS = 90.0` |
 | Encode + verify + batch loop | `pipeline.py` | `encode_with_quality`, `_encode_with_command`, `check_disk_space` |
 | Black bars, one detector | `crop.py` | keyframe timeline pass + `sustained_runs` + `intersect_crop_rects`; DB-cached; `detect_crop_rect` is the fallback for a pass that learned nothing (issue #525) |
 | Sample windows | `samples.py` | `sample_offsets`, `extract_samples`, `DEFAULT_SAMPLE_EVERY = 600.0` |
-| HDR/SDR encoder choice | `encoders.py` | `encoder_for`, `DEFAULT_ENCODER`/`HDR_ENCODER` |
+| Encoder by bit depth | `encoders.py` | `encoder_for` (>8 bit: `HDR_ENCODER`), `DEFAULT_ENCODER` |
 | Scan -> DB rows | `scan.py` | `scan_movies`, `process_movie`, `resolve_input_paths`; pool `min(8, cpu)` |
 | Inbox watchdog | `watch.py` | `watch`, `_FsWaiter`, `decide`, `next_poll_interval` |
 | One encoder per contended dir | `lock.py` | `guard_encodes`, keyed on the movie's own directory in place; 60 s heartbeat, 5 min silence window; busy raises, never waits |
@@ -28,13 +28,16 @@ then bar detection, then sample extraction, then the CRF search. The only
 difference is the tail: `plan` returns a prediction, `encode` runs the full encode
 and optionally verifies. Sizing permission is a skip, never an error:
 `skipped_reason` is one of `too short`, `resolution too low`, `below min size`,
-`source codec not a candidate`, `no size gain`, `target unreachable`,
-`output not smaller` (`pipeline.py`).
+`source codec not a candidate`, `hdr not supported` (issue #518: the maintainer's
+#340 decision — HDR is not supported until libvmaf's HDR models, #519; the gate keys
+on the TRANSFER characteristic, so a bt2020nc SDR master and 10-bit SDR stay eligible),
+`no size gain`, `target unreachable`, `output not smaller` (`pipeline.py`).
 
-HDR is an override, not a branch: `encoder_for(bit_depth, hdr)` switches to `svt_av1_10bit`
-when the source is 10-bit or HDR and `plan.py` replaces the target and CRF range
-with the HDR pair before any measurement, so every stored fingerprint field carries the
-OVERRIDDEN values.
+HDR is not an override but a skip (issue #518, the maintainer's #340 decision): a
+source with an HDR transfer is refused at the gates (`is_hdr_file`, the code-fixed
+transfer set in `tools/ffprobe.py`) before any sample is measured. `encoder_for(bit_depth)`
+chooses by depth alone; the recipe's `hdr` field stays in the fingerprint (always False)
+so stored SDR plans keep matching while historical `hdr=hable` plans never do.
 
 ## CONVENTIONS
 

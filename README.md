@@ -79,20 +79,19 @@ Nothing is guessed: every decision is measured, and movies that cannot profit
 the resident app) every decision is also recorded, so it is not measured twice.
 
 > [!NOTE]
-> **HDR10 sources are processed, not guaranteed** (issue
-> [#358](https://github.com/bennischober/ShrinkRay/issues/358)). They are
-> neither blocked nor validated: by default (`codec.hdr`) a file whose colour
-> space is bt2020nc or whose transfer is PQ (smpte2084) is treated as HDR, is
-> re-encoded only to 10-bit, and — because VMAF has no HDR model — is measured
-> on a tone-mapped SDR copy of both files against a fixed HDR target of 95.5,
-> which `--target-vmaf` and `quality.target_vmaf` do not change ([#361](https://github.com/bennischober/ShrinkRay/issues/361)). That
-> score is an approximation — on the one real HDR10 pair compared so far it
-> read ~2.9 below the reference tool's, which errs toward larger files, not
-> worse ones ([#340](https://github.com/bennischober/ShrinkRay/issues/340)).
-> Carrying the HDR10 metadata into the output is left to HandBrake's defaults;
-> nothing verifies it survives an encode. Dolby Vision is not handled
-> ([#104](https://github.com/bennischober/ShrinkRay/issues/104)). The original
-> is always kept aside, so check an HDR result before removing it.
+> **HDR sources are not supported yet** (issue
+> [#518](https://github.com/bennischober/ShrinkRay/issues/518), the maintainer's
+> [#340](https://github.com/bennischober/ShrinkRay/issues/340) decision of
+> 2026-10-31). A source whose transfer characteristic is HDR — PQ (`smpte2084`)
+> or HLG (`arib-std-b67`), fixed in code — is skipped as `hdr not supported`:
+> the tone-mapped SDR measurement was not valid for HDR (VMAF has no HDR
+> model; libvmaf's docs say an SDR model on HDR pictures "is not meaningful").
+> 10-bit SDR sources stay fully supported — bit depth is not the problem, the
+> HDR transfer is. Support returns with libvmaf's HDR models
+> ([#519](https://github.com/bennischober/ShrinkRay/issues/519)). Dolby Vision
+> is not handled ([#104](https://github.com/bennischober/ShrinkRay/issues/104)).
+> HDR files encoded by earlier versions keep their originals as
+> `<name>.shrinkray-original`, recoverable with `shrinkray retained`.
 
 ## Quickstart
 
@@ -311,14 +310,13 @@ about the size they measured ([#388](https://github.com/bennischober/ShrinkRay/i
 runs at the probe preset, the encode at the final one, and the chosen CRF can
 differ by ±1 between runs.
 
-**HDR estimates are biased optimistic.** The plan's size estimate comes from
-the probe windows (all of them when the probe cache carries their encoded
-sizes, one window otherwise), and HDR samples skew toward easy content (dark,
-static shots), so the predicted savings land far above the real ones —
-measured on an HDR 4K title: 19.1% real vs 78% predicted. Every surface that
-shows an HDR estimate (the `plan` command, the dashboard's plan display)
-carries this note; plan an HDR title expecting the real number to be much
-smaller than the prediction.
+**HDR estimates (historical rows only) are biased optimistic.** HDR sources are
+skipped since issue #518, so no new HDR estimate is made; plan rows recorded by
+earlier versions still show theirs, and those carry a measured bias (the plan's
+size estimate encodes one early window and HDR samples skew toward easy content,
+so the prediction lands far above the real savings — measured on an HDR 4K
+title: 19.1% real vs 78% predicted). Every surface that shows such an estimate
+carries the note.
 
 ### `setup` — configure, pause and resume
 
@@ -415,23 +413,24 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 
 | # | Gate | Question | Default | If it fails |
 |---|---|---|---|---|
-| 1 | Duration | At least 90 s? | fixed | skip — not a movie |
-| 2 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
-| 3 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
-| 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
-| 5 | Bar detection | Which bars does every sustained segment share? (sampled fallback: only when the pass learned nothing, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
-| 6 | CRF search | Largest CRF (or one step below it) that meets the VMAF target? | 96 | skip — target unreachable |
-| 7 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
-| 8 | Encode | One full encode at the chosen CRF, with the crop | — | — |
+| 1 | HDR | Is the source's transfer characteristic HDR (PQ/HLG, fixed in code — [#518](https://github.com/bennischober/ShrinkRay/issues/518))? | not supported yet | skip — `hdr not supported` (returns with libvmaf's HDR models, [#519](https://github.com/bennischober/ShrinkRay/issues/519)) |
+| 2 | Duration | At least 90 s? | fixed | skip — not a movie |
+| 3 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
+| 4 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
+| 5 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
+| 6 | Bar detection | Which bars does every sustained segment share? (sampled fallback: only when the pass learned nothing, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
+| 7 | CRF search | Largest CRF (or one step below it) that meets the VMAF target? | 96 | skip — target unreachable |
+| 8 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
+| 9 | Encode | One full encode at the chosen CRF, with the crop | — | — |
 
 The two rows people ask about:
 
-- **Rows 2-4 are the "not worth it" gates**: a 480p DVD rip
-  fails row 2 today, an MPEG-2/Xvid/VC-1 rip fails row 4, and a small file
-  fails row 3 the moment you set a floor. All three are config keys under
+- **Rows 3-5 are the "not worth it" gates**: a 480p DVD rip
+  fails row 3 today, an MPEG-2/Xvid/VC-1 rip fails row 5, and a small file
+  fails row 4 the moment you set a floor. All three are config keys under
   `eligibility`, and all three are checked before any ffmpeg probe runs — a
   skipped file costs one `ffprobe`, not an encode.
-- **Row 7 is the real answer to "is this file already efficient?"**: the
+- **Row 8 is the real answer to "is this file already efficient?"**: the
   search measures a size probe at the most aggressive CRF, then decides at
   the chosen CRF from the encoded byte counts the VMAF probes already
   recorded for every window (a pre-#314 cache falls back to one encoded
@@ -503,9 +502,6 @@ Example [config.json](config.json):
     },
     "resources": {
         "idle_priority": true       // encodes run below normal priority
-    },
-    "codec": {
-        "hdr": { "color_space": ["bt2020nc"], "color_transfer": ["smpte2084"] }  // the defaults; an empty list means "nothing is HDR"
     },
     "app": {
         "auto_backlog": false,     // start scan -> plan -> encode on boot

@@ -345,6 +345,10 @@ def record_from_cache(row: sqlite3.Row) -> dict:
         "hdr": bool(row["hdr"]),
         "other_codecs": row["other_codecs"],
         "audio_languages": row["audio_languages"],
+        # the row IS the file's stored data: a cache-hit write-back must not
+        # null the stored hash (issue #573) - the upsert would otherwise
+        # overwrite it with data.get("hash") => None
+        "hash": row["hash"],
         "size": size,
         "compression_rate": compression_rate,
     }

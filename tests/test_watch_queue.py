@@ -122,19 +122,14 @@ class TestWatcherSubmitsToTheQueue(unittest.TestCase):
             raise AssertionError("the queue owns the encode; the watcher must not encode")
 
         def fake_scan(filename, root, config, **kwargs):
-            # the real process_movie writes the row itself; the mock must
-            # preserve that behaviour or the assertion below tests nothing
-            db.upsert_file(
-                self.connection,
-                db.MovieRecord(
-                    path=filename,
-                    mtime=filename.stat().st_mtime,
-                    size=filename.stat().st_size,
-                    name="one",
-                    category="movies",
-                ),
-            )
-            return {"name": "one", "category": "movies"}, None
+            # the scan RECORDS now (issue #574): _scan_into_db's write-back
+            # makes the row from the returned data, so the fake returns the
+            # full record shape - the old manual upsert stood in for the
+            # recording this fix adds, and its comment taught the false
+            # claim that process_movie writes the row itself
+            from tests.test_watch import _watch_scan_data
+
+            return _watch_scan_data(filename, root), None
 
         stack = ExitStack()
         with (
