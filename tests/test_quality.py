@@ -2379,9 +2379,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         sample.write_bytes(b"m" * 100)  # the all-window factor stats the sample
         db_file = Path(root) / "meta.db"
         connection = db_mod.connect(db_file)
-        recipe = tools_vmaf.vmaf_recipe(
-            crop=None, hdr=False, width=1920, height=1080, bit_depth=None
-        )
+        recipe = tools_vmaf.vmaf_recipe(crop=None, width=1920, height=1080, bit_depth=None)
         key = engine_search.probe_cache_key(
             self.movie,
             10.0,
@@ -2390,7 +2388,6 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
             "svt_av1",
             "5",
             None,
-            False,
             None,
             ("hb", "1.6"),
             recipe.identifier(),
@@ -3363,7 +3360,7 @@ class TestHdrSkip(unittest.TestCase):
         from shrinkray import config as config_helper
         from shrinkray.engine.plan import plan_quality
 
-        probed = Mock(return_value=(20, 96.0, [], False))
+        probed = Mock(return_value=(20, 96.0, [], False, 0.5))
         # the REAL seam: run_ffprobe returns the raw ffprobe JSON, so the
         # real get_data -> get_video_stream -> is_hdr path runs (the reviewer's
         # round-1 proof: a mock of get_data itself hid the gate's dead shape)
@@ -3375,7 +3372,6 @@ class TestHdrSkip(unittest.TestCase):
             patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
             patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
             patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
-            patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
         ):
             result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
         return result, probed
@@ -3415,7 +3411,7 @@ class TestHdrSkip(unittest.TestCase):
         from shrinkray import config as config_helper
         from shrinkray.engine.pipeline import encode_with_quality
 
-        probed = Mock(return_value=(20, 96.0, [], False))
+        probed = Mock(return_value=(20, 96.0, [], False, 0.5))
         raw = {
             "streams": [
                 {
@@ -3462,7 +3458,7 @@ class TestHdrSkip(unittest.TestCase):
         from shrinkray import config as config_helper
         from shrinkray.engine.plan import plan_quality
 
-        probed = Mock(return_value=(20, 96.0, [], False))
+        probed = Mock(return_value=(20, 96.0, [], False, 0.5))
         captured: list[str] = []
         sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
         try:
@@ -3480,7 +3476,6 @@ class TestHdrSkip(unittest.TestCase):
             patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
             patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
             patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
-            patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
         ):
             result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
         self.assertEqual(result.skipped_reason, "hdr not supported")
