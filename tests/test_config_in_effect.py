@@ -108,6 +108,58 @@ class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
         self.assertEqual(response.json()["quality"]["target_vmaf"], 94)
         self.assertIn("not applied", response.json()["config_error"])
 
+    def test_every_conf_attribute_round_trips_through_the_route(self) -> None:
+        """Round-4's observation, made a pin: three review rounds each found
+        one omitted Conf attribute (target_vmaf, the app section, the
+        handbrake language filters) because nothing compared the loader's
+        settings against the route's dict end to end. This test loads every
+        section with distinctive values and asserts the route serves them
+        all - a new Conf attribute with no pass-through fails here."""
+
+        self._load(
+            "{"
+            '"file": {"extensions": [".mkv", ".mp4"], "output": {"separator": ";"}},'
+            '"ffmpeg": {"black_bars": {"MIN_WIDTH": 25, "MIN_HEIGHT": 26}, "crop_sample_count": 11},'
+            '"handbrake": {"preset": "P 5", "encoder": "svt_av1", "encoder_preset": "7",'
+            '  "max_threads": 4, "stall_minutes": 12.5,'
+            '  "audio_languages": ["ger"], "subtitle_languages": ["eng"]},'
+            '"quality": {"target_vmaf": 93.5, "sample_every": 700, "sample_count": 4, "sample_seconds": 12},'
+            '"resources": {"idle_priority": false},'
+            '"app": {"auto_backlog": true, "encode_window_start": "01:00", "encode_window_end": "02:00"},'
+            '"eligibility": {"min_source_height": 2160, "min_source_size_gb": 2,'
+            '  "candidate_codecs": ["h264", "hevc"]},'
+            '"language": "de"'
+            "}"
+        )
+        conf = config_module.refresh_config()
+        body = TestClient(fast_app).get("/api/config").json()
+
+        self.assertEqual(body["file"]["extensions"], conf.extensions)
+        self.assertEqual(body["file"]["output"]["separator"], conf.separator)
+        self.assertEqual(body["ffmpeg"]["black_bars"]["MIN_WIDTH"], conf.black_bar_min_width)
+        self.assertEqual(body["ffmpeg"]["black_bars"]["MIN_HEIGHT"], conf.black_bar_min_height)
+        self.assertEqual(body["ffmpeg"]["crop_sample_count"], conf.crop_sample_count)
+        self.assertEqual(body["handbrake"]["preset"], conf.handbrake_preset)
+        self.assertEqual(body["handbrake"]["encoder"], conf.handbrake_encoder)
+        self.assertEqual(body["handbrake"]["encoder_preset"], conf.handbrake_encoder_preset)
+        self.assertEqual(body["handbrake"]["max_threads"], conf.handbrake_max_threads)
+        self.assertEqual(body["handbrake"]["stall_minutes"], conf.handbrake_stall_minutes)
+        self.assertEqual(body["handbrake"]["audio_languages"], conf.handbrake_audio_languages)
+        self.assertEqual(body["handbrake"]["subtitle_languages"], conf.handbrake_subtitle_languages)
+        self.assertEqual(body["quality"]["target_vmaf"], conf.target_vmaf)
+        self.assertEqual(body["quality"]["sample_every"], conf.sample_every)
+        self.assertEqual(body["quality"]["sample_count"], conf.sample_count)
+        self.assertEqual(body["quality"]["sample_seconds"], conf.sample_seconds)
+        self.assertEqual(body["resources"]["idle_priority"], conf.idle_priority)
+        self.assertEqual(body["app"]["auto_backlog"], conf.auto_backlog)
+        self.assertEqual(body["app"]["encode_window_start"], conf.encode_window_start)
+        self.assertEqual(body["app"]["encode_window_end"], conf.encode_window_end)
+        self.assertEqual(body["eligibility"]["min_source_height"], conf.min_source_height)
+        self.assertEqual(body["eligibility"]["min_source_width"], conf.min_source_width)
+        self.assertEqual(body["eligibility"]["min_source_size_gb"], conf.min_source_size_gb)
+        self.assertEqual(body["eligibility"]["candidate_codecs"], conf.candidate_codecs)
+        self.assertEqual(body["language"], conf.language)
+
     def test_the_handbrake_language_filters_ride_the_route(self) -> None:
         """Round-3 finding 1: _conf_to_dict omitted the handbrake audio/subtitle
         language filters, so the route served [] while the loader held the
