@@ -634,6 +634,17 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
 
             env = dict(os.environ)
             env["PATH"] = f"{stubs}:{env.get('PATH', '')}"
+            # the stability witness is a SUBPROCESS here (issue #537): the
+            # suite's in-process constant patches cannot reach the child, and
+            # the spawn deadline below must not measure the witness's 30 s
+            # size-check sleep (the fixture is aged past STABLE_MIN_AGE, so
+            # the age gate is already satisfied - only the interval sleep
+            # remains, and the test's subject is the signal, not stability).
+            # The test-only env override (watch.py's comment) zeroes both
+            # constants in the child; no retry wrapper, the wait stays
+            # bounded - it just stops measuring a sleep nobody is testing.
+            env["SHRINKRAY_STABLE_CHECK_INTERVAL"] = "0"
+            env["SHRINKRAY_STABLE_MIN_AGE"] = "0"
             proc = subprocess.Popen(
                 [
                     sys.executable,
@@ -702,6 +713,12 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
             finally:
                 if proc.poll() is None:
                     proc.kill()
+                    # reap: an unreaped kill leaves returncode None and the
+                    # Popen's __del__ warns "still running" - the resource
+                    # guard (issue #510/#548) turns that into an error at
+                    # the NEXT test's setup (measured in the 32-spinner
+                    # round on the 545 branch, 2026-11-04)
+                    proc.wait()
                 # a failed run must not leave the stub encoding in its own
                 # session: find it by its unique path and end it by pid
                 leftover = subprocess.run(
@@ -1367,3 +1384,145 @@ class TestStartupBacklog(unittest.TestCase):
         state = self._state()
         self.assertEqual(app_module.auto_backlog(state, [], enabled=True), [])
         self.assertFalse(state.queue.enqueue.called)
+
+
+class TestDurationEnvGuard(unittest.TestCase):
+    """`_duration_env`'s guard is total (issue #537's review): every
+    `float()`-accepted non-duration - nan, inf, negative, too large for
+    time.sleep, garbage - falls back to the default; a valid override wins.
+    The SIGHUP test depends on the `0` case; the resident watcher's safety
+    depends on the -5 case never reaching is_stable."""
+
+    def test_every_non_duration_falls_back_to_the_default(self) -> None:
+        from shrinkray.engine.watch import _duration_env
+
+        for raw in ("nan", "inf", "-inf", "-5", "1e10", "86401", "banana", ""):
+            with mock.patch.dict(os.environ, {"X": raw}):
+                self.assertEqual(
+                    _duration_env("X", 60.0),
+                    60.0,
+                    f"{raw!r} must fall back to the default",
+                )
+
+    def test_a_valid_override_wins(self) -> None:
+        from shrinkray.engine.watch import _duration_env
+
+        for raw, want in (("0", 0.0), ("0.5", 0.5), ("86400", 86400.0)):
+            with mock.patch.dict(os.environ, {"X": raw}):
+                self.assertEqual(_duration_env("X", 60.0), want)
+
+
+class TestStableSeamWiring(unittest.TestCase):
+    """The env seam's wiring: both REAL constant names take the override
+    (issue #537's round-4 review finding 2 — the guard tests use a
+    fabricated name, so a typo'd initializer left the suite green while
+    the SIGHUP test measured 30 s sleeps again). Reloads the module with
+    the vars set and restores it; the SIGHUP test's child reads the same
+    names at ITS import, so this pins the names the child depends on."""
+
+    def test_both_real_constant_names_take_the_override(self) -> None:
+        import importlib
+
+        from shrinkray.engine import watch as watch_mod
+
+        env = {
+            "SHRINKRAY_STABLE_CHECK_INTERVAL": "7",
+            "SHRINKRAY_STABLE_MIN_AGE": "13",
+        }
+        saved_interval, saved_age = watch_mod.STABLE_CHECK_INTERVAL, watch_mod.STABLE_MIN_AGE
+        try:
+            with mock.patch.dict(os.environ, env):
+                reloaded = importlib.reload(watch_mod)
+                self.assertEqual(reloaded.STABLE_CHECK_INTERVAL, 7.0)
+                self.assertEqual(reloaded.STABLE_MIN_AGE, 13.0)
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("SHRINKRAY_STABLE_CHECK_INTERVAL", None)
+                os.environ.pop("SHRINKRAY_STABLE_MIN_AGE", None)
+                reloaded = importlib.reload(watch_mod)
+                self.assertEqual(reloaded.STABLE_CHECK_INTERVAL, 30.0)
+                self.assertEqual(reloaded.STABLE_MIN_AGE, 60.0)
+        finally:
+            # restore ABSENCE, not the saved values: the suite isolates the
+            # vars (conftest's pytest_configure), so a test that leaves them
+            # set leaks a pin into every later test that asserts the defaults
+            # (round-5 review finding 3)
+            os.environ.pop("SHRINKRAY_STABLE_CHECK_INTERVAL", None)
+            os.environ.pop("SHRINKRAY_STABLE_MIN_AGE", None)
+            importlib.reload(watch_mod)
+            self.assertEqual(watch_mod.STABLE_CHECK_INTERVAL, saved_interval)
+            self.assertEqual(watch_mod.STABLE_MIN_AGE, saved_age)
+
+    def test_the_constants_are_wired_through_the_guard(self) -> None:
+        """The initializer must run the constants through _duration_env
+        (round-5 review finding 2): an initializer that assigns a literal
+        bypasses the guard, and SHRLNK... -5 would reach is_stable as -5.0
+        with every value-assertion green."""
+        import inspect
+
+        from shrinkray.engine import watch as watch_mod
+
+        source = inspect.getsource(watch_mod)
+        self.assertIn("STABLE_CHECK_INTERVAL = _duration_env(", source)
+        self.assertIn("STABLE_MIN_AGE = _duration_env(", source)
+
+
+class TestRetainedCommand(unittest.TestCase):
+    """The retained command's missing-database error (issue #524): the CLI
+    defines no scan command, so the error names what actually creates the
+    database and what a run without one leaves behind."""
+
+    def test_a_missing_database_names_the_real_producers(self) -> None:
+        from loguru import logger
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "fresh.db"
+            captured: list[str] = []
+            sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+            try:
+                runner = CliRunner()
+                result = runner.invoke(app, ["retained", "list", "--db", str(missing)])
+            finally:
+                logger.remove(sink_id)
+        text = "".join(captured)
+        self.assertEqual(result.exit_code, 1, text)
+        self.assertIn("not found", text)
+        self.assertIn("serve", text, "the resident command that creates the database is named")
+        self.assertIn("--db", text, "the flag that makes a run record is named")
+        self.assertIn(
+            "encode or plan",
+            text,
+            "the runs that create a database are named (doctor/setup do not)",
+        )
+        self.assertIn(
+            ".shrinkray-original", text, "what a run without a database leaves behind is named"
+        )
+        self.assertNotIn("scan", text, "the CLI defines no scan command (issue #524)")
+
+
+class TestThreadsHelp(unittest.TestCase):
+    """The --threads help states the fallback the code performs, and no help
+    string still advertises a "Quality mode" (issue #202 removed it; #528)."""
+
+    def test_the_threads_help_states_the_fallback(self) -> None:
+        runner = CliRunner()
+        for command in ("encode", "plan"):
+            result = runner.invoke(app, [command, "--help"])
+            self.assertEqual(result.exit_code, 0, result.output)
+            # rich wraps the help at spaces: assert on fragments that stay
+            # one token
+            self.assertIn(
+                "handbrake.max_threads",
+                result.output,
+                f"{command}'s --threads help names the fallback",
+            )
+            self.assertNotIn("(0 = all cores)", result.output)
+            self.assertNotIn("Quality", result.output, f"{command}'s help strings")
+
+    def test_cap_threads_config_value_semantics(self) -> None:
+        """The fallback's target: the config's cap is used as-is; its 0 means
+        all cores (cap_threads returns None, the encoder runs uncapped)."""
+        from shrinkray.engine.pipeline import cap_threads
+
+        self.assertEqual(cap_threads(4), 4)
+        self.assertIsNone(cap_threads(0))
+        self.assertIsNone(cap_threads(None))

@@ -273,8 +273,8 @@ class TestEncode(unittest.TestCase):
         lives in one function and every caller reads it from there. Since
         issue #234 the source's bit depth joins the decision.
         """
-        self.assertEqual(engine_encoders.encoder_for(8, False), "svt_av1")
-        self.assertEqual(engine_encoders.encoder_for(10, True), "svt_av1_10bit")
+        self.assertEqual(engine_encoders.encoder_for(8), "svt_av1")
+        self.assertEqual(engine_encoders.encoder_for(10), "svt_av1_10bit")
 
     def test_no_handbrake_command_emits_h264_or_h265(self):
         """No code path emits H.264 or H.265 any more (issue #21).
@@ -290,7 +290,7 @@ class TestEncode(unittest.TestCase):
                 Path("in.mkv"),
                 Path("out.mkv"),
                 30,
-                engine_encoders.encoder_for(8, False),
+                engine_encoders.encoder_for(8),
                 "3",
             ),
             tools_handbrake.build_encode_command(
@@ -298,7 +298,7 @@ class TestEncode(unittest.TestCase):
                 Path("in.mkv"),
                 Path("out.mkv"),
                 30,
-                engine_encoders.encoder_for(10, True),
+                engine_encoders.encoder_for(10),
                 "3",
             ),
         ):
@@ -900,8 +900,18 @@ class TestEncodeLock(unittest.TestCase):
 
     def test_the_heartbeat_keeps_a_held_slot_alive(self):
         """The holder touches the lock while it runs, so the stale window
-        measures silence: a slot held past the window is still ours
-        (issue #383)."""
+        measures silence: a slot held PAST the window is still ours
+        (issue #383). The wait proceeds on the BEAT the test is waiting
+        for — a beat landing AFTER the stale window has elapsed since
+        acquisition — not on a wall-clock guess that the daemon thread got
+        scheduled (issue #545: under full-suite CPU stress a 0.2 s sleep
+        guaranteed nothing, the lock aged stale and the rival legitimately
+        stole the slot). The wait exits only on a beat strictly past the
+        window: a heartbeat that beats once BEFORE the window and then
+        stops fails here; what the wait proves is that a fresh beat exists
+        at assertion time even after the window elapsed — not a cadence
+        guarantee (a continuity assertion would be load-fragile by
+        nature)."""
         from shrinkray.engine import lock as lock_mod
 
         with (
@@ -909,7 +919,21 @@ class TestEncodeLock(unittest.TestCase):
             mock.patch.object(lock_mod, "_LOCK_STALE_SECONDS", 0.05),
             lock_mod.guard_encodes(self.out, holder="test") as held,
         ):
-            time.sleep(0.2)
+            acquired = held.stat().st_mtime
+            # the assertion must hold the slot PAST the stale window (the
+            # #383 contract): wait for a beat whose mtime is later than
+            # acquisition + the window. 0.01 s beats against a 0.05 s window
+            # put that beat at ~0.06 s; allow ~100x scheduling slack and
+            # fail loudly if the heartbeat stopped before then (that is the
+            # defect this test exists to catch, not something to wait out)
+            deadline = time.monotonic() + 1.0
+            while held.stat().st_mtime <= acquired + lock_mod._LOCK_STALE_SECONDS:
+                if time.monotonic() >= deadline:
+                    self.fail("the heartbeat did not keep the slot alive past the stale window")
+                time.sleep(0.005)
+            # a beat landed strictly past the window: the lock is provably
+            # fresh at assertion time, so a rival's acquisition must be
+            # refused
             with self.assertRaises(lock_mod.EncodeBusyError):
                 lock_mod.acquire_encode_slot(self.out, holder="rival")
         self.assertFalse(held.exists())
@@ -1464,10 +1488,9 @@ class TestEncodeLock(unittest.TestCase):
         self.assertIn("model=vmaf_v0.6.1.json", base.identifier())
         self.assertIn("fmt=yuv420p", base.identifier())
         self.assertIn("hdr=no", base.identifier())
-        # a different model / pixel format / tone-map => a different identifier
+        # a different model / pixel format => a different identifier
         self.assertNotEqual(base.identifier(), vmaf_recipe(width=3840, height=2160).identifier())
         self.assertNotEqual(base.identifier(), vmaf_recipe(bit_depth=10).identifier())
-        self.assertNotEqual(base.identifier(), vmaf_recipe(hdr=True).identifier())
         # the plan fingerprint ignores the crop-dependent model/scale: the plan
         # lookup runs before bar detection and cannot know them
         self.assertEqual(
@@ -1783,3 +1806,67 @@ class TestSubprocessTimeouts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEncodeOutcomeLine(unittest.TestCase):
+    """Issue #471: the transcript is silent from 'Chosen CRF n' until the
+    verification line hours later; the outcome line names the file, the CRF
+    and the output size."""
+
+    def test_the_outcome_line_names_the_result(self) -> None:
+        import tempfile
+        from unittest.mock import patch
+
+        from loguru import logger
+
+        from shrinkray.engine import pipeline as engine_pipeline
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "movie.mkv"
+            src.write_bytes(b"x" * 64)
+            out = Path(tmp) / "out.mkv"
+
+            def fake_encode(input_file, output_file, command, progress=None, **kwargs):
+                output_file.write_bytes(b"x" * 32)
+                return engine_pipeline.EncodeResult(
+                    input=input_file, output=output_file, success=True
+                )
+
+            captured: list[str] = []
+            sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+            try:
+                with (
+                    patch.object(
+                        engine_pipeline,
+                        "_source_snapshot",
+                        return_value={
+                            "width": 1920,
+                            "height": 1080,
+                            "codec": "h264",
+                            "duration": 6000.0,
+                            "bit_depth": 8,
+                            "bitrate": None,
+                        },
+                    ),
+                    patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=6000.0),
+                    patch.object(engine_pipeline, "source_codec", return_value="h264"),
+                    patch.object(
+                        engine_pipeline, "_probe_movie", return_value=(20, 96.0, [], None)
+                    ),
+                    patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode),
+                    patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+                ):
+                    result = engine_pipeline.encode_with_quality(
+                        src,
+                        out,
+                        target_vmaf=95.0,
+                        encoder="svt_av1",
+                        verify=False,
+                    )
+            finally:
+                logger.remove(sink_id)
+            self.assertTrue(result.success, result.error)
+            text = "".join(captured)
+            self.assertIn("Encode result for 'movie.mkv'", text, text)
+            self.assertIn("CRF 20", text, text)
+            self.assertIn("50% of source", text, text)

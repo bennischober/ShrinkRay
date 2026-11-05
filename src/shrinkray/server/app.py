@@ -9,6 +9,7 @@ Run with `shrinkray serve` (the resident mode; `app` stays as a hidden alias).
 
 import hmac
 import json
+import logging
 import os
 import os.path
 import queue
@@ -29,7 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
-from shrinkray.config import Conf, load_config
+from shrinkray.config import Conf, encode_window_open, load_config, refresh_config
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import cap_threads
@@ -202,7 +203,9 @@ async def log_requests(
         )
         raise
     duration = (_time.perf_counter() - start) * 1000
-    if request.url.path.startswith("/api"):
+    # the healthcheck polls /api/status every 30 s (issue #471): two lines
+    # per poll carried no operator signal and dominated docker logs
+    if request.url.path.startswith("/api") and request.url.path != "/api/status":
         log(f"{request.method} {request.url.path} -> {response.status_code} ({duration:.0f}ms)")
     return response
 
@@ -214,6 +217,18 @@ async def log_requests(
 _allowed_roots: list[Path] = []
 
 
+class _StatusAccessFilter(logging.Filter):
+    """Drops uvicorn's access lines for the healthcheck's /api/status polls.
+
+    The Dockerfile's 30-second healthcheck produced two lines per poll (the
+    middleware's and uvicorn's own); neither carries operator signal and
+    together they dominated every captured log (issue #471).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/api/status" not in record.getMessage()
+
+
 def allow_roots(roots: list[Path]) -> None:
     """Sets the folder roots the API may operate on.
 
@@ -222,6 +237,16 @@ def allow_roots(roots: list[Path]) -> None:
     """
     global _allowed_roots
     _allowed_roots = [root.resolve() for root in roots]
+
+
+def allowed_roots() -> list[Path]:
+    """Returns the folder roots the API may operate on (a copy).
+
+    These are the same roots the watcher is started with, so a server-side
+    scan can derive a file's category root from the same root the watcher
+    scans under (issue #489).
+    """
+    return list(_allowed_roots)
 
 
 def validate_path(path_str: str, what: str = "path") -> Path:
@@ -375,6 +400,17 @@ class AppState:
         The result column stays NULL (live progress was never persisted):
         the row becomes a plain failed-trail entry.
         """
+        # announce each recovered row (issue #471): the one event that
+        # explains why the previous run's work stopped is the one event the
+        # transcript omitted
+        rows = self.connection.execute(
+            "SELECT id, kind, started_at FROM jobs WHERE state = ?", ("running",)
+        ).fetchall()
+        for row in rows:
+            log(
+                f"Recovering job #{row['id']} ({row['kind']}) started "
+                f"{row['started_at']}: interrupted by app restart"
+            )
         self.connection.execute(
             "UPDATE jobs SET state = ?, error = ?, result = NULL, "
             "finished_at = datetime('now') WHERE state = ?",
@@ -606,7 +642,6 @@ def _conf_to_dict(conf: Conf) -> dict:
         FfmpegSection,
         FileSection,
         HandbrakeSection,
-        HdrSection,
         OutputSection,
         QualitySection,
         ResourcesSection,
@@ -639,12 +674,7 @@ def _conf_to_dict(conf: Conf) -> dict:
             sample_seconds=conf.sample_seconds,
         ),
         resources=ResourcesSection(idle_priority=conf.idle_priority),
-        codec=CodecSection(
-            hdr=HdrSection(
-                color_space=conf.hdr_color_spaces,
-                color_transfer=conf.hdr_color_transfers,
-            )
-        ),
+        codec=CodecSection(),
         eligibility=EligibilitySection(
             min_source_height=conf.min_source_height,
             min_source_width=conf.min_source_width,
@@ -715,6 +745,23 @@ def retained_list(conn: sqlite3.Connection = Depends(db_access)) -> list[dict]:
     ]
 
 
+def _encode_window_state() -> str | None:
+    """The daily encode window's state for the status payload (issue #434).
+
+    Returns:
+        str | None: "open" or "closed" when a window is configured, None
+            when no window is set (the dashboard renders nothing then).
+    """
+    config = refresh_config()
+    if not config.encode_window_start:
+        return None
+    return (
+        "open"
+        if encode_window_open(config.encode_window_start, config.encode_window_end)
+        else "closed"
+    )
+
+
 def _reveal_available() -> bool:
     """Whether this host can open a file manager window (issue #239).
 
@@ -770,6 +817,9 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         # why no new file starts (the operator's pause or a manual encode,
         # issue #250), or None while the app works normally
         "paused": pause_reason(s.db_file.resolve().parent),
+        # the daily encode window (issue #434): the dashboard must not be
+        # unaware of why nothing starts (open/closed, or None unconfigured)
+        "encode_window": _encode_window_state(),
         # the reveal capability (issue #239): a container has no desktop and
         # no opener binary, so the button hides instead of promising a
         # folder window that would end in a 500
@@ -956,6 +1006,7 @@ def snapshot(
             # (#250) and the reveal button (#239)
             "config_error": config_module.config_error,
             "paused": pause_reason(s.db_file.resolve().parent),
+            "encode_window": _encode_window_state(),
             "reveal_available": _reveal_available(),
         },
         "jobs": None if jobs_unchanged else [j.to_dict() for j in data["jobs"]],
@@ -1401,6 +1452,9 @@ def _serve_forever(host: str, port: int) -> None:
     config = uvicorn.Config(
         app, host=host, port=port, log_level="info", timeout_graceful_shutdown=15
     )
+    # the healthcheck's /api/status polls must not dominate the transcript
+    # (issue #471): the middleware drops its own line, this drops uvicorn's
+    logging.getLogger("uvicorn.access").addFilter(_StatusAccessFilter())
     _ServerWithAppShutdown(config).run()
 
 
@@ -1602,6 +1656,8 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
             crop_sample_count=config.crop_sample_count,
             audio_languages=list(config.handbrake_audio_languages),
             subtitle_languages=list(config.handbrake_subtitle_languages),
+            encode_window_start=config.encode_window_start,
+            encode_window_end=config.encode_window_end,
         )
 
     def submit_watch_candidate(movie: Path) -> bool:

@@ -33,6 +33,9 @@ from shrinkray.engine.crop import (
     MIN_BAR_PERCENT as MIN_BAR_PERCENT,
 )
 from shrinkray.engine.crop import (
+    crop_bars_or_fallback,
+)
+from shrinkray.engine.crop import (
     detect_crop_rect as detect_crop_rect,
 )
 from shrinkray.engine.crop import (
@@ -40,12 +43,6 @@ from shrinkray.engine.crop import (
 )
 from shrinkray.engine.encoders import (
     DEFAULT_ENCODER as DEFAULT_ENCODER,
-)
-from shrinkray.engine.encoders import (
-    DEFAULT_HDR_TARGET_VMAF as DEFAULT_HDR_TARGET_VMAF,
-)
-from shrinkray.engine.encoders import (
-    HDR_ENCODER as HDR_ENCODER,
 )
 from shrinkray.engine.encoders import (
     encoder_for as encoder_for,
@@ -84,9 +81,6 @@ from shrinkray.engine.plan import (
     is_1080p_class as is_1080p_class,
 )
 from shrinkray.engine.plan import (
-    is_hdr_file as is_hdr_file,
-)
-from shrinkray.engine.plan import (
     plan_quality as plan_quality,
 )
 from shrinkray.engine.plan import (
@@ -109,9 +103,6 @@ from shrinkray.engine.samples import (
 )
 from shrinkray.engine.search import (
     DEFAULT_CRF_RANGE as DEFAULT_CRF_RANGE,
-)
-from shrinkray.engine.search import (
-    DEFAULT_HDR_CRF_RANGE as DEFAULT_HDR_CRF_RANGE,
 )
 from shrinkray.engine.search import (
     DEFAULT_TARGET_VMAF as DEFAULT_TARGET_VMAF,
@@ -205,8 +196,8 @@ def cap_threads(max_threads: int | None) -> int | None:
             negative values are also treated as no cap).
 
     Returns:
-        int | None: The thread count for HandBrake's --encopts threads=N,
-            None when uncapped.
+        int | None: The thread count for HandBrake's ``--encopts pin=N``
+            option (the SVT-AV1 pin; None when uncapped).
     """
     if max_threads is None or max_threads <= 0:
         return None
@@ -777,6 +768,23 @@ def _encode_with_command(
                 except subprocess.TimeoutExpired:
                     popen.kill()
                     returncode = popen.wait(timeout=10)
+                # wait() reaps the child but closes NO pipe object: the
+                # reader threads reached EOF (the loop ended on the
+                # sentinel), so their FileIO objects stay open and the GC
+                # raises `ResourceWarning: unclosed file` at the call site -
+                # one leak per clean streamed encode, test and product paths
+                # alike (issue #510). stdout is already closed above; stderr
+                # is the leak. NORMALLY at EOF when we get here — but an
+                # orphan grandchild holding stderr's write end can keep the
+                # drain thread blocked in read() past this call (measured,
+                # review finding 2): the bounded join may time out, the
+                # close below still closes the FileIO (the warning is gone),
+                # and the blocked reader then exits EITHER at its EOF
+                # sentinel (the orphan exits without writing) or through its
+                # except (ValueError, OSError) (the orphan writes after our
+                # close) — measured both shapes, round-2 review finding 3.
+                stderr_thread.join(timeout=5)
+                popen.stderr.close()
             else:
                 # terminated mid-stream: close our pipe ends so the reader
                 # threads unblock even if an orphan still holds the write
@@ -956,7 +964,6 @@ def _probe_movie(
     sample_seconds: float,
     encoder: str,
     probe_encoder_preset: str,
-    hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
@@ -979,7 +986,6 @@ def _probe_movie(
         probe_encoder_preset (str): The PROBE's encoder speed preset (a
             measurement setting, issue #22).
         crop_sample_count (int): cropdetect windows per movie.
-        hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encodes
@@ -1015,23 +1021,24 @@ def _probe_movie(
         # is already re-encoding every frame, so the crop is free here and a
         # file with no bars simply proceeds uncropped. The timeline detector
         # is the one bar measurement (issue #181), cached per file version;
-        # the sampled detector is the fallback for stateless runs.
+        # the sampled detector is the fallback for a pass that learned nothing (issue #525).
         summary = detect_crop_summary_cached(input_file, db_file, cancel=cancel)
-        if summary is None or summary.bars is None:
-            crop = detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel)
-        else:
-            crop = summary.bars
+        # the measured "no common bars" verdict stands (issue #525): the
+        # sampled detector runs only for a pass that learned nothing
+        crop = crop_bars_or_fallback(
+            summary,
+            lambda: detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel),
+        )
         if crop is not None:
             log(
                 f"Removing stable black bars of '{input_file.name}': "
                 f"top {crop[0]}, bottom {crop[1]}, left {crop[2]}, right {crop[3]}"
             )
         # the measurement recipe follows the source's dimensions (for the model
-        # and the scale, through the crop), its bit depth (the analysis pixel
-        # format) and the HDR flag (the tone-map) - issue #308
+        # and the scale, through the crop) and its bit depth (the analysis
+        # pixel format) - issue #308
         recipe = vmaf_recipe(
             crop=crop,
-            hdr=hdr,
             width=source_width,
             height=source_height,
             bit_depth=source_bit_depth,
@@ -1049,7 +1056,6 @@ def _probe_movie(
             probe_encoder_preset=probe_encoder_preset,
             recipe=recipe,
             crop=crop,
-            hdr=hdr,
             cancel=cancel,
             db_file=db_file,
             encoder_threads=encoder_threads,
@@ -1185,21 +1191,36 @@ def encode_with_quality(
     from shrinkray.engine.plan import is_hdr_file as _is_hdr_file
 
     hdr = _is_hdr_file(input_file)
-    # the effective decision inputs: for HDR the engine overrides the
-    # target/range and switches to the 10-bit encoder (same rule as
-    # plan_quality, so a stored HDR plan is found under its real encoder).
-    # The encoder follows the SOURCE's bit depth now (issue #234): a 10-bit
-    # SDR master keeps its depth; HDR alone no longer decides it.
-    effective_encoder = encoder_for(source_bit_depth(input_file), hdr)
-    if hdr:
-        target_vmaf = DEFAULT_HDR_TARGET_VMAF
-        crf_range = DEFAULT_HDR_CRF_RANGE
+    # the effective decision inputs. The encoder follows the SOURCE's bit
+    # depth (issue #234): a 10-bit SDR master keeps its depth; HDR alone no
+    # longer decides it.
+    effective_encoder = encoder_for(source_bit_depth(input_file))
 
     from shrinkray.tools.ffprobe import probe_duration_seconds as _probe_duration
 
     duration = _probe_duration(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
+    if hdr:
+        # the maintainer's decision (issue #340, 2026-10-31; issue #518): HDR
+        # is not supported yet - the tone-mapped SDR measurement is not valid
+        # for HDR. Support returns with libvmaf's HDR models (#519). The
+        # detection is the SAME call the scan and the plan use (hdr, above):
+        # one probe per file, all three paths always agree.
+        log(f"Encode for '{input_file.name}': skip (hdr not supported)")
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error="HDR: not supported yet (no validated quality measurement); tracked in issue #519",
+            skipped_reason="hdr not supported",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
     if duration is not None and duration < MIN_ENCODE_SECONDS:
+        log(f"Encode for '{input_file.name}': skip (too short)")
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1230,6 +1251,7 @@ def encode_with_quality(
             if width is not None and height is not None
             else (f"width {width}px" if width is not None else f"height {height}px")
         )
+        log(f"Encode for '{input_file.name}': skip (resolution too low)")
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1249,6 +1271,7 @@ def encode_with_quality(
 
     size_gb = input_file.stat().st_size / (1024**3)
     if min_source_size_gb > 0 and size_gb < min_source_size_gb:
+        log(f"Encode for '{input_file.name}': skip (below min size)")
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1271,6 +1294,7 @@ def encode_with_quality(
 
     allowed = allowed_codecs(candidate_codecs)
     if codec is not None and codec not in allowed:
+        log(f"Encode for '{input_file.name}': skip (source codec not a candidate)")
         return QualityResult(
             input=input_file,
             output=output_file,
@@ -1329,7 +1353,6 @@ def encode_with_quality(
             sample_seconds=sample_seconds,
             crop_sample_count=crop_sample_count,
             vmaf_recipe=vmaf_recipe(
-                hdr=hdr,
                 width=snapshot["width"],
                 height=snapshot["height"],
                 bit_depth=snapshot["bit_depth"],
@@ -1400,7 +1423,6 @@ def encode_with_quality(
                 sample_seconds,
                 effective_encoder,
                 probe_encoder_preset,
-                hdr=hdr,
                 cancel=cancel,
                 db_file=db_file,
                 encoder_threads=encoder_threads,
@@ -1423,6 +1445,12 @@ def encode_with_quality(
             # must not commit for bytes the run no longer sees. Loud abort,
             # the caller reports it (the entry points catch RuntimeError).
             ensure_unchanged(input_file, identity, "encode")
+            skip_reason = "target unreachable" if "unreachable" in str(e) else "no size gain"
+            # the line only for the case no existing line covers (issue #471's
+            # no-duplicate rule): the would-not-shrink skip is logged in the
+            # search layer (find_optimal_crf_and_skip / check_chosen_crf_shrinks)
+            if skip_reason == "target unreachable":
+                log(f"Encode for '{input_file.name}': skip (target unreachable)")
             return QualityResult(
                 input=input_file,
                 output=output_file,
@@ -1434,9 +1462,7 @@ def encode_with_quality(
                 probes=[],
                 input_size=identity.size,
                 output_size=identity.size,
-                skipped_reason=(
-                    "target unreachable" if "unreachable" in str(e) else "no size gain"
-                ),
+                skipped_reason=skip_reason,
                 input_mtime=identity.mtime,
                 encoder_preset=encoder_preset,
                 probe_encoder_preset=probe_encoder_preset,
@@ -1450,7 +1476,7 @@ def encode_with_quality(
         crf_source = "probe"
         probe_seconds = _time.perf_counter() - run_started
 
-    log(f"Chosen CRF {crf} (VMAF {achieved})")
+    log(f"'{input_file.name}': chosen CRF {crf} (VMAF {achieved})")
     # the encode-start recheck (issue #436): a CRF chosen from bytes-A and
     # applied to bytes-B is an UNMEASURED decision for bytes-B (no fixed
     # preset path to fall into, #202) and costs hours - one stat is the
@@ -1513,6 +1539,7 @@ def encode_with_quality(
     final_output_size = output_file.stat().st_size
     if final_output_size >= final_input_size:
         output_file.unlink(missing_ok=True)
+        log(f"Encode for '{input_file.name}': skip (output not smaller)")
         return QualityResult(
             input=input_file,
             output=input_file,
@@ -1570,7 +1597,6 @@ def encode_with_quality(
         # be comparable with the target it is checked against
         verify_recipe = vmaf_recipe(
             crop=crop,
-            hdr=hdr,
             width=(snapshot or {}).get("width"),
             height=(snapshot or {}).get("height"),
             bit_depth=(snapshot or {}).get("bit_depth"),
@@ -1587,7 +1613,6 @@ def encode_with_quality(
                     input_file,
                     verify_workdir,
                     crop=crop,
-                    hdr=hdr,
                     cancel=cancel,
                     db_file=db_file,
                     subsample=verified_subsample,
@@ -1608,6 +1633,16 @@ def encode_with_quality(
             verified_vmaf = None
             verified_subsample = None
 
+    # the encode's outcome line (issue #471): the transcript is silent from
+    # 'chosen CRF' until the verification line hours later without it. A
+    # verification finding is NOT repeated here: the tracks check logs its
+    # own error line above and the finding rides result.error (issue #471
+    # round 3, finding 1 — do not re-add a suffix here)
+    log(
+        f"Encode result for '{input_file.name}': CRF {crf}, output "
+        f"{final_output_size / (1024**3):.2f} GB "
+        f"({100 * final_output_size / final_input_size:.0f}% of source)"
+    )
     return QualityResult(
         input=input_file,
         output=output_file,

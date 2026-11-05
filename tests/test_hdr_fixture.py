@@ -38,15 +38,6 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CLIP = FIXTURES / "hdr10_gradient_320x180_2s.mp4"
 RECORDED = FIXTURES / "hdr10_probe.json"
 
-# the shipped config.json's codec.hdr markers (the documented HDR signature):
-# an empty config means "no HDR markers configured", so the tests construct the
-# Conf explicitly instead of relying on defaults
-HDR_CONF_DATA = {"codec": {"hdr": {"color_space": ["bt2020nc"], "color_transfer": ["smpte2084"]}}}
-
-
-def _hdr_conf():
-    return config_helper.Conf(HDR_CONF_DATA)
-
 
 class TestHdrFixture(unittest.TestCase):
     """The committed HDR10 clip anchors HDR detection and the encoder path."""
@@ -70,7 +61,7 @@ class TestHdrFixture(unittest.TestCase):
         can drift against the configured markers — this fails before any
         binary runs)."""
         video = dict(self.recorded)
-        self.assertTrue(read_media.is_hdr(video, _hdr_conf()))
+        self.assertTrue(read_media.is_hdr(video))
 
     def test_is_hdr_false_for_sdr_dict(self):
         """The same dict with SDR markers is NOT HDR (the negative control:
@@ -79,42 +70,61 @@ class TestHdrFixture(unittest.TestCase):
         sdr["color_space"] = "bt709"
         sdr["color_transfer"] = "bt709"
         sdr["color_primaries"] = "bt709"
-        self.assertFalse(read_media.is_hdr(sdr, _hdr_conf()))
+        self.assertFalse(read_media.is_hdr(sdr))
 
-    def test_conf_without_hdr_section_uses_the_code_defaults(self):
-        """Issue #236, the maintainer's decision: HDR detection defaults in
-        code. A config that says nothing about HDR still classifies the
-        documented signature (bt2020nc/smpte2084) as HDR — the container
-        must not depend on its baked config.json for detection."""
-        conf = config_helper.Conf({})
-        self.assertEqual(conf.hdr_color_spaces, ["bt2020nc"])
-        self.assertEqual(conf.hdr_color_transfers, ["smpte2084"])
-        self.assertTrue(read_media.is_hdr(dict(self.recorded), conf))
+    def test_the_detection_is_code_fixed(self):
+        """Issue #518 (criterion 2): the skip's detection keys on a FIXED
+        transfer set in code — no config reaches it, so an empty or absent
+        codec.hdr section cannot loosen the skip (hard invariant 10)."""
+        self.assertEqual(read_media.HDR_TRANSFERS, ("smpte2084", "arib-std-b67"))
+        self.assertTrue(read_media.is_hdr(dict(self.recorded)))
+        # a bt2020nc SDR master: the colour space alone is not HDR
+        bt2020_sdr = dict(self.recorded)
+        bt2020_sdr["color_transfer"] = "bt709"
+        self.assertFalse(read_media.is_hdr(bt2020_sdr))
 
-    def test_an_explicitly_empty_marker_list_flags_nothing(self):
-        """The opt-OUT stays possible: a config that EXPLICITLY empties the
-        marker lists flags nothing (an operator narrowing detection is
-        honored — the defaults are overridable, the decision is theirs)."""
-        conf = config_helper.Conf({"codec": {"hdr": {"color_space": [], "color_transfer": []}}})
-        self.assertFalse(read_media.is_hdr(dict(self.recorded), conf))
+    def test_an_old_config_with_codec_hdr_loads_with_a_warning(self):
+        """Issue #518 (criterion 2's proposal): the codec.hdr section is gone
+        from the schema; an old config that sets it still loads, with a
+        one-time warning that it is ignored (the integrations-key pattern)."""
+        from loguru import logger
+
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            conf = config_helper.Conf(
+                {"codec": {"hdr": {"color_space": ["bt2020nc"], "color_transfer": ["smpte2084"]}}}
+            )
+        finally:
+            logger.remove(sink_id)
+        self.assertFalse(hasattr(conf, "hdr_color_spaces"))
+        self.assertTrue(any("codec.hdr" in line for line in captured), captured)
+
+    def test_an_old_config_with_empty_marker_lists_still_loads(self):
+        """The old opt-OUT config shape loads (with the removal warning) and
+        the detection stays code-fixed: the fixture is still HDR."""
+        config_helper.Conf({"codec": {"hdr": {"color_space": [], "color_transfer": []}}})
+        self.assertTrue(read_media.is_hdr(dict(self.recorded)))
 
     def test_encoder_for_hdr_picks_the_10bit_av1_encoder(self):
         """The HDR path picks svt_av1_10bit; SDR picks the default (issue #21:
         AV1-only output, one encoder decision per source)."""
-        self.assertEqual(encoder_for(10, True), "svt_av1_10bit")
-        self.assertEqual(encoder_for(None, True), "svt_av1_10bit")
-        self.assertEqual(encoder_for(8, False), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(10), "svt_av1_10bit")
+        self.assertEqual(encoder_for(None), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(8), DEFAULT_ENCODER)
 
     def test_encoder_for_follows_the_source_bit_depth(self):
         """Issue #234: the SOURCE's bit depth decides, not an HDR guess. A
         10-bit SDR master keeps its depth; an 8-bit source stays 8-bit even
         when HDR flags would suggest more; an unknown depth falls back to
-        the HDR answer instead of silently truncating an unreadable depth."""
-        self.assertEqual(encoder_for(10, False), "svt_av1_10bit")
-        self.assertEqual(encoder_for(12, False), "svt_av1_10bit")
-        self.assertEqual(encoder_for(8, False), DEFAULT_ENCODER)
-        self.assertEqual(encoder_for(None, False), DEFAULT_ENCODER)
-        self.assertEqual(encoder_for(8, True), "svt_av1_10bit")
+        the DEFAULT encoder, exactly as the code always did for an
+        unreadable depth (the old docstring claimed an HDR fallback; the
+        tests pinned the default - issue #518: HDR sources never reach this
+        choice at all)."""
+        self.assertEqual(encoder_for(10), "svt_av1_10bit")
+        self.assertEqual(encoder_for(12), "svt_av1_10bit")
+        self.assertEqual(encoder_for(8), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(None), DEFAULT_ENCODER)
 
     @skipUnless(shutil.which("ffprobe"), "ffprobe not on PATH")
     def test_fixture_still_probes_as_recorded(self):

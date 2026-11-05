@@ -31,11 +31,10 @@ HandBrakeCLI.
 
 ## Tolerance
 
-`|ShrinkRay - ab-av1| <= 0.1` VMAF per pair (issue #306's proposal). One exception,
-documented rather than waived: an HDR pair measured through ShrinkRay's tone-map is
-**reported, not held** (the deviation in `docs/encode-decision.md`, measured at
-~2.9 VMAF on a real HDR10 pair by #340). The same pair with tone-mapping off is
-held, and that is what proves the rest of the pipeline matches.
+`|ShrinkRay - ab-av1| <= 0.1` VMAF per pair (issue #306's proposal). The historical
+HDR exception (the tone-map's ~2.9 VMAF footprint, measured by #340) is moot since
+issue #518: HDR sources are skipped before any measurement, so there is no HDR pair
+to compare until libvmaf's HDR models exist (#519).
 
 ## What you need
 
@@ -72,7 +71,7 @@ and say in the report which of these you actually ran:
 | 2160p | the 4K model and ab-av1's auto scale | `shrinkray encode` a 4K file (or a 4K `--vf` crop of one) |
 | Probe sample | the stream copy + HandBrake probe path | the probe-sample recipe below |
 | Full-file verification | the frame alignment between a source with audio and a HandBrake output | `shrinkray encode` a real file, then measure its output against the source (step 7) |
-| HDR10 | the tone-map deviation, and the PQ-direct parity underneath | `shrinkray encode` an HDR10 file |
+| HDR10 | not measurable since issue #518 (sources are skipped; no HDR pair exists until libvmaf's HDR models, #519) | — |
 
 No filename from `test_media/` may appear in code, docs or a test (AGENTS.md); refer
 to files by role ("the 4K HDR episode"), never by name.
@@ -220,18 +219,11 @@ structure is untested; treat it as the candidate, not a documented working route
 
 ### 5. An HDR10 pair
 
-```sh
-uv run scripts/vmaf_parity.py --pair "/path/to/hdr_source.mkv" "/path/to/hdr_encoded.mkv" \
-  --label "HDR10" --hdr true
-```
-
-This measures the pair twice:
-
-- **tone-mapped** (ShrinkRay's shipped path) - REPORTED against ab-av1's PQ-direct
-  score. The gap is the documented deviation, expected around 3 VMAF on real content
-  (#340 measured ~2.9); a much larger gap means something else broke.
-- **PQ-direct** (tone-mapping off) - HELD to the tolerance. This is the like-for-like
-  comparison and it is what #312's HDR criterion asks for.
+Not applicable since issue #518: HDR sources are skipped before any measurement
+(the tone-map chain is removed; support returns with libvmaf's HDR models, #519).
+The `--hdr` flag is gone. The historical measurement (#340's ~2.9 VMAF tone-map
+footprint, #312's PQ-direct hold) is recorded in `docs/encode-decision.md`'s
+decision history.
 
 ### 6. The probe-sample pair
 
@@ -344,7 +336,8 @@ and scores normally: 2882 / 2882 frames, VMAF 96.10.
   is signalling only - `docs/encode-settings.md`); a low score on untagged
   content is therefore not evidence of colour damage, but the real-title low
   readings that opened #258 are tracked as issue #443 and remain unexplained.
-- **Whether the tone-map is the best available chain.** #340 owns that, and this
-  procedure only reports its footprint.
+- **Whether libvmaf's HDR models, when they land, are good enough to unblock HDR.**
+  That is #519's question; the v0.6.1 tone-map this procedure used to report is
+  removed (issue #518).
 - **Whether the CRF search picks the right CRF.** That is the search, tracked outside
   the parity milestone (#313-#317).

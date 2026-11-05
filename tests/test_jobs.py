@@ -875,5 +875,150 @@ class TestPayloadPaths(unittest.TestCase):
         self.assertEqual(resolved, [Path("/m/a")])
 
 
+class TestTranscriptBoundaries(unittest.TestCase):
+    """Issue #471: job start/finish lines with a measured duration, the
+    plan's verdict line, and the [i/N] counter on a single-file payload."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.connection = db.connect(Path(self.tmp.name) / "test.db")
+        self.queue = jobs.JobQueue(self.connection)
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def test_boundaries_verdict_and_counter(self) -> None:
+        from loguru import logger
+
+        movie = Path(self.tmp.name) / "movie.mkv"
+        movie.write_bytes(b"x" * 64)
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        worker = jobs.JobWorker(self.connection, self.queue)
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            # the too-short gate fires on a mocked small duration: no probe
+            # subprocess runs, the verdict line is the plan's own
+            with mock.patch("shrinkray.engine.plan.probe_duration_seconds", return_value=10.0):
+                worker._execute(job)
+        finally:
+            logger.remove(sink_id)
+        text = "".join(captured)
+        self.assertIn(f"Job #{job.id} (plan) started", text, text)
+        # the plan's verdict line, counter-prefixed over the 1-movie payload
+        self.assertIn("[1/1] Plan for 'movie.mkv': skip (too short)", text, text)
+        self.assertIn(f"Job #{job.id} (plan) finished in", text, text)
+
+    def test_the_end_line_counts_use_each_paths_own_words(self) -> None:
+        """Issue #471 round 3, finding 2: the counts branch is pinned — a plan
+        job's already-planned files read 'to encode', an encode job's read
+        'encoded', and cancelled files get their own bucket."""
+        counts = jobs.JobWorker._outcome_counts
+        self.assertEqual(
+            counts(
+                {
+                    "plans": [
+                        {"state": "encode"},
+                        {"state": "skip"},
+                        {"state": "error"},
+                        {"state": "cancelled"},
+                    ]
+                }
+            ),
+            "1 to encode, 1 skipped, 1 failed, 1 cancelled",
+        )
+        self.assertEqual(
+            counts(
+                {
+                    "outcomes": [
+                        {"state": "encoded"},
+                        {"state": "already_encoded"},
+                        {"state": "skipped"},
+                        {"state": "cancelled"},
+                        {"state": "cancelled"},
+                    ]
+                }
+            ),
+            "2 encoded, 1 skipped, 0 failed, 2 cancelled",
+        )
+        self.assertEqual(
+            counts({"movies": 3, "errors": ["a", "b"]}),
+            "3 scanned, 2 errors",
+        )
+
+
+class TestEncodeWindowGate(unittest.TestCase):
+    """Issue #434: the worker holds plan/encode jobs while outside the
+    window; scan jobs proceed; the queue's kind filter does the holding."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.connection = db.connect(Path(self.tmp.name) / "test.db")
+        self.queue = jobs.JobQueue(self.connection)
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def test_the_kind_filter_holds_plan_and_encode(self) -> None:
+        plan_job = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["D:/Movies"]})
+        )
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": "D:/Movies"}))
+        # gated: only scan jobs are taken
+        taken = self.queue.take_next(only_kinds={jobs.JobKind.SCAN})
+        self.assertIsNotNone(taken)
+        self.assertEqual(taken.kind, jobs.JobKind.SCAN)
+        # the plan job is still queued
+        self.assertEqual(self.queue.take_next(only_kinds={jobs.JobKind.SCAN}), None)
+        # ungated: the plan job comes out
+        taken = self.queue.take_next()
+        self.assertEqual(taken.id, plan_job.id)
+
+    def test_the_worker_holds_encode_jobs_outside_the_window(self) -> None:
+        from unittest.mock import patch
+
+        movie = Path(self.tmp.name) / "movie.mkv"
+        movie.write_bytes(b"x" * 64)
+        job = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.ENCODE, payload={"paths": [str(movie)], "quality": True})
+        )
+        worker = jobs.JobWorker(self.connection, self.queue)
+
+        def stop_after_first_wait(timeout: float) -> bool:
+            worker.request_stop()
+            return True
+
+        # outside the window: the worker takes only scan jobs - the encode
+        # job stays queued (issue #434)
+        with (
+            patch("shrinkray.server.jobs.encode_window_open", return_value=False),
+            patch.object(self.queue, "wait_for_work", side_effect=stop_after_first_wait),
+        ):
+            worker._run()
+        reloaded = self.queue.get(job.id)
+        self.assertEqual(
+            reloaded.state, jobs.JobState.QUEUED, "the encode job was taken outside the window"
+        )
+
+        # inside the window: the job is taken (its execution is patched out —
+        # the assertion is the TAKE, not the toolchain's outcome). A fresh
+        # worker: the first phase's request_stop latched its stop event
+        worker = jobs.JobWorker(self.connection, self.queue)
+        with (
+            patch("shrinkray.server.jobs.encode_window_open", return_value=True),
+            patch.object(self.queue, "wait_for_work", side_effect=stop_after_first_wait),
+            patch.object(jobs.JobWorker, "_execute", lambda self, job, cancel=None: None),
+        ):
+            worker._run()
+        reloaded = self.queue.get(job.id)
+        self.assertEqual(
+            reloaded.state,
+            jobs.JobState.RUNNING,
+            "the encode job was never taken inside the window",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

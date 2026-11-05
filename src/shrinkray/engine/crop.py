@@ -23,6 +23,7 @@ import re
 import sqlite3
 import subprocess
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -555,6 +556,35 @@ def detect_crop_summary_cached(
             connection.close()
 
 
+def crop_bars_or_fallback(
+    summary: CropSummary | None,
+    fallback: Callable[[], tuple[int, int, int, int] | None],
+) -> tuple[int, int, int, int] | None:
+    """Decides the bars: a measured "no common bars" stands (issue #525).
+
+    The timeline pass's verdict is the one bar measurement. When it MEASURED
+    no safe crop — the full-frame veto, noise-sized bars, or readings with no
+    sustained run — that verdict stands and the sampled detector never runs:
+    ten windows of a variable-aspect film can miss its full-frame sections
+    and cut picture the verdict protected. The sampled fallback runs only
+    for a pass that learned nothing: the summary is absent (a failed pass)
+    or cropdetect produced no readings.
+
+    Args:
+        summary (CropSummary | None): The timeline pass's summary (None: the
+            pass failed or was skipped).
+        fallback (callable): The sampled detector, called only when the pass
+            learned nothing.
+
+    Returns:
+        tuple | None: The (top, bottom, left, right) bars to crop, or None
+            for no bars.
+    """
+    if summary is not None and summary.readings > 0:
+        return summary.bars
+    return fallback()
+
+
 def detect_crop_rect(
     movie: Path,
     workdir: Path,
@@ -566,7 +596,8 @@ def detect_crop_rect(
     Runs cropdetect on several segments and keeps the bars common to all of
     them, so only bars that are present throughout the movie are removed.
     The FALLBACK detector: the timeline pass (detect_crop_summary_cached) is
-    the primary, this one keeps runs without a database working.
+    the primary; this one runs only when that pass learned nothing — a failed
+    pass, or no readings (issue #525) — not merely when a database is absent.
 
     Args:
         movie (Path): The source movie file.

@@ -320,23 +320,29 @@ def bit_depth(video: dict) -> int | None:
     return None
 
 
-def is_hdr(video: dict, config: Conf) -> bool:
-    """Checks if the video stream is HDR by comparing its color data with the config.
+# the HDR transfer characteristics the skip gate and the classification key
+# on - FIXED IN CODE (issue #518, the maintainer's #340 decision): the
+# config's codec.hdr lists are gone (an old config that sets them loads with
+# a one-time warning), because a product rule (HDR: not supported yet) is
+# never loosened by settings (hard invariant 10)
+HDR_TRANSFERS = ("smpte2084", "arib-std-b67")
+
+
+def is_hdr(video: dict) -> bool:
+    """Checks if the video stream is HDR by its transfer characteristic.
+
+    PQ (smpte2084) and HLG (arib-std-b67) transfers are HDR; a bt2020nc SDR
+    master carries an SDR transfer (bt709) and is not - the colour space
+    alone does not make a source HDR (issue #518).
 
     Args:
         video (dict): The video stream data from ffprobe.
-        config (Conf): The config settings.
 
     Returns:
-        bool: True if the video is HDR.
+        bool: True if the video's transfer characteristic is HDR.
     """
-    color_space = str(video.get("color_space") or "")
     color_transfer = str(video.get("color_transfer") or "")
-
-    for space in config.hdr_color_spaces:
-        if space and space in color_space:
-            return True
-    return any(transfer and transfer in color_transfer for transfer in config.hdr_color_transfers)
+    return any(transfer and transfer in color_transfer for transfer in HDR_TRANSFERS)
 
 
 def get_bitrate(probe: dict) -> float:
@@ -406,7 +412,7 @@ def get_data(path: Path, config: Conf | None = None) -> dict:
         aspect_ratio = get_aspect_ratio(width, height)
 
     audio_languages = get_audio_languages(streams)
-    hdr = is_hdr(video, config)
+    hdr = is_hdr(video)
     depth = bit_depth(video)
 
     return {

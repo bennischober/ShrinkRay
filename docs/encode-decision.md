@@ -57,16 +57,17 @@ Every gate is a cheap question asked before the expensive next step.
 
 | # | Gate | Question | If it fails |
 |---|---|---|---|
-| 1 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS`, `engine/plan.py:59`) | skip — not a movie |
-| 2 | Resolution | At least the 1080p class — width >= 1920 OR height >= 1080? (`is_1080p_class`, `engine/plan.py:244`; the floors may be raised, never lowered — issue #246; the width arm is issue #233) | skip — too few pixels to save |
-| 3 | Size | At least the configured size floor? (`min_source_size_gb`, `engine/plan.py:419`) | skip — payoff below the probe cost |
-| 4 | Codec age | In the candidate codec list? (`SOURCE_CODECS` extended by the config's `candidate_codecs`, `engine/plan.py:55`; the list may be extended, never shrunk — issue #233) | skip — a source codec outside the list is not re-encoded |
-| 5 | **Bar detection** | Which bars are common to every sampled frame? (`detect_crop_rect`, `engine/crop.py`, called at `engine/plan.py:607`) | no crop; the encode proceeds uncropped. A sampled window that yields no reading — ffmpeg fails (any positive exit, including — believed from `fftools/ffmpeg.c`, not run — 255 from a caught signal) or exits 0 without printing a crop line (a window past the stream's end) — leaves the file uncropped and is logged: that window measured nothing, so the common-bars rule cannot be evaluated and the safe direction wins. **Interim rule** (issue #403 carries `needs-decision`; the maintainer's call is open) — the reading this document's own safe-direction principle argues for, applied so the veto cannot be lost silently. The vetoed file is UNCROPPED, not unencoded: the plan's crop field records no-crop, which is indistinguishable from a genuine no-bars measurement in the plans table, so a stored plan reuses the uncropped decision without re-detecting (the plan fingerprint does not carry an unmeasured flag; changing that is a product decision beyond #403). The log line at detection time is the record |
-| 6 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:651`) | skip — target unreachable |
-| 7 | **Size gate** | Would the result be smaller? (`engine/search.py:722` at the bound CRF, and at the chosen CRF `:764` from every window's cached encoded bytes — `check_chosen_crf_shrinks`) | skip — "would not shrink" |
-| 8 | Encode | One full encode at the chosen CRF, **with the crop** | — |
+| 1 | **HDR** | Is the source's TRANSFER characteristic HDR (PQ `smpte2084` or HLG `arib-std-b67`) — fixed in code (`HDR_TRANSFERS`, `tools/ffprobe.py:is_hdr`; no config reaches it)? (`is_hdr_file`, `engine/plan.py` + `engine/pipeline.py`) | skip — `hdr not supported`: the tone-mapped SDR measurement is not valid for HDR (the maintainer's #340 decision, 2026-10-31; support returns with libvmaf's HDR models, #519). A bt2020nc SDR master and a 10-bit SDR source stay eligible — bit depth is not the problem, the HDR transfer is. |
+| 2 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS`, `engine/plan.py:59`) | skip — not a movie |
+| 3 | Resolution | At least the 1080p class — width >= 1920 OR height >= 1080? (`is_1080p_class`, `engine/plan.py:244`; the floors may be raised, never lowered — issue #246; the width arm is issue #233) | skip — too few pixels to save |
+| 4 | Size | At least the configured size floor? (`min_source_size_gb`, `engine/plan.py:419`) | skip — payoff below the probe cost |
+| 5 | Codec age | In the candidate codec list? (`SOURCE_CODECS` extended by the config's `candidate_codecs`, `engine/plan.py:55`; the list may be extended, never shrunk — issue #233) | skip — a source codec outside the list is not re-encoded |
+| 6 | **Bar detection** | Which bars are common to every sustained timeline reading? (`crop_summary_from_timeline`, `engine/crop.py`, called at `engine/plan.py` and `engine/pipeline.py` through `detect_crop_summary_cached`; `detect_crop_rect` is the sampled fallback, run only when the pass learned nothing) | the timeline verdict stands: bars common to every sustained reading are cropped; a MEASURED "no common bars" — the full-frame veto, noise-sized bars, or readings with no sustained run — leaves the file uncropped, and the sampled detector never runs over it: ten windows of a variable-aspect film can miss its full-frame sections and cut picture the verdict protected (issue #525). The sampled fallback runs only when the pass learned nothing — the summary is absent (a failed pass; `detect_crop_summary_cached` returns None) or cropdetect produced no readings. A sampled window that yields no reading — ffmpeg fails (any positive exit, including — believed from `fftools/ffmpeg.c`, not run — 255 from a caught signal) or exits 0 without printing a crop line (a window past the stream's end) — leaves the file uncropped and is logged: that window measured nothing, so the common-bars rule cannot be evaluated and the safe direction wins. **Interim rule** (issue #403 carries `needs-decision`; the maintainer's call is open) — the reading this document's own safe-direction principle argues for, applied so the veto cannot be lost silently. The vetoed file is UNCROPPED, not unencoded: the plan's crop field records no-crop, which is indistinguishable from a genuine no-bars measurement in the plans table, so a stored plan reuses the uncropped decision without re-detecting (the plan fingerprint does not carry an unmeasured flag; changing that is a product decision beyond #403). The log line at detection time is the record |
+| 7 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:651`) | skip — target unreachable |
+| 8 | **Size gate** | Would the result be smaller? (`engine/search.py:722` at the bound CRF, and at the chosen CRF `:764` from every window's cached encoded bytes — `check_chosen_crf_shrinks`) | skip — "would not shrink" |
+| 9 | Encode | One full encode at the chosen CRF, **with the crop** | — |
 
-Note gate 5 cannot fail in the sense of aborting: "no bars found" is a normal outcome and the
+Note gate 6 cannot fail in the sense of aborting: "no bars found" is a normal outcome and the
 encode continues. That is the whole point of removing the codec branch — every codec takes the same
 path through this table.
 
@@ -76,19 +77,20 @@ path through this table.
 |---|---|---|---|---|
 | A | H.264 | above floor | none | probed → encoded if smaller |
 | B | H.264 | above floor | yes | probed **with crop** → encoded if smaller |
-| C | H.264 | below floor | any | skipped at gate 3 |
+| C | H.264 | below floor | any | skipped at gate 4 |
 | D | HEVC | above floor | yes | probed **with crop** → encoded if smaller |
 | E | HEVC | above floor | none | probed → encoded if smaller |
 | F | AV1 | above floor | any | probed → encoded if smaller *(see the open question)* |
-| G | MPEG-2 / VC-1 | any | any | skipped at gate 4 |
-| H | any | below the 1080p class (both dimensions) | any | skipped at gate 2 |
-| I | any | < 90 s | any | skipped at gate 1 |
-| J | any | above floor | bars, would grow | skipped at gate 7 — **with the crop applied to the estimate** |
-| K | any | above floor | bars, target unreachable | skipped at gate 6 |
+| G | MPEG-2 / VC-1 | any | any | skipped at gate 5 |
+| H | any | below the 1080p class (both dimensions) | any | skipped at gate 3 |
+| I | any | < 90 s | any | skipped at gate 2 |
+| J | any | above floor | bars, would grow | skipped at gate 8 — **with the crop applied to the estimate** |
+| K | any | above floor | bars, target unreachable | skipped at gate 7 |
 | L | any | above floor | bars, shrinks | encoded **with the crop**, original retained |
+| M | any HDR transfer (PQ/HLG) | any | any | skipped at gate 1 — `hdr not supported` (issue #518) |
 
 Scenario E is the case the old rules forbade: a large HEVC file with no bars is probed and encoded.
-Scenario J is why gate 5 runs before gate 7 — the estimate must reflect the crop, or a file that
+Scenario J is why gate 6 runs before gate 8 — the estimate must reflect the crop, or a file that
 would only shrink *after* cropping gets a false "won't shrink".
 
 ## What the search never does
@@ -109,13 +111,20 @@ The CRF search brackets and interpolates in VMAF space (issue #23) and spends on
 every encode. Two deliberate shapes keep that cost down (issues **#313**, **#395**), and their measured
 trade follows them:
 
-- **The round structure is ab-av1's** (`crf_search`, read at ab-av1 `ed5f5461f0aa`): the first probe is
-the range's midpoint; while only one side of the target is known, round two moves to the 20%/80% point of
-the range and round three to its end; once a passing and a failing probe bracket the target, each round
-interpolates between them (with issue #23's safeguards). The range's ends are probed only when the
-search heads there, so "target unreachable" costs three rounds (midpoint, 20% point, lowest CRF) where
-the old shape spent one, and the SkipEncode evidence is the lowest CRF's probe, as before. The old shape
-probed CRF 14 - the slowest, largest probe - upfront on every file, passing or not.
+- **The round structure is ab-av1's, with one deliberate deviation** (`crf_search`, read at ab-av1
+`ed5f5461f0aa`): the first probe is the range's midpoint; while only one side of the target is known,
+round two moves to the 20%/80% point of the range and round three to its end; once a passing and a
+failing probe bracket the target, each round interpolates between them (with issue #23's safeguards).
+The deviation (issue #399, the maintainer's 2026-10-31 decision): the round-two cut is applied on EVERY
+range, where ab-av1's cut_on_iter2 skips it when the range is narrower than half its libsvtav1 default
+(5..70) - which the SDR default (14, 45) is; there ab-av1 would probe the range end on round two
+(measured 29 -> 14 -> 22, where ours probes 29 -> 20). The measured trade-off: the cut saves ~0.4-0.5
+rounds per reachable file and costs 1 round per unreachable one, so it wins unless roughly 30% or more
+of eligible files are unreachable (11 real final CRFs: SDR cut 4.82 vs no-cut 5.09 rounds; HDR 5.00 vs
+5.64). The range's ends are probed only when the search heads there, so "target unreachable" costs
+three rounds (midpoint, 20% point, lowest CRF) where the old shape spent one, and the SkipEncode
+evidence is the lowest CRF's probe, as before. The old shape probed CRF 14 - the slowest, largest
+probe - upfront on every file, passing or not.
 - **An early stop accepts a passing CRF whose score is less than a tolerance above the target**, the
 tolerance doubling per round from 0.1 (0.1, 0.2, 0.4, 0.8, ...): ab-av1's formula for an encoder whose
 CRF moves in whole steps. A probe below the target is never accepted, and the stop fires only once the
@@ -195,14 +204,12 @@ the claim, because `--verify` arrived in v0.11.7.
   `engine/samples.py:152`); ab-av1 cuts 20 s by frame count (`-frames:v`). A duration cut can end a
   frame early at most; a frame-count cut on variable-frame-rate content varies in wall time. 10 s keeps
   a probe cheap; whether 20 s would move the score is unmeasured (#306's baseline covers it).
-- **HDR is tone-mapped to SDR before scoring** (`tools/vmaf.py`, both inputs through the same
-  hable chain, then the analysis format): the v0.6.1 model is SDR-trained, so scoring the PQ signal directly
-  would measure the tone-mapping mismatch, not the encode. When bars are present the reference is cropped first
-  (issue #307's fix) so the bars cannot influence the tone-map and the geometries match. ab-av1 scores the PQ
-  signal directly. HDR carries a separate target (`HDR_VMAF_OFFSET`, `engine/encoders.py:32`) for the same
-  reason. #340 measured the chain's own footprint at ~2.9 VMAF on a real HDR10 pair (ours reads lower, which
-  errs safe); #312's parity run holds the same pair with tone-mapping OFF, which proves the rest of the
-  pipeline matches and leaves the tone-map as the only remaining difference.
+- **HDR is skipped, not scored** (issue #518, the maintainer's #340 decision of 2026-10-31): a source
+  whose transfer characteristic is HDR (PQ or HLG, `tools/ffprobe.py:is_hdr` — the fixed set in code) is
+  refused at the gates (`hdr not supported`) before any sample is extracted. The v0.6.1 model is SDR-trained
+  and libvmaf's docs say an SDR model on HDR pictures "is not meaningful"; #340 measured the tone-map's own
+  footprint at ~2.9 VMAF on a real HDR10 pair. The tone-map chain is removed; support returns with libvmaf's
+  HDR models (#519).
 - **Probe samples encode at SVT-AV1 preset 5, the final encode at preset 3** (`config.py`, issue #22):
   a probe measures the CRF, and a slower preset is believed to be at least as good at the same CRF, so
   the sample measurement errs safe. **Believed, not measured** — the error direction is recorded, not
@@ -250,7 +257,7 @@ from the crop and from a better encode. That may still be worth it, or it may no
 
 - **Treat AV1 like HEVC**: probed, encoded if smaller. Consistent, and the size gate protects you.
 - **Exclude AV1**: an AV1 source is already the output format, so the only reason to touch it is bars,
-  which the rule forbids as a reason. That makes AV1 a skip at gate 4 alongside MPEG-2.
+  which the rule forbids as a reason. That makes AV1 a skip at gate 5 alongside MPEG-2.
 
 The second reading is closer to "AV1 is the output format" — re-encoding the same codec is generation
 loss for whatever small gain the crop gives. But the first is defensible and simpler. **Not decided;

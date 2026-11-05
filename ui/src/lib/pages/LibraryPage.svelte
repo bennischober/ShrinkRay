@@ -5,8 +5,6 @@
     movies,
     selectedPaths,
     targetVmaf,
-    scanning = false,
-    pending = false,
     runningMovie = null,
     runningPercent = null,
     plannedPaths = [],
@@ -19,8 +17,6 @@
     movies: Movie[]
     selectedPaths: Set<string>
     targetVmaf: number
-    scanning?: boolean
-    pending?: boolean
     runningMovie?: string | null
     runningPercent?: number | null
     plannedPaths?: string[]
@@ -298,7 +294,11 @@
               </td>
             </tr>
           {:else}
-            <tr><td colspan="8" class="empty dim">no titles match — adjust the search or run a scan</td></tr>
+            {#if movies.length === 0}
+              <tr><td colspan="8" class="empty dim">nothing scanned yet — the resident app's scan fills this library on its own</td></tr>
+            {:else}
+              <tr><td colspan="8" class="empty dim">no titles match — adjust the search</td></tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -349,19 +349,6 @@
     white-space: nowrap;
     border: 0;
   }
-  .act.scan {
-    background: var(--panel-raised);
-    border: 1px solid var(--ink);
-    border-radius: var(--radius);
-    color: var(--ink);
-    padding: 6px 14px;
-    cursor: pointer;
-    font-size: var(--fs-legend);
-    letter-spacing: var(--track-legend);
-    text-transform: uppercase;
-  }
-  .act.scan:hover:not(:disabled) { border-color: var(--teal); color: var(--teal-ink); }
-  .act.scan:disabled { opacity: 0.5; cursor: default; }
   .spacer { flex: 1; }
 
   .bulk-bar {

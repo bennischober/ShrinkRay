@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 from shrinkray import config as config_helper
 from shrinkray import db
+from shrinkray.server import jobs
+from shrinkray.server.jobs import JobQueue
 
 
 class TestDb(unittest.TestCase):
@@ -1419,11 +1421,11 @@ class TestDb(unittest.TestCase):
             self.assertIsNone(row["verified_vmaf"])
 
     def test_records_effective_target_vmaf(self):
-        """The preset column carries the EFFECTIVE target: for HDR the engine
-        overrides the requested target (DEFAULT_HDR_TARGET_VMAF), and the row
-        must record the target the encode was actually decided against —
-        regression: both callers persisted the caller's value, so every HDR
-        encode was recorded as VMAF>95.0 while decided against 94.5."""
+        """The preset column carries the engine's EFFECTIVE target (what the
+        encode was actually decided against), never the caller's — regression:
+        both callers persisted the caller's value, so a result decided against
+        94.5 was recorded as VMAF>95.0. The HDR override this test once
+        exercised is gone (issue #518); the recording rule is unchanged."""
 
         from shrinkray import service
         from shrinkray.engine.plan import QualityResult
@@ -1436,13 +1438,12 @@ class TestDb(unittest.TestCase):
                 input=movie,
                 output=root / "enc" / "movie.mkv",
                 success=True,
-                target_vmaf=94.5,  # the engine's HDR override, not the caller's 95.0
+                target_vmaf=94.5,  # the engine's effective target, not the caller's 95.0
                 chosen_crf=22,
                 achieved_vmaf=94.6,
                 input_size=1000,
                 output_size=400,
-                hdr=True,
-                # what the engine carries on an HDR result (the 10-bit switch)
+                hdr=True,  # recorded to encodes.hdr for historical rows; new rows are always 0
                 encoder="svt_av1_10bit",
             )
             outcome = service.record_quality_results(
@@ -1454,8 +1455,9 @@ class TestDb(unittest.TestCase):
             self.assertEqual(row["encoder"], "svt_av1_10bit")
 
     def test_records_config_encoder_for_non_hdr(self):
-        """A non-HDR result records the config encoder (the default unchanged
-        — the effective encoder field only overrides for HDR)."""
+        """A result whose effective encoder equals the config's records the
+        config encoder (the effective-encoder field names what the decision
+        was made against, whatever decided it)."""
 
         from shrinkray import service
         from shrinkray.engine.plan import QualityResult
@@ -2159,3 +2161,39 @@ class TestInPlaceAuditTrail(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStaleJobRecoveryAnnouncement(unittest.TestCase):
+    """Issue #471: the boot announces every recovered row, one line each,
+    naming the job id, its kind and its stored start time."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_a_recovered_row_is_announced(self) -> None:
+        from shrinkray.logger import logger
+        from shrinkray.server.app import AppState
+
+        db_file = Path(self.tmp.name) / "recover.db"
+        connection = db.connect(db_file)
+        queue = JobQueue(connection)
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["D:/Movies"]}))
+        connection.execute(
+            "UPDATE jobs SET state = 'running', started_at = '2026-01-01 00:00:00' WHERE id = ?",
+            (job.id,),
+        )
+        connection.commit()
+        connection.close()
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            state = AppState(db_file)
+        finally:
+            logger.remove(sink_id)
+        state.shutdown()
+        text = "".join(captured)
+        self.assertIn(f"Recovering job #{job.id} (plan)", text, text)
+        self.assertIn("interrupted by app restart", text)

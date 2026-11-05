@@ -44,25 +44,23 @@ class TestBitDepthParsing(unittest.TestCase):
 
 
 class TestEncoderFollowsBitDepth(unittest.TestCase):
-    """The decision matrix: depth decides, HDR keeps its override."""
+    """The decision matrix: depth decides (issue #234). HDR sources never
+    reach the choice (issue #518's skip); an unknown depth keeps the default
+    encoder, exactly as the code always did."""
 
     def test_a_10bit_sdr_source_stays_10bit(self):
-        self.assertEqual(encoder_for(10, False), "svt_av1_10bit")
+        self.assertEqual(encoder_for(10), "svt_av1_10bit")
 
     def test_an_8bit_sdr_source_stays_8bit(self):
-        self.assertEqual(encoder_for(8, False), DEFAULT_ENCODER)
+        self.assertEqual(encoder_for(8), DEFAULT_ENCODER)
 
     def test_a_12bit_source_stays_high(self):
-        self.assertEqual(encoder_for(12, False), "svt_av1_10bit")
+        self.assertEqual(encoder_for(12), "svt_av1_10bit")
 
-    def test_an_unknown_depth_falls_back_to_the_hdr_answer(self):
-        # never silently truncate a depth the probe failed to read
-        self.assertEqual(encoder_for(None, False), DEFAULT_ENCODER)
-        self.assertEqual(encoder_for(None, True), "svt_av1_10bit")
-
-    def test_hdr_stays_10bit_regardless(self):
-        self.assertEqual(encoder_for(10, True), "svt_av1_10bit")
-        self.assertEqual(encoder_for(8, True), "svt_av1_10bit")
+    def test_an_unknown_depth_keeps_the_default(self):
+        # never silently truncate a depth the probe failed to read: the
+        # default encoder (the old code's behaviour for an unknown depth)
+        self.assertEqual(encoder_for(None), DEFAULT_ENCODER)
 
 
 class TestRealProbeRoundTrip(unittest.TestCase):
@@ -101,7 +99,7 @@ class TestRealProbeRoundTrip(unittest.TestCase):
             self.assertEqual(data["bit_depth"], 10)
             self.assertFalse(data["hdr"], "a 10-bit SDR clip must not be flagged HDR")
             # the decision: this source gets the 10-bit encoder although SDR
-            self.assertEqual(encoder_for(data["bit_depth"], data["hdr"]), "svt_av1_10bit")
+            self.assertEqual(encoder_for(data["bit_depth"]), "svt_av1_10bit")
 
     @skipUnless(shutil.which("ffmpeg"), "ffmpeg not on PATH")
     def test_a_synthetic_8bit_clip_probes_as_8bit(self):
@@ -131,7 +129,7 @@ class TestRealProbeRoundTrip(unittest.TestCase):
             )
             data = get_data(clip)
             self.assertEqual(data["bit_depth"], 8)
-            self.assertEqual(encoder_for(data["bit_depth"], data["hdr"]), DEFAULT_ENCODER)
+            self.assertEqual(encoder_for(data["bit_depth"]), DEFAULT_ENCODER)
 
 
 if __name__ == "__main__":

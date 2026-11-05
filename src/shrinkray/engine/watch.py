@@ -8,6 +8,7 @@ logic as the encode/plan commands and encodes them (source stays untouched
 
 import contextlib
 import ctypes
+import math
 import os
 import sqlite3
 import struct
@@ -20,7 +21,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
+from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH, encode_window_open
 from shrinkray.config import Conf as Conf
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.engine.pause import pause_reason
@@ -40,10 +41,64 @@ from shrinkray.tools.ffprobe import probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 from shrinkray.tools.process import Cancelled
 
-# a file is stable when its size is unchanged between two checks ...
-STABLE_CHECK_INTERVAL = 30.0
-# ... and it is at least this old (grace period after the last modification)
-STABLE_MIN_AGE = 60.0
+
+# a file is stable when its size is unchanged between two checks ... and it is
+# at least this old (grace period after the last modification) — the two
+# constants below, whose values the env seam can override (test-only, #537).
+# Test-only env overrides (issue #537): the SIGHUP test spawns the CLI as a
+# SUBPROCESS, so the suite's in-process patches (tests/test_cli.py's
+# `_toolchain_ok`, the inline block in `test_a_signal_after_the_final_encode_*
+# and the `_encode` helper, which zero both constants) cannot reach it, and its
+# 60 s spawn deadline must not measure a 30 s sleep its subject never
+# exercises. This is deliberately NOT the shape of an operator knob: it is read
+# once at import, has no config key and no CLI flag, and exists so a test can
+# reach a constant that lives in the child process (issue #537's review finding
+# 2 — the earlier comment wrongly cited $SHRINKRAY_WATCH_OUTPUT, which is
+# documented operator surface, and $SHRINKRAY_SMOKE, which no product module
+# reads).
+#
+# The guard is TOTAL (review findings 1 and 2): a value that `float()` accepts
+# but that is not a usable duration — `nan`, `inf`, negative, or too large for
+# `time.sleep` — must fall back to the default, because `STABLE_MIN_AGE = -5`
+# would make `is_stable()` answer True for a file still being written (the exact
+# #437 defect this witness exists to prevent), and `nan`/`inf`/negative/1e10
+# make `time.sleep`/`st_mtime` arithmetic raise where no caller expects it.
+def _duration_env(var: str, default: float) -> float:
+    """Reads a non-negative, finite duration from the environment.
+
+    Args:
+        var (str): The environment variable name.
+        default (float): The value when unset, unparsable, or unusable.
+
+    Returns:
+        float: The override, or the default.
+    """
+    raw = os.environ.get(var)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    # `float()` accepts nan/inf/negatives; a duration must be finite, >= 0, and
+    # small enough that `time.sleep`/`st_mtime` arithmetic cannot overflow
+    # (1e10 passes isfinite and overflows sleep — round-2 review finding 1).
+    # The cap bounds OVERFLOW ONLY, not the wait: `wait_for_stable`'s deadline
+    # and its cancel event are both observed only BETWEEN sleeps, so a legal
+    # interval up to a day overruns the limit — and on the stable path the
+    # cancel is not delayed but DROPPED (is_stable's True return ends the
+    # wait; round-6 review finding 1). At the default interval the #326
+    # contract's "never absorbs a signal for minutes" still holds on the
+    # raising paths; the seam's values are a test's choice, never an
+    # operator's. Larger values are a mistake or an attempt to disable the
+    # witness, and fall back to the default.
+    if not math.isfinite(value) or value < 0 or value > 86400.0:
+        return default
+    return value
+
+
+STABLE_CHECK_INTERVAL = _duration_env("SHRINKRAY_STABLE_CHECK_INTERVAL", 30.0)
+STABLE_MIN_AGE = _duration_env("SHRINKRAY_STABLE_MIN_AGE", 60.0)
 # the bounded wait's ceiling for the one-shot CLI (issue #437): the watcher
 # has no ceiling (it reconsiders on its next pass); a one-shot run reports
 # and skips instead of waiting forever on a file that never settles
@@ -82,9 +137,12 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
     is (1) scanned into the database and (2) re-decided from that fresh scan.
     The engine owns the scan (`engine.scan.process_movie`), so the watcher can
     call it without crossing a layer; the DECISION belongs to the encode job
-    the queue runs (`submit`). A failed scan returns False and the caller
-    leaves the file eligible (it is already in `known`, so the retry happens
-    when the file changes).
+    the queue runs (`submit`). The scan RECORDS the row here (issue #574):
+    process_movie computes and never writes, so the write-back is this
+    function's job - a file the watchdog saw but whose encode job never ran
+    is still catalogued, under the watch root's category. A failed scan
+    returns False and the caller leaves the file eligible (it is already in
+    `known`, so the retry happens when the file changes).
 
     Args:
         movie (Path): The file to scan.
@@ -92,12 +150,16 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
         db_file (Path | None): The database file; None records nothing.
 
     Returns:
-        bool: True when the file was scanned and recorded (or nothing needed
-            recording), False when the scan failed.
+        bool: True when the scan succeeded (the row recorded, or - on a
+            recording failure - logged and left to the encode job's
+            recording, `service.ensure_file_row`'s minimal row), False when
+            the scan itself failed.
     """
     if db_file is None:
         return True
+    from shrinkray import db
     from shrinkray.config import load_config
+    from shrinkray.engine.scan import movie_record_from_data
 
     try:
         data, error = process_movie(movie, root, load_config(), db_file=db_file)
@@ -110,6 +172,24 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
     if data is None:
         log_error(f"Scanning '{movie.name}' failed: {error} => retried when the file changes.")
         return False
+    # record the scan's result (issue #574): the row is the catalog's memory
+    # of the watchdog's scan. It also preempts the encode path's minimal row
+    # (service.ensure_file_row writes category=parent.name when no row
+    # exists) - the recorded category stays the watch root's. A recording
+    # failure must not fail the scan (the #507/#517 rule: a failed write
+    # costs the shortcut, never the measurement); the encode path's own
+    # recording then writes its minimal row.
+    try:
+        connection = db.connect(db_file)
+        try:
+            db.upsert_file(connection, movie_record_from_data(movie, data))
+            connection.commit()
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error) as e:
+        log(
+            f"Recording '{movie.name}'s scan failed ({e}); the encode path's own recording writes the row."
+        )
     return True
 
 
@@ -264,9 +344,20 @@ def wait_for_stable(
 
     Args:
         path (Path): The file to wait for.
-        limit (float): Total seconds to wait before giving up.
+        limit (float): Total seconds to wait before giving up. Checked
+            BETWEEN sleeps: one interval longer than the limit overruns it
+            (a legal seam value up to a day makes one sleep that long), so
+            the limit bounds the number of checks, not the wall clock.
         cancel (threading.Event | None): Cooperative cancellation; when set,
-            the wait raises instead of returning.
+            the wait raises instead of returning. Observed only between
+            sleeps, and NOT on every path: a cancel that arrives DURING a
+            sleep is honoured at the next check — except the witness's own
+            size-check sleep inside `is_stable`, whose True return ENDS the
+            wait before any check sees the cancel (measured, round-5 review
+            finding 1: the wait returns True with the cancel set). On the
+            age-sleep and direct-size-check paths the cancel raises after
+            one interval (up to a day under the test-only override, 30 s at
+            the default).
 
     Returns:
         bool: True when the file settled, False when the limit expired
@@ -603,6 +694,11 @@ class WatchSettings:
     crop_sample_count: int
     audio_languages: list[str] | None = None
     subtitle_languages: list[str] | None = None
+    # the daily encode window (issue #434): resident automation holds back
+    # new files while outside it (an empty pair = no window; a stateless
+    # run constructs without these and is never gated)
+    encode_window_start: str = ""
+    encode_window_end: str = ""
 
 
 def watch(
@@ -715,6 +811,7 @@ def watch(
     # no resident app to pause
     state_dir = db_file.resolve().parent if db_file is not None else None
     paused_reason: str | None = None
+    window_reason: str | None = None
     known: set[str] = set()
     if db_file is not None:
         # the scanned library IS the memory (issue #231): every file row holds
@@ -801,6 +898,27 @@ def watch(
                 if paused_reason is not None:
                     log("Watcher resumed.")
                     paused_reason = None
+                # the daily encode window (issue #434): outside it the pass
+                # defers - nothing enters `known`, so every file stays
+                # eligible, and the base interval notices the window opening
+                window_open = encode_window_open(
+                    current.encode_window_start, current.encode_window_end
+                )
+                if not window_open:
+                    if window_reason is None:
+                        log(
+                            f"Watcher outside the encode window "
+                            f"({current.encode_window_start}-"
+                            f"{current.encode_window_end}): files stay eligible."
+                        )
+                        window_reason = "outside the encode window"
+                    if once:
+                        return
+                    _wait_or_stop(poll_interval, stop_event, waiter=waiter)
+                    continue
+                if window_reason is not None:
+                    log("Watcher inside the encode window: resuming.")
+                    window_reason = None
                 # pass-level disk guard: a full output drive would burn a full
                 # CRF probe per candidate per pass (probe, watchdog cancel,
                 # retry next pass, repeat). Skipping the pass BEFORE anything
@@ -833,9 +951,14 @@ def watch(
                         # at it again, starving every normal copy arrival)
                         log(f"'{movie.name}' is not stable yet (still copying?) => later.")
                         continue
-                    # a manual encode or a pause can begin mid-pass: hold this
-                    # file and the rest back; the next pass reports the pause
+                    # a manual encode, a pause, or the encode window can begin
+                    # mid-pass: hold this file and the rest back; the next pass
+                    # reports it (issue #434)
                     if pause_reason(state_dir) is not None:
+                        break
+                    if not encode_window_open(
+                        current.encode_window_start, current.encode_window_end
+                    ):
                         break
                     try:
                         known.add(_identity(movie))
@@ -939,7 +1062,11 @@ def watch(
                             # same root race on - the job path covers them
                             # inside its guard, the watcher must too
                             if result.skipped_reason:
-                                log(f"Skipping '{movie.name}': {result.skipped_reason}.")
+                                # NO line here (issue #471's no-duplicate rule):
+                                # the decision line came from the engine site
+                                # that decided it (plan.py's verdict or the
+                                # pipeline's gate/skip lines); this branch only
+                                # records
                                 if record is not None:
                                     record(movie, result, None)
                             elif result.success:

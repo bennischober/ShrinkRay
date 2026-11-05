@@ -295,11 +295,9 @@ def record_plan(
                 "that no longer exist; the file is re-decided on the next run"
             )
         return None
-    # the fingerprint stores the EFFECTIVE decision inputs: for HDR the
-    # engine overrides target/range and switches to the 10-bit encoder,
-    # so a plan of an HDR movie must be recorded under those values. The
-    # result is the single source of truth for all of them (the engine's
-    # plan-reuse lookup matches on exactly this fingerprint)
+    # the fingerprint stores the EFFECTIVE decision inputs. The result is
+    # the single source of truth for all of them (the engine's plan-reuse
+    # lookup matches on exactly this fingerprint)
     encoder = result.encoder or config.handbrake_encoder
     # the plan fingerprint keys on the PROBE preset (issue #22 decision): a
     # stored plan is a probe result, its CRF depends on the probe preset
@@ -564,12 +562,10 @@ def record_quality_results(
         encode_id = save_encode(
             connection,
             movie,
-            # the EFFECTIVE target, not the caller's: for HDR the engine
-            # overrides it (DEFAULT_HDR_TARGET_VMAF), and the row must record
-            # the target the encode was actually decided against
+            # the engine's effective target: the row records the target the
+            # encode was actually decided against
             f"VMAF>{result.target_vmaf}",
-            # the EFFECTIVE encoder, not the config's: for HDR the engine
-            # switched to the 10-bit variant, and a per-encoder drift or
+            # the engine's effective encoder, not the config's: a per-encoder drift or
             # benchmark analysis would mix 8-bit and 10-bit rows otherwise
             result.encoder or config.handbrake_encoder,
             result.input_size,
