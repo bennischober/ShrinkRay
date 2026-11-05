@@ -717,12 +717,29 @@ def execute_scan(
                 }
             )
 
+    # the category roots: the resident app's allowed roots - the same roots
+    # the watcher scans (app.allowed_roots; the lazy import keeps the
+    # module-level import direction app -> jobs acyclic)
+    from shrinkray.server.app import allowed_roots
+
+    roots = [root for root in allowed_roots() if root.exists()]
+
     for path in payload_paths(payload):
         if path.is_file():
-            # single movie file (per-movie action)
+            # single movie file (per-movie action). The category root is the
+            # watch root the file lives under (issue #489), so a Title
+            # subfolder's file groups under its folder exactly as a
+            # watcher-discovered file does; a file outside every root (an
+            # ad-hoc single-file scan) keeps parent-as-root, this branch's
+            # original and documented CLI semantics (scan.resolve_input_paths).
             from shrinkray.engine.scan import process_movie
 
-            data, error = process_movie(path, path.parent, config, db_file=_db_file_of(connection))
+            resolved = path.resolve()
+            scan_root = next(
+                (root for root in roots if resolved.is_relative_to(root)),
+                path.parent,
+            )
+            data, error = process_movie(path, scan_root, config, db_file=_db_file_of(connection))
             if data is not None:
                 movies.append(data)
                 by_category.setdefault(data["category"], []).append(data)

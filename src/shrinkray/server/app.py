@@ -239,6 +239,16 @@ def allow_roots(roots: list[Path]) -> None:
     _allowed_roots = [root.resolve() for root in roots]
 
 
+def allowed_roots() -> list[Path]:
+    """Returns the folder roots the API may operate on (a copy).
+
+    The resident app's category-root contract (issue #489): these are the
+    same roots the watcher scans, so a server-side scan records a file's
+    category against the root the watcher would have used.
+    """
+    return list(_allowed_roots)
+
+
 def validate_path(path_str: str, what: str = "path") -> Path:
     """Validates a user-provided path against the allowed roots.
 
