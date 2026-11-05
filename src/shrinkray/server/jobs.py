@@ -731,11 +731,13 @@ def execute_scan(
             # never writes - the row goes through scan_movies's write-back
             # (the same recording the directory branch and the encode job's
             # payload scan use). The category root is the MOST SPECIFIC
-            # allowed root containing the file (nested --allow roots make
-            # first-match wrong: the watcher's deepest-root pass is the
-            # reference); a file outside every root keeps parent-as-root,
-            # this branch's original and documented CLI semantics
-            # (scan.resolve_input_paths).
+            # allowed root containing the file - a deterministic choice that
+            # matches the watcher's scan when roots are supplied shallow-first
+            # (the watcher scans a nested file once per containing root in
+            # --root order and the last pass wins; the depth rule here does
+            # not depend on that order). A file outside every root keeps
+            # parent-as-root, this branch's original and documented CLI
+            # semantics (scan.resolve_input_paths).
             from shrinkray.engine.scan import scan_movies
 
             resolved = path.resolve()

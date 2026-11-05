@@ -102,7 +102,9 @@ class TestScanJobCategoryRoot(unittest.TestCase):
 
     def test_the_most_specific_root_wins_when_roots_nest(self) -> None:
         """Nested --allow roots: the branch picks the deepest containing root
-        (the watcher's deepest pass is the reference), not the first."""
+        - a deterministic rule that does not depend on the roots' submission
+        order (the watcher's own multi-root scan order is its own behaviour,
+        outside this branch)."""
         outer = self.root
         inner = self.root / "Title"
         _result, captured = self._scan([outer, inner])
