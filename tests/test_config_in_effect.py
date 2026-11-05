@@ -120,7 +120,7 @@ class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
             "{"
             '"file": {"extensions": [".mkv", ".mp4"], "output": {"separator": ";"}},'
             '"ffmpeg": {"black_bars": {"MIN_WIDTH": 25, "MIN_HEIGHT": 26}, "crop_sample_count": 11},'
-            '"handbrake": {"preset": "P 5", "encoder": "svt_av1", "encoder_preset": "7",'
+            '"handbrake": {"preset": "P 5", "encoder": "svt_av1", "probe_encoder_preset": "8", "encoder_preset": "7",'
             '  "max_threads": 4, "stall_minutes": 12.5,'
             '  "audio_languages": ["ger"], "subtitle_languages": ["eng"]},'
             '"quality": {"target_vmaf": 93.5, "sample_every": 700, "sample_count": 4, "sample_seconds": 12},'
@@ -141,6 +141,7 @@ class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
         self.assertEqual(body["ffmpeg"]["crop_sample_count"], conf.crop_sample_count)
         self.assertEqual(body["handbrake"]["preset"], conf.handbrake_preset)
         self.assertEqual(body["handbrake"]["encoder"], conf.handbrake_encoder)
+        self.assertEqual(body["handbrake"]["probe_encoder_preset"], conf.handbrake_probe_encoder_preset)
         self.assertEqual(body["handbrake"]["encoder_preset"], conf.handbrake_encoder_preset)
         self.assertEqual(body["handbrake"]["max_threads"], conf.handbrake_max_threads)
         self.assertEqual(body["handbrake"]["stall_minutes"], conf.handbrake_stall_minutes)
