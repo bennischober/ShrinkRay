@@ -108,6 +108,20 @@ class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
         self.assertEqual(response.json()["quality"]["target_vmaf"], 94)
         self.assertIn("not applied", response.json()["config_error"])
 
+    def test_the_app_section_is_served_not_the_schema_defaults(self) -> None:
+        """Round-2 finding 1: the merge brought the app section (#434's encode
+        window, auto_backlog) and _conf_to_dict did not pass it, so the route
+        served schema defaults for fields the loader holds real values for."""
+        self._load(
+            '{"app": {"auto_backlog": true, "encode_window_start": "01:00", '
+            '"encode_window_end": "02:00"}}'
+        )
+
+        body = TestClient(fast_app).get("/api/config").json()
+        self.assertEqual(body["app"]["auto_backlog"], True)
+        self.assertEqual(body["app"]["encode_window_start"], "01:00")
+        self.assertEqual(body["app"]["encode_window_end"], "02:00")
+
     def test_a_valid_edit_shows_the_new_values_after_the_refresh(self) -> None:
         self._load('{"quality": {"target_vmaf": 92}}')
         # a DIFFERENT LENGTH so the file signature changes (same-size writes

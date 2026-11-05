@@ -635,6 +635,7 @@ def _conf_to_dict(conf: Conf) -> dict:
         dict: The config.json-shaped dict.
     """
     from shrinkray.config import (
+        AppSection,
         BlackBarsSection,
         CodecSection,
         ConfigModel,
@@ -680,6 +681,11 @@ def _conf_to_dict(conf: Conf) -> dict:
             min_source_width=conf.min_source_width,
             min_source_size_gb=conf.min_source_size_gb,
             candidate_codecs=conf.candidate_codecs,
+        ),
+        app=AppSection(
+            auto_backlog=conf.auto_backlog,
+            encode_window_start=conf.encode_window_start,
+            encode_window_end=conf.encode_window_end,
         ),
         language=conf.language,
     )
@@ -795,11 +801,13 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     from shrinkray import config as config_module
     from shrinkray.tools.process import rss_mib
 
-    # prompt detection (issue #541): the open dashboard polls this route every
-    # few seconds, so a broken config.json edit is judged HERE - one stat when
-    # nothing changed - instead of waiting for the watcher's next file boundary
-    # (60 s, up to 4 min idle). Applying a change stays at file boundaries:
-    # a running encode keeps the settings it started with.
+    # prompt detection (issue #541): a broken config.json edit is judged HERE
+    # - one stat when nothing changed - instead of waiting for the watcher's
+    # next file boundary (60 s, up to 4 min idle). The dashboard's own poll is
+    # /api/snapshot (which makes the same call); this route keeps it for its
+    # own consumers (curl, scripts, tests, and the maintainer decision named
+    # it). Applying a change stays at file boundaries: a running encode keeps
+    # the settings it started with.
     config_module.refresh_config()
     running = s.with_lock(
         lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
