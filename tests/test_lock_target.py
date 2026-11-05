@@ -28,6 +28,7 @@ def _conf_stub() -> object:
             "handbrake_encoder": "svt_av1",
             "handbrake_probe_encoder_preset": "5",
             "handbrake_encoder_preset": "3",
+            "min_saving_percent": 15,
             "handbrake_max_threads": 0,
             "crop_sample_count": 10,
             "min_source_height": 1080,

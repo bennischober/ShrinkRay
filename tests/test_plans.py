@@ -157,6 +157,7 @@ class TestRecordPlan(unittest.TestCase):
             output_size=8,  # the estimate
             success=True,
             target_vmaf=95.0,
+            min_saving_percent=15,
             crf_range=(14, 32),
             sample_count=3,
             sample_seconds=10.0,
@@ -169,7 +170,7 @@ class TestRecordPlan(unittest.TestCase):
             encoder="svt_av1",
             input_mtime=None,  # a duck-typed result without the #436 field
         )
-        config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
+        config = type("Conf", (), {"handbrake_encoder": "svt_av1", "min_saving_percent": 15})()
         plan_id = service.record_plan(self.connection, movie, result, config)
         return plan_id, movie
 
@@ -201,6 +202,7 @@ class TestRecordPlan(unittest.TestCase):
             output_size=8,
             success=True,
             target_vmaf=95.0,
+            min_saving_percent=15,
             crf_range=(14, 32),
             sample_count=3,
             sample_seconds=10.0,
@@ -211,7 +213,7 @@ class TestRecordPlan(unittest.TestCase):
             probe_encoder_preset="5",
             hdr=False,
         )
-        config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
+        config = type("Conf", (), {"handbrake_encoder": "svt_av1", "min_saving_percent": 15})()
         self.assertIsNone(service.record_plan(self.connection, movie, result, config))
 
 

@@ -594,6 +594,7 @@ class TestCropCancelReachesBothPasses(unittest.TestCase):
                 pipeline_module._probe_movie(
                     movie,
                     target_vmaf=96.0,
+                    min_saving_percent=15,
                     crf_range=(14, 45),
                     sample_count=3,
                     sample_seconds=2.0,

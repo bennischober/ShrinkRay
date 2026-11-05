@@ -498,7 +498,8 @@ Example [config.json](config.json):
         "max_threads": 0                  // per-encode thread cap (0 = all cores)
     },
     "quality": {
-        "target_vmaf": 96             // the required VMAF (--target-vmaf overrides it)
+        "target_vmaf": 96,            // the required VMAF (--target-vmaf overrides it)
+        "min_saving_percent": 15      // skip when the predicted saving is below this (0 = any shrink)
     },
     "resources": {
         "idle_priority": true       // encodes run below normal priority

@@ -325,6 +325,7 @@ class QualityResult:
     output: Path
     success: bool
     target_vmaf: float = DEFAULT_TARGET_VMAF
+    min_saving_percent: int = 0
     chosen_crf: int | None = None
     achieved_vmaf: float | None = None
     probes: list[SampleProbe] = field(default_factory=list)

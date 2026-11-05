@@ -1655,6 +1655,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
         return WatchSettings(
             max_threads=cap_threads(config.handbrake_max_threads),
             target_vmaf=config.target_vmaf,
+            min_saving_percent=config.min_saving_percent,
             min_source_height=config.min_source_height,
             min_source_width=config.min_source_width,
             min_source_size_gb=config.min_source_size_gb,

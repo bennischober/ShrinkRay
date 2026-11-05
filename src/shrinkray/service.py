@@ -337,6 +337,7 @@ def record_plan(
         result.crop_sample_count,
         result.vmaf_statistic,
         result.vmaf_recipe or "",
+        result.min_saving_percent,
     )
 
 

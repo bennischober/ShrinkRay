@@ -410,6 +410,23 @@ class TestImageKeepsItsConfigOnTheVolume(unittest.TestCase):
         self.assertIn("COPY container-config.json /app/config.json", runtime)
 
 
+class TestMinSavingPercentValidation(unittest.TestCase):
+    """Issue #316: the threshold's range validation at config load."""
+
+    def test_the_range_is_enforced_and_the_default_is_15(self) -> None:
+        from pydantic import ValidationError
+
+        from shrinkray.config import Conf
+
+        self.assertEqual(Conf({}).min_saving_percent, 15)
+        Conf({"quality": {"min_saving_percent": 0}})  # the old rule
+        Conf({"quality": {"min_saving_percent": 99}})
+        with self.assertRaises(ValidationError):
+            Conf({"quality": {"min_saving_percent": 100}})
+        with self.assertRaises(ValidationError):
+            Conf({"quality": {"min_saving_percent": -1}})
+
+
 class TestEncodeWindow(unittest.TestCase):
     """Issue #434: the daily encode window's config validation and helper."""
 
