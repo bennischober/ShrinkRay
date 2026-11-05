@@ -83,9 +83,30 @@ if (-not $handbrake) {
 if ($handbrake) {
     Write-Skip "HandBrakeCLI"
 } else {
-    Write-Host "    installing HandBrake (winget)..."
-    winget install --id HandBrake.HandBrake --accept-source-agreements --accept-package-agreements
-    Write-Ok "HandBrake installed"
+    Write-Host "    installing HandBrakeCLI (winget; the CLI package, not the GUI one)"
+    Write-Host "    -- the GUI package (HandBrake.HandBrake) does not ship HandBrakeCLI.exe..."
+    winget install --id HandBrake.HandBrake.CLI --accept-source-agreements --accept-package-agreements
+    # winget installs do not update the current session's PATH, and the CLI
+    # package is portable (zip): winget shims it into %LOCALAPPDATA%\Microsoft\WinGet\Links
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "User") + ";" +
+        [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Links"
+    $handbrake = Get-Command HandBrakeCLI -ErrorAction SilentlyContinue
+    if ($handbrake) {
+        # verify the artifact (a zero exit is not success): the version probe
+        # reads the MERGED output like the product does (tools/handbrake.py)
+        $version = (& HandBrakeCLI --version 2>&1 | Out-String).Trim()
+        if ($version -match "\d+\.\d+") {
+            Write-Ok "HandBrakeCLI installed ($(($version -split "`n")[0]))"
+        } else {
+            Write-Host "    HandBrakeCLI is on PATH but --version produced no version line." -ForegroundColor Yellow
+            Write-Host "    Run 'HandBrakeCLI --version' yourself and re-run this script if it works."
+            exit 1
+        }
+    } else {
+        Write-Host "    HandBrakeCLI installed but not on PATH yet - open a NEW terminal and re-run this script." -ForegroundColor Yellow
+        exit 1
+    }
 }
 
 # ── 5. the repository ───────────────────────────────────────────────────
