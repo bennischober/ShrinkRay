@@ -80,7 +80,10 @@ class TestCacheHitKeepsTheStoredHash(unittest.TestCase):
         from shrinkray.engine.scan import scan_movies
 
         self._record_with_hash("abc123")
-        self.movie.write_bytes(b"CHANGED" * 32)  # mtime+size change: re-probe
+        # rescan=True bypasses the cache branch entirely (scan_movies skips
+        # the lookup when rescan is set); the changed bytes make the scenario
+        # the realistic one (a file that changed since its last scan)
+        self.movie.write_bytes(b"CHANGED" * 32)
 
         def fake_process_movie(movie, root, config, db_file=None, **kwargs):
             data = TestScanJobCategoryRoot._fake_data(movie, root)
