@@ -13,7 +13,6 @@ from __future__ import annotations
 DEFAULT_ENCODER = "svt_av1"
 HDR_ENCODER = "svt_av1_10bit"
 # HDR size estimates carry a measured, systematic bias (issue #98): the size
-# HDR size estimates carry a measured, systematic bias (issue #98): the size
 # estimate comes from the probe windows (all of them when the probe cache
 # carries their encoded sizes, one window otherwise — issue #388), and HDR
 # samples skew toward easy content (dark, static), so the predicted ratio
