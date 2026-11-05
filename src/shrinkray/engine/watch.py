@@ -150,8 +150,10 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
         db_file (Path | None): The database file; None records nothing.
 
     Returns:
-        bool: True when the file was scanned and recorded (or nothing needed
-            recording), False when the scan failed.
+        bool: True when the scan succeeded (the row recorded, or - on a
+            recording failure - logged and left to the encode job's
+            recording, `service.ensure_file_row`'s minimal row), False when
+            the scan itself failed.
     """
     if db_file is None:
         return True
@@ -171,10 +173,12 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
         log_error(f"Scanning '{movie.name}' failed: {error} => retried when the file changes.")
         return False
     # record the scan's result (issue #574): the row is the catalog's memory
-    # of the watchdog's scan, and the encode job's payload scan then hits the
-    # cache instead of re-probing. A recording failure must not fail the scan
-    # (the #507/#517 rule: a failed write costs the shortcut, never the
-    # measurement) - the encode job's payload scan records the row instead.
+    # of the watchdog's scan. It also preempts the encode path's minimal row
+    # (service.ensure_file_row writes category=parent.name when no row
+    # exists) - the recorded category stays the watch root's. A recording
+    # failure must not fail the scan (the #507/#517 rule: a failed write
+    # costs the shortcut, never the measurement); the encode path's own
+    # recording then writes its minimal row.
     try:
         connection = db.connect(db_file)
         try:
@@ -183,7 +187,9 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
         finally:
             connection.close()
     except (OSError, sqlite3.Error) as e:
-        log(f"Recording '{movie.name}'s scan failed ({e}); the encode job's scan records it.")
+        log(
+            f"Recording '{movie.name}'s scan failed ({e}); the encode path's own recording writes the row."
+        )
     return True
 
 

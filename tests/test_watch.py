@@ -745,8 +745,8 @@ class TestScanIntoDbRecords(unittest.TestCase):
 
     def test_a_failed_recording_does_not_fail_the_scan(self) -> None:
         """The #507/#517 rule: a failed write costs the shortcut, never the
-        measurement - the scan still reports success (the encode job's payload
-        scan records the row instead)."""
+        measurement - the scan still reports success (the encode path's own
+        recording, service.ensure_file_row, writes its minimal row then)."""
         import sqlite3
         from unittest.mock import patch
 
