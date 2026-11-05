@@ -13,17 +13,20 @@ from __future__ import annotations
 DEFAULT_ENCODER = "svt_av1"
 HDR_ENCODER = "svt_av1_10bit"
 # HDR size estimates carry a measured, systematic bias (issue #98): the size
-# probe encodes ONE early window, and HDR samples skew toward easy content
-# (dark, static), so the predicted ratio lands far below the real one —
-# measured on an HDR 4K title: 19.1% real savings vs 78% predicted. HDR
-# sources are SKIPPED since issue #518 (the maintainer's #340 decision), so
-# no new estimate is ever made — the note annotates the HISTORICAL plan rows
-# (hdr=1 in the plans table) whose estimates still render. Quoted, never
-# recomputed: the factor itself is a measurement this codebase cannot remake
-# without the original title.
+# estimate comes from the probe windows (all of them when the probe cache
+# carries their encoded sizes, one window otherwise — issue #388), and HDR
+# samples skew toward easy content (dark, static), so the predicted ratio
+# lands far below the real one — measured on an HDR 4K title: 19.1% real
+# savings vs 78% predicted. HDR sources are SKIPPED since issue #518 (the
+# maintainer's #340 decision), so no new estimate is ever made — the note
+# annotates the HISTORICAL plan rows (hdr=1 in the plans table) whose
+# estimates still render. Quoted, never recomputed: the factor itself is a
+# measurement this codebase cannot remake without the original title.
 HDR_ESTIMATE_NOTE = (
-    "HDR estimate: measured on one easy-content window; real savings run "
-    "much lower (measured 19.1% real vs 78% predicted on an HDR 4K title)"
+    "HDR estimate: the prediction comes from easy-content probe windows "
+    "(all of them when the probe cache carries their encoded sizes, one "
+    "window otherwise); real savings run much lower (measured 19.1% real vs "
+    "78% predicted on an HDR 4K title)"
 )
 
 

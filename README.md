@@ -303,17 +303,21 @@ Runs the same probing pipeline as a quality encode (samples, CRF search, bar
 detection) and prints the predicted outcome per movie — encode or skip, with
 CRF, VMAF and an estimated size — plus the estimated total savings. Use it to
 decide whether (and with which options) a real encode run is worth it. The
-size estimate comes from the short probe samples, so treat it as a ballpark;
-the probing predicts the decision, the encode measures it — the chosen CRF
-can differ by ±1 between runs.
+size estimate is the decision's own factor at the chosen CRF — the total over
+every probe window's encoded size when the cache carries them all ([#314](https://github.com/bennischober/ShrinkRay/issues/314)), the
+one-window fallback when it does not — so plan and encode no longer disagree
+about the size they measured ([#388](https://github.com/bennischober/ShrinkRay/issues/388)). It is still a prediction: the probe
+runs at the probe preset, the encode at the final one, and the chosen CRF can
+differ by ±1 between runs.
 
 **HDR estimates (historical rows only) are biased optimistic.** HDR sources are
 skipped since issue #518, so no new HDR estimate is made; plan rows recorded by
 earlier versions still show theirs, and those carry a measured bias (the plan's
-size estimate encodes one early window and HDR samples skew toward easy content,
-so the prediction lands far above the real savings — measured on an HDR 4K
-title: 19.1% real vs 78% predicted). Every surface that shows such an estimate
-carries the note.
+size estimate comes from the probe windows — all of them when the probe cache
+carries their encoded sizes, one window otherwise — and HDR samples skew toward
+easy content, so the prediction lands far above the real savings — measured on an
+HDR 4K title: 19.1% real vs 78% predicted). Every surface that shows such an
+estimate carries the note.
 
 ### `setup` — configure, pause and resume
 
