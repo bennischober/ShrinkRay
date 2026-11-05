@@ -317,29 +317,10 @@ class AppSection(BaseModel):
         return self
 
 
-class HdrSection(BaseModel):
-    """codec.hdr: the markers that flag a source as HDR.
-
-    The defaults ARE the documented HDR signature (issue #236, the
-    maintainer's decision: HDR detection defaults in code): a config that
-    says nothing about HDR still classifies bt2020nc/smpte2084 streams
-    correctly, because the shipped config.json's values — the repo's own
-    working setup — are now the code's defaults. An operator can still
-    narrow or extend the lists; an empty list means "nothing is HDR".
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    color_space: list[str] = ["bt2020nc"]
-    color_transfer: list[str] = ["smpte2084"]
-
-
 class CodecSection(BaseModel):
     """The codec section of config.json."""
 
     model_config = ConfigDict(extra="forbid")
-
-    hdr: HdrSection = Field(default_factory=HdrSection)
 
 
 def _parse_hhmm(value: str, key: str) -> time:
@@ -422,12 +403,24 @@ class Conf:
                 "integration was removed (issue #43); the key is ignored."
             )
             data.pop("integrations")
+        if "codec" in data and isinstance(data["codec"], dict) and "hdr" in data["codec"]:
+            # the codec.hdr markers drove the HDR classification until issue
+            # #518 (the maintainer's #340 decision): HDR sources are skipped
+            # as not supported, on a FIXED transfer set in code - a config
+            # key that no longer drives anything is removed, and an old
+            # config that sets it still loads with this one-time warning
+            # (the integrations-key pattern, issue #43)
+            log_warning(
+                "config.json contains 'codec.hdr' - the HDR marker lists no "
+                "longer drive anything (issue #518: HDR sources are skipped "
+                "as not supported yet, on a fixed transfer set in code); "
+                "the key is ignored."
+            )
+            data["codec"] = {k: v for k, v in data["codec"].items() if k != "hdr"}
+            if not data["codec"]:
+                data.pop("codec")
 
         model = ConfigModel.model_validate(data)
-
-        # codec => hdr detection
-        self.hdr_color_spaces: list[str] = model.codec.hdr.color_space
-        self.hdr_color_transfers: list[str] = model.codec.hdr.color_transfer
 
         # file => extensions and output settings
         self.extensions: list[str] = model.file.extensions
@@ -492,6 +485,11 @@ config_file_used: Path | None = None
 # what refresh_config() last judged (issue #247): the file's (mtime_ns, size),
 # or None when it did not exist. A changed signature means "read it again".
 _config_signature: tuple[int, int] | None = None
+# the judged-state marker for a path that cannot even be statted (never a
+# real (mtime_ns, size) pair, and never None - None is a DELETED file's
+# signature, and reusing it would keep a stale "Permission denied" reason
+# after the operator fixes the permission and then deletes the file)
+_UNSTATABLE: tuple[int, int] = (-1, -1)
 
 # why the file on disk is NOT the config in effect (an edit that failed to
 # parse or validate), or None when it is. The dashboard's status shows it.
@@ -597,7 +595,26 @@ def refresh_config() -> Conf:
         if _config is None or config_file_used is None:
             return load_config()
         path = config_file_used
-        signature = _file_signature(path)
+        try:
+            signature = _file_signature(path)
+        except OSError as e:
+            # the path cannot even be statted (a directory without execute
+            # permission): judged like a file that does not parse - last-good
+            # stays in effect and the reason is reported (issue #541, review
+            # finding 1; the old route answered an opaque 500 here, and the
+            # answer differed per interpreter). Recording the _UNSTATABLE
+            # sentinel keeps the report once-per-state: the next poll's stat
+            # fails the same way and returns the cached config silently, a
+            # restored permission re-judges the file normally, and - unlike
+            # None - a deletion after the permission fix re-judges too, so the
+            # reason can never stay a stale "Permission denied" once the file
+            # is gone.
+            if _config_signature == _UNSTATABLE:
+                return _config
+            _config_signature = _UNSTATABLE
+            config_error = f"'{path}' was not applied, the previous settings stay in effect: {e}"
+            log_error(config_error)
+            return _config
         if signature == _config_signature:
             return _config
         # this version of the file is judged now, good or bad: a bad one is

@@ -717,19 +717,52 @@ def execute_scan(
                 }
             )
 
+    # the category roots: the resident app's allowed roots - the same roots
+    # the watcher scans (app.allowed_roots; the lazy import keeps the
+    # module-level import direction app -> jobs acyclic)
+    from shrinkray.server.app import allowed_roots
+
+    roots = [root for root in allowed_roots() if root.exists()]
+
     for path in payload_paths(payload):
         if path.is_file():
-            # single movie file (per-movie action)
-            from shrinkray.engine.scan import process_movie
+            # single movie file (per-movie action). RECORD it the way the
+            # watch path records (issue #489): process_movie computes, it
+            # never writes - the row goes through scan_movies's write-back
+            # (the same recording the directory branch and the encode job's
+            # payload scan use). The category root is the MOST SPECIFIC
+            # allowed root containing the file - a rule that depends only on
+            # the folder structure, never on the roots' submission order. A
+            # file outside every root keeps parent-as-root, this branch's
+            # original and documented CLI semantics (scan.resolve_input_paths).
+            from shrinkray.engine.scan import scan_movies
 
-            data, error = process_movie(path, path.parent, config, db_file=_db_file_of(connection))
-            if data is not None:
-                movies.append(data)
-                by_category.setdefault(data["category"], []).append(data)
-            else:
-                errors.append(error or "unknown error")
-            if on_movie is not None:
-                on_movie(0, data, error)
+            resolved = path.resolve()
+            scan_root = max(
+                (root for root in roots if resolved.is_relative_to(root)),
+                key=lambda r: len(r.parts),
+                default=path.parent,
+            )
+            part_by_cat, part_movies, part_errors = scan_movies(
+                scan_root,
+                config,
+                workers=payload.get("workers"),
+                connection=connection,
+                rescan=payload.get("rescan", False),
+                compute_hash=payload.get("hash", False),
+                exclude=Path(payload["exclude"]) if payload.get("exclude") else None,
+                on_movie=on_movie,
+                files=[resolved],
+                walked=False,
+                db_file=_db_file_of(connection),
+            )
+            movies.extend(part_movies)
+            errors.extend(part_errors)
+            for cat, mvs in part_by_cat.items():
+                by_category.setdefault(cat, []).extend(mvs)
+            # on_movie is scan_movies's callback now: the per-movie progress
+            # fires inside it (the old branch's own call referenced the
+            # removed data/error locals)
         else:
             part_by_cat, part_movies, part_errors = scan_movies(
                 path,

@@ -137,9 +137,12 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
     is (1) scanned into the database and (2) re-decided from that fresh scan.
     The engine owns the scan (`engine.scan.process_movie`), so the watcher can
     call it without crossing a layer; the DECISION belongs to the encode job
-    the queue runs (`submit`). A failed scan returns False and the caller
-    leaves the file eligible (it is already in `known`, so the retry happens
-    when the file changes).
+    the queue runs (`submit`). The scan RECORDS the row here (issue #574):
+    process_movie computes and never writes, so the write-back is this
+    function's job - a file the watchdog saw but whose encode job never ran
+    is still catalogued, under the watch root's category. A failed scan
+    returns False and the caller leaves the file eligible (it is already in
+    `known`, so the retry happens when the file changes).
 
     Args:
         movie (Path): The file to scan.
@@ -147,12 +150,16 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
         db_file (Path | None): The database file; None records nothing.
 
     Returns:
-        bool: True when the file was scanned and recorded (or nothing needed
-            recording), False when the scan failed.
+        bool: True when the scan succeeded (the row recorded, or - on a
+            recording failure - logged and left to the encode job's
+            recording, `service.ensure_file_row`'s minimal row), False when
+            the scan itself failed.
     """
     if db_file is None:
         return True
+    from shrinkray import db
     from shrinkray.config import load_config
+    from shrinkray.engine.scan import movie_record_from_data
 
     try:
         data, error = process_movie(movie, root, load_config(), db_file=db_file)
@@ -165,6 +172,24 @@ def _scan_into_db(movie: Path, root: Path, db_file: Path | None) -> bool:
     if data is None:
         log_error(f"Scanning '{movie.name}' failed: {error} => retried when the file changes.")
         return False
+    # record the scan's result (issue #574): the row is the catalog's memory
+    # of the watchdog's scan. It also preempts the encode path's minimal row
+    # (service.ensure_file_row writes category=parent.name when no row
+    # exists) - the recorded category stays the watch root's. A recording
+    # failure must not fail the scan (the #507/#517 rule: a failed write
+    # costs the shortcut, never the measurement); the encode path's own
+    # recording then writes its minimal row.
+    try:
+        connection = db.connect(db_file)
+        try:
+            db.upsert_file(connection, movie_record_from_data(movie, data))
+            connection.commit()
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error) as e:
+        log(
+            f"Recording '{movie.name}'s scan failed ({e}); the encode path's own recording writes the row."
+        )
     return True
 
 

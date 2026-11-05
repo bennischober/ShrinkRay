@@ -45,12 +45,6 @@ from shrinkray.engine.encoders import (
     DEFAULT_ENCODER as DEFAULT_ENCODER,
 )
 from shrinkray.engine.encoders import (
-    DEFAULT_HDR_TARGET_VMAF as DEFAULT_HDR_TARGET_VMAF,
-)
-from shrinkray.engine.encoders import (
-    HDR_ENCODER as HDR_ENCODER,
-)
-from shrinkray.engine.encoders import (
     encoder_for as encoder_for,
 )
 from shrinkray.engine.identity import (
@@ -87,9 +81,6 @@ from shrinkray.engine.plan import (
     is_1080p_class as is_1080p_class,
 )
 from shrinkray.engine.plan import (
-    is_hdr_file as is_hdr_file,
-)
-from shrinkray.engine.plan import (
     plan_quality as plan_quality,
 )
 from shrinkray.engine.plan import (
@@ -112,9 +103,6 @@ from shrinkray.engine.samples import (
 )
 from shrinkray.engine.search import (
     DEFAULT_CRF_RANGE as DEFAULT_CRF_RANGE,
-)
-from shrinkray.engine.search import (
-    DEFAULT_HDR_CRF_RANGE as DEFAULT_HDR_CRF_RANGE,
 )
 from shrinkray.engine.search import (
     DEFAULT_TARGET_VMAF as DEFAULT_TARGET_VMAF,
@@ -976,7 +964,6 @@ def _probe_movie(
     sample_seconds: float,
     encoder: str,
     probe_encoder_preset: str,
-    hdr: bool = False,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
@@ -999,7 +986,6 @@ def _probe_movie(
         probe_encoder_preset (str): The PROBE's encoder speed preset (a
             measurement setting, issue #22).
         crop_sample_count (int): cropdetect windows per movie.
-        hdr (bool): Tone-map both sides for the VMAF measurement.
         cancel (threading.Event | None): Cooperative cancellation.
         db_file (Path | None): The database file for failure-evidence logs.
         encoder_threads (int | None): Thread limit for the probe encodes
@@ -1049,11 +1035,10 @@ def _probe_movie(
                 f"top {crop[0]}, bottom {crop[1]}, left {crop[2]}, right {crop[3]}"
             )
         # the measurement recipe follows the source's dimensions (for the model
-        # and the scale, through the crop), its bit depth (the analysis pixel
-        # format) and the HDR flag (the tone-map) - issue #308
+        # and the scale, through the crop) and its bit depth (the analysis
+        # pixel format) - issue #308
         recipe = vmaf_recipe(
             crop=crop,
-            hdr=hdr,
             width=source_width,
             height=source_height,
             bit_depth=source_bit_depth,
@@ -1071,7 +1056,6 @@ def _probe_movie(
             probe_encoder_preset=probe_encoder_preset,
             recipe=recipe,
             crop=crop,
-            hdr=hdr,
             cancel=cancel,
             db_file=db_file,
             encoder_threads=encoder_threads,
@@ -1207,20 +1191,34 @@ def encode_with_quality(
     from shrinkray.engine.plan import is_hdr_file as _is_hdr_file
 
     hdr = _is_hdr_file(input_file)
-    # the effective decision inputs: for HDR the engine overrides the
-    # target/range and switches to the 10-bit encoder (same rule as
-    # plan_quality, so a stored HDR plan is found under its real encoder).
-    # The encoder follows the SOURCE's bit depth now (issue #234): a 10-bit
-    # SDR master keeps its depth; HDR alone no longer decides it.
-    effective_encoder = encoder_for(source_bit_depth(input_file), hdr)
-    if hdr:
-        target_vmaf = DEFAULT_HDR_TARGET_VMAF
-        crf_range = DEFAULT_HDR_CRF_RANGE
+    # the effective decision inputs. The encoder follows the SOURCE's bit
+    # depth (issue #234): a 10-bit SDR master keeps its depth; HDR alone no
+    # longer decides it.
+    effective_encoder = encoder_for(source_bit_depth(input_file))
 
     from shrinkray.tools.ffprobe import probe_duration_seconds as _probe_duration
 
     duration = _probe_duration(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
+    if hdr:
+        # the maintainer's decision (issue #340, 2026-10-31; issue #518): HDR
+        # is not supported yet - the tone-mapped SDR measurement is not valid
+        # for HDR. Support returns with libvmaf's HDR models (#519). The
+        # detection is the SAME call the scan and the plan use (hdr, above):
+        # one probe per file, all three paths always agree.
+        log(f"Encode for '{input_file.name}': skip (hdr not supported)")
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error="HDR: not supported yet (no validated quality measurement); tracked in issue #519",
+            skipped_reason="hdr not supported",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
     if duration is not None and duration < MIN_ENCODE_SECONDS:
         log(f"Encode for '{input_file.name}': skip (too short)")
         return QualityResult(
@@ -1355,7 +1353,6 @@ def encode_with_quality(
             sample_seconds=sample_seconds,
             crop_sample_count=crop_sample_count,
             vmaf_recipe=vmaf_recipe(
-                hdr=hdr,
                 width=snapshot["width"],
                 height=snapshot["height"],
                 bit_depth=snapshot["bit_depth"],
@@ -1426,7 +1423,6 @@ def encode_with_quality(
                 sample_seconds,
                 effective_encoder,
                 probe_encoder_preset,
-                hdr=hdr,
                 cancel=cancel,
                 db_file=db_file,
                 encoder_threads=encoder_threads,
@@ -1601,7 +1597,6 @@ def encode_with_quality(
         # be comparable with the target it is checked against
         verify_recipe = vmaf_recipe(
             crop=crop,
-            hdr=hdr,
             width=(snapshot or {}).get("width"),
             height=(snapshot or {}).get("height"),
             bit_depth=(snapshot or {}).get("bit_depth"),
@@ -1618,7 +1613,6 @@ def encode_with_quality(
                     input_file,
                     verify_workdir,
                     crop=crop,
-                    hdr=hdr,
                     cancel=cancel,
                     db_file=db_file,
                     subsample=verified_subsample,

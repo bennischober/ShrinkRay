@@ -103,7 +103,6 @@ def main() -> int:
                 encoded,
                 Path(reference),
                 workdir=REPO / "test_media" / "scratch",
-                hdr="HDR" in label,
                 db_file=REPO / "metadata.db",
                 cancel=cancel,
             )

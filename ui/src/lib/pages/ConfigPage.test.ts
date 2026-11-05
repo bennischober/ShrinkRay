@@ -1,12 +1,17 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import ConfigPage from './ConfigPage.svelte'
 import type { Config } from '../api'
 
-// the page fetches its config itself; the fixture answers without a server
+// the page fetches its config itself; the fixture answers without a server.
+// A single hoisted mock, overridable per test (issue #541's banner case).
+const apiConfig = vi.hoisted(() => ({ impl: async (): Promise<unknown> => ({}) }))
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
-  return { ...mod, api: { ...mod.api, config: () => Promise.resolve(configFixture) } }
+  return {
+    ...mod,
+    api: { ...mod.api, config: () => apiConfig.impl() },
+  }
 })
 
 /** Issue #239/#236: the config page rendered editable inputs whose values
@@ -38,6 +43,10 @@ const config: Config = {
 }
 
 describe('ConfigPage render (issue #239)', () => {
+  beforeEach(() => {
+    apiConfig.impl = async () => configFixture
+  })
+
   it('renders no editable input anywhere on the page', () => {
     render(ConfigPage, {
       scanPaths: ['/m'],
@@ -63,8 +72,21 @@ describe('ConfigPage render (issue #239)', () => {
   it('invites no click on the read-only rows (issue #535)', async () => {
     // the page is a mirror (issue #331): a pointer cursor on a value that
     // cannot change is an affordance that lies. The stylesheet must not
-    // declare one on .option-row.
+    // declare one on .option-row, nor on any state of it (issue #541: the
+    // original pin missed `.option-row:hover` and descendant rules).
     const css = (await import('./ConfigPage.svelte?raw')).default
-    expect(css).not.toMatch(/\.option-row\s*{[^}]*cursor:\s*pointer/s)
+    const pointerRules = css.match(/[^{}]*\{[^}]*cursor:\s*pointer[^}]*\}/gs) ?? []
+    const offending = pointerRules.filter((rule) => rule.includes('option-row'))
+    expect(offending).toEqual([])
+  })
+
+  it('renders the loader error as a banner, not a raw body (issue #541)', async () => {
+    apiConfig.impl = async () => ({
+      ...configFixture,
+      config_error: "'/data/config.json' was not applied, the previous settings stay in effect: x",
+    })
+    render(ConfigPage, { scanPaths: [], outputDir: '/out', targetVmaf: 96 })
+    expect(await screen.findByText(/^config.json has an error and was not applied\.$/)).toBeTruthy()
+    expect(screen.getByText(/ShrinkRay keeps running with the previous settings/)).toBeTruthy()
   })
 })

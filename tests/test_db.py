@@ -1421,11 +1421,11 @@ class TestDb(unittest.TestCase):
             self.assertIsNone(row["verified_vmaf"])
 
     def test_records_effective_target_vmaf(self):
-        """The preset column carries the EFFECTIVE target: for HDR the engine
-        overrides the requested target (DEFAULT_HDR_TARGET_VMAF), and the row
-        must record the target the encode was actually decided against —
-        regression: both callers persisted the caller's value, so every HDR
-        encode was recorded as VMAF>95.0 while decided against 94.5."""
+        """The preset column carries the engine's EFFECTIVE target (what the
+        encode was actually decided against), never the caller's — regression:
+        both callers persisted the caller's value, so a result decided against
+        94.5 was recorded as VMAF>95.0. The HDR override this test once
+        exercised is gone (issue #518); the recording rule is unchanged."""
 
         from shrinkray import service
         from shrinkray.engine.plan import QualityResult
@@ -1438,13 +1438,12 @@ class TestDb(unittest.TestCase):
                 input=movie,
                 output=root / "enc" / "movie.mkv",
                 success=True,
-                target_vmaf=94.5,  # the engine's HDR override, not the caller's 95.0
+                target_vmaf=94.5,  # the engine's effective target, not the caller's 95.0
                 chosen_crf=22,
                 achieved_vmaf=94.6,
                 input_size=1000,
                 output_size=400,
-                hdr=True,
-                # what the engine carries on an HDR result (the 10-bit switch)
+                hdr=True,  # recorded to encodes.hdr for historical rows; new rows are always 0
                 encoder="svt_av1_10bit",
             )
             outcome = service.record_quality_results(
@@ -1456,8 +1455,9 @@ class TestDb(unittest.TestCase):
             self.assertEqual(row["encoder"], "svt_av1_10bit")
 
     def test_records_config_encoder_for_non_hdr(self):
-        """A non-HDR result records the config encoder (the default unchanged
-        — the effective encoder field only overrides for HDR)."""
+        """A result whose effective encoder equals the config's records the
+        config encoder (the effective-encoder field names what the decision
+        was made against, whatever decided it)."""
 
         from shrinkray import service
         from shrinkray.engine.plan import QualityResult

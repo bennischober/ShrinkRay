@@ -12,7 +12,6 @@ from unittest.mock import Mock, patch
 
 from shrinkray import db, service
 from shrinkray.engine import crop as engine_crop
-from shrinkray.engine import encoders as engine_encoders
 from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import samples as engine_samples
@@ -79,18 +78,6 @@ class TestQuality(unittest.TestCase):
         all derive from DEFAULT_TARGET_VMAF now; this pins the decision itself.
         """
         self.assertEqual(engine_search.DEFAULT_TARGET_VMAF, 96.0)
-
-    def test_the_hdr_default_is_the_sdr_default_minus_the_offset(self):
-        """The HDR target is calibrated DOWN from the SDR one by a fixed offset.
-
-        It used to be a second literal (94.5), which is how the two drifted apart
-        when only one was changed (issue #103). It is a difference now.
-        """
-        self.assertEqual(
-            engine_encoders.DEFAULT_HDR_TARGET_VMAF,
-            engine_search.DEFAULT_TARGET_VMAF - engine_encoders.HDR_VMAF_OFFSET,
-        )
-        self.assertLess(engine_encoders.DEFAULT_HDR_TARGET_VMAF, engine_search.DEFAULT_TARGET_VMAF)
 
     def test_no_surface_repeats_the_default_literal(self):
         """Every surface must DERIVE the default, not restate it as a literal.
@@ -336,37 +323,6 @@ class TestQuality(unittest.TestCase):
             else:
                 self.assertIn("model_path=vmaf_v0.6.1.json", joined)
 
-    def test_build_vmaf_command_hdr_crop_crops_the_reference(self):
-        """Issue #307: an HDR source with bars crops the reference before
-        the tone-map. The hdr branch used to ignore the crop, so the
-        HandBrake-cropped distorted input met an uncropped reference."""
-        command = tools_vmaf.build_vmaf_command(
-            Path("d.mkv"),
-            Path("r.mkv"),
-            8,
-            style=tools_vmaf.VMAF_STYLE_MODERN,
-            crop=(140, 140, 0, 0),
-            hdr=True,
-        )
-        joined = " ".join(command)
-        # cropped to the distorted geometry first, then tone-mapped
-        self.assertIn("[1:v]crop=iw-0:ih-280:0:140,zscale=t=linear", joined)
-        self.assertIn("[0:v]zscale=t=linear", joined)
-        # exactly one explicit pixel format per input, AFTER the tone-map: the
-        # tone-mapped float intermediate must not be converted back to 8-bit
-        self.assertEqual(joined.count("format=yuv420p10le"), 2)
-        self.assertNotIn("format=yuv420p,", joined)
-
-    def test_build_vmaf_command_hdr_without_crop_is_unchanged(self):
-        """The plain HDR path (no bars) keeps its tone-map-only graph."""
-        command = tools_vmaf.build_vmaf_command(
-            Path("d.mkv"), Path("r.mkv"), 8, style=tools_vmaf.VMAF_STYLE_MODERN, hdr=True
-        )
-        joined = " ".join(command)
-        self.assertNotIn("crop=", joined)
-        self.assertIn("[0:v]zscale=t=linear", joined)
-        self.assertIn("[1:v]zscale=t=linear", joined)
-
     def test_detect_vmaf_style_without_ffmpeg(self):
         # a missing ffmpeg must raise a clear error (CI has no ffmpeg)
         with self.assertRaises(RuntimeError):
@@ -486,7 +442,6 @@ class TestPlanReuse(unittest.TestCase):
         """Stores a plan for the movie via the service write path."""
         from shrinkray.engine.search import SampleProbe
 
-        hdr_value = overrides.get("hdr", False)
         result = engine_plan.QualityResult(
             input=movie,
             output=movie,
@@ -504,14 +459,12 @@ class TestPlanReuse(unittest.TestCase):
             crf_range=overrides.pop("crf_range", engine_search.DEFAULT_CRF_RANGE),
             sample_count=engine_search.sample_count_for(600.0, engine_plan.DEFAULT_SAMPLE_EVERY),
             sample_seconds=10.0,
-            hdr=hdr_value,
+            hdr=False,
             encoder=overrides.pop("encoder", "svt_av1"),
-            # the fingerprint's crop-independent recipe part, derived from the
-            # same hdr flag the result carries (the tests' source snapshot has
-            # no dimensions, so the model and scale cannot enter it)
-            vmaf_recipe=overrides.pop(
-                "vmaf_recipe", tools_vmaf.vmaf_recipe(hdr=hdr_value).fingerprint()
-            ),
+            # the fingerprint's crop-independent recipe part (the tests'
+            # source snapshot has no dimensions, so the model and scale
+            # cannot enter it)
+            vmaf_recipe=overrides.pop("vmaf_recipe", tools_vmaf.vmaf_recipe().fingerprint()),
         )
         config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
         record_plan = overrides.pop("record_plan", service.record_plan)
@@ -731,41 +684,6 @@ class TestPlanReuse(unittest.TestCase):
         fake_probe.assert_called_once()
         self.assertEqual(result.chosen_crf, 20)
         self.assertEqual(result.crf_source, "probe")
-
-    def test_hdr_plan_reuses_after_engine_switches_to_10bit(self):
-        """An HDR plan is stored under the EFFECTIVE encoder (svt_av1_10bit)
-        and a following encode of the same HDR file reuses it — regression:
-        plan results never carried hdr/encoder, so HDR plans were stored as
-        'x265' and the encode-side lookup (which matches on the overridden
-        encoder) never found them; every HDR encode re-probed from scratch.
-        See issues #26 and #24."""
-        movie = self._movie()
-        # plan_quality's write path: HDR override applied on the result
-        # (effective encoder svt_av1_10bit, HDR target/range), stored via
-        # record_plan
-        self._store_plan(
-            movie,
-            target_vmaf=engine_encoders.DEFAULT_HDR_TARGET_VMAF,
-            chosen_crf=18,
-            achieved_vmaf=94.8,
-            crf_range=engine_search.DEFAULT_HDR_CRF_RANGE,
-            encoder="svt_av1_10bit",
-            hdr=True,
-        )
-        row = self.connection.execute("SELECT encoder FROM plans").fetchone()
-        self.assertEqual(row["encoder"], "svt_av1_10bit")
-        # the encode side: same HDR file => the engine switches to 10-bit
-        # and MUST find the plan under it
-        with (
-            patch.object(engine_plan, "is_hdr_file", return_value=True),
-            patch.object(engine_pipeline, "_probe_movie") as fake_probe,
-            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
-        ):
-            result, _ = self._encode(movie)
-        fake_probe.assert_not_called()  # the plan replaces probing
-        self.assertEqual(result.crf_source, "plan")
-        self.assertEqual(result.chosen_crf, 18)
-        self.assertEqual(result.encoder, "svt_av1_10bit")
 
     def _encode_growing(self, movie: Path, factor: float = 1.5):
         """Runs _encode with a fake final encode that writes a LARGER file.
@@ -1258,7 +1176,6 @@ class TestProbeCache(unittest.TestCase):
                     "svt_av1",
                     "5",
                     None,
-                    False,
                     None,
                     ("hb", "1.6"),
                     tools_vmaf.vmaf_recipe().identifier(),
@@ -1298,8 +1215,8 @@ class TestProbeCache(unittest.TestCase):
         re-measures instead of reusing the old number.
 
         A stored probe measured with the 1080p model must not answer a 4K
-        measurement of the same window: the model, the scale, the pixel format and
-        the tone-map each move the score, and none of them used to be in the key.
+        measurement of the same window: the model, the scale and the pixel format
+        each move the score, and none of them used to be in the key.
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1423,7 +1340,9 @@ class TestProbeCache(unittest.TestCase):
         """The same rule for the plan: a stored plan measured with one recipe is
         never reused under another (issue #308). The recipe part the fingerprint
         carries is the crop-independent half (the plan lookup runs before bar
-        detection), so the pixel format and the tone-map must each invalidate it.
+        detection), so the pixel format must invalidate it (the model follows
+        the source's dimensions, which the lookup covers through the file
+        identity).
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1479,67 +1398,6 @@ class TestProbeCache(unittest.TestCase):
             self.assertIsNone(db.get_valid_plan(connection, movie, **lookup))
             connection.close()
 
-    def test_the_chosen_crf_size_keys_on_hdr(self):
-        """The cache key carries the HDR flag (issue #314's reviewer round 3):
-        a cache seeded under hdr=True must be READ under hdr=True - flipping
-        the flag on either side misses every entry and falls back. Mutating
-        the reader's hdr to False fails this test (the fallback fires); the
-        all-windows test above cannot catch it because its fixture is SDR.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
-            db_file = root / "meta.db"
-            connection = db.connect(db_file)
-            workdir = root / "w"
-            workdir.mkdir()
-            movie = root / "movie.mkv"
-            movie.write_bytes(b"x")
-            samples = []
-            for i in range(2):
-                s = root / f"s{i}.mkv"
-                s.write_bytes(b"m" * 100)
-                samples.append((s, 10.0 * i))
-
-            for _sample, offset in samples:
-                key = engine_search.probe_cache_key(
-                    movie,
-                    offset,
-                    10.0,
-                    22,
-                    "svt_av1",
-                    "5",
-                    None,
-                    True,
-                    None,
-                    ("hb", "1.6"),
-                    tools_vmaf.vmaf_recipe(hdr=True).identifier(),
-                )
-                db.save_probe_score(connection, key, 95.0, 40)
-
-            with (
-                patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
-                patch.object(
-                    engine_search,
-                    "estimate_size_factor",
-                    side_effect=AssertionError("the fallback ran: the cache was incomplete"),
-                ),
-            ):
-                factor = engine_search.check_chosen_crf_shrinks(
-                    samples,
-                    workdir,
-                    "hb",
-                    22,
-                    movie,
-                    10.0,
-                    "svt_av1",
-                    "5",
-                    hdr=True,
-                    db_file=db_file,
-                )
-            # the HDR-keyed rows were found: the factor came from the cache
-            self.assertAlmostEqual(factor, 80 / 200, places=4)
-            connection.close()
-
     def test_the_chosen_crf_size_encodes_when_every_window_shrinks(self):
         """The reverse direction (issue #314's acceptance): a cache whose
         every window shrank yields a factor BELOW 1.0 - the file encodes.
@@ -1570,7 +1428,6 @@ class TestProbeCache(unittest.TestCase):
                     "svt_av1",
                     "5",
                     None,
-                    False,
                     None,
                     ("hb", "1.6"),
                     tools_vmaf.vmaf_recipe().identifier(),
@@ -1653,7 +1510,6 @@ class TestProbeCache(unittest.TestCase):
                 "svt_av1",
                 "5",
                 None,
-                False,
                 None,
                 ("hb", "1.6"),
                 tools_vmaf.vmaf_recipe().identifier(),
@@ -1697,7 +1553,6 @@ class TestProbeCache(unittest.TestCase):
                     "svt_av1",
                     "5",
                     None,
-                    False,
                     None,
                     ("hb", "1.6"),
                     tools_vmaf.vmaf_recipe().identifier(),
@@ -1790,7 +1645,6 @@ class TestProbeCache(unittest.TestCase):
                 "svt_av1",
                 "5",
                 None,
-                False,
                 None,
                 ("hb", "1.6"),
                 tools_vmaf.vmaf_recipe().identifier(),
@@ -2167,7 +2021,6 @@ class TestChosenCrfSizeGate(unittest.TestCase):
                     "svt_av1",
                     "5",
                     None,
-                    False,
                     None,
                     ("hb", "1.6"),
                     tools_vmaf.vmaf_recipe().identifier(),
@@ -2222,10 +2075,11 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         self.assertEqual(seen.count(22), 1)
 
     def test_the_plumbing_reaches_the_chosen_check(self):
-        """find_optimal_crf_and_skip forwards hdr and db_file to the chosen-CRF
-        check (review round 4, finding 4): the decision's cache key must carry
-        the HDR flag and the database the caller was given - mutating either
-        at the call site left the whole suite green before this test.
+        """find_optimal_crf_and_skip forwards db_file to the chosen-CRF
+        check (review round 4, finding 4): the decision's record must carry
+        the database the caller was given - mutating it at the call site left
+        the whole suite green before this test. (The hdr forwarding is gone
+        with issue #518: HDR sources never reach the search.)
         """
         captured: dict = {}
 
@@ -2246,12 +2100,8 @@ class TestChosenCrfSizeGate(unittest.TestCase):
                     self.workdir,
                     "hb",
                     samples=[(self.sample, 10.0)],
-                    hdr=True,
                     db_file=db_file,
                 )
-        self.assertEqual(
-            captured["kwargs"].get("hdr"), True, "the HDR flag did not reach the chosen check"
-        )
         self.assertEqual(
             captured["kwargs"].get("db_file"),
             db_file,
@@ -2272,12 +2122,8 @@ class TestChosenCrfSizeGate(unittest.TestCase):
                 self.workdir,
                 "hb",
                 samples=[(self.sample, 10.0)],
-                hdr=False,
                 db_file=db_file,
             )
-        self.assertEqual(
-            captured["kwargs"].get("hdr"), False, "the HDR flag did not reach the chosen check"
-        )
 
 
 class TestPlanReportsTheDecisionFactor(unittest.TestCase):
@@ -3048,7 +2894,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                         "bit_depth": None,
                     },
                 ),
-                patch.object(engine_pipeline, "is_hdr_file", return_value=False),
+                patch.object(engine_plan, "is_hdr_file", return_value=False),
                 patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
                 patch.object(engine_pipeline, "check_disk_space", return_value=(True, "")),
@@ -3173,7 +3019,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                     "_source_snapshot",
                     return_value={"width": 3840, "height": 2160},
                 ),
-                patch.object(engine_pipeline, "is_hdr_file", return_value=False),
+                patch.object(engine_plan, "is_hdr_file", return_value=False),
                 patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_pipeline, "_probe_movie") as fake_probe,
             ):
@@ -3345,3 +3191,146 @@ class TestRoundTwoCutOnTheDefaultRanges(unittest.TestCase):
         # a passing midpoint: 27 -> round(0.4*27 + 0.6*44) = 37 -> the top
         self.assertEqual(engine_search.bisect_crf(passing, 10, 45, target_vmaf=95.0), 44)
         self.assertEqual(hdr_calls, [27, 37, 44])
+
+
+class TestHdrSkip(unittest.TestCase):
+    """Issue #518 (the maintainer's #340 decision): HDR sources are skipped
+    with a visible reason - the tone-mapped SDR measurement is not valid for
+    HDR. 10-bit SDR stays fully supported; the transfer alone decides."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.movie = Path(self.tmp.name) / "movie.mkv"
+        self.movie.write_bytes(b"x" * 64)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _plan_with_transfer(self, stream: dict) -> "tuple[object, object]":
+        from unittest.mock import Mock
+
+        from shrinkray import config as config_helper
+        from shrinkray.engine.plan import plan_quality
+
+        probed = Mock(return_value=(20, 96.0, [], False))
+        # the REAL seam: run_ffprobe returns the raw ffprobe JSON, so the
+        # real get_data -> get_video_stream -> is_hdr path runs (the reviewer's
+        # round-1 proof: a mock of get_data itself hid the gate's dead shape)
+        raw = {"streams": [dict(stream, codec_type="video", codec_name="h264")]}
+        with (
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+            patch("shrinkray.config.load_config", return_value=config_helper.Conf({})),
+            patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
+            patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
+        ):
+            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+        return result, probed
+
+    def test_a_pq_source_is_skipped_without_a_probe(self) -> None:
+        result, probed = self._plan_with_transfer({"color_transfer": "smpte2084"})
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "hdr not supported")
+        self.assertIn("not supported yet", result.error)
+        probed.assert_not_called()
+
+    def test_an_hlg_source_is_skipped_without_a_probe(self) -> None:
+        result, probed = self._plan_with_transfer({"color_transfer": "arib-std-b67"})
+        self.assertEqual(result.skipped_reason, "hdr not supported")
+        probed.assert_not_called()
+
+    def test_a_bt2020_sdr_master_is_not_skipped(self) -> None:
+        result, probed = self._plan_with_transfer(
+            {"color_space": "bt2020nc", "color_transfer": "bt709"}
+        )
+        self.assertIsNone(result.skipped_reason)
+        probed.assert_called()
+
+    def test_a_10bit_sdr_source_is_not_skipped(self) -> None:
+        result, probed = self._plan_with_transfer(
+            {"color_transfer": "bt709", "pix_fmt": "yuv420p10le"}
+        )
+        self.assertIsNone(result.skipped_reason)
+        probed.assert_called()
+
+    def test_the_encode_path_skips_pq_without_probing(self) -> None:
+        """The encode path runs the SAME gate (finding 8's coverage): a PQ
+        source reaches encode_with_quality and comes back skipped before the
+        search - the plan and the encode can never disagree."""
+        from unittest.mock import Mock
+
+        from shrinkray import config as config_helper
+        from shrinkray.engine.pipeline import encode_with_quality
+
+        probed = Mock(return_value=(20, 96.0, [], False))
+        raw = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "color_transfer": "smpte2084",
+                }
+            ]
+        }
+        with (
+            patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.pipeline.capture_run_identity") as ident,
+            patch("shrinkray.engine.pipeline._source_snapshot", return_value={}),
+            patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.pipeline.find_optimal_crf_and_skip", probed),
+            patch("shrinkray.engine.pipeline._encode_with_command", probed),
+            patch("shrinkray.config.load_config", return_value=config_helper.Conf({})),
+        ):
+            ident.size = 64
+            ident.mtime = 1.0
+            result = encode_with_quality(
+                self.movie,
+                self.movie.with_suffix(".enc.mkv"),
+                target_vmaf=95.0,
+                encoder="svt_av1",
+                db_file=None,
+            )
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "hdr not supported")
+        self.assertIn("not supported yet", result.error)
+        probed.assert_not_called()
+
+    def test_an_old_config_with_codec_hdr_still_skips_pq(self) -> None:
+        """The codec.hdr section is GONE from the schema (issue #518
+        criterion 2): an old config that sets it loads with a warning and the
+        skip still fires - the detection is code-fixed, never config-loosened
+        (hard invariant 10)."""
+        from unittest.mock import Mock
+
+        from loguru import logger
+
+        from shrinkray import config as config_helper
+        from shrinkray.engine.plan import plan_quality
+
+        probed = Mock(return_value=(20, 96.0, [], False))
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            conf = config_helper.Conf(
+                {"codec": {"hdr": {"color_space": ["bt2020nc"], "color_transfer": []}}}
+            )
+        finally:
+            logger.remove(sink_id)
+        self.assertTrue(any("codec.hdr" in line for line in captured), captured)
+        raw = {"streams": [{"codec_type": "video", "color_transfer": "smpte2084"}]}
+        with (
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+            patch("shrinkray.config.load_config", return_value=conf),
+            patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
+            patch("shrinkray.engine.plan.estimate_size_factor", return_value=0.5),
+        ):
+            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+        self.assertEqual(result.skipped_reason, "hdr not supported")
+        probed.assert_not_called()

@@ -1,14 +1,4 @@
 {
-  "codec": {
-    "hdr": {
-      "color_space": [
-        "bt2020nc"
-      ],
-      "color_transfer": [
-        "smpte2084"
-      ]
-    }
-  },
   "file": {
     "extensions": [
       ".3gp",
