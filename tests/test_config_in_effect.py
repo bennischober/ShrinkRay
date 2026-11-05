@@ -141,7 +141,9 @@ class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
         self.assertEqual(body["ffmpeg"]["crop_sample_count"], conf.crop_sample_count)
         self.assertEqual(body["handbrake"]["preset"], conf.handbrake_preset)
         self.assertEqual(body["handbrake"]["encoder"], conf.handbrake_encoder)
-        self.assertEqual(body["handbrake"]["probe_encoder_preset"], conf.handbrake_probe_encoder_preset)
+        self.assertEqual(
+            body["handbrake"]["probe_encoder_preset"], conf.handbrake_probe_encoder_preset
+        )
         self.assertEqual(body["handbrake"]["encoder_preset"], conf.handbrake_encoder_preset)
         self.assertEqual(body["handbrake"]["max_threads"], conf.handbrake_max_threads)
         self.assertEqual(body["handbrake"]["stall_minutes"], conf.handbrake_stall_minutes)
