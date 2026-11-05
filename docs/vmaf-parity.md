@@ -321,6 +321,27 @@ and fails the run.
 A production-shaped full-file pair, measured the same way on the same source, is aligned
 and scores normally: 2882 / 2882 frames, VMAF 96.10.
 
+## The 2026-10 real-title gap, explained (issue #443)
+
+The low real-title readings that opened #258 and stayed unexplained as #443 were the **pre-#410 frame pairing**, not colour and not the sample windows. Measured 2026-11-05 on `test_media`'s untagged 1080p h264 title (1920x800 content in 1080p, 198 s) in the `shrinkray:smoke` image (HandBrake 1.11.2, ffmpeg N-127957, ab-av1 0.11.7):
+
+| probe shape | code | CRF-14 score | decision at target 96 |
+|---|---|---|---|
+| the real `plan` pipeline | the image's installed shrinkray (pre-#410) | **69.25** | skip, "target unreachable" |
+| the real `plan` pipeline | current main (with `ts_sync_mode=nearest`, #410) | **96.07** (probes 29→92.05, 20→94.75, 17→95.33, 15→95.91) | **encode at CRF 14** |
+| ab-av1 `crf-search`, preset 5 | ab-av1 0.11.7 | 97.47 (the #395 run) | encode at CRF 21 |
+
+Before #410 (`dd8a0d8`, 2026-10-26) the measurement paired frames by arrival order (framesync's default). On the VFR-rounded timestamps of a real title that pairing drifts and re-locks: a **pixel-identical pair** (a lossless crop of a clip measured against the clip itself) reads **72.84 with 80 of 247 frames below 60** through it, and **99.88 with zero low frames** through the current graph — deterministic, three runs each. That drift is what the 2026-10-26 numbers (87.23, and the flat VMAF-vs-CRF curve that looked like a colour error) recorded: they were measured hours before #410 merged.
+
+What the investigation also settled, so nobody re-derives it:
+
+- **The sample windows are not a factor.** ShrinkRay's windows (3, evenly over 10%–90% of the duration, 10 s, keyframe-aligned stream copies) vs ab-av1's rule (duration/12 min samples, 20 s) vs the full file, all under one encoder and one measurement: **94.01 / 94.52 / 94.07** — a 0.5-point spread.
+- **A full-window misalignment cannot produce these numbers.** One dropped frame at the head reads **32.35** against 93.02 aligned; the drift above is the partial, re-locking kind.
+- **The encoder wrapper is not a factor.** HandBrake `svt_av1 --encoder-preset 5 --quality 14` vs ffmpeg `libsvtav1 -crf 14 -preset 5` on the same windows: 96.38/97.40/93.14 vs 96.68/98.95/97.54 — a −0.3 to −4.4 delta.
+- **The residual difference is intended.** The probe measures the **content region** (bars cropped out of both sides, #307); ab-av1 measures the **full frame**, where the bars score ~100 and inflate its mean. On this title that is the ~1.4 points between 96.07 and 97.47.
+
+Reproducing the old behaviour needs the image's installed shrinkray (pre-#410), not this tree: run `plan` in `shrinkray:smoke` without a `/repo` mount and the same title reads 69.25; run it with `PYTHONPATH=/repo/src` and it reads 96.07.
+
 ## What this run cannot tell you
 
 - **Whether the two sides compare the same frames.** This is the caveat that matters
@@ -334,8 +355,9 @@ and scores normally: 2882 / 2882 frames, VMAF 96.10.
   artifact is right. Colour is settled, not a live question: #258's acceptance run
   found no conversion on the way out (the re-tagging of unset components to BT.709 on 1080p-class 8-bit SDR sources
   is signalling only - `docs/encode-settings.md`); a low score on untagged
-  content is therefore not evidence of colour damage, but the real-title low
-  readings that opened #258 are tracked as issue #443 and remain unexplained.
+  content is therefore not evidence of colour damage. The real-title low readings
+  that opened #258 are explained above: they were the pre-#410 frame pairing, fixed
+  by `ts_sync_mode=nearest` (issue #443).
 - **Whether libvmaf's HDR models, when they land, are good enough to unblock HDR.**
   That is #519's question; the v0.6.1 tone-map this procedure used to report is
   removed (issue #518).
