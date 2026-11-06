@@ -86,6 +86,8 @@ def swap_encode_into_place(
     output: Path,
     encode_id: int | None = None,
     error: str | None = None,
+    input_size: int | None = None,
+    input_mtime: float | None = None,
 ) -> SwapOutcome:
     """Swaps a verified encode into the source's path, retaining the original.
 
@@ -118,6 +120,27 @@ def swap_encode_into_place(
     Returns:
         SwapOutcome: What happened (replaced / declined, and why).
     """
+    if input_size is not None and input_mtime is not None:
+        # the swap is the most consequential write of the run (issue #585): a
+        # source that changed since the encode was decided (a resumed download,
+        # a mover's re-copy) must not be replaced by an encode of its old
+        # bytes. #436's identity guards the decisions and the encode's start;
+        # this is the same comparison at the swap, the last code before the
+        # library. A same-size, mtime-preserved change is the remaining
+        # boundary (#438's case).
+        try:
+            current = source.stat()
+        except OSError:
+            current = None
+        if (
+            current is None
+            or current.st_size != input_size
+            or abs(current.st_mtime - input_mtime) > 1.0
+        ):
+            reason = "the source changed during the encode"
+            log_error(f"Not replacing '{source.name}': {reason}")
+            _encode_discarded(connection, encode_id)
+            return SwapOutcome(replaced=False, reason=reason)
     if error is not None:
         # the artifact is fine (the picture measured at target), but the
         # encode broke a promise the swap would make permanent: a lost track
