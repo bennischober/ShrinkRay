@@ -121,6 +121,8 @@ def _lookup_plan(
         encoder (str): The pending encode's effective encoder.
         encoder_preset (str): The pending encode's preset.
         target_vmaf (float): The encode's target VMAF.
+        min_saving_percent (int): The pending encode's minimum-saving
+            threshold (issue #316; measured plans only).
         crf_range (tuple[int, int]): The encode's CRF range.
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
@@ -303,6 +305,8 @@ class QualityResult:
         success (bool): True if the encode succeeded.
         target_vmaf (float): The effective VMAF quality floor that was met:
             the requested one.
+        min_saving_percent (int): The minimum-saving threshold the verdict
+            was decided under (issue #316; part of the plan fingerprint).
         chosen_crf (int | None): The CRF selected by the bisect.
         achieved_vmaf (float | None): The mean per-sample VMAF measured at
             the chosen CRF (None if no probe was possible). Not the worst
@@ -411,6 +415,9 @@ def plan_quality(
     Args:
         input_file (Path): The file to analyze.
         target_vmaf (float): The VMAF quality floor to meet.
+        min_saving_percent (int): The minimum predicted saving (percent)
+            the decision demands (issue #316; 0 = any real shrink). Part of
+            the stored plan fingerprint.
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.

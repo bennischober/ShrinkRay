@@ -1146,6 +1146,8 @@ def encode_with_quality(
         input_file (Path): The file to re-encode.
         output_file (Path): The target file (must not exist).
         target_vmaf (float): The VMAF quality floor to meet.
+        min_saving_percent (int): The minimum predicted saving (percent)
+            the decision demands (issue #316; 0 = any real shrink).
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
@@ -1462,12 +1464,22 @@ def encode_with_quality(
             # must not commit for bytes the run no longer sees. Loud abort,
             # the caller reports it (the entry points catch RuntimeError).
             ensure_unchanged(input_file, identity, "encode")
-            skip_reason = "target unreachable" if "unreachable" in str(e) else "no size gain"
-            # the line only for the case no existing line covers (issue #471's
+            # the verdict's slug, recorded like the other gate verdicts (issue
+            # #316's acceptance 2): the threshold's message is its own skip, not
+            # a size verdict - the plan path records the same slug
+            if "saving" in str(e):
+                skip_reason = "saving below minimum"
+            elif "unreachable" in str(e):
+                skip_reason = "target unreachable"
+            else:
+                skip_reason = "no size gain"
+            # the line only for the cases no existing line covers (issue #471's
             # no-duplicate rule): the would-not-shrink skip is logged in the
-            # search layer (find_optimal_crf_and_skip / check_chosen_crf_shrinks)
+            # search layer; the threshold's own numbers come from its message
             if skip_reason == "target unreachable":
                 log(f"Encode for '{input_file.name}': skip (target unreachable)")
+            elif skip_reason == "saving below minimum":
+                log(f"Encode for '{input_file.name}': skip ({e})")
             return QualityResult(
                 input=input_file,
                 output=output_file,

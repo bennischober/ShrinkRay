@@ -2200,10 +2200,12 @@ class TestMinSavingThreshold(unittest.TestCase):
             )
 
     def test_exactly_the_threshold_encodes(self) -> None:
-        """15.0% predicted with a 15% requirement: not below, so encode."""
-        result = self._plan(15, 0.85)
+        """Exactly at the threshold encodes (a `<` -> `<=` mutation must fail
+        here): 50% predicted against a 50% requirement - factor 0.5 is exact in
+        binary, unlike 0.85 (whose saving is 15.000000000000002)."""
+        result = self._plan(50, 0.5)
         self.assertTrue(result.success, result.error)
-        self.assertEqual(result.min_saving_percent, 15)
+        self.assertEqual(result.min_saving_percent, 50)
 
     def test_just_below_the_threshold_skips(self) -> None:
         """14.9% predicted against 15%: skip, with both numbers in the error."""
