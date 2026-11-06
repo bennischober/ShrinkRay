@@ -196,7 +196,7 @@ class TestProbeScratchAttribution(unittest.TestCase):
 
         def fake_encode(input_file, output_file, command, **kwargs):
             output_file.write_bytes(b"out" * 4)  # smaller than the 16-byte source
-            return SimpleNamespace(success=True, cancelled=False, error=None)
+            return SimpleNamespace(success=True, cancelled=False, error=None, min_saving_percent=15)
 
         def fake_mkdtemp(prefix: str = "", **kwargs):
             prefixes.append(prefix)
@@ -336,6 +336,7 @@ class TestPlanPathGuard(unittest.TestCase):
                 crop_sample_count=10,
                 vmaf_statistic="mean",
                 vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+                min_saving_percent=15,
             )
         )
 
@@ -376,6 +377,7 @@ class TestPlanPathGuard(unittest.TestCase):
             crop_sample_count=10,
             vmaf_statistic="mean",
             vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+            min_saving_percent=15,
         )
         self.assertIsNotNone(row)
 
@@ -500,6 +502,7 @@ class TestEngineSkipPathGuard(unittest.TestCase):
                 crop_sample_count=10,
                 vmaf_statistic="mean",
                 vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+                min_saving_percent=15,
             )
         )
 

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 if TYPE_CHECKING:
     # engine is ABOVE db in the layer contract; the summary type arrives as
@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS plans (
     crop_sample_count INTEGER NOT NULL DEFAULT 3,
     vmaf_statistic TEXT NOT NULL DEFAULT 'min',
     vmaf_recipe TEXT NOT NULL DEFAULT '',
+    min_saving_percent INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -410,6 +411,16 @@ MIGRATIONS = {
         # every pre-#308 plan misses and is re-probed. That is the correct
         # answer after a measurement change, not a guess.
         "ALTER TABLE plans ADD COLUMN vmaf_recipe TEXT NOT NULL DEFAULT ''",
+    ],
+    20: [
+        # the minimum saving threshold is part of the plan fingerprint
+        # (issue #316): a verdict decided under one threshold is not the
+        # answer under another (the threshold only ever demands MORE saving,
+        # but an encode verdict under 15 can be wrong under 25 - 16% < 25%).
+        # Old rows default to 0 (the rule they were decided under: any real
+        # shrink), so every pre-#316 plan misses the current lookup and is
+        # re-probed - fail-safe to re-probe, never guess.
+        "ALTER TABLE plans ADD COLUMN min_saving_percent INTEGER NOT NULL DEFAULT 0",
     ],
 }
 
@@ -718,6 +729,7 @@ def save_plan(
     crop_sample_count: int = 3,
     vmaf_statistic: str = "mean",
     vmaf_recipe: str = "",
+    min_saving_percent: int = 0,
 ) -> int:
     """Stores (upserts) the plan decision for one file — one row per file.
 
@@ -750,6 +762,8 @@ def save_plan(
             (fingerprint, issue #308: a plan measured another way is a
             different measurement). Empty means a plan stored before the
             recipe existed.
+        min_saving_percent (int): The minimum-saving threshold the verdict
+            was decided under (fingerprint, issue #316).
 
     Returns:
         int: The plan row id.
@@ -761,8 +775,8 @@ def save_plan(
             file_id, chosen_crf, achieved_vmaf, crop, probes, skipped_reason,
             estimated_size, input_mtime, input_size, encoder, encoder_preset,
             target_vmaf, crf_low, crf_high, sample_count, sample_seconds,
-            crop_sample_count, vmaf_statistic, vmaf_recipe
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            crop_sample_count, vmaf_statistic, vmaf_recipe, min_saving_percent
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -784,6 +798,7 @@ def save_plan(
             crop_sample_count,
             vmaf_statistic,
             vmaf_recipe,
+            min_saving_percent,
         ),
     )
     connection.commit()
@@ -856,6 +871,7 @@ def get_valid_plan(
     crop_sample_count: int = 3,
     vmaf_statistic: str = "mean",
     vmaf_recipe: str = "",
+    min_saving_percent: int = 0,
 ) -> sqlite3.Row | None:
     """Returns the file's stored plan when the fingerprint matches.
 
@@ -878,6 +894,10 @@ def get_valid_plan(
         vmaf_recipe (str): The pending encode's measurement recipe
             (crop-independent part, issue #308). An empty string never
             matches: a plan stored before the recipe existed is re-probed.
+        min_saving_percent (int): The pending encode's minimum-saving
+            threshold (issue #316). Only measured plans carry it: a gate
+            skip never reached the size decision, so its verdict is
+            threshold-independent and stays reusable.
 
     Returns:
         sqlite3.Row | None: The valid plan row, or None.
@@ -912,6 +932,13 @@ def get_valid_plan(
         # its row carries '' and must stay reusable - requiring a recipe there
         # would re-derive every gate skip on every run (issue #308's review).
         or (row["achieved_vmaf"] is not None and str(row["vmaf_recipe"]) != vmaf_recipe)
+        # the threshold gates the size decision only (issue #316): a measured
+        # plan decided under another threshold is a different verdict; a gate
+        # skip never reached it and stays reusable under any threshold
+        or (
+            row["achieved_vmaf"] is not None
+            and int(row["min_saving_percent"]) != min_saving_percent
+        )
     ):
         return None
     return cast("sqlite3.Row", row)

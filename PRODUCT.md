@@ -257,7 +257,13 @@ Before either question is asked, a file must be worth touching at all:
   re-encoded (h264, hevc, vp9, av1; MPEG-2/VC-1 and older are outside it).
 
 Among eligible files, **the CRF search always runs** — and a re-encode happens only when
-that search shows the file would actually get smaller. That one rule replaces the older
+that search shows the file would actually get smaller **by at least the minimum saving**
+(`quality.min_saving_percent`, default 15 % of the source size, issue #316): the decision to
+spend the encode demands more than "smaller", because the encode's own cost is real
+(≈ 3 h at 200 W ≈ €0.18 at €0.30/kWh, against storage at €40/TB ≈ €0.04/GB — break-even
+4.5 GB, i.e. 9 % of a 50 GB remux; 15 % covers it with margin and sits at a 10 GB 1080p
+film's break-even). 0 restores "any real shrink". The threshold gates the DECISION only:
+after the encode has run, any real shrink is kept. That one rule replaces the older
 "codec decides what triggers an encode" framing, which was wrong twice: it read as *never
 re-encode a modern codec without bars*, and it implied a re-encode might happen *in order
 to* remove bars. Neither is true.

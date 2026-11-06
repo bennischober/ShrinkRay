@@ -447,6 +447,7 @@ class TestPlanReuse(unittest.TestCase):
             output=movie,
             success=overrides.pop("success", True),
             target_vmaf=overrides.pop("target_vmaf", engine_search.DEFAULT_TARGET_VMAF),
+            min_saving_percent=overrides.pop("min_saving_percent", 15),
             chosen_crf=overrides.pop("chosen_crf", 21),
             achieved_vmaf=overrides.pop("achieved_vmaf", 95.47),
             probes=overrides.pop("probes", [SampleProbe(crf=21, vmaf=95.47)]),
@@ -466,7 +467,7 @@ class TestPlanReuse(unittest.TestCase):
             # cannot enter it)
             vmaf_recipe=overrides.pop("vmaf_recipe", tools_vmaf.vmaf_recipe().fingerprint()),
         )
-        config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
+        config = type("Conf", (), {"handbrake_encoder": "svt_av1", "min_saving_percent": 15})()
         record_plan = overrides.pop("record_plan", service.record_plan)
         record_plan(self.connection, movie, result, config)
 
@@ -511,11 +512,44 @@ class TestPlanReuse(unittest.TestCase):
             )
         return result, fake_encode
 
+    def test_a_threshold_change_invalidates_a_measured_plan(self) -> None:
+        """The threshold is part of the fingerprint (issue #316): a plan
+        decided under 15 is not the answer under 25 - the encode re-probes.
+        A gate skip row (no measurement) stays valid under any threshold."""
+        movie = self._movie()
+        self._store_plan(movie, min_saving_percent=15)
+        with (
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+            ) as fake_probe,
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
+        ):
+            _result, _ = self._encode(movie, min_saving_percent=25)
+        fake_probe.assert_called()  # the threshold mismatch forces a re-probe
+
+    def test_a_gate_skip_row_survives_a_threshold_change(self) -> None:
+        """A plan that skipped at a gate (never measured) has no size verdict,
+        so its row is threshold-independent and stays reusable."""
+        movie = self._movie()
+        # a gate-skip row carries no measurement (achieved_vmaf None): the
+        # threshold exemption keys on it
+        self._store_plan(movie, success=False, skipped_reason="too short", achieved_vmaf=None)
+        with (
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+            ) as fake_probe,
+            patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
+        ):
+            _result, _ = self._encode(movie, min_saving_percent=25)
+        fake_probe.assert_not_called()  # the gate skip is reused under any threshold
+
     def test_valid_plan_skips_probing_and_encodes_planned_crf(self):
         movie = self._movie()
         self._store_plan(movie)
         with (
-            patch.object(engine_pipeline, "_probe_movie") as fake_probe,
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+            ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, fake_encode = self._encode(movie)
@@ -531,7 +565,7 @@ class TestPlanReuse(unittest.TestCase):
         self.assertEqual(command[command.index("--quality") + 1], "21")
         # the caller (job worker / CLI) persists the result; the encodes row
         # carries the provenance
-        config = type("Conf", (), {"handbrake_encoder": "svt_av1"})()
+        config = type("Conf", (), {"handbrake_encoder": "svt_av1", "min_saving_percent": 15})()
         service.record_quality_results(self.connection, movie, result, config)
         row = self.connection.execute(
             "SELECT crf_source, plan_created_at FROM encodes ORDER BY id DESC LIMIT 1"
@@ -623,7 +657,9 @@ class TestPlanReuse(unittest.TestCase):
         movie = self._movie()
         self._store_plan(movie, chosen_crf=21)
         with (
-            patch.object(engine_pipeline, "_probe_movie") as fake_probe,
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+            ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
             result, _ = self._encode(movie, encoder_preset="9")
@@ -648,7 +684,9 @@ class TestPlanReuse(unittest.TestCase):
         movie = self._movie()
         self._store_plan(movie, success=False, skipped_reason="no size gain")
         with (
-            patch.object(engine_pipeline, "_probe_movie") as fake_probe,
+            patch.object(
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+            ) as fake_probe,
             patch.object(engine_pipeline, "_encode_with_command") as fake_encode,
         ):
             result, _ = self._encode(movie)
@@ -2137,6 +2175,186 @@ class TestChosenCrfSizeGate(unittest.TestCase):
             )
 
 
+class TestMinSavingThreshold(unittest.TestCase):
+    """Issue #316 (the maintainer's 2026-10-31 decision): the decision to
+    SPEND the encode demands a minimum predicted saving (default 15%) - the
+    all-window factor the search decided with is the prediction. 0 reproduces
+    the old rule; the post-encode rule is unchanged (any real shrink kept)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.movie = Path(self.tmp.name) / "movie.mkv"
+        self.movie.write_bytes(b"x" * 1000)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _plan(self, min_saving_percent: int, factor: float):
+        """Runs plan_quality with the search mocked to the given factor."""
+        with (
+            patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+            patch.object(
+                engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
+            ),
+            patch.object(engine_plan, "source_codec", return_value="h264"),
+            patch.object(engine_plan, "source_bit_depth", return_value=None),
+            patch.object(engine_plan, "find_handbrake", return_value="hb"),
+            patch.object(engine_plan, "detect_crop_summary_cached", return_value=None),
+            patch.object(engine_plan, "detect_crop_rect", return_value=None),
+            patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(
+                engine_plan, "find_optimal_crf_and_skip", return_value=(22, 96.0, [], False, factor)
+            ),
+        ):
+            return engine_plan.plan_quality(
+                self.movie, target_vmaf=95.0, min_saving_percent=min_saving_percent, db_file=None
+            )
+
+    def test_exactly_the_threshold_encodes(self) -> None:
+        """Exactly at the threshold encodes (a `<` -> `<=` mutation must fail
+        here): 50% predicted against a 50% requirement - factor 0.5 is exact in
+        binary, unlike 0.85 (whose saving is 15.000000000000002)."""
+        result = self._plan(50, 0.5)
+        self.assertTrue(result.success, result.error)
+        self.assertEqual(result.min_saving_percent, 50)
+
+    def test_just_below_the_threshold_skips(self) -> None:
+        """14.9% predicted against 15%: skip, with both numbers in the error."""
+        result = self._plan(15, 0.851)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "saving below minimum")
+        self.assertIn("predicted saving 14.9%", result.error)
+        self.assertIn("required 15%", result.error)
+
+    def test_just_above_the_threshold_encodes(self) -> None:
+        result = self._plan(15, 0.849)
+        self.assertTrue(result.success, result.error)
+
+    def test_zero_reproduces_the_old_rule(self) -> None:
+        """Threshold 0: any real shrink encodes (the old behaviour)."""
+        result = self._plan(0, 0.99)
+        self.assertTrue(result.success, result.error)
+
+    def test_the_threshold_rides_the_result_for_the_fingerprint(self) -> None:
+        """The recorded verdict's fingerprint carries the threshold it was
+        decided under (issue #316's cache rule)."""
+        result = self._plan(25, 0.9)
+        self.assertFalse(result.success)
+        self.assertEqual(result.min_saving_percent, 25)
+
+    def test_the_encode_boundary_is_exact(self) -> None:
+        """Exactly at the threshold the encode proceeds - a `<` -> `<=`
+        mutation fails here; just below it skips with both numbers."""
+        from shrinkray.engine.pipeline import _probe_movie
+        from shrinkray.engine.search import SkipEncode
+
+        def run(factor: float, required: int):
+            with (
+                patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+                patch.object(
+                    engine_pipeline,
+                    "find_optimal_crf_and_skip",
+                    return_value=(22, 96.0, [], False, factor),
+                ),
+                patch.object(engine_pipeline, "detect_crop_summary_cached", return_value=None),
+                patch.object(engine_pipeline, "detect_crop_rect", return_value=None),
+            ):
+                return _probe_movie(
+                    self.movie,
+                    96.0,
+                    required,
+                    (14, 45),
+                    2,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    cancel=None,
+                    db_file=None,
+                    encoder_threads=None,
+                    progress=None,
+                    use_probe_cache=False,
+                    crop_sample_count=3,
+                    source_width=1920,
+                    source_height=1080,
+                    source_bit_depth=None,
+                )
+
+        run(0.5, 50)  # exactly 50%: encodes
+        with self.assertRaises(SkipEncode) as ctx:
+            run(0.51, 50)  # 49% < 50%: skips
+        self.assertIn("predicted saving 49.0%", str(ctx.exception))
+        self.assertIn("required 50%", str(ctx.exception))
+
+    def test_the_encode_skip_records_the_threshold_verdict(self) -> None:
+        """The encode path's SkipEncode handler records `saving below minimum`
+        (the plan path's slug) and logs the numbers (issue #316 AC 2)."""
+        from loguru import logger
+
+        from shrinkray.engine.search import SkipEncode
+
+        captured: list[str] = []
+        sink_id = logger.add(lambda m: captured.append(str(m)), level="INFO")
+        try:
+            with (
+                patch.object(engine_pipeline, "capture_run_identity") as ident,
+                patch.object(engine_pipeline, "_source_snapshot", return_value={}),
+                patch.object(
+                    engine_pipeline,
+                    "_probe_movie",
+                    side_effect=SkipEncode("predicted saving 6.2% < required 15%"),
+                ),
+                patch.object(engine_pipeline, "check_disk_space", return_value=(True, "")),
+            ):
+                ident.return_value.size = self.movie.stat().st_size
+                ident.return_value.mtime = self.movie.stat().st_mtime
+                result = engine_pipeline.encode_with_quality(
+                    self.movie, self.movie.with_suffix(".enc.mkv"), db_file=None
+                )
+        finally:
+            logger.remove(sink_id)
+        self.assertEqual(result.skipped_reason, "saving below minimum")
+        self.assertTrue(any("6.2%" in line and "15%" in line for line in captured), captured)
+
+    def test_the_encode_path_applies_the_same_gate(self) -> None:
+        """plan and encode agree: the encode's search-phase skip carries the
+        same verdict the plan's would (the SkipEncode message names both)."""
+        from shrinkray.engine.pipeline import _probe_movie
+        from shrinkray.engine.search import SkipEncode
+
+        with (
+            patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+            patch.object(
+                engine_pipeline,
+                "find_optimal_crf_and_skip",
+                return_value=(22, 96.0, [], False, 0.851),
+            ),
+            patch.object(engine_pipeline, "detect_crop_summary_cached", return_value=None),
+            patch.object(engine_pipeline, "detect_crop_rect", return_value=None),
+            self.assertRaises(SkipEncode) as ctx,
+        ):
+            _probe_movie(
+                self.movie,
+                96.0,
+                15,
+                (14, 45),
+                2,
+                10.0,
+                "svt_av1",
+                "5",
+                cancel=None,
+                db_file=None,
+                encoder_threads=None,
+                progress=None,
+                use_probe_cache=False,
+                crop_sample_count=3,
+                source_width=1920,
+                source_height=1080,
+                source_bit_depth=None,
+            )
+        self.assertIn("predicted saving 14.9%", str(ctx.exception))
+        self.assertIn("required 15%", str(ctx.exception))
+
+
 class TestPlanReportsTheDecisionFactor(unittest.TestCase):
     """Issue #388 (the maintainer's 2026-10-31 decision): the plan's savings
     estimate is the factor the size decision already computed — the same
@@ -3029,7 +3247,9 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch.object(engine_plan, "is_hdr_file", return_value=False),
                 patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
-                patch.object(engine_pipeline, "_probe_movie") as fake_probe,
+                patch.object(
+                    engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+                ) as fake_probe,
             ):
                 encoded = engine_pipeline.encode_with_quality(
                     src, Path(tmp) / "out.mkv", min_source_height=4320, min_source_width=7680
