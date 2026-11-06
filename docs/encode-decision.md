@@ -51,6 +51,30 @@ So the hard case is already handled by the safe rule, and no film needs a manual
 `docs/black-bar-spike.md` measurements back this up: the naive "largest bars" rule kept **0%** of
 the frame on two real films where the safe rule kept 85%.
 
+## Before any gate: is the file complete?
+
+A file that a copy or download is still writing must not be decided on: torn probes, and a cached decision under a torn identity, are the cost (issue #437). Both entries ask one witness, `check_stability` (`engine/watch.py`), before any gate or sample. It answers from a single `stat()` and never sleeps (issue #479):
+
+- **Age.** The last write is at least `STABLE_MIN_AGE` (60 s) old. Every write updates the modification time, so a file still being written always looks young. A preserved old timestamp (`cp -p`, `rsync -t`) is applied only after the data is written.
+- **Not sparse.** At least `SPARSE_ALLOCATED_FLOOR` (90 %) of the file's size is allocated on disk (`st_blocks × 512`). A download that reserves its full size as a sparse file and then stalls has the right size but holes in it, which only this check sees. Video is already compressed, so filesystem compression (ZFS, btrfs) leaves a finished file far above the floor. When the platform reports no allocation (Windows), or reports 0 blocks for a non-empty file (some FUSE and SMB mounts), the age check alone applies. A file with nothing allocated is all zeros, which no probe reads as video.
+
+What each entry does with the answer:
+
+| Answer | One-shot CLI (`wait_until_settled`) | Watcher |
+|---|---|---|
+| settled | decided at once, no wait | decided in this pass |
+| young | sleeps the remaining age, then asks again, up to `STABLE_WAIT_LIMIT` (600 s); then skipped with `did not settle` | left for a later pass |
+| old but sparse | skipped at once with `appears incomplete: only N % of its size is allocated on disk` | reported once; asked again when the file changes |
+
+A skipped file is never recorded as decided: a later run, or the watcher once the file changes, decides it again.
+
+**What the witness cannot see** (accepted in the #479 decision):
+
+- **A fully reserved (`fallocate`) download that stalls for more than 60 s.** Its unwritten parts are allocated, so `stat` cannot see them. Only a filesystem-specific query (FIEMAP) could, which is not portable and not reliable in a container. If the download resumes while a run is measuring the file, the run identity (#436, `ensure_unchanged` in `engine/identity.py`) aborts the run before a decision is committed or an encode starts. If it resumes after the encoded file was swapped in, the downloader writes into the new file; the original is still kept as `<name>.shrinkray-original`.
+- **Network mounts that cache metadata (NFS, SMB).** A client can see a stale modification time and a stale size together. The target deployment mounts `/media` locally.
+
+Such downloads normally sit in the downloader's own incomplete folder, not in the library. The safe setup is to write elsewhere and **move into the library**: a rename on one filesystem is atomic, so a half-written file never appears in the library at all (`docs/docker.md`, *Adding files to the library*).
+
 ## The pipeline, in order
 
 Every gate is a cheap question asked before the expensive next step.

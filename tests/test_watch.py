@@ -58,10 +58,11 @@ def _isolated_lock(stack, tmp) -> None:
     behaviour (correct in production) then eats the pass and the test's
     expectations come back empty (the #303 CI face of the #291 family).
 
-    Also zeroes is_stable's STABLE_CHECK_INTERVAL sleep (30 s per candidate)
-    unless the test already patched it: a watch test's subject is not the
-    stability wait, and three tests that forgot the per-test patch slept
-    120 s per run (issue #478). STABLE_MIN_AGE is left alone - tests that
+    Also zeroes STABLE_CHECK_INTERVAL unless the test already patched it: a
+    watch test's subject is not the stability wait, and three tests that
+    forgot the per-test patch slept 120 s per run (issue #478). Since #479 the
+    watcher's witness no longer sleeps the interval at all; the patch keeps a
+    future pacing change from putting the sleep back into these tests. STABLE_MIN_AGE is left alone - tests that
     want a stable file backdate its mtime, tests that want "never stable"
     patch the floor themselves. A test that needs its own interval patches
     it before this call or enters its patch after it; either way its value
@@ -339,16 +340,15 @@ class TestWatch(unittest.TestCase):
             self.assertTrue(acquire_lock(lock))
             release_lock(lock)
 
-    def test_is_stable_min_age(self):
+    def test_check_stability_min_age(self):
 
-        from shrinkray.engine.watch import is_stable
+        from shrinkray.engine.watch import check_stability
 
         with tempfile.TemporaryDirectory() as tmp:
             fresh = Path(tmp) / "fresh.mkv"
             fresh.write_bytes(b"x")
-            # just created => below the minimum age => not stable (fast path,
-            # no sleep because the age check comes first)
-            self.assertFalse(is_stable(fresh))
+            # just created => below the minimum age => not settled
+            self.assertFalse(check_stability(fresh).settled)
 
     def test_decide_too_short(self):
 
@@ -1015,9 +1015,8 @@ class TestWatchInPlace(unittest.TestCase):
         with (
             mock.patch("shrinkray.engine.watch.encode_with_quality", side_effect=fake_quality),
             mock.patch("shrinkray.replace.stage", side_effect=failing_stage),
-            # the test's own runtime: is_stable's STABLE_CHECK_INTERVAL sleep
-            # (60 s) runs its course inside the pass - the seven sibling tests
-            # patch it to 0.0; so does this one
+            # the test's own runtime: the seven sibling tests patch the
+            # stability interval to 0.0 (issue #478); so does this one
             mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0),
         ):
             _isolated_lock(stack, self.tmp.name)

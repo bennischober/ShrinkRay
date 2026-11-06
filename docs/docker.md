@@ -303,6 +303,12 @@ to encode one file and list retained originals, and the dashboard's token. It pr
 only, so `docker exec <container> <command>` output stays clean; the shell itself runs as
 `PUID`/`PGID` (see *Running as your user*).
 
+## Adding files to the library
+
+ShrinkRay leaves a file alone until it looks complete: its last write is at least a minute old and it has no unfilled holes (`docs/encode-decision.md`, *Before any gate: is the file complete?*). The witness cannot see everything. A download that reserves its whole size up front and then stalls looks complete, and so can a file on a network mount that caches metadata.
+
+The reliable setup leaves nothing for the witness to judge: **write new files outside the library, then move them in.** Point your downloader's incomplete folder outside the folder mounted at `/media`, on the same filesystem as the library. A move within one filesystem is a rename, which is atomic, so a half-written file never appears in the library. A copy across filesystems is not atomic: the witness then waits until the copy has been quiet for a minute.
+
 ## Pausing
 
 The resident app starts no new file while it is paused; the file it is working on
