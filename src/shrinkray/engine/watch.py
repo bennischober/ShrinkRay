@@ -100,8 +100,9 @@ STABLE_CHECK_INTERVAL = _duration_env("SHRINKRAY_STABLE_CHECK_INTERVAL", 30.0)
 STABLE_MIN_AGE = _duration_env("SHRINKRAY_STABLE_MIN_AGE", 60.0)
 # below this share of its size allocated on disk, a file is sparse: a download
 # that wrote its full size up front and has not filled it (issue #479). Video
-# is already compressed, so filesystem compression leaves a finished file far
-# above it; the margin is deliberately generous so a finished file never trips it
+# is already compressed, so filesystem compression is expected to keep a
+# finished file well above it (reasoned, not measured); the margin is generous
+# so that a finished file does not trip it
 SPARSE_ALLOCATED_FLOOR = 0.9
 # the bounded wait's ceiling for the one-shot CLI (issue #437): the watcher
 # has no ceiling (it reconsiders on its next pass); a one-shot run reports
@@ -348,8 +349,8 @@ def check_stability(path: Path) -> Stability:
     settled file. What the age check cannot see is a sparse download that
     stalled: it reports its full size from the start, and only its allocated
     blocks show the holes. Video is already compressed, so a finished file on
-    a compressing filesystem (ZFS, btrfs) stays well above
-    SPARSE_ALLOCATED_FLOOR. Accepted gaps: a fully preallocated (fallocate)
+    a compressing filesystem (ZFS, btrfs) is expected to stay well above
+    SPARSE_ALLOCATED_FLOOR (reasoned, not measured). Accepted gaps: a fully preallocated (fallocate)
     download that stalls, and a network mount serving stale metadata. #436's
     run identity aborts a run whose file changes while it is measured, up to
     the start of the final encode - not during or after that encode.
