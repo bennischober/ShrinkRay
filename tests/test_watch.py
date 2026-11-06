@@ -764,6 +764,38 @@ class TestScanIntoDbRecords(unittest.TestCase):
         self.assertIsNone(self._recorded())
 
 
+class TestWatcherSwapIdentity(unittest.TestCase):
+    """Issue #585: the watcher's own swap entry declines a source that changed
+    during the encode, exactly as the service path does."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.source = self.root / "movie.mkv"
+        self.source.write_bytes(b"ORIGINAL" * 100)
+        self.output = self.root / "enc.mkv"
+        self.output.write_bytes(b"NEW" * 10)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_a_source_changed_during_the_encode_declines_the_swap(self) -> None:
+        from shrinkray.engine import watch as watch_mod
+
+        before = self.source.stat()
+        self.source.write_bytes(b"CHANGED-DURING-THE-ENCODE" * 10)
+        replaced = watch_mod._swap(
+            None,
+            self.source,
+            self.output,
+            None,
+            input_size=before.st_size,
+            input_mtime=before.st_mtime,
+        )
+        self.assertFalse(replaced)
+        self.assertEqual(self.source.read_bytes(), b"CHANGED-DURING-THE-ENCODE" * 10)
+
+
 if __name__ == "__main__":
     unittest.main()
 

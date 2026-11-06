@@ -56,6 +56,27 @@ class TestSwap(unittest.TestCase):
             replace.swap(self.source, staged)
         self.assertEqual(self.source.read_bytes(), b"ORIGINAL" * 100)
 
+    def test_a_source_changed_during_the_encode_declines_the_swap(self):
+        """Issue #585: the swap is the most consequential write - a source whose
+        size or mtime moved since the run identity must not be replaced by an
+        encode of its old bytes. The original stays in place, the encode is
+        discarded, and the reason is visible."""
+        from shrinkray import service
+
+        before = self.source.stat()
+        self.source.write_bytes(b"CHANGED-DURING-THE-ENCODE" * 10)
+        outcome = service.swap_encode_into_place(
+            None,
+            self.source,
+            self.output,
+            None,
+            input_size=before.st_size,
+            input_mtime=before.st_mtime,
+        )
+        self.assertFalse(outcome.replaced)
+        self.assertIn("changed during the encode", outcome.reason or "")
+        self.assertEqual(self.source.read_bytes(), b"CHANGED-DURING-THE-ENCODE" * 10)
+
     def test_a_verification_finding_declines_the_swap(self):
         """Review finding 1: a swap on an artifact with a verification finding
         (a lost track, an unverifiable probe) would make the finding permanent:

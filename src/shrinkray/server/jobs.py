@@ -1139,6 +1139,11 @@ def _encode_measured(
                         # a verification finding (issue #240: a lost track, an
                         # unverifiable probe) declines the swap
                         error=result.error,
+                        # a source that changed during the encode declines it
+                        # too (issue #585): the run identity is the swap's
+                        # last comparison before the library
+                        input_size=result.input_size,
+                        input_mtime=getattr(result, "input_mtime", None),
                     )
                     declined = not swap.replaced
                 else:

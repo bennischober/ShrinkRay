@@ -1115,7 +1115,13 @@ def watch(
                                 )
                                 if in_place_mode:
                                     if not _swap(
-                                        db_file, movie, result.output, encode_id, error=result.error
+                                        db_file,
+                                        movie,
+                                        result.output,
+                                        encode_id,
+                                        error=result.error,
+                                        input_size=result.input_size,
+                                        input_mtime=getattr(result, "input_mtime", None),
                                     ):
                                         # declined (a verification finding, a grown
                                         # output or a refused rename): _swap said why,
@@ -1192,6 +1198,8 @@ def _swap(
     output: Path,
     encode_id: int | None = None,
     error: str | None = None,
+    input_size: int | None = None,
+    input_mtime: float | None = None,
 ) -> bool:
     """Swaps a verified encode into the source's path, retaining the original.
 
@@ -1232,6 +1240,26 @@ def _swap(
         log_error(f"Not replacing '{source.name}': {error} => the original is kept.")
         _discard_row()
         return False
+    if input_size is not None and input_mtime is not None:
+        # the swap is the most consequential write (issue #585): a source that
+        # changed since the encode was decided must not be replaced by an encode
+        # of its old bytes (#436's identity, compared at the last code before
+        # the library; a same-size, mtime-preserved change is #438's boundary)
+        try:
+            current = source.stat()
+        except OSError:
+            current = None
+        if (
+            current is None
+            or current.st_size != input_size
+            or abs(current.st_mtime - input_mtime) > 1.0
+        ):
+            log_error(
+                f"Not replacing '{source.name}': the source changed during the "
+                "encode => the original is kept, the encode is discarded."
+            )
+            _discard_row()
+            return False
     size_before = source.stat().st_size
     size_after = output.stat().st_size
     if size_after >= size_before:
