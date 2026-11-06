@@ -503,11 +503,19 @@ class Conf:
             tuple[float, int | None, float]: (sample_every, sample_count,
             sample_seconds) ready for the engine.
         """
-        return (
-            self.sample_every if sample_every is None else sample_every,
-            self.sample_count if sample_count is None else sample_count,
-            self.sample_seconds if sample_seconds is None else sample_seconds,
-        )
+        # an explicit flag of EITHER kind wins over the config's count: naming
+        # the density explicitly must not be overridden by a configured count
+        if sample_count is not None:
+            count: int | None = sample_count
+            every = self.sample_every if sample_every is None else sample_every
+        elif sample_every is not None:
+            count = None
+            every = sample_every
+        else:
+            count = self.sample_count
+            every = self.sample_every
+        seconds = self.sample_seconds if sample_seconds is None else sample_seconds
+        return every, count, seconds
 
 
 _config: Conf | None = None

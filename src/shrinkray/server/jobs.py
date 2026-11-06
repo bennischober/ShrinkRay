@@ -1072,6 +1072,9 @@ def _encode_measured(
             # Two-directory mode keys on the output directory it writes into.
             # Per movie, never nested.
             lock_target = movie.parent if in_place else output_dir
+            # one precedence for every entry point (issue #526): the resident
+            # encode reads the same keys as the CLI and the plan job
+            sample_every, sample_count, sample_seconds = config.probe_settings()
             # the [i/N] prefix covers the record and swap lines too (issue
             # #471 round 1, finding 4): they are per-file lines
             with (
@@ -1103,6 +1106,9 @@ def _encode_measured(
                     min_source_size_gb=config.min_source_size_gb,
                     candidate_codecs=tuple(config.candidate_codecs),
                     crop_sample_count=config.crop_sample_count,
+                    sample_every=sample_every,
+                    sample_count=sample_count,
+                    sample_seconds=sample_seconds,
                     audio_languages=config.handbrake_audio_languages,
                     subtitle_languages=config.handbrake_subtitle_languages,
                 )

@@ -251,7 +251,8 @@ def encode(
         min=0.0,
         help=(
             "Seconds of runtime per probe window (coverage stays a fixed "
-            "fraction of the file; 0 falls back to --sample-count). Default: "
+            "fraction of the file; an explicit flag wins over a configured "
+            "quality.sample_count, 0 falls back to --sample-count). Default: "
             "the quality.sample_every config value."
         ),
     ),
@@ -765,7 +766,8 @@ def plan(
         min=0.0,
         help=(
             "Seconds of runtime per probe window (coverage stays a fixed "
-            "fraction of the file; 0 falls back to --sample-count). Default: "
+            "fraction of the file; an explicit flag wins over a configured "
+            "quality.sample_count, 0 falls back to --sample-count). Default: "
             "the quality.sample_every config value."
         ),
     ),

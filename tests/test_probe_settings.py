@@ -35,9 +35,15 @@ class TestTheResolver(unittest.TestCase):
         every, count, seconds = conf.probe_settings(900.0, 7, 20.0)
         self.assertEqual((every, count, seconds), (900.0, 7, 20.0))
 
-    def test_a_flag_fills_only_the_value_it_names(self) -> None:
+    def test_an_every_flag_overrides_a_configured_count(self) -> None:
+        # an explicit flag of EITHER kind wins: naming the density must not be
+        # overridden by a configured count (review round 1, finding 2)
         conf = Conf({"quality": {"sample_count": 5}})
-        self.assertEqual(conf.probe_settings(sample_every=300.0), (300.0, 5, 10.0))
+        self.assertEqual(conf.probe_settings(sample_every=300.0), (300.0, None, 10.0))
+
+    def test_a_count_flag_fills_only_the_count(self) -> None:
+        conf = Conf()
+        self.assertEqual(conf.probe_settings(sample_count=7), (600.0, 7, 10.0))
 
     def test_the_count_follows_density_for_a_two_hour_film(self) -> None:
         # the issue's own table: 7200 s at the 600 s density is 12 windows,
