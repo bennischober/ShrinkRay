@@ -25,7 +25,7 @@ def run(app: SetupApp, steps: Callable[[Pilot[None]], Awaitable[None]]) -> None:
     show every field."""
 
     async def main() -> None:
-        async with app.run_test(size=(140, 60)) as pilot:
+        async with app.run_test(size=(140, 72)) as pilot:
             await steps(pilot)
 
     asyncio.run(main())

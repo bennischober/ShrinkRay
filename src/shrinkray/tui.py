@@ -84,6 +84,15 @@ def fields_for(defaults: Conf) -> list[Field]:
         ),
         Field(
             "Quality",
+            "quality.min_saving_percent",
+            "Minimum saving %",
+            "int",
+            defaults.min_saving_percent,
+            "Skip a file whose predicted saving is below this (0 = any shrink)",
+            remeasures=True,
+        ),
+        Field(
+            "Quality",
             "handbrake.encoder_preset",
             "Final encode preset",
             "text",

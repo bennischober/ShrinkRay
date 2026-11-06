@@ -2,6 +2,12 @@
 
 All notable changes to ShrinkRay are documented here. Releases are tagged in git; the GitHub release for each tag carries the same notes.
 
+## [Unreleased]
+
+### Changed
+
+- **A configurable minimum saving gates the decision to encode** ([#316](https://github.com/bennischober/ShrinkRay/issues/316), [#578](https://github.com/bennischober/ShrinkRay/pull/578)): a re-encode was accepted whenever the prediction said "smaller" - even 1% - spending a multi-hour encode, a verification and a retained original to save almost nothing. The new `quality.min_saving_percent` (default 15, range 0-99; 0 restores the old rule) skips a file whose all-window predicted saving is below the threshold, with the skip reason naming both numbers; plan and encode apply the same gate on the same factor, and the threshold is part of the stored plan fingerprint (a verdict decided under another threshold is re-probed). The post-encode rule is unchanged: any real shrink is kept. The default is calculated, not guessed: break-even of one encode against the disk it frees is 9% of a 50 GB remux, 15% of a 10 GB 1080p film (PRODUCT.md carries the worked example).
+
 ## [0.6.1] - 2026-11-06
 
 ### Fixed

@@ -959,6 +959,7 @@ def _output_bitrate(output_file: Path, duration: float | None) -> float | None:
 def _probe_movie(
     input_file: Path,
     target_vmaf: float,
+    min_saving_percent: int,
     crf_range: tuple[int, int],
     sample_count: int,
     sample_seconds: float,
@@ -979,6 +980,8 @@ def _probe_movie(
     Args:
         input_file (Path): The file to probe.
         target_vmaf (float): The VMAF quality floor to meet.
+        min_saving_percent (int): The minimum predicted saving (percent) the
+            decision demands (issue #316; 0 = any real shrink).
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
@@ -1044,7 +1047,7 @@ def _probe_movie(
             bit_depth=source_bit_depth,
         )
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
-        crf, achieved, probes, skip, _chosen_factor = find_optimal_crf_and_skip(
+        crf, achieved, probes, skip, chosen_factor = find_optimal_crf_and_skip(
             input_file,
             workdir,
             handbrake,
@@ -1065,6 +1068,17 @@ def _probe_movie(
         if skip:
             raise SkipEncode(
                 "re-encode would not shrink the file",
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probe_count=len(probes),
+            )
+        # the minimum-saving threshold (issue #316): the decision to SPEND
+        # the encode demands more than "smaller" - the same gate the plan
+        # applies, on the same factor the decision computed
+        saving_percent = (1.0 - chosen_factor) * 100.0
+        if saving_percent < min_saving_percent:
+            raise SkipEncode(
+                f"predicted saving {saving_percent:.1f}% < required {min_saving_percent}%",
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
@@ -1099,6 +1113,7 @@ def encode_with_quality(
     input_file: Path,
     output_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
+    min_saving_percent: int = 15,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
@@ -1131,6 +1146,8 @@ def encode_with_quality(
         input_file (Path): The file to re-encode.
         output_file (Path): The target file (must not exist).
         target_vmaf (float): The VMAF quality floor to meet.
+        min_saving_percent (int): The minimum predicted saving (percent)
+            the decision demands (issue #316; 0 = any real shrink).
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
@@ -1357,6 +1374,7 @@ def encode_with_quality(
                 height=snapshot["height"],
                 bit_depth=snapshot["bit_depth"],
             ).fingerprint(),
+            min_saving_percent=min_saving_percent,
         )
     crf_source: str | None = None
     plan_created_at: str | None = None
@@ -1418,6 +1436,7 @@ def encode_with_quality(
             crf, achieved, probes, crop = _probe_movie(
                 input_file,
                 target_vmaf,
+                min_saving_percent,
                 crf_range,
                 sample_count,
                 sample_seconds,
@@ -1445,12 +1464,22 @@ def encode_with_quality(
             # must not commit for bytes the run no longer sees. Loud abort,
             # the caller reports it (the entry points catch RuntimeError).
             ensure_unchanged(input_file, identity, "encode")
-            skip_reason = "target unreachable" if "unreachable" in str(e) else "no size gain"
-            # the line only for the case no existing line covers (issue #471's
+            # the verdict's slug, recorded like the other gate verdicts (issue
+            # #316's acceptance 2): the threshold's message is its own skip, not
+            # a size verdict - the plan path records the same slug
+            if "saving" in str(e):
+                skip_reason = "saving below minimum"
+            elif "unreachable" in str(e):
+                skip_reason = "target unreachable"
+            else:
+                skip_reason = "no size gain"
+            # the line only for the cases no existing line covers (issue #471's
             # no-duplicate rule): the would-not-shrink skip is logged in the
-            # search layer (find_optimal_crf_and_skip / check_chosen_crf_shrinks)
+            # search layer; the threshold's own numbers come from its message
             if skip_reason == "target unreachable":
                 log(f"Encode for '{input_file.name}': skip (target unreachable)")
+            elif skip_reason == "saving below minimum":
+                log(f"Encode for '{input_file.name}': skip ({e})")
             return QualityResult(
                 input=input_file,
                 output=output_file,

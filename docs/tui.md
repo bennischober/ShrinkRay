@@ -29,7 +29,8 @@ window.
 ## What the terminal surface is
 
 - **`shrinkray setup`** — a TUI that edits the operator-facing settings:
-  required VMAF, the two encoder speed presets, the probe density, the track filters,
+  required VMAF, the minimum saving, the two encoder speed presets, the probe density,
+  the track filters,
   thread caps, the stall watchdog, priority, the eligibility gates (resolution floor
   upward only, minimum file size), extra codecs and file extensions, and backlog-on-start;
   plus pause/resume of the backlog where a resident process runs. It edits those keys
@@ -74,7 +75,8 @@ window.
   `rich`, and `App.run_test` drives screens headless in the flat `unittest` suite.
   Rejected: `rich.prompt` only (a linear wizard) and `questionary` (two dependencies,
   clumsier headless tests).
-- **One screen, grouped:** Quality (required VMAF, final and probe presets, probe
+- **One screen, grouped:** Quality (required VMAF, the minimum saving, final and probe
+  presets, probe
   density), Resources (thread cap, stall watchdog, idle priority), Eligibility (height,
   width, size floors, extra codecs), Library (extensions, backlog on start), the pause
   switch at the top when a data folder is known. Keys it does not show stay untouched.

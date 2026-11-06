@@ -692,6 +692,7 @@ class WatchSettings:
     min_source_size_gb: float
     candidate_codecs: tuple[str, ...]
     crop_sample_count: int
+    min_saving_percent: int = 15
     audio_languages: list[str] | None = None
     subtitle_languages: list[str] | None = None
     # the daily encode window (issue #434): resident automation holds back
@@ -715,6 +716,7 @@ def watch(
     db_file: Path | None = None,
     min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
     min_source_width: int = DEFAULT_MIN_SOURCE_WIDTH,
+    min_saving_percent: int = 15,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = ("h264",),
     crop_sample_count: int = 10,
@@ -741,6 +743,8 @@ def watch(
             encode IN PLACE: each verified output takes the source's own path
             and the original is renamed aside and kept.
         target_vmaf (float): The VMAF quality floor.
+        min_saving_percent (int): The minimum predicted saving (percent)
+            the decision demands (issue #316; 0 = any real shrink).
         encoder (str): The video encoder.
         probe_encoder_preset (str): The PROBE's speed preset (a measurement
             setting, issue #22).
@@ -796,6 +800,7 @@ def watch(
     current = WatchSettings(
         max_threads=max_threads,
         target_vmaf=target_vmaf,
+        min_saving_percent=min_saving_percent,
         min_source_height=min_source_height,
         min_source_width=min_source_width,
         min_source_size_gb=min_source_size_gb,
@@ -1041,6 +1046,7 @@ def watch(
                                 min_source_height=current.min_source_height,
                                 min_source_width=current.min_source_width,
                                 min_source_size_gb=current.min_source_size_gb,
+                                min_saving_percent=current.min_saving_percent,
                                 candidate_codecs=current.candidate_codecs,
                                 crop_sample_count=current.crop_sample_count,
                                 # a struct without the filters (tests, older
