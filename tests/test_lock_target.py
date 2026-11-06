@@ -288,7 +288,9 @@ class TestInPlaceSlotKeying(unittest.TestCase):
             mock.patch.object(watch_mod, "guard_encodes", side_effect=fake_guard),
             mock.patch.object(watch_mod, "encode_with_quality", side_effect=fake_encode),
             mock.patch.object(watch_mod, "decide", return_value="encode"),
-            mock.patch.object(watch_mod, "is_stable", return_value=True),
+            mock.patch.object(
+                watch_mod, "check_stability", return_value=watch_mod.Stability(0.0, None)
+            ),
             mock.patch.object(watch_mod, "disk_free_bytes", return_value=None),
         ):
             watch_mod.watch([self.root], None, once=True, poll_interval=0.0)
@@ -327,7 +329,9 @@ class TestInPlaceSlotKeying(unittest.TestCase):
             mock.patch.object(watch_mod, "guard_encodes", side_effect=fake_guard),
             mock.patch.object(watch_mod, "encode_with_quality", side_effect=fake_encode),
             mock.patch.object(watch_mod, "decide", return_value="encode"),
-            mock.patch.object(watch_mod, "is_stable", return_value=True),
+            mock.patch.object(
+                watch_mod, "check_stability", return_value=watch_mod.Stability(0.0, None)
+            ),
             mock.patch.object(watch_mod, "disk_free_bytes", return_value=None),
         ):
             watch_mod.watch([inbox], out, once=True, poll_interval=0.0)

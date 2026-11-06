@@ -636,13 +636,13 @@ class TestTerminalCloseCancelsEncode(unittest.TestCase):
             env["PATH"] = f"{stubs}:{env.get('PATH', '')}"
             # the stability witness is a SUBPROCESS here (issue #537): the
             # suite's in-process constant patches cannot reach the child, and
-            # the spawn deadline below must not measure the witness's 30 s
-            # size-check sleep (the fixture is aged past STABLE_MIN_AGE, so
-            # the age gate is already satisfied - only the interval sleep
-            # remains, and the test's subject is the signal, not stability).
-            # The test-only env override (watch.py's comment) zeroes both
-            # constants in the child; no retry wrapper, the wait stays
-            # bounded - it just stops measuring a sleep nobody is testing.
+            # the spawn deadline below must not measure the witness's pacing
+            # (the fixture is aged past STABLE_MIN_AGE, so since #479 the
+            # witness accepts it without a sleep; the test's subject is the
+            # signal, not stability). The test-only env override (watch.py's
+            # comment) zeroes both constants in the child, so the test does
+            # not depend on the witness's defaults; no retry wrapper, the
+            # wait stays bounded.
             env["SHRINKRAY_STABLE_CHECK_INTERVAL"] = "0"
             env["SHRINKRAY_STABLE_MIN_AGE"] = "0"
             proc = subprocess.Popen(
@@ -1391,7 +1391,7 @@ class TestDurationEnvGuard(unittest.TestCase):
     `float()`-accepted non-duration - nan, inf, negative, too large for
     time.sleep, garbage - falls back to the default; a valid override wins.
     The SIGHUP test depends on the `0` case; the resident watcher's safety
-    depends on the -5 case never reaching is_stable."""
+    depends on the -5 case never reaching check_stability."""
 
     def test_every_non_duration_falls_back_to_the_default(self) -> None:
         from shrinkray.engine.watch import _duration_env
@@ -1455,7 +1455,7 @@ class TestStableSeamWiring(unittest.TestCase):
     def test_the_constants_are_wired_through_the_guard(self) -> None:
         """The initializer must run the constants through _duration_env
         (round-5 review finding 2): an initializer that assigns a literal
-        bypasses the guard, and SHRLNK... -5 would reach is_stable as -5.0
+        bypasses the guard, and SHRLNK... -5 would reach check_stability as -5.0
         with every value-assertion green."""
         import inspect
 

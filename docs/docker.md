@@ -303,6 +303,12 @@ to encode one file and list retained originals, and the dashboard's token. It pr
 only, so `docker exec <container> <command>` output stays clean; the shell itself runs as
 `PUID`/`PGID` (see *Running as your user*).
 
+## Adding files to the library
+
+The watcher and `shrinkray encode` leave a file alone until it looks complete: its last write is at least a minute old and, where the mount reports how much of a file is allocated, at least 90 % of its size is actually written to disk (`docs/encode-decision.md`, *Before any gate: is the file complete?*). The boot backlog (#586) and `shrinkray plan` (#587) do not check yet: a container that starts while a copy into `/media` is still being written can decide on the partial file, and a `plan` run during a copy predicts from it. And the witness cannot see everything. A download that reserves its whole size up front and then stalls looks complete, and so does a sparse download that stalls with less than 10 % left to write. On a mount that reports no allocation (0 blocks; the Unraid user share's reporting is not yet measured), only the age check applies, so any stalled download looks complete after a minute. A file on a network mount that caches metadata can look complete too.
+
+The reliable setup leaves nothing for the witness to judge: **write new files outside the library, then move them in.** Point your downloader's incomplete folder outside the library, but on the same filesystem, and make sure the program that moves finished files sees both folders inside **one** mount. Then the move is a rename, which is atomic, so a half-written file never appears in the library. Across two mounts the move becomes a copy, even when both are the same disk: two separate bind mounts in the downloader's container are two mounts, and `rename` fails across them (EXDEV). The copy is not atomic, and the watcher and `shrinkray encode` then rely on the witness: the watcher re-judges the file on its next pass, and the CLI's `wait_until_settled` sleeps until the copy has been quiet for a minute (or skips it at its wait limit).
+
 ## Pausing
 
 The resident app starts no new file while it is paused; the file it is working on

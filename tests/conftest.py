@@ -68,7 +68,7 @@ def pytest_configure() -> None:
     at IMPORT time (issue #537's test seam), so a per-test fixture is too late: a
     value exported in the developer's shell would already have pinned the
     constants and flipped the tests that assert the defaults
-    (`test_file_stability` pins 30.0; `test_watch`'s is_stable cases assume
+    (`test_cli`'s guard tests pin 30.0; `test_watch`'s stability cases assume
     60.0). conftest is imported before collection, so this runs before any test
     module imports watch. The SIGHUP test exports the overrides into its CHILD's
     environment explicitly and is unaffected.

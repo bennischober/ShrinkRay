@@ -1,7 +1,7 @@
 """Watch mode: automatically encode new movies arriving in a folder.
 
 Polls an inbox directory for new movie files, waits until they are stable
-(no longer growing => the download/copy finished), applies the same skip
+(no longer being written => the download/copy finished), applies the same skip
 logic as the encode/plan commands and encodes them (source stays untouched
 => the human stays in the loop for replacing library files).
 """
@@ -42,9 +42,10 @@ from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
 from shrinkray.tools.process import Cancelled
 
 
-# a file is stable when its size is unchanged between two checks ... and it is
-# at least this old (grace period after the last modification) — the two
-# constants below, whose values the env seam can override (test-only, #537).
+# a file is stable when its last write is at least STABLE_MIN_AGE old and it is
+# not sparse (issue #479, `check_stability`); STABLE_CHECK_INTERVAL paces the
+# one-shot wait's retries of a file it cannot stat. The env seam below can
+# override both (test-only, #537).
 # Test-only env overrides (issue #537): the SIGHUP test spawns the CLI as a
 # SUBPROCESS, so the suite's in-process patches (tests/test_cli.py's
 # `_toolchain_ok`, the inline block in `test_a_signal_after_the_final_encode_*
@@ -60,7 +61,7 @@ from shrinkray.tools.process import Cancelled
 # The guard is TOTAL (review findings 1 and 2): a value that `float()` accepts
 # but that is not a usable duration — `nan`, `inf`, negative, or too large for
 # `time.sleep` — must fall back to the default, because `STABLE_MIN_AGE = -5`
-# would make `is_stable()` answer True for a file still being written (the exact
+# would make `check_stability()` accept a file still being written (the exact
 # #437 defect this witness exists to prevent), and `nan`/`inf`/negative/1e10
 # make `time.sleep`/`st_mtime` arithmetic raise where no caller expects it.
 def _duration_env(var: str, default: float) -> float:
@@ -83,15 +84,13 @@ def _duration_env(var: str, default: float) -> float:
     # `float()` accepts nan/inf/negatives; a duration must be finite, >= 0, and
     # small enough that `time.sleep`/`st_mtime` arithmetic cannot overflow
     # (1e10 passes isfinite and overflows sleep — round-2 review finding 1).
-    # The cap bounds OVERFLOW ONLY, not the wait: `wait_for_stable`'s deadline
-    # and its cancel event are both observed only BETWEEN sleeps, so a legal
-    # interval up to a day overruns the limit — and on the stable path the
-    # cancel is not delayed but DROPPED (is_stable's True return ends the
-    # wait; round-6 review finding 1). At the default interval the #326
-    # contract's "never absorbs a signal for minutes" still holds on the
-    # raising paths; the seam's values are a test's choice, never an
-    # operator's. Larger values are a mistake or an attempt to disable the
-    # witness, and fall back to the default.
+    # The cap bounds OVERFLOW ONLY, not the wait: `wait_until_settled`'s cancel
+    # event is observed only BETWEEN sleeps, so a legal value up to a day
+    # delays a cancel by up to one sleep of that length. At the defaults the
+    # #326 contract's "never absorbs a signal for minutes" holds; the seam's
+    # values are a test's choice, never an operator's. Larger values are a
+    # mistake or an attempt to disable the witness, and fall back to the
+    # default.
     if not math.isfinite(value) or value < 0 or value > 86400.0:
         return default
     return value
@@ -99,6 +98,12 @@ def _duration_env(var: str, default: float) -> float:
 
 STABLE_CHECK_INTERVAL = _duration_env("SHRINKRAY_STABLE_CHECK_INTERVAL", 30.0)
 STABLE_MIN_AGE = _duration_env("SHRINKRAY_STABLE_MIN_AGE", 60.0)
+# below this share of its size allocated on disk, a file is sparse: a download
+# that wrote its full size up front and has not filled it (issue #479). Video
+# is already compressed, so filesystem compression is expected to keep a
+# finished file well above it (reasoned, not measured); the margin is generous
+# so that a finished file does not trip it
+SPARSE_ALLOCATED_FLOOR = 0.9
 # the bounded wait's ceiling for the one-shot CLI (issue #437): the watcher
 # has no ceiling (it reconsiders on its next pass); a one-shot run reports
 # and skips instead of waiting forever on a file that never settles
@@ -290,78 +295,123 @@ def _identity(path: Path) -> str:
     return f"{path.resolve()}:{stat.st_mtime}:{stat.st_size}"
 
 
-def is_stable(path: Path) -> bool:
-    """Checks whether a file has finished growing (download/copy complete).
+@dataclass(frozen=True)
+class Stability:
+    """One `stat()`'s verdict on whether a file is complete (issue #479).
 
-    A file is stable when its size does not change between two checks and
-    it was last modified at least STABLE_MIN_AGE seconds ago.
+    Attributes:
+        young_for (float): Seconds until the file's last write is
+            STABLE_MIN_AGE old; 0.0 once it is. Positive means a writer may
+            still be at work: wait that long, then ask again.
+        incomplete (str | None): Why a file old enough for the age check is
+            still not complete, worded for the operator; None when it is
+            complete or its allocation cannot be judged.
+    """
+
+    young_for: float
+    incomplete: str | None
+
+    @property
+    def settled(self) -> bool:
+        """True when the file may be decided on now."""
+        return self.young_for == 0.0 and self.incomplete is None
+
+
+def _allocated_fraction(stat: os.stat_result) -> float | None:
+    """The share of a file's size that is allocated on disk.
+
+    `st_blocks` counts 512-byte units on every POSIX platform. Windows has no
+    `st_blocks`, and some FUSE/SMB filesystems report 0 for a complete file:
+    both mean "unknown", never "sparse" (the maintainer's #479 refinement A).
+    A file with nothing allocated at all is all zeros, which no probe reads
+    as a video stream, so treating it as unknown cannot lead to an encode.
 
     Args:
-        path (Path): The file to check.
+        stat (os.stat_result): The file's stat.
 
     Returns:
-        bool: True if the file can be considered complete.
+        float | None: allocated bytes / size, or None when it cannot be judged.
     """
-    try:
-        size_1 = path.stat().st_size
-        age = time.time() - path.stat().st_mtime
-    except OSError:
-        return False
-    if age < STABLE_MIN_AGE:
-        return False
-    time.sleep(STABLE_CHECK_INTERVAL)
-    try:
-        size_2 = path.stat().st_size
-    except OSError:
-        return False
-    return size_1 == size_2
+    blocks: int | None = getattr(stat, "st_blocks", None)
+    if not blocks or stat.st_size == 0:
+        return None
+    return blocks * 512 / stat.st_size
 
 
-def wait_for_stable(
+def check_stability(path: Path) -> Stability:
+    """Judges from a single `stat()` whether a file has finished arriving.
+
+    The witness (issue #479, replacing #437's size re-check): the file's last
+    write is at least STABLE_MIN_AGE old, and it is not sparse. Every write
+    updates mtime, so a file still being written always looks young; an old
+    mtime means nothing wrote for STABLE_MIN_AGE. That made the old 30 s size
+    comparison a second, shorter copy of the age question, paid by every
+    settled file. What the age check cannot see is a sparse download that
+    stalled: it reports its full size from the start, and only its allocated
+    blocks show the holes. Video is already compressed, so a finished file on
+    a compressing filesystem (ZFS, btrfs) is expected to stay well above
+    SPARSE_ALLOCATED_FLOOR (reasoned, not measured). Accepted gaps: a fully preallocated (fallocate)
+    download that stalls, and a network mount serving stale metadata. #436's
+    run identity aborts a run whose file changes while it is measured, up to
+    the start of the final encode - not during or after that encode.
+
+    Args:
+        path (Path): The file to judge.
+
+    Returns:
+        Stability: The verdict; it never sleeps.
+
+    Raises:
+        OSError: When the file cannot be stat'ed (vanished, unreadable).
+    """
+    stat = path.stat()
+    young_for = STABLE_MIN_AGE - (time.time() - stat.st_mtime)
+    if young_for > 0:
+        return Stability(young_for=young_for, incomplete=None)
+    allocated = _allocated_fraction(stat)
+    if allocated is not None and allocated < SPARSE_ALLOCATED_FLOOR:
+        # floor, not round: 89.6 % must not read as the 90 % that passes
+        return Stability(
+            young_for=0.0,
+            incomplete=(
+                f"appears incomplete: only {math.floor(allocated * 100)} % of its size "
+                "is allocated on disk (a stalled download?)"
+            ),
+        )
+    return Stability(young_for=0.0, incomplete=None)
+
+
+def wait_until_settled(
     path: Path,
     limit: float = STABLE_WAIT_LIMIT,
     cancel: threading.Event | None = None,
-) -> bool:
-    """Waits until the file settles, bounded and cancel-aware; the one seam
-    for both entries (issue #437).
+) -> str | None:
+    """Waits, bounded and cancel-aware, until the file may be decided on; the
+    one-shot CLI's entry to the witness the watcher uses (issues #437, #479).
 
-    The witness is the watcher's `is_stable` (size unchanged across a
-    STABLE_CHECK_INTERVAL sleep, last change at least STABLE_MIN_AGE ago).
-    The seam's cost for a COMPLETE fresh file is the floor + one interval
-    (~90 s at the defaults): it sleeps the REMAINING age once, then does
-    the size check DIRECTLY (one interval, here - calling is_stable on
-    this path would stack its own interval sleep on the age sleep, the
-    measured 90 s chunking shape, and the two sleeps are both the witness
-    definition requires). A file already past the floor asks the witness
-    directly (its size-check sleep runs inside it). Overlapping the
-    unchanged-window with the age wait could reach ~60 s, but that changes
-    what the witness measures - the watcher keeps is_stable untouched. The watcher's loop
-    needs no bound (it reconsiders on its next pass) and keeps its single
-    is_stable check - an extraction, not a policy change; the one-shot CLI
-    has no next pass, so it waits here and gives up loudly at the limit. A
-    set cancel event raises Cancelled (the #326 contract: closing the
-    terminal cancels the wait too, it never absorbs a signal for minutes).
+    A settled file returns at once, with no sleep. A young file sleeps its
+    remaining age and is judged again, so a file written meanwhile waits
+    again from its new mtime. An old file that is still incomplete (sparse)
+    is not waited on: it is a stalled download, and waiting would not finish
+    it - the reason is returned at once and the caller skips the file. The
+    watcher calls `check_stability` directly once per candidate per pass; it
+    needs no bound because it reconsiders on its next pass.
 
     Args:
         path (Path): The file to wait for.
-        limit (float): Total seconds to wait before giving up. Checked
-            BETWEEN sleeps: one interval longer than the limit overruns it
-            (a legal seam value up to a day makes one sleep that long), so
-            the limit bounds the number of checks, not the wall clock.
-        cancel (threading.Event | None): Cooperative cancellation; when set,
-            the wait raises instead of returning. Observed only between
-            sleeps, and NOT on every path: a cancel that arrives DURING a
-            sleep is honoured at the next check — except the witness's own
-            size-check sleep inside `is_stable`, whose True return ENDS the
-            wait before any check sees the cancel (measured, round-5 review
-            finding 1: the wait returns True with the cancel set). On the
-            age-sleep and direct-size-check paths the cancel raises after
-            one interval (up to a day under the test-only override, 30 s at
-            the default).
+        limit (float): Total seconds to wait before giving up. A wait that
+            would end past the limit gives up before sleeping.
+        cancel (threading.Event | None): Cooperative cancellation, checked
+            after every sleep (the #326 contract: closing the terminal
+            cancels the wait too). A cancel that arrives DURING a sleep is
+            honoured at the next check, so the worst case is one sleep: the
+            remaining age (up to STABLE_MIN_AGE, 60 s at the default) or,
+            on the unreadable-file retry, STABLE_CHECK_INTERVAL (30 s).
 
     Returns:
-        bool: True when the file settled, False when the limit expired
-            (the caller reports and skips; the file stays eligible).
+        str | None: None when the file settled; otherwise why it is skipped,
+            worded for the operator. The file stays eligible: a later run
+            decides it again.
 
     Raises:
         Cancelled: When the cancel event fires during the wait.
@@ -370,56 +420,21 @@ def wait_for_stable(
     while True:
         if cancel is not None and cancel.is_set():
             raise Cancelled("cancelled while waiting for the file to settle")
-        if time.monotonic() >= deadline:
-            return False
         try:
-            age = time.time() - path.stat().st_mtime
-        except OSError:
-            # unreadable/vanished: same answer the witness would give, and
-            # the bounded wait reports it as never-settled at the limit
-            if time.monotonic() >= deadline:
-                return False
+            verdict = check_stability(path)
+        except OSError as e:
+            # vanished or unreadable: retried on the interval until the limit
+            if time.monotonic() + STABLE_CHECK_INTERVAL >= deadline:
+                return f"could not be read within {int(limit)} s ({e})"
             time.sleep(STABLE_CHECK_INTERVAL)
             continue
-        if age >= STABLE_MIN_AGE:
-            # old enough for the age gate: the witness's size check (one
-            # interval, inside it) is the only remaining question
-            if is_stable(path):
-                return True
-            if time.monotonic() >= deadline:
-                return False
-            # the witness slept one interval for the size check and returned
-            # False (the size changed): sleep nothing extra, the next turn's
-            # witness call re-checks at the new size
-            continue
-        # too young: sleep the REMAINING age, then the size check DIRECTLY
-        # (one interval, here). The complete fresh file's total cost is the
-        # floor + one interval (~90 s at the defaults) - the witness's own
-        # definition requires both waits; only the CHUNKED 30-s polling of
-        # the first shape was waste.
-        remaining = STABLE_MIN_AGE - age
-        if time.monotonic() + remaining + STABLE_CHECK_INTERVAL >= deadline:
-            return False
-        time.sleep(remaining)
-        if cancel is not None and cancel.is_set():
-            raise Cancelled("cancelled while waiting for the file to settle")
-        try:
-            size_1 = path.stat().st_size
-        except OSError:
-            # vanished during the age sleep: the next turn re-reads
-            continue
-        time.sleep(STABLE_CHECK_INTERVAL)
-        if cancel is not None and cancel.is_set():
-            raise Cancelled("cancelled while waiting for the file to settle")
-        try:
-            size_2 = path.stat().st_size
-        except OSError:
-            continue
-        if size_1 == size_2:
-            return True
-        # the size changed during the interval: still growing, the next
-        # turn re-derives the age from the NEW mtime
-        continue
+        if verdict.incomplete is not None:
+            return verdict.incomplete
+        if verdict.settled:
+            return None
+        if time.monotonic() + verdict.young_for >= deadline:
+            return f"did not settle within {int(limit)} s (still copying?)"
+        time.sleep(verdict.young_for)
 
 
 def decide(movie: Path, target_vmaf: float, encoder: str) -> str:
@@ -949,12 +964,29 @@ def watch(
                     if stop_event is not None and stop_event.is_set():
                         log("Watch stopped (stop event set).")
                         return
-                    if not is_stable(movie):
+                    try:
+                        stability = check_stability(movie)
+                    except OSError:
+                        stability = None
+                    if stability is None or stability.young_for > 0:
                         # NOT marked known: the file is still copying and stays
                         # eligible (it must be reconsidered once stable - the
                         # old code added it to `known` first and never looked
                         # at it again, starving every normal copy arrival)
                         log(f"'{movie.name}' is not stable yet (still copying?) => later.")
+                        continue
+                    if stability.incomplete is not None:
+                        # an old file that is still incomplete is a stalled
+                        # download: another pass will not finish it. Marked known
+                        # like a decided skip, so it is reported once; a resumed
+                        # download writes, which gives it a new identity and
+                        # brings it back (issue #479)
+                        log(
+                            f"Skipping '{movie.name}': {stability.incomplete} "
+                            "=> re-decided when it changes."
+                        )
+                        with suppress(OSError):
+                            known.add(_identity(movie))
                         continue
                     # a manual encode, a pause, or the encode window can begin
                     # mid-pass: hold this file and the rest back; the next pass
