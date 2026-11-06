@@ -1906,7 +1906,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
     """Issue #129: the search must check size at the CRF it chose, not only at
     the top of the range.
 
-    The top-of-range probe (crf_range[1], 45) is a *bound*: it answers "can any
+    The top-of-range probe (crf_range[1], the range's top) is a *bound*: it answers "can any
     CRF shrink this file?". The chosen CRF sits far below it, so the file there
     is much bigger and can still grow. These tests drive the two calls to
     different answers, which a flat mock cannot do.
@@ -1971,7 +1971,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
     def test_the_early_exit_still_skips_the_search(self):
         """When the bound itself cannot shrink, the search never runs.
 
-        The bound is the whole point of the top-of-range probe: if CRF 45 cannot
+        The bound is the whole point of the top-of-range probe: if the range's top CRF cannot
         shrink the file, nothing in the range can, so the bisect is wasted work.
         """
         with (
@@ -2057,6 +2057,17 @@ class TestChosenCrfSizeGate(unittest.TestCase):
             self.assertEqual(factor, 0.5)
             self.assertEqual(reads, [], "a bypassed cache was read for the size decision")
             connection.close()
+
+    def test_a_flat_curve_reaches_above_the_old_top_bound(self) -> None:
+        """The calibrated top bound is reachable: a curve that never drops below
+        the target chooses a CRF above the old 45 bound (issue #315).
+
+        The whole point of widening the window is that clean, flat content must
+        not be capped at 44; this pins the effect, not the number.
+        """
+        chosen = engine_search.bisect_crf(lambda crf: 100.0, *engine_search.DEFAULT_CRF_RANGE, 96.0)
+        self.assertGreater(chosen, 45, "the search still cannot pass the old top bound")
+        self.assertEqual(chosen, engine_search.DEFAULT_CRF_RANGE[1] - 1)
 
     def test_the_chosen_check_is_a_separate_measurement(self):
         """The search's own chosen-CRF check encodes one window separately.
@@ -2196,7 +2207,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
             ]
         )
         self.assertTrue(result.success, result.error)
-        # the bound (45) + the chosen check (22): exactly the decision's own
+        # the bound (the range top) + the chosen check (22): exactly the decision's own
         self.assertEqual(seen, [engine_search.DEFAULT_CRF_RANGE[1], 22])
         # the report carries the CHOSEN factor (0.7), never the bound's (0.4)
         self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.7))

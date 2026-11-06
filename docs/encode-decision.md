@@ -134,7 +134,7 @@ plateau-then-knee curve a pass at the 20% point ended the search eight CRF below
 one, where a file that shrinks could grow. ab-av1 has no such bracket condition; this is a deliberate
 deviation.
 - **The trade**, simulated on 5000 SVT-AV1-like curves (VMAF = 100 - k·e^(CRF/s), s drawn from 8-16, the
-target from 94-97 and crossing it at a CRF drawn from 16-69, range 14-70 (#315: clean content passes up to 69, 70 is the encoder's give-up end); the same curves for every
+target from 94-97 and crossing it at a CRF drawn from 16-44 (the simulation ran under the old range 14-45; issue #315 has since widened the window to 14-70, so clean content can now pass above 44 - the simulated round counts are not re-measured); the same curves for every
 shape): 4.87 rounds per passing file instead of the old shape's 5.92, and 6.1% of files end one CRF step
 below the best passing CRF (never more) - a slightly bigger file. An unreachable target costs 3 rounds
 instead of 1. On real titles (#395) all three measured titles were unreachable at the default target under

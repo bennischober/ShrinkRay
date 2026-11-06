@@ -288,7 +288,7 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
     2026-10-31 decision): while only one side is known, round two moves to
     the 20%/80% point (_round_two_cut) on EVERY range - ab-av1 skips that
     cut when the range is narrower than half its libsvtav1 default (5..70),
-    which the old SDR default (14, 45) was (the calibrated (14, 70) is no longer narrower than half, so the cut now applies to SDR too - issue #315), and goes straight to the range end.
+    which the old SDR default (14, 45) was (the calibrated (14, 70) is not narrower than half either, so the unconditional cut now also runs for SDR windows - issue #315), and goes straight to the range end.
     The measured trade-off (issue #399): the cut saves ~0.4-0.5 rounds per
     reachable file and costs 1 round per unreachable one, so it wins unless
     roughly 30% or more of eligible files are unreachable (the maintainer's
