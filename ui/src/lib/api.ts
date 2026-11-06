@@ -139,7 +139,6 @@ export interface MoviePlan {
   /** the plan was probed at this preset (a measurement setting, issue #22) */
   probe_encoder_preset?: string | null
   target_vmaf: number | null
-  vmaf_margin: number | null
   stale: boolean
   /** the HDR estimate bias note (issue #98): present only for HDR titles with
    * a live estimate — the prediction comes from easy-content probe windows */
@@ -222,6 +221,7 @@ export interface Config {
   resources?: { idle_priority?: boolean }
   quality?: {
     target_vmaf?: number
+    vmaf_margin?: number
     sample_every?: number
     sample_count?: number | null
     sample_seconds?: number

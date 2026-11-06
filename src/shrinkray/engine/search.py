@@ -629,6 +629,7 @@ def source_vmaf_ceiling(
     samples: list[tuple[Path, float]],
     workdir: Path,
     recipe: VmafRecipe | None = None,
+    crop: tuple[int, int, int, int] | None = None,
     cancel: threading.Event | None = None,
 ) -> float:
     """Measures a source's own VMAF ceiling (each sample against itself).
@@ -659,7 +660,7 @@ def source_vmaf_ceiling(
     scores: list[float] = []
     for sample, _offset in samples:
         _check_cancel(cancel)
-        scores.append(measure_vmaf(sample, sample, workdir, recipe=recipe))
+        scores.append(measure_vmaf(sample, sample, workdir, recipe=recipe, crop=crop))
     if not scores:
         raise RuntimeError("cannot measure the source's VMAF ceiling: no samples")
     return sum(scores) / len(scores)
@@ -741,7 +742,7 @@ def find_optimal_crf(
     # absolute target is not. margin 0 keeps the absolute target exactly.
     effective_target = target_vmaf
     if vmaf_margin > 0:
-        ceiling = source_vmaf_ceiling(samples, workdir, recipe, cancel=cancel)
+        ceiling = source_vmaf_ceiling(samples, workdir, recipe, crop=crop, cancel=cancel)
         effective_target = min(target_vmaf, ceiling - vmaf_margin)
         if progress:
             progress({"stage": "probe", "detail": f"source ceiling VMAF {ceiling:.2f}"})

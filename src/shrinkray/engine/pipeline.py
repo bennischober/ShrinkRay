@@ -1448,6 +1448,7 @@ def encode_with_quality(
                 sample_seconds,
                 effective_encoder,
                 probe_encoder_preset,
+                vmaf_margin=vmaf_margin,
                 cancel=cancel,
                 db_file=db_file,
                 encoder_threads=encoder_threads,

@@ -671,6 +671,7 @@ def plan_quality(
             handbrake,
             target_vmaf=target_vmaf,
             crf_range=crf_range,
+            vmaf_margin=vmaf_margin,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             encoder=effective_encoder,
