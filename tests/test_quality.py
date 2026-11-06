@@ -2239,7 +2239,6 @@ class TestMinSavingThreshold(unittest.TestCase):
 
         def run(factor: float, required: int):
             with (
-                patch.object(engine_pipeline, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
                 patch.object(
                     engine_pipeline,
@@ -2249,11 +2248,7 @@ class TestMinSavingThreshold(unittest.TestCase):
                 patch.object(engine_pipeline, "detect_crop_summary_cached", return_value=None),
                 patch.object(engine_pipeline, "detect_crop_rect", return_value=None),
                 patch.object(engine_pipeline, "extract_samples", return_value=[]),
-                patch.object(engine_pipeline, "capture_run_identity") as ident,
-                patch.object(engine_pipeline, "_source_snapshot", return_value={}),
             ):
-                ident.size = 64
-                ident.mtime = 1.0
                 return _probe_movie(
                     self.movie,
                     96.0,
