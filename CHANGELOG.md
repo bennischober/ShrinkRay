@@ -2,6 +2,12 @@
 
 All notable changes to ShrinkRay are documented here. Releases are tagged in git; the GitHub release for each tag carries the same notes.
 
+## [Unreleased]
+
+### Changed
+
+- **The CRF search's top bound reaches the encoder's real range** ([#315](https://github.com/bennischober/ShrinkRay/issues/315)): the SDR search window was `(14, 45)`, x265-era bounds carried over and never calibrated for SVT-AV1, so clean, flat content that still measured >= 96 at CRF 69 was capped at 44 - the whole 45-69 band of savings was left on the table. Measured on 4 sources (18 probes, target 96): the flat test pattern passes up to **69** and fails at 70 (the encoder's give-up end), while the bottom bound does not bind (a grain-heavy source reads 95.3 even at CRF 0, so its "target unreachable" verdict is its ceiling, not the floor). The window is `(14, 70)` now; the wider top costs one or two probes per file and cannot make a decision wrong in the safe direction.
+
 ## [0.6.1] - 2026-11-06
 
 ### Fixed

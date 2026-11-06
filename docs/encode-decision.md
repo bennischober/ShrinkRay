@@ -117,7 +117,7 @@ round two moves to the 20%/80% point of the range and round three to its end; on
 failing probe bracket the target, each round interpolates between them (with issue #23's safeguards).
 The deviation (issue #399, the maintainer's 2026-10-31 decision): the round-two cut is applied on EVERY
 range, where ab-av1's cut_on_iter2 skips it when the range is narrower than half its libsvtav1 default
-(5..70) - which the SDR default (14, 45) is; there ab-av1 would probe the range end on round two
+(5..70) - which the old SDR default (14, 45) was; with the calibrated (14, 70) the cut now applies to SDR too (#315); there ab-av1 would probe the range end on round two
 (measured 29 -> 14 -> 22, where ours probes 29 -> 20). The measured trade-off: the cut saves ~0.4-0.5
 rounds per reachable file and costs 1 round per unreachable one, so it wins unless roughly 30% or more
 of eligible files are unreachable (11 real final CRFs: SDR cut 4.82 vs no-cut 5.09 rounds; HDR 5.00 vs
@@ -134,7 +134,7 @@ plateau-then-knee curve a pass at the 20% point ended the search eight CRF below
 one, where a file that shrinks could grow. ab-av1 has no such bracket condition; this is a deliberate
 deviation.
 - **The trade**, simulated on 5000 SVT-AV1-like curves (VMAF = 100 - k·e^(CRF/s), s drawn from 8-16, the
-target from 94-97 and crossing it at a CRF drawn from 16-44, range 14-45; the same curves for every
+target from 94-97 and crossing it at a CRF drawn from 16-69, range 14-70 (#315: clean content passes up to 69, 70 is the encoder's give-up end); the same curves for every
 shape): 4.87 rounds per passing file instead of the old shape's 5.92, and 6.1% of files end one CRF step
 below the best passing CRF (never more) - a slightly bigger file. An unreachable target costs 3 rounds
 instead of 1. On real titles (#395) all three measured titles were unreachable at the default target under

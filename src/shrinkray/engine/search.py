@@ -45,12 +45,15 @@ VMAF_STATISTIC = "mean"
 
 # SVT-AV1 publishes 0-70 at 0.25 granularity (HandBrake's
 # hb_video_quality_get_limits), a wider and finer scale than x265's.
-# These bounds are NOT calibrated for SVT-AV1 yet: they are the
-# x265-era ranges carried over, and the issue requires a measured
-# SVT-AV1 CRF-to-VMAF curve on 3-5 titles before they can be
-# trusted. The search clamps to this band, so an over-wide range only
-# costs probes - it cannot make the decision wrong in the safe direction.
-DEFAULT_CRF_RANGE = (14, 45)
+# Calibrated on 2026-11-06 (issue #315, 4 sources, 18 probes, target 96):
+# the TOP bound binds - clean, flat content still measures >= 96 at CRF 69 and
+# only fails at 70 (the encoder's give-up end), so the old 45 capped such
+# files at 44 and left the 45-69 band on the table. The BOTTOM bound does
+# not bind: a grain-heavy source reads 95.3 at CRF 0, so "target unreachable"
+# is its ceiling, not the floor. The search clamps to this band, so the wider
+# top only costs probes - it cannot make the decision wrong in the safe
+# direction.
+DEFAULT_CRF_RANGE = (14, 70)
 
 
 @dataclass
@@ -285,7 +288,7 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
     2026-10-31 decision): while only one side is known, round two moves to
     the 20%/80% point (_round_two_cut) on EVERY range - ab-av1 skips that
     cut when the range is narrower than half its libsvtav1 default (5..70),
-    which the SDR default (14, 45) is, and goes straight to the range end.
+    which the old SDR default (14, 45) was (the calibrated (14, 70) is no longer narrower than half, so the cut now applies to SDR too - issue #315), and goes straight to the range end.
     The measured trade-off (issue #399): the cut saves ~0.4-0.5 rounds per
     reachable file and costs 1 round per unreachable one, so it wins unless
     roughly 30% or more of eligible files are unreachable (the maintainer's
