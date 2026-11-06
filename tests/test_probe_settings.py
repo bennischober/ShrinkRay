@@ -92,6 +92,7 @@ class TestTheResidentJobUsesTheSameRule(unittest.TestCase):
             output=movie,
             success=True,
             target_vmaf=95.0,
+            min_saving_percent=15,
             chosen_crf=21,
             achieved_vmaf=95.47,
             probes=[],
