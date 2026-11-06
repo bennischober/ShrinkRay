@@ -45,14 +45,17 @@ VMAF_STATISTIC = "mean"
 
 # SVT-AV1 publishes 0-70 at 0.25 granularity (HandBrake's
 # hb_video_quality_get_limits), a wider and finer scale than x265's.
-# Calibrated on 2026-11-06 (issue #315, 4 sources, 18 probes, target 96):
-# the TOP bound binds - clean, flat content still measures >= 96 at CRF 69 and
-# only fails at 70 (the encoder's give-up end), so the old 45 capped such
-# files at 44 and left the 45-69 band on the table. The BOTTOM bound does
-# not bind: a grain-heavy source reads 95.3 at CRF 0, so "target unreachable"
-# is its ceiling, not the floor. The search clamps to this band, so the wider
-# top only costs probes - it cannot make the decision wrong in the safe
-# direction.
+# The bounds are the encoder's range, not a calibration claim (issue #315,
+# measured 2026-11-06 on 7 real sources across 4 shapes plus a synthetic
+# pattern, target 96): NO real source chose a CRF above 34 - the old 45 top
+# never bound on real content, so this widening is headroom, not a measured
+# saving. It matters for the outlier shape (a synthetic flat pattern still
+# measures >= 96 at CRF 69) and it aligns the window with the encoder's real
+# scale; the search's top is exclusive, so it probes up to 69 and never tries
+# 70, the encoder's give-up end. The bottom stays 14: a grain-heavy source
+# reads 95.3 at CRF 0, so its "target unreachable" verdict is its ceiling,
+# not the floor. An over-wide range only costs probes - it cannot make the
+# decision wrong in the safe direction.
 DEFAULT_CRF_RANGE = (14, 70)
 
 
