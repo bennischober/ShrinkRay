@@ -403,7 +403,10 @@ def wait_until_settled(
             would end past the limit gives up before sleeping.
         cancel (threading.Event | None): Cooperative cancellation, checked
             after every sleep (the #326 contract: closing the terminal
-            cancels the wait too).
+            cancels the wait too). A cancel that arrives DURING a sleep is
+            honoured at the next check, so the worst case is one sleep: the
+            remaining age (up to STABLE_MIN_AGE, 60 s at the default) or,
+            on the unreadable-file retry, STABLE_CHECK_INTERVAL (30 s).
 
     Returns:
         str | None: None when the file settled; otherwise why it is skipped,
