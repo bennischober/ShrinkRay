@@ -2,6 +2,12 @@
 
 All notable changes to ShrinkRay are documented here. Releases are tagged in git; the GitHub release for each tag carries the same notes.
 
+## [Unreleased]
+
+### Changed
+
+- **A configurable minimum saving gates the decision to encode** ([#316](https://github.com/bennischober/ShrinkRay/issues/316), [#578](https://github.com/bennischober/ShrinkRay/pull/578)): a re-encode was accepted whenever the prediction said "smaller" - even 1% - spending a multi-hour encode, a verification and a retained original to save almost nothing. The new `quality.min_saving_percent` (default 15, range 0-99; 0 restores the old rule) skips a file whose all-window predicted saving is below the threshold, with the skip reason naming both numbers; plan and encode apply the same gate on the same factor, and the threshold is part of the stored plan fingerprint (a verdict decided under another threshold is re-probed). The post-encode rule is unchanged: any real shrink is kept. The default is calculated, not guessed: break-even of one encode against the disk it frees is 9% of a 50 GB remux, 15% of a 10 GB 1080p film (PRODUCT.md carries the worked example).
+
 ## [0.6.1] - 2026-11-06
 
 ### Fixed
@@ -53,7 +59,6 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 - **The plan's savings estimate is the decision's own all-window factor** ([#388](https://github.com/bennischober/ShrinkRay/issues/388), [#570](https://github.com/bennischober/ShrinkRay/pull/570)): the size decision already computes the encoded-over-source factor at the chosen CRF over every probe window (issue #314's cache), but `find_optimal_crf_and_skip` discarded it and `plan_quality` re-derived a noisier one-window estimate with an extra sample-window encode — the visible plan/encode disagreement (plan predicts 30%, the encode's factor says 12%). The search now returns the factor it decided with, the plan reports it, and the redundant window encode is gone. Cache-incomplete paths keep today's behaviour exactly (the decision already falls back to the one-window estimate); the chosen CRF, the skip verdicts and the plan-reuse fingerprint are unchanged.
 
 - **Every entry point probes with the same window count, and density is the default** ([#526](https://github.com/bennischober/ShrinkRay/issues/526), [#580](https://github.com/bennischober/ShrinkRay/pull/580)): `encode`, `plan` and the resident job resolved the probe-window count three different ways — `encode` always pinned the schema default of 3 (so `--sample-every` and `quality.sample_every` never applied), `plan` read neither config key, and the resident app ignored both. They now share one rule (`Conf.probe_settings`): an explicit flag, then `quality.sample_count` when set, then `quality.sample_every` (density — one window per 10 minutes, the product's default, now with `sample_count` unset instead of defaulting to 3). A 2-hour film is probed with 12 windows in every mode instead of 3; plans stored under the old encode-mode fingerprint re-probe once. The `--help` texts, the README and the flags' docs state the new precedence.
-- **A configurable minimum saving gates the decision to encode** ([#316](https://github.com/bennischober/ShrinkRay/issues/316), [#578](https://github.com/bennischober/ShrinkRay/pull/578)): a re-encode was accepted whenever the prediction said "smaller" - even 1% - spending a multi-hour encode, a verification and a retained original to save almost nothing. The new `quality.min_saving_percent` (default 15, range 0-99; 0 restores the old rule) skips a file whose all-window predicted saving is below the threshold, with the skip reason naming both numbers; plan and encode apply the same gate on the same factor, and the threshold is part of the stored plan fingerprint (a verdict decided under another threshold is re-probed). The post-encode rule is unchanged: any real shrink is kept. The default is calculated, not guessed: break-even of one encode against the disk it frees is 9% of a 50 GB remux, 15% of a 10 GB 1080p film (PRODUCT.md carries the worked example).
 ## [0.6.0] - 2026-10-30
 
 ### Fixed
