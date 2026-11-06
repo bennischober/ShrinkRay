@@ -660,7 +660,9 @@ def source_vmaf_ceiling(
     scores: list[float] = []
     for sample, _offset in samples:
         _check_cancel(cancel)
-        scores.append(measure_vmaf(sample, sample, workdir, recipe=recipe, crop=crop))
+        scores.append(
+            measure_vmaf(sample, sample, workdir, recipe=recipe, crop=crop, crop_distorted=True)
+        )
     if not scores:
         raise RuntimeError("cannot measure the source's VMAF ceiling: no samples")
     return sum(scores) / len(scores)

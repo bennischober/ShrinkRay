@@ -303,6 +303,7 @@ def build_vmaf_command(
     crop: tuple[int, int, int, int] | None = None,
     subsample: int | None = None,
     recipe: VmafRecipe | None = None,
+    crop_distorted: bool = False,
 ) -> list[str]:
     """Builds the ffmpeg command measuring the VMAF of an encode.
 
@@ -380,13 +381,21 @@ def build_vmaf_command(
     # (--crop), so only the reference is cropped here. HDR sources never
     # reach a measurement: the skip gate (issue #518) refuses them first,
     # so there is no tone-map chain to maintain.
-    ref_chain: list[str] = []
+    crop_filter = ""
     if crop is not None:
         top, bottom, left, right = crop
-        ref_chain.append(f"crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}")
+        crop_filter = f"crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}"
+    ref_chain: list[str] = []
+    if crop_filter:
+        ref_chain.append(crop_filter)
     ref_chain.append(suffix)
 
+    # the ceiling measurement compares a source against itself, so the crop must
+    # apply to BOTH sides or the geometry differs and libvmaf refuses the pair
+    # (issue #584 review round 2)
     dis_chain = [suffix]
+    if crop_distorted and crop_filter:
+        dis_chain = [crop_filter, suffix]
     filtergraph = f"[0:v]{','.join(dis_chain)}[d];[1:v]{','.join(ref_chain)}[r];[d][r]{vmaf}"
     return [
         FFMPEG_BINARY,
@@ -473,6 +482,7 @@ def measure_vmaf(
     db_file: Path | None = None,
     subsample: int | None = None,
     recipe: VmafRecipe | None = None,
+    crop_distorted: bool = False,
 ) -> float:
     """Measures the mean VMAF of an encode against its source.
 
