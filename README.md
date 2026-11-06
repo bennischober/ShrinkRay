@@ -278,7 +278,7 @@ removed it: an unmeasured encode can take a library file's path).
 | `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `3`; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows for the sampled fallback detector (more samples can only shrink the crop) |
-| `--sample-count N` | the number of probe windows (default: unset — density from `quality.sample_every` applies; set `quality.sample_count` to pin a fixed number) |
+| `--sample-count N` | the number of probe windows (default: unset — density from `quality.sample_every` applies; set `quality.sample_count` to pin a fixed number; plans stored under the old encode-mode fingerprint re-probe once) |
 | `--sample-every S` | seconds of runtime per probe window — the default (`quality.sample_every`, 600 s, i.e. one per 10 minutes); a configured `quality.sample_count` overrides it ([#526](https://github.com/bennischober/ShrinkRay/issues/526)) |
 | `--verify` | after each encode, measure VMAF on the FULL output against the source (slow; ground truth beyond the samples) |
 | `--replan` | ignore stored plans and re-probe every movie |

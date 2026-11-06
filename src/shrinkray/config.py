@@ -508,12 +508,15 @@ class Conf:
         if sample_count is not None:
             count: int | None = sample_count
             every = self.sample_every if sample_every is None else sample_every
-        elif sample_every is not None:
+        elif sample_every is not None and sample_every > 0:
             count = None
             every = sample_every
         else:
+            # no count flag, and no (or a zero) density flag: the config's
+            # count wins, else its density; a zero --sample-every falls back
+            # to --sample-count as its help states
             count = self.sample_count
-            every = self.sample_every
+            every = self.sample_every if sample_every is None else sample_every
         seconds = self.sample_seconds if sample_seconds is None else sample_seconds
         return every, count, seconds
 
