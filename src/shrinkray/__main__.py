@@ -259,7 +259,7 @@ def encode(
         None,
         "--sample-count",
         min=1,
-        help="Probe windows, overriding --sample-every when set explicitly. Default: the quality.sample_count config value.",
+        help="Probe windows, overriding --sample-every when set explicitly. Default: quality.sample_count when configured, otherwise density (quality.sample_every).",
     ),
     verify: bool = typer.Option(
         False,
@@ -535,14 +535,13 @@ def _record_encodes(
             directory the run writes into is its own private staging directory:
             nothing else ever locks it, and only each movie's folder is contended.
     """
-    # the config values are the defaults: a flag not given falls back to
-    # quality.sample_every / quality.sample_count (issue #236 part 2 - the
-    # keys were echoed but read by nothing)
-    if sample_every is None:
-        sample_every = config.sample_every
-    if sample_count is None:
-        sample_count = config.sample_count
-    sample_seconds = config.sample_seconds
+    # one precedence for every entry point (issue #526): an explicit flag,
+    # then quality.sample_count when set, then quality.sample_every (density,
+    # the product's default). The count no longer shadows density by always
+    # carrying the schema's old default of 3.
+    sample_every, sample_count, sample_seconds = config.probe_settings(
+        sample_every, sample_count, None
+    )
     from shrinkray.engine.pipeline import encode_with_quality
 
     # already encoded AND output still present? (unless --overwrite)
@@ -774,7 +773,7 @@ def plan(
         None,
         "--sample-count",
         min=1,
-        help="Probe windows, overriding --sample-every when set explicitly. Default: the quality.sample_count config value.",
+        help="Probe windows, overriding --sample-every when set explicitly. Default: quality.sample_count when configured, otherwise density (quality.sample_every).",
     ),
     threads: int = typer.Option(
         0,
@@ -838,6 +837,11 @@ def plan(
         else probe_encoder_preset
     )
     encoder_preset = config.handbrake_encoder_preset if encoder_preset is None else encoder_preset
+    # one precedence for every entry point (issue #526): the flags win, then
+    # quality.sample_count when set, then quality.sample_every (density)
+    sample_every, sample_count, sample_seconds = config.probe_settings(
+        sample_every, sample_count, None
+    )
     apply_config(config)
     # plan probes every movie's CRF: it needs the whole toolchain (issue #194)
     from shrinkray.service import all_problems
@@ -899,10 +903,11 @@ def plan(
                     candidate_codecs=tuple(config.candidate_codecs),
                     # the sample settings follow the config too (issue #236
                     # part 2): the CLI flags override when given, the keys
-                    # were echoed but never read before
+                    # were echoed but never read before; one shared resolver
+                    # for every entry point (issue #526)
                     sample_every=sample_every,
                     sample_count=sample_count,
-                    sample_seconds=config.sample_seconds,
+                    sample_seconds=sample_seconds,
                     cancel=cancel,
                 )
             except (RuntimeError, FileNotFoundError) as e:

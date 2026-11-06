@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from shrinkray.config import Conf as _RealConf
 from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine import watch as engine_watch
 from shrinkray.engine.lock import EncodeBusyError, _lock_path, guard_encodes
@@ -36,6 +37,9 @@ def _conf_stub() -> object:
             "candidate_codecs": ("h264", "hevc", "vp9", "av1"),
             "handbrake_audio_languages": ["deu", "eng", "und", "jpn"],
             "handbrake_subtitle_languages": ["eng", "deu", "und"],
+            # the real resolver (issue #526): the stub carries the production
+            # precedence instead of a copy of it
+            "probe_settings": _RealConf.probe_settings,
         },
     )()
 

@@ -225,7 +225,11 @@ class QualitySection(BaseModel):
     # says otherwise (issue #252); part of the stored plan fingerprint
     target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
     sample_every: float = Field(DEFAULT_SAMPLE_EVERY, ge=0)
-    sample_count: int = Field(DEFAULT_SAMPLE_COUNT, ge=1)
+    # UNSET by default (issue #526): density (sample_every) is the product's
+    # probe-window default, and a count configured here overrides it. A schema
+    # default of 3 silently shadowed the density knob everywhere (the CLI filled
+    # the flag from the config, so the count always won).
+    sample_count: int | None = Field(default=None, ge=1)
     sample_seconds: float = Field(DEFAULT_SAMPLE_SECONDS, gt=0)
 
 
@@ -454,7 +458,7 @@ class Conf:
 
         # quality => probe density
         self.sample_every: float = model.quality.sample_every
-        self.sample_count: int = model.quality.sample_count
+        self.sample_count: int | None = model.quality.sample_count
         self.sample_seconds: float = model.quality.sample_seconds
         self.target_vmaf: float = model.quality.target_vmaf
 
@@ -474,6 +478,36 @@ class Conf:
         # back new files while outside it (empty pair = no window)
         self.encode_window_start: str = model.app.encode_window_start
         self.encode_window_end: str = model.app.encode_window_end
+
+    def probe_settings(
+        self,
+        sample_every: float | None = None,
+        sample_count: int | None = None,
+        sample_seconds: float | None = None,
+    ) -> tuple[float, int | None, float]:
+        """Resolves the probe settings every entry point uses (issue #526).
+
+        One precedence for `encode`, `plan` and the resident job: an explicit
+        flag wins, then the config's `sample_count` when it is set, then the
+        config's `sample_every` (density, the product's default), and
+        `sample_seconds` follows the same rule. A configured count therefore
+        overrides density, and an unset count leaves density in charge - the
+        count no longer silently shadows `sample_every`.
+
+        Args:
+            sample_every (float | None): The --sample-every flag, or None.
+            sample_count (int | None): The --sample-count flag, or None.
+            sample_seconds (float | None): The --sample-seconds flag, or None.
+
+        Returns:
+            tuple[float, int | None, float]: (sample_every, sample_count,
+            sample_seconds) ready for the engine.
+        """
+        return (
+            self.sample_every if sample_every is None else sample_every,
+            self.sample_count if sample_count is None else sample_count,
+            self.sample_seconds if sample_seconds is None else sample_seconds,
+        )
 
 
 _config: Conf | None = None

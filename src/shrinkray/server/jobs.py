@@ -836,6 +836,10 @@ def execute_plan(
                     "movie": movie.name,
                 }
             )
+        # one precedence for every entry point (issue #526): the resident
+        # job reads the same keys as the CLI - an unset count leaves density
+        # (sample_every) in charge instead of the old fixed default of 3
+        sample_every, sample_count, sample_seconds = config.probe_settings()
         try:
             # the [i/N] prefix on this file's decision lines (issue #471)
             with file_scope(index + 1, total):
@@ -856,6 +860,13 @@ def execute_plan(
                     min_source_size_gb=config.min_source_size_gb,
                     candidate_codecs=tuple(config.candidate_codecs),
                     crop_sample_count=config.crop_sample_count,
+                    # one precedence for every entry point (issue #526): the
+                    # resident job reads the same keys as the CLI, so a
+                    # configured count overrides density and an unset count
+                    # leaves density (sample_every) in charge
+                    sample_every=sample_every,
+                    sample_count=sample_count,
+                    sample_seconds=sample_seconds,
                 )
         except (RuntimeError, FileNotFoundError) as e:
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
