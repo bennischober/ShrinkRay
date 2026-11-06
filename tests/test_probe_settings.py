@@ -45,6 +45,15 @@ class TestTheResolver(unittest.TestCase):
         conf = Conf()
         self.assertEqual(conf.probe_settings(sample_count=7), (600.0, 7, 10.0))
 
+    def test_a_zero_every_flag_falls_back_to_the_count(self) -> None:
+        """`--sample-every 0` disables density and falls back to the count, as
+        its help states (issue #526 round 3): with a configured count that is
+        the count, not the engine default."""
+        conf = Conf({"quality": {"sample_count": 5}})
+        self.assertEqual(conf.probe_settings(sample_every=0.0), (0.0, 5, 10.0))
+        # without a configured count the engine default applies
+        self.assertEqual(Conf().probe_settings(sample_every=0.0), (0.0, None, 10.0))
+
     def test_the_count_follows_density_for_a_two_hour_film(self) -> None:
         # the issue's own table: 7200 s at the 600 s density is 12 windows,
         # and a configured count still pins 5
