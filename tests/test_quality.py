@@ -3375,8 +3375,10 @@ if __name__ == "__main__":
 class TestRoundTwoCutOnTheDefaultRanges(unittest.TestCase):
     """Issue #399's maintainer decision (2026-10-31): the round-two cut stays
     unconditional - a deliberate deviation from ab-av1's cut_on_iter2, which
-    would skip it on the SDR default. The cut is pinned on both DEFAULT
-    ranges, both directions."""
+    would skip it on a range narrower than half of its 5..70 default. The cut
+    is pinned on the pre-#315 default ranges (14, 45) and (10, 45), both
+    directions; the calibrated SDR default (14, 70) is not narrower than half,
+    so the unconditional cut runs there too."""
 
     def test_the_sdr_default_cuts_both_ways(self) -> None:
         sdr_calls: list[int] = []
