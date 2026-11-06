@@ -45,12 +45,18 @@ VMAF_STATISTIC = "mean"
 
 # SVT-AV1 publishes 0-70 at 0.25 granularity (HandBrake's
 # hb_video_quality_get_limits), a wider and finer scale than x265's.
-# These bounds are NOT calibrated for SVT-AV1 yet: they are the
-# x265-era ranges carried over, and the issue requires a measured
-# SVT-AV1 CRF-to-VMAF curve on 3-5 titles before they can be
-# trusted. The search clamps to this band, so an over-wide range only
-# costs probes - it cannot make the decision wrong in the safe direction.
-DEFAULT_CRF_RANGE = (14, 45)
+# The bounds are the encoder's range, not a calibration claim (issue #315,
+# measured 2026-11-06 on 7 real sources across 4 shapes plus a synthetic
+# pattern, target 96): NO real source chose a CRF above 34 - the old 45 top
+# never bound on real content, so this widening is headroom, not a measured
+# saving. It matters for the outlier shape (a synthetic flat pattern still
+# measures >= 96 at CRF 69) and it aligns the window with the encoder's real
+# scale; the search's top is exclusive, so it probes up to 69 and never tries
+# 70, the encoder's give-up end. The bottom stays 14: a grain-heavy source
+# reads 95.3 at CRF 0, so its "target unreachable" verdict is its ceiling,
+# not the floor. An over-wide range only costs probes - it cannot make the
+# decision wrong in the safe direction.
+DEFAULT_CRF_RANGE = (14, 70)
 
 
 @dataclass
@@ -285,7 +291,7 @@ def bisect_crf(score: Callable[[int], float], lo: int, hi: int, target_vmaf: flo
     2026-10-31 decision): while only one side is known, round two moves to
     the 20%/80% point (_round_two_cut) on EVERY range - ab-av1 skips that
     cut when the range is narrower than half its libsvtav1 default (5..70),
-    which the SDR default (14, 45) is, and goes straight to the range end.
+    which the old SDR default (14, 45) was; the calibrated (14, 70) is not, and the cut here is unconditional anyway, so it runs for every range - issue #315.
     The measured trade-off (issue #399): the cut saves ~0.4-0.5 rounds per
     reachable file and costs 1 round per unreachable one, so it wins unless
     roughly 30% or more of eligible files are unreachable (the maintainer's

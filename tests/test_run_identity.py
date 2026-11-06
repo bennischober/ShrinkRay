@@ -19,6 +19,7 @@ from unittest.mock import patch
 from shrinkray import db
 from shrinkray.engine.pipeline import encode_with_quality
 from shrinkray.engine.plan import QualityResult, plan_quality
+from shrinkray.engine.search import DEFAULT_CRF_RANGE
 
 
 def _movie(root: Path, content: bytes) -> Path:
@@ -329,7 +330,7 @@ class TestPlanPathGuard(unittest.TestCase):
                 encoder="svt_av1",
                 encoder_preset="5",
                 target_vmaf=96.0,
-                crf_range=(14, 45),
+                crf_range=DEFAULT_CRF_RANGE,
                 sample_count=6,
                 sample_seconds=10.0,
                 crop_sample_count=10,
@@ -370,7 +371,7 @@ class TestPlanPathGuard(unittest.TestCase):
             encoder="svt_av1",
             encoder_preset="5",
             target_vmaf=96.0,
-            crf_range=(14, 45),
+            crf_range=DEFAULT_CRF_RANGE,
             sample_count=6,
             sample_seconds=10.0,
             crop_sample_count=10,
@@ -495,7 +496,7 @@ class TestEngineSkipPathGuard(unittest.TestCase):
                 encoder="svt_av1",
                 encoder_preset="5",
                 target_vmaf=96.0,
-                crf_range=(14, 45),
+                crf_range=DEFAULT_CRF_RANGE,
                 sample_count=6,
                 sample_seconds=10.0,
                 crop_sample_count=10,
@@ -610,7 +611,7 @@ class TestEngineSkipPathGuard(unittest.TestCase):
                     input_size=16,
                     output_size=8,
                     input_mtime=movie_in.stat().st_mtime,
-                    crf_range=(14, 45),
+                    crf_range=DEFAULT_CRF_RANGE,
                     sample_count=3,
                     sample_seconds=10.0,
                 )
