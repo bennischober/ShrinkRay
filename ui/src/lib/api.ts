@@ -222,7 +222,7 @@ export interface Config {
   quality?: {
     target_vmaf?: number
     sample_every?: number
-    sample_count?: number
+    sample_count?: number | null
     sample_seconds?: number
   }
   eligibility?: {

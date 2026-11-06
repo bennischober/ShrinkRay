@@ -290,6 +290,64 @@ class TestJobs(unittest.TestCase):
         # the job's recorded outcomes carry the movie through (not empty)
         self.assertEqual(result["outcomes"][0]["movie"], "Some Movie_t00.mkv")
 
+    def test_the_encode_job_resolves_the_probe_windows(self) -> None:
+        """The resident ENCODE job resolves the probe windows with the one
+        precedence (issue #526): density by default, a configured count when
+        set (the reviewer's mutation: reverting this left the file green)."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        from shrinkray.config import Conf
+
+        movie = _Path(self.tmp.name) / "Probe Movie_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        captured: dict = {}
+
+        def fake_encode(movie_in, output_file, **kwargs):
+            captured["sample_every"] = kwargs.get("sample_every")
+            captured["sample_count"] = kwargs.get("sample_count")
+            return _NS(input_size=1, output_size=1, chosen_crf=20, achieved_vmaf=95.0, error=None)
+
+        def run(config):
+            job = self.queue.enqueue(
+                jobs.Job(
+                    kind=jobs.JobKind.ENCODE,
+                    payload={
+                        "paths": [str(movie)],
+                        "output_dir": str(_Path(self.tmp.name) / "out"),
+                        "quality": True,
+                    },
+                )
+            )
+            with (
+                _patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode),
+                _patch(
+                    "shrinkray.service.record_quality_results",
+                    lambda *a, **k: _NS(encoded=True, skipped=False),
+                ),
+                _patch("shrinkray.config.load_config", return_value=config),
+                _patch("shrinkray.config.refresh_config", return_value=config),
+            ):
+                jobs.execute_encode(job, self.connection, threading.Event())
+
+        run(Conf())
+        self.assertEqual(captured["sample_every"], 600.0)
+        self.assertIsNone(captured["sample_count"])
+        run(Conf({"quality": {"sample_count": 5}}))
+        self.assertEqual(captured["sample_count"], 5)
+
     def test_an_in_place_job_never_swaps_an_encode_with_a_track_finding(self):
         """Review of #287: the job worker called swap_encode_into_place without
         the encode's verification finding, so a track-losing encode replaced

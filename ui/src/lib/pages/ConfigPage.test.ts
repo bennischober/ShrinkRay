@@ -26,7 +26,7 @@ const configFixture = vi.hoisted(() => ({
   ffmpeg: { black_bars: { MIN_WIDTH: 24, MIN_HEIGHT: 24 }, crop_sample_count: 10 },
   handbrake: { preset: 'Fast 1080p30', encoder: 'svt_av1', encoder_preset: '3', max_threads: 0 },
   resources: { idle_priority: true },
-  quality: { target_vmaf: 96, sample_every: 600, sample_count: 3, sample_seconds: 10 },
+  quality: { target_vmaf: 96, sample_every: 600, sample_count: null, sample_seconds: 10 },  // the route serializes null for an unset count (issue #526)
   eligibility: { min_source_height: 1080, min_source_size_gb: 0, candidate_codecs: ['h264'] },
   language: 'en',
 }))
@@ -37,7 +37,7 @@ const config: Config = {
   ffmpeg: { black_bars: { MIN_WIDTH: 24, MIN_HEIGHT: 24 }, crop_sample_count: 10 },
   handbrake: { preset: 'Fast 1080p30', encoder: 'svt_av1', encoder_preset: '3', max_threads: 0 },
   resources: { idle_priority: true },
-  quality: { sample_every: 600, sample_count: 3, sample_seconds: 10 },
+  quality: { sample_every: 600, sample_count: null, sample_seconds: 10 },
   eligibility: { min_source_height: 1080, min_source_size_gb: 0, candidate_codecs: ['h264'] },
   language: 'en',
 }
