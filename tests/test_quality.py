@@ -2247,7 +2247,6 @@ class TestMinSavingThreshold(unittest.TestCase):
                 ),
                 patch.object(engine_pipeline, "detect_crop_summary_cached", return_value=None),
                 patch.object(engine_pipeline, "detect_crop_rect", return_value=None),
-                patch.object(engine_pipeline, "extract_samples", return_value=[]),
             ):
                 return _probe_movie(
                     self.movie,
@@ -2323,24 +2322,24 @@ class TestMinSavingThreshold(unittest.TestCase):
             self.assertRaises(SkipEncode) as ctx,
         ):
             _probe_movie(
-                    self.movie,
-                    96.0,
-                    15,
-                    (14, 45),
-                    2,
-                    10.0,
-                    "svt_av1",
-                    "5",
-                    cancel=None,
-                    db_file=None,
-                    encoder_threads=None,
-                    progress=None,
-                    use_probe_cache=False,
-                    crop_sample_count=3,
-                    source_width=1920,
-                    source_height=1080,
-                    source_bit_depth=None,
-                )
+                self.movie,
+                96.0,
+                15,
+                (14, 45),
+                2,
+                10.0,
+                "svt_av1",
+                "5",
+                cancel=None,
+                db_file=None,
+                encoder_threads=None,
+                progress=None,
+                use_probe_cache=False,
+                crop_sample_count=3,
+                source_width=1920,
+                source_height=1080,
+                source_bit_depth=None,
+            )
         self.assertIn("predicted saving 14.9%", str(ctx.exception))
         self.assertIn("required 15%", str(ctx.exception))
 
