@@ -305,7 +305,7 @@ only, so `docker exec <container> <command>` output stays clean; the shell itsel
 
 ## Adding files to the library
 
-ShrinkRay leaves a file alone until it looks complete: its last write is at least a minute old and at least 90 % of its size is actually written to disk (`docs/encode-decision.md`, *Before any gate: is the file complete?*). The witness cannot see everything. A download that reserves its whole size up front and then stalls looks complete, and so does a sparse download that stalls with less than 10 % left to write. A file on a network mount that caches metadata can look complete too.
+The watcher and the one-shot CLI leave a file alone until it looks complete: its last write is at least a minute old and at least 90 % of its size is actually written to disk (`docs/encode-decision.md`, *Before any gate: is the file complete?*). The boot backlog does not check yet (#586): a container that starts while a copy into `/media` is still being written can decide on the partial file. And the witness cannot see everything. A download that reserves its whole size up front and then stalls looks complete, and so does a sparse download that stalls with less than 10 % left to write. A file on a network mount that caches metadata can look complete too.
 
 The reliable setup leaves nothing for the witness to judge: **write new files outside the library, then move them in.** Point your downloader's incomplete folder outside the folder mounted at `/media`, on the same filesystem as the library. A move within one filesystem is a rename, which is atomic, so a half-written file never appears in the library. A copy across filesystems is not atomic: the witness then waits until the copy has been quiet for a minute.
 
