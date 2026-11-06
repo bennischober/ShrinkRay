@@ -625,6 +625,46 @@ def estimate_size_factor(
             connection.close()
 
 
+def source_vmaf_ceiling(
+    samples: list[tuple[Path, float]],
+    workdir: Path,
+    recipe: VmafRecipe | None = None,
+    cancel: threading.Event | None = None,
+) -> float:
+    """Measures a source's own VMAF ceiling (each sample against itself).
+
+    The VMAF model does not score identical frames as 100: its maximum is
+    content-dependent (measured 97.4-99.9 across four shapes, issue #584), so an
+    absolute target is stricter on flat content than on a detailed film - and
+    unreachable where the ceiling sits below it. This is the reference that turns
+    the absolute target into a relative one: `min(target, ceiling - margin)`.
+
+    Costs one VMAF pass per sample (no encode): the samples the search already
+    extracted.
+
+    Args:
+        samples (list): The (path, offset) windows the search probes.
+        workdir (Path): Working directory for the model and log files.
+        recipe (VmafRecipe | None): The measurement recipe. None derives the
+            1080p model at native size.
+        cancel (threading.Event | None): Cooperative cancellation.
+
+    Returns:
+        float: The mean self-measured VMAF of the samples.
+
+    Raises:
+        RuntimeError: If there are no samples to measure.
+        Cancelled: When the cancel event fires.
+    """
+    scores: list[float] = []
+    for sample, _offset in samples:
+        _check_cancel(cancel)
+        scores.append(measure_vmaf(sample, sample, workdir, recipe=recipe))
+    if not scores:
+        raise RuntimeError("cannot measure the source's VMAF ceiling: no samples")
+    return sum(scores) / len(scores)
+
+
 def find_optimal_crf(
     movie: Path,
     workdir: Path,
@@ -644,7 +684,8 @@ def find_optimal_crf(
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
     samples: list[tuple[Path, float]] | None = None,
-) -> tuple[int, float, list[SampleProbe]]:
+    vmaf_margin: float = 0.0,
+) -> tuple[int, float, list[SampleProbe], float]:
     """Finds the largest CRF that still meets the VMAF target on samples.
 
     Args:
@@ -671,7 +712,8 @@ def find_optimal_crf(
             step updates (flow to the UI, never persisted).
 
     Returns:
-        tuple: The chosen CRF, the VMAF measured at that CRF and all probes.
+        tuple: The chosen CRF, the VMAF measured at that CRF, all probes and
+            the effective target (the absolute one, or the source-ceiling clamp).
 
     Raises:
         RuntimeError: If sampling or probing failed.
@@ -693,6 +735,22 @@ def find_optimal_crf(
     probes: list[SampleProbe] = []
     if recipe is None:
         recipe = vmaf_recipe(crop=crop)
+
+    # the effective target (issue #584): the model's ceiling is content-dependent,
+    # so a margin below the source's own ceiling can be reachable where the
+    # absolute target is not. margin 0 keeps the absolute target exactly.
+    effective_target = target_vmaf
+    if vmaf_margin > 0:
+        ceiling = source_vmaf_ceiling(samples, workdir, recipe, cancel=cancel)
+        effective_target = min(target_vmaf, ceiling - vmaf_margin)
+        if progress:
+            progress({"stage": "probe", "detail": f"source ceiling VMAF {ceiling:.2f}"})
+        if effective_target < target_vmaf:
+            log(
+                f"'{movie.name}' source VMAF ceiling {ceiling:.2f}: aiming at "
+                f"{effective_target:.2f} instead of {target_vmaf:.2f} "
+                f"(margin {vmaf_margin:.1f})"
+            )
 
     def check(crf: int) -> float:
         _check_cancel(cancel)
@@ -731,9 +789,9 @@ def find_optimal_crf(
         return vmaf
 
     lo, hi = crf_range
-    chosen = bisect_crf(check, lo, hi, target_vmaf)
+    chosen = bisect_crf(check, lo, hi, effective_target)
     achieved = next(p.vmaf for p in reversed(probes) if p.crf == chosen)
-    return chosen, achieved, probes
+    return chosen, achieved, probes, effective_target
 
 
 def find_optimal_crf_and_skip(
@@ -755,7 +813,8 @@ def find_optimal_crf_and_skip(
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
     samples: list[tuple[Path, float]] | None = None,
-) -> tuple[int, float, list[SampleProbe], bool, float]:
+    vmaf_margin: float = 0.0,
+) -> tuple[int, float, list[SampleProbe], bool, float, float]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
 
     Before the quality bisect, a single size probe estimates whether the
@@ -832,14 +891,15 @@ def find_optimal_crf_and_skip(
             f"Skipping '{movie.name}': no size gain (re-encode would not "
             f"shrink it, probe factor {factor:.2f} at CRF {crf_range[1]})."
         )
-        return crf_range[1], 0.0, [], True, factor
+        return crf_range[1], 0.0, [], True, factor, target_vmaf
 
-    chosen, achieved, probes = find_optimal_crf(
+    chosen, achieved, probes, effective_target = find_optimal_crf(
         movie,
         workdir,
         handbrake,
         target_vmaf=target_vmaf,
         crf_range=crf_range,
+        vmaf_margin=vmaf_margin,
         sample_count=sample_count,
         sample_seconds=sample_seconds,
         encoder=encoder,
@@ -879,8 +939,8 @@ def find_optimal_crf_and_skip(
             f"Skipping '{movie.name}': no size gain (re-encode would not "
             f"shrink it, probe factor {chosen_factor:.2f} at the chosen CRF {chosen})."
         )
-        return chosen, achieved, probes, True, chosen_factor
-    return chosen, achieved, probes, False, chosen_factor
+        return chosen, achieved, probes, True, chosen_factor, effective_target
+    return chosen, achieved, probes, False, chosen_factor, effective_target
 
 
 def check_chosen_crf_shrinks(

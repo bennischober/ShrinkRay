@@ -1977,7 +1977,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
 
         with (
             patch.object(engine_search, "estimate_size_factor", side_effect=fake_estimate),
-            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [], 95.5)),
         ):
             result = engine_search.find_optimal_crf_and_skip(
                 self.movie,
@@ -1994,7 +1994,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         file at CRF 22 and made it bigger.
         """
         result, seen = self._run_search({engine_search.DEFAULT_CRF_RANGE[1]: 0.5, 22: 1.2})
-        _crf, _vmaf, _probes, skip, _factor = result
+        _crf, _vmaf, _probes, skip, _factor, _effective = result
         self.assertTrue(skip, "a grown chosen CRF must be skipped")
         self.assertIn(engine_search.DEFAULT_CRF_RANGE[1], seen, "the bound probe must still run")
         self.assertIn(22, seen, "the chosen CRF must be checked")
@@ -2002,7 +2002,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
     def test_a_shrink_at_both_points_is_encoded(self):
         """The regression guard: the new gate must not reject a normal file."""
         result, seen = self._run_search({engine_search.DEFAULT_CRF_RANGE[1]: 0.4, 22: 0.7})
-        _crf, _vmaf, _probes, skip, _factor = result
+        _crf, _vmaf, _probes, skip, _factor, _effective = result
         self.assertFalse(skip, "a file that shrinks at the chosen CRF must encode")
         self.assertIn(22, seen)
 
@@ -2141,7 +2141,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
             db_file = Path(tmp) / "meta.db"
             with (
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [], 95.5)),
                 patch.object(engine_search, "check_chosen_crf_shrinks", side_effect=fake_check),
             ):
                 engine_search.find_optimal_crf_and_skip(
@@ -2163,7 +2163,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         captured.clear()
         with (
             patch.object(engine_search, "estimate_size_factor", return_value=0.5),
-            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [], 95.5)),
             patch.object(engine_search, "check_chosen_crf_shrinks", side_effect=fake_check),
         ):
             engine_search.find_optimal_crf_and_skip(
@@ -2203,7 +2203,9 @@ class TestMinSavingThreshold(unittest.TestCase):
             patch.object(engine_plan, "detect_crop_rect", return_value=None),
             patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
             patch.object(
-                engine_plan, "find_optimal_crf_and_skip", return_value=(22, 96.0, [], False, factor)
+                engine_plan,
+                "find_optimal_crf_and_skip",
+                return_value=(22, 96.0, [], False, factor, 96.0),
             ),
         ):
             return engine_plan.plan_quality(
@@ -2254,7 +2256,7 @@ class TestMinSavingThreshold(unittest.TestCase):
                 patch.object(
                     engine_pipeline,
                     "find_optimal_crf_and_skip",
-                    return_value=(22, 96.0, [], False, factor),
+                    return_value=(22, 96.0, [], False, factor, 96.0),
                 ),
                 patch.object(engine_pipeline, "detect_crop_summary_cached", return_value=None),
                 patch.object(engine_pipeline, "detect_crop_rect", return_value=None),
@@ -2326,7 +2328,7 @@ class TestMinSavingThreshold(unittest.TestCase):
             patch.object(
                 engine_pipeline,
                 "find_optimal_crf_and_skip",
-                return_value=(22, 96.0, [], False, 0.851),
+                return_value=(22, 96.0, [], False, 0.851, 96.0),
             ),
             patch.object(engine_pipeline, "detect_crop_summary_cached", return_value=None),
             patch.object(engine_pipeline, "detect_crop_rect", return_value=None),
@@ -2400,7 +2402,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
                 patch.object(
                     engine_plan,
                     "find_optimal_crf_and_skip",
-                    return_value=(20, 96.0, [], False, 0.42),
+                    return_value=(20, 96.0, [], False, 0.42, 96.0),
                 ),
             ]
         )
@@ -2421,7 +2423,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         result = self._plan(
             [
                 patch.object(engine_search, "estimate_size_factor", side_effect=keyed_estimate),
-                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [], 95.5)),
             ]
         )
         self.assertTrue(result.success, result.error)
@@ -2437,7 +2439,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         result = self._plan(
             [
                 patch.object(engine_search, "estimate_size_factor", size_estimates),
-                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [], 95.5)),
             ]
         )
         self.assertTrue(result.success, result.error)
@@ -2482,7 +2484,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
                 patch.object(engine_plan, "extract_samples", return_value=[(sample, 10.0)]),
                 patch.object(engine_search, "_tool_versions", return_value=("hb", "1.6")),
                 patch.object(engine_search, "estimate_size_factor", size_estimates),
-                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+                patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [], 95.5)),
             ],
             db_file=Path(root) / "meta.db",
         )
@@ -3442,7 +3444,7 @@ class TestHdrSkip(unittest.TestCase):
         from shrinkray import config as config_helper
         from shrinkray.engine.plan import plan_quality
 
-        probed = Mock(return_value=(20, 96.0, [], False, 0.5))
+        probed = Mock(return_value=(20, 96.0, [], False, 0.5, 96.0))
         # the REAL seam: run_ffprobe returns the raw ffprobe JSON, so the
         # real get_data -> get_video_stream -> is_hdr path runs (the reviewer's
         # round-1 proof: a mock of get_data itself hid the gate's dead shape)
@@ -3493,7 +3495,7 @@ class TestHdrSkip(unittest.TestCase):
         from shrinkray import config as config_helper
         from shrinkray.engine.pipeline import encode_with_quality
 
-        probed = Mock(return_value=(20, 96.0, [], False, 0.5))
+        probed = Mock(return_value=(20, 96.0, [], False, 0.5, 96.0))
         raw = {
             "streams": [
                 {
@@ -3540,7 +3542,7 @@ class TestHdrSkip(unittest.TestCase):
         from shrinkray import config as config_helper
         from shrinkray.engine.plan import plan_quality
 
-        probed = Mock(return_value=(20, 96.0, [], False, 0.5))
+        probed = Mock(return_value=(20, 96.0, [], False, 0.5, 96.0))
         captured: list[str] = []
         sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
         try:

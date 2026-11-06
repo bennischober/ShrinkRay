@@ -385,6 +385,7 @@ class QualityResult:
 def plan_quality(
     input_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
+    vmaf_margin: float = 0.0,
     min_saving_percent: int = 15,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
     sample_count: int | None = None,
@@ -664,7 +665,7 @@ def plan_quality(
                 input_file, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
             )
         ]
-        crf, achieved, probes, skip, factor = find_optimal_crf_and_skip(
+        crf, achieved, probes, skip, factor, effective_target = find_optimal_crf_and_skip(
             input_file,
             workdir,
             handbrake,
@@ -702,7 +703,7 @@ def plan_quality(
                 input=input_file,
                 output=input_file,
                 success=False,
-                target_vmaf=target_vmaf,
+                target_vmaf=effective_target,
                 min_saving_percent=min_saving_percent,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
@@ -758,7 +759,7 @@ def plan_quality(
                 encoder=effective_encoder,
                 vmaf_recipe=recipe.fingerprint(),
             )
-        if achieved < target_vmaf and crf == crf_range[0]:
+        if achieved < effective_target and crf == crf_range[0]:
             # the unreachable verdict is recorded like a skip (issue #436):
             # the same record-time recheck applies
             ensure_unchanged(input_file, identity, "plan")
@@ -775,7 +776,7 @@ def plan_quality(
                 input_size=identity.size,
                 output_size=identity.size,
                 error=(
-                    f"skipped: target VMAF {target_vmaf} unreachable "
+                    f"skipped: target VMAF {effective_target:.2f} unreachable "
                     f"(best {achieved} at CRF {crf_range[0]})"
                 ),
                 skipped_reason="target unreachable",

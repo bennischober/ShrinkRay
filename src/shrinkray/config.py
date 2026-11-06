@@ -97,6 +97,16 @@ DEFAULT_SAMPLE_SECONDS = 10.0
 # file. It lives here, below the engine, so the config can default to it; the
 # engine re-exports it, so there is still one home (issue #252)
 DEFAULT_TARGET_VMAF = 96.0
+# how far below a source's own VMAF ceiling the search may aim (issue #584).
+# The 1080p model does not score identical frames as 100: its ceiling is
+# content-dependent (97.4-99.9 measured on four shapes), so an absolute target
+# is stricter on flat content than on a detailed film - and unreachable where the
+# ceiling is low (real animation read 95.3-95.97 at CRF 0 against a 98.5
+# ceiling). The effective target is min(target_vmaf, ceiling - vmaf_margin):
+# 0 restores the fixed absolute target exactly, and 3 keeps every source that
+# can meet the absolute target on it while letting the rest aim at its own
+# achievable best instead of being skipped as unreachable.
+DEFAULT_VMAF_MARGIN = 3.0
 # eligibility: sources below this size are never re-encoded (0 = gate off).
 # Probe cost is roughly constant per file while the payoff scales with size,
 # so the smallest files have the worst cost/benefit ratio
@@ -224,6 +234,9 @@ class QualitySection(BaseModel):
     # the required VMAF every entry point uses unless a --target-vmaf flag
     # says otherwise (issue #252); part of the stored plan fingerprint
     target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
+    # the margin below the source's own measured VMAF ceiling (issue #584);
+    # 0 = the fixed absolute target, whatever the content's ceiling is
+    vmaf_margin: float = Field(DEFAULT_VMAF_MARGIN, ge=0.0, le=50.0)
     # the minimum predicted saving (percent of the source size) the decision
     # to encode demands (issue #316, the maintainer's 2026-10-31 decision,
     # default 15 = the calculated break-even with margin); 0 reproduces the
@@ -466,6 +479,7 @@ class Conf:
         self.sample_count: int | None = model.quality.sample_count
         self.sample_seconds: float = model.quality.sample_seconds
         self.target_vmaf: float = model.quality.target_vmaf
+        self.vmaf_margin: float = model.quality.vmaf_margin
         self.min_saving_percent: int = model.quality.min_saving_percent
 
         # resources => how politely the engine behaves on a shared machine

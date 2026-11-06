@@ -24,6 +24,7 @@ from shrinkray import db
 from shrinkray.config import (
     DEFAULT_ENCODER_PRESET,
     DEFAULT_PROBE_ENCODER_PRESET,
+    DEFAULT_VMAF_MARGIN,
     load_config,
     seed_config_from_env,
 )
@@ -236,6 +237,19 @@ def encode(
         help="The required VMAF. Default: the quality.target_vmaf config value "
         f"({DEFAULT_TARGET_VMAF:g} unless changed).",
     ),
+    vmaf_margin: float | None = typer.Option(
+        None,
+        "--vmaf-margin",
+        min=0.0,
+        max=50.0,
+        help=(
+            "How far below the source's own VMAF ceiling the search may aim. "
+            "The VMAF model's maximum is content-dependent, so an absolute "
+            "target can be unreachable on flat content; 0 = the fixed absolute "
+            "target, whatever the ceiling. Default: quality.vmaf_margin "
+            f"({DEFAULT_VMAF_MARGIN:g} unless changed)."
+        ),
+    ),
     crop_samples: int = typer.Option(
         10,
         "--crop-samples",
@@ -339,6 +353,7 @@ def encode(
     config = load_config(config_file=config_file)
     # the flag wins; without it the config's required VMAF applies (issue #252)
     target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
+    vmaf_margin = config.vmaf_margin if vmaf_margin is None else vmaf_margin
     # the presets follow the same rule (issue #328): the config keys
     # (handbrake.probe_encoder_preset / handbrake.encoder_preset - what the
     # TUI saves and the resident app honours) are the defaults, an explicit
@@ -402,6 +417,7 @@ def encode(
                 crop_samples,
                 sample_every,
                 sample_count,
+                vmaf_margin,
                 output_dir is None or replace,
                 in_place=output_dir is None,
                 cancel=cancel,
@@ -508,6 +524,7 @@ def _record_encodes(
     crop_samples: int = 10,
     sample_every: float | None = None,
     sample_count: int | None = None,
+    vmaf_margin: float = 0.0,
     replace: bool = False,
     in_place: bool = False,
     cancel: "threading.Event | None" = None,
@@ -642,6 +659,7 @@ def _record_encodes(
                                     movie,
                                     output_dir / movie.name,
                                     target_vmaf=target_vmaf,
+                                    vmaf_margin=vmaf_margin,
                                     min_saving_percent=config.min_saving_percent,
                                     encoder=config.handbrake_encoder,
                                     db_file=db_file,
@@ -755,6 +773,19 @@ def plan(
         help="The required VMAF. Default: the quality.target_vmaf config value "
         f"({DEFAULT_TARGET_VMAF:g} unless changed).",
     ),
+    vmaf_margin: float | None = typer.Option(
+        None,
+        "--vmaf-margin",
+        min=0.0,
+        max=50.0,
+        help=(
+            "How far below the source's own VMAF ceiling the search may aim. "
+            "The VMAF model's maximum is content-dependent, so an absolute "
+            "target can be unreachable on flat content; 0 = the fixed absolute "
+            "target, whatever the ceiling. Default: quality.vmaf_margin "
+            f"({DEFAULT_VMAF_MARGIN:g} unless changed)."
+        ),
+    ),
     crop_samples: int = typer.Option(
         10,
         "--crop-samples",
@@ -831,6 +862,7 @@ def plan(
     config = load_config(config_file=config_file)
     # the flag wins; without it the config's required VMAF applies (issue #252)
     target_vmaf = config.target_vmaf if target_vmaf is None else target_vmaf
+    vmaf_margin = config.vmaf_margin if vmaf_margin is None else vmaf_margin
     # the presets follow the same rule (issue #328): the config keys are the
     # defaults, an explicit flag wins (the TUI saves them; the resident app
     # and now the CLI honour them alike)
@@ -893,6 +925,7 @@ def plan(
                 result = plan_quality(
                     movie,
                     target_vmaf=target_vmaf,
+                    vmaf_margin=vmaf_margin,
                     min_saving_percent=config.min_saving_percent,
                     encoder=config.handbrake_encoder,
                     db_file=db_file,

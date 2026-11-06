@@ -974,12 +974,15 @@ def _probe_movie(
     source_width: int | None = None,
     source_height: int | None = None,
     source_bit_depth: int | None = None,
+    vmaf_margin: float = 0.0,
 ) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
     Args:
         input_file (Path): The file to probe.
         target_vmaf (float): The VMAF quality floor to meet.
+        vmaf_margin (float): The margin below the source's own VMAF ceiling
+            (issue #584); 0 = the fixed absolute target.
         min_saving_percent (int): The minimum predicted saving (percent) the
             decision demands (issue #316; 0 = any real shrink).
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
@@ -1047,12 +1050,13 @@ def _probe_movie(
             bit_depth=source_bit_depth,
         )
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
-        crf, achieved, probes, skip, chosen_factor = find_optimal_crf_and_skip(
+        crf, achieved, probes, skip, chosen_factor, effective_target = find_optimal_crf_and_skip(
             input_file,
             workdir,
             handbrake,
             target_vmaf=target_vmaf,
             crf_range=crf_range,
+            vmaf_margin=vmaf_margin,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             encoder=encoder,
@@ -1083,9 +1087,10 @@ def _probe_movie(
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
             )
-        if achieved < target_vmaf and crf == crf_range[0]:
+        if achieved < effective_target and crf == crf_range[0]:
             raise SkipEncode(
-                f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})",
+                f"target VMAF {effective_target:.2f} unreachable "
+                f"(best {achieved} at CRF {crf_range[0]})",
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
@@ -1113,6 +1118,7 @@ def encode_with_quality(
     input_file: Path,
     output_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
+    vmaf_margin: float = 0.0,
     min_saving_percent: int = 15,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
     sample_count: int | None = None,

@@ -195,6 +195,8 @@ the claim, because `--verify` arrived in v0.11.7.
 - The comparison runs inside one ffmpeg invocation with both inputs in a single filtergraph
   (`[0:v][1:v]libvmaf=...`), as ab-av1's does.
 
+  **The target is absolute, the ceiling is not.** VMAF's model does not score identical frames as 100: its maximum is content-dependent (measured 97.4-99.9 across four shapes, issue #584), so an absolute 96 is stricter on flat content than on a detailed film, and unreachable where the ceiling sits below it. `quality.vmaf_margin` (default 3, `--vmaf-margin`) makes the effective target `min(target_vmaf, ceiling - vmaf_margin)`, where the ceiling is the source measured against itself - one VMAF pass per probe window, no encode. `0` restores the fixed absolute target exactly; the margin never raises a target that is already lower, so a source that can meet the absolute target keeps it.
+
 **Deliberate deviations, each with its reason:**
 
 - **Sample windows sit between 10% and 90% of the runtime** (`engine/samples.py:56-57`): lead-in and
