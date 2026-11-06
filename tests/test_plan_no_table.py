@@ -80,6 +80,31 @@ class TestPlanNoTable(unittest.TestCase):
             output = self._run("plan", str(self.movie))
         self.assertIn("Encode plan", output, "the default lost its table")
 
+    def test_plan_resolves_the_probe_windows(self) -> None:
+        """The plan CLI resolves the probe windows with the one precedence
+        (issue #526): density by default, and an explicit --sample-every wins
+        (the reviewer's mutation: reverting this resolution left the file green)."""
+        captured: dict = {}
+
+        def fake_plan(movie: Path, **kwargs: object) -> QualityResult:
+            captured["sample_every"] = kwargs.get("sample_every")
+            captured["sample_count"] = kwargs.get("sample_count")
+            return _encode_plan(movie)
+
+        with (
+            _toolchain_present(),
+            patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
+        ):
+            self._run("plan", str(self.movie), "--no-table")
+        self.assertEqual(captured["sample_every"], 600.0)
+        self.assertIsNone(captured["sample_count"])
+        with (
+            _toolchain_present(),
+            patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
+        ):
+            self._run("plan", str(self.movie), "--no-table", "--sample-every", "300")
+        self.assertEqual(captured["sample_every"], 300.0)
+
     def test_plan_no_table_still_persists_the_decisions(self) -> None:
         """The table is rendering, not the record: --db keeps working.
 

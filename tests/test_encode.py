@@ -1337,6 +1337,77 @@ class TestEncodeLock(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_encode_quality_cli_resolves_the_probe_windows(self):
+        """The CLI quality path resolves the probe windows with the one
+        precedence (issue #526): density by default (an unset count leaves
+        `sample_every` in charge), a configured count when set, and an explicit
+        `--sample-every` over both - the reviewer's mutation: reverting this
+        resolution left the whole file green."""
+        import tempfile
+
+        from shrinkray.__main__ import _record_encodes
+        from shrinkray.config import Conf
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x")
+            db_file = root / "metadata.db"
+            connection = db.connect(db_file)
+            try:
+                captured: dict = {}
+
+                def fake_quality(movie_in, output_file, **kwargs):
+                    captured["sample_every"] = kwargs.get("sample_every")
+                    captured["sample_count"] = kwargs.get("sample_count")
+                    return QualityResult(
+                        input=movie_in,
+                        output=output_file,
+                        success=True,
+                        input_size=100,
+                        output_size=50,
+                    )
+
+                def run(config, sample_every=None, sample_count=None):
+                    with (
+                        mock.patch(
+                            "shrinkray.engine.pipeline.encode_with_quality",
+                            side_effect=fake_quality,
+                        ),
+                        mock.patch("shrinkray.__main__.record_quality_results"),
+                        mock.patch("shrinkray.engine.watch.wait_for_stable", return_value=True),
+                    ):
+                        _record_encodes(
+                            connection,
+                            [movie],
+                            root / "enc",
+                            config,
+                            dry_run=False,
+                            overwrite=True,
+                            quality=True,
+                            target_vmaf=95.0,
+                            verify=False,
+                            threads=None,
+                            db_file=db_file,
+                            sample_every=sample_every,
+                            sample_count=sample_count,
+                        )
+
+                # density by default: the count is unset and sample_every decides
+                run(Conf())
+                self.assertEqual(captured["sample_every"], 600.0)
+                self.assertIsNone(captured["sample_count"])
+                # a configured count overrides density
+                run(Conf({"quality": {"sample_count": 5}}))
+                self.assertEqual(captured["sample_count"], 5)
+                # an explicit --sample-every wins over the configured count
+                run(Conf({"quality": {"sample_count": 5}}), sample_every=300.0)
+                self.assertEqual(captured["sample_every"], 300.0)
+                self.assertIsNone(captured["sample_count"])
+            finally:
+                connection.close()
+
     def test_encode_quality_cli_passes_the_language_filters(self):
         """The CLI quality path hands the config's language filters to the
         engine (issue #240): _record_encodes reads them from the loaded
