@@ -1944,7 +1944,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
     """Issue #129: the search must check size at the CRF it chose, not only at
     the top of the range.
 
-    The top-of-range probe (crf_range[1], 45) is a *bound*: it answers "can any
+    The top-of-range probe (crf_range[1], the range's top) is a *bound*: it answers "can any
     CRF shrink this file?". The chosen CRF sits far below it, so the file there
     is much bigger and can still grow. These tests drive the two calls to
     different answers, which a flat mock cannot do.
@@ -1993,15 +1993,15 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         This is the case the old code missed entirely - it would have encoded the
         file at CRF 22 and made it bigger.
         """
-        result, seen = self._run_search({45: 0.5, 22: 1.2})
+        result, seen = self._run_search({engine_search.DEFAULT_CRF_RANGE[1]: 0.5, 22: 1.2})
         _crf, _vmaf, _probes, skip, _factor = result
         self.assertTrue(skip, "a grown chosen CRF must be skipped")
-        self.assertIn(45, seen, "the bound probe must still run")
+        self.assertIn(engine_search.DEFAULT_CRF_RANGE[1], seen, "the bound probe must still run")
         self.assertIn(22, seen, "the chosen CRF must be checked")
 
     def test_a_shrink_at_both_points_is_encoded(self):
         """The regression guard: the new gate must not reject a normal file."""
-        result, seen = self._run_search({45: 0.4, 22: 0.7})
+        result, seen = self._run_search({engine_search.DEFAULT_CRF_RANGE[1]: 0.4, 22: 0.7})
         _crf, _vmaf, _probes, skip, _factor = result
         self.assertFalse(skip, "a file that shrinks at the chosen CRF must encode")
         self.assertIn(22, seen)
@@ -2009,7 +2009,7 @@ class TestChosenCrfSizeGate(unittest.TestCase):
     def test_the_early_exit_still_skips_the_search(self):
         """When the bound itself cannot shrink, the search never runs.
 
-        The bound is the whole point of the top-of-range probe: if CRF 45 cannot
+        The bound is the whole point of the top-of-range probe: if the range's top CRF cannot
         shrink the file, nothing in the range can, so the bisect is wasted work.
         """
         with (
@@ -2096,6 +2096,17 @@ class TestChosenCrfSizeGate(unittest.TestCase):
             self.assertEqual(reads, [], "a bypassed cache was read for the size decision")
             connection.close()
 
+    def test_a_flat_curve_reaches_above_the_old_top_bound(self) -> None:
+        """The calibrated top bound is reachable: a curve that never drops below
+        the target chooses a CRF above the old 45 bound (issue #315).
+
+        The whole point of widening the window is that clean, flat content must
+        not be capped at 44; this pins the effect, not the number.
+        """
+        chosen = engine_search.bisect_crf(lambda crf: 100.0, *engine_search.DEFAULT_CRF_RANGE, 96.0)
+        self.assertGreater(chosen, 45, "the search still cannot pass the old top bound")
+        self.assertEqual(chosen, engine_search.DEFAULT_CRF_RANGE[1] - 1)
+
     def test_the_chosen_check_is_a_separate_measurement(self):
         """The search's own chosen-CRF check encodes one window separately.
 
@@ -2107,9 +2118,9 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         encodes at two CRFs, the bound and the chosen. Asserting both were
         measured keeps the fallback honest.
         """
-        _result, seen = self._run_search({45: 0.5, 22: 1.2})
+        _result, seen = self._run_search({engine_search.DEFAULT_CRF_RANGE[1]: 0.5, 22: 1.2})
         self.assertEqual(len(seen), 2, "one bound probe + one chosen-CRF probe")
-        self.assertEqual(seen.count(45), 1)
+        self.assertEqual(seen.count(engine_search.DEFAULT_CRF_RANGE[1]), 1)
         self.assertEqual(seen.count(22), 1)
 
     def test_the_plumbing_reaches_the_chosen_check(self):
@@ -2405,7 +2416,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         def keyed_estimate(*args, **kwargs):
             crf = args[3]
             seen.append(crf)
-            return 0.4 if crf == 45 else 0.7
+            return 0.4 if crf == engine_search.DEFAULT_CRF_RANGE[1] else 0.7
 
         result = self._plan(
             [
@@ -2414,8 +2425,8 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
             ]
         )
         self.assertTrue(result.success, result.error)
-        # the bound (45) + the chosen check (22): exactly the decision's own
-        self.assertEqual(seen, [45, 22])
+        # the bound (the range top) + the chosen check (22): exactly the decision's own
+        self.assertEqual(seen, [engine_search.DEFAULT_CRF_RANGE[1], 22])
         # the report carries the CHOSEN factor (0.7), never the bound's (0.4)
         self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.7))
 
@@ -3364,8 +3375,10 @@ if __name__ == "__main__":
 class TestRoundTwoCutOnTheDefaultRanges(unittest.TestCase):
     """Issue #399's maintainer decision (2026-10-31): the round-two cut stays
     unconditional - a deliberate deviation from ab-av1's cut_on_iter2, which
-    would skip it on the SDR default. The cut is pinned on both DEFAULT
-    ranges, both directions."""
+    would skip it on a range narrower than half of its 5..70 default. The cut
+    is pinned on the pre-#315 default ranges (14, 45) and (10, 45), both
+    directions; the calibrated SDR default (14, 70) is not narrower than half,
+    so the unconditional cut runs there too."""
 
     def test_the_sdr_default_cuts_both_ways(self) -> None:
         sdr_calls: list[int] = []

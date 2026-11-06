@@ -9,7 +9,7 @@ answers — is this file bigger than its quality requires, and does it carry bar
 
 | Question | Module | Notes |
 |---|---|---|
-| The CRF search | `search.py` | `bisect_crf`, `probe_crf`, `find_optimal_crf_and_skip`, `SkipEncode`, `DEFAULT_TARGET_VMAF` (re-exported from `config.py`, #252), `DEFAULT_CRF_RANGE = (14, 45)` |
+| The CRF search | `search.py` | `bisect_crf`, `probe_crf`, `find_optimal_crf_and_skip`, `SkipEncode`, `DEFAULT_TARGET_VMAF` (re-exported from `config.py`, #252), `DEFAULT_CRF_RANGE = (14, 70), calibrated in #315` |
 | The plan: gates, reuse | `plan.py` | `plan_quality`, `_lookup_plan`, `SOURCE_CODECS` whitelist, `is_1080p_class`, `MIN_ENCODE_SECONDS = 90.0` |
 | Encode + verify + batch loop | `pipeline.py` | `encode_with_quality`, `_encode_with_command`, `check_disk_space` |
 | Black bars, one detector | `crop.py` | keyframe timeline pass + `sustained_runs` + `intersect_crop_rects`; DB-cached; `detect_crop_rect` is the fallback for a pass that learned nothing (issue #525) |
