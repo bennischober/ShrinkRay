@@ -1955,15 +1955,15 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         This is the case the old code missed entirely - it would have encoded the
         file at CRF 22 and made it bigger.
         """
-        result, seen = self._run_search({45: 0.5, 22: 1.2})
+        result, seen = self._run_search({engine_search.DEFAULT_CRF_RANGE[1]: 0.5, 22: 1.2})
         _crf, _vmaf, _probes, skip, _factor = result
         self.assertTrue(skip, "a grown chosen CRF must be skipped")
-        self.assertIn(45, seen, "the bound probe must still run")
+        self.assertIn(engine_search.DEFAULT_CRF_RANGE[1], seen, "the bound probe must still run")
         self.assertIn(22, seen, "the chosen CRF must be checked")
 
     def test_a_shrink_at_both_points_is_encoded(self):
         """The regression guard: the new gate must not reject a normal file."""
-        result, seen = self._run_search({45: 0.4, 22: 0.7})
+        result, seen = self._run_search({engine_search.DEFAULT_CRF_RANGE[1]: 0.4, 22: 0.7})
         _crf, _vmaf, _probes, skip, _factor = result
         self.assertFalse(skip, "a file that shrinks at the chosen CRF must encode")
         self.assertIn(22, seen)
@@ -2069,9 +2069,9 @@ class TestChosenCrfSizeGate(unittest.TestCase):
         encodes at two CRFs, the bound and the chosen. Asserting both were
         measured keeps the fallback honest.
         """
-        _result, seen = self._run_search({45: 0.5, 22: 1.2})
+        _result, seen = self._run_search({engine_search.DEFAULT_CRF_RANGE[1]: 0.5, 22: 1.2})
         self.assertEqual(len(seen), 2, "one bound probe + one chosen-CRF probe")
-        self.assertEqual(seen.count(45), 1)
+        self.assertEqual(seen.count(engine_search.DEFAULT_CRF_RANGE[1]), 1)
         self.assertEqual(seen.count(22), 1)
 
     def test_the_plumbing_reaches_the_chosen_check(self):
@@ -2187,7 +2187,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         def keyed_estimate(*args, **kwargs):
             crf = args[3]
             seen.append(crf)
-            return 0.4 if crf == 45 else 0.7
+            return 0.4 if crf == engine_search.DEFAULT_CRF_RANGE[1] else 0.7
 
         result = self._plan(
             [
@@ -2197,7 +2197,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         )
         self.assertTrue(result.success, result.error)
         # the bound (45) + the chosen check (22): exactly the decision's own
-        self.assertEqual(seen, [45, 22])
+        self.assertEqual(seen, [engine_search.DEFAULT_CRF_RANGE[1], 22])
         # the report carries the CHOSEN factor (0.7), never the bound's (0.4)
         self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.7))
 
