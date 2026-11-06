@@ -749,7 +749,7 @@ def find_optimal_crf_and_skip(
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
     samples: list[tuple[Path, float]] | None = None,
-) -> tuple[int, float, list[SampleProbe], bool]:
+) -> tuple[int, float, list[SampleProbe], bool, float]:
     """Finds the optimal CRF and predicts whether the encode is worthwhile.
 
     Before the quality bisect, a single size probe estimates whether the
@@ -779,8 +779,13 @@ def find_optimal_crf_and_skip(
             (force_reprobe: the caller asked to measure everything fresh).
 
     Returns:
-        tuple: The chosen CRF, the VMAF at that CRF, all probes and a flag
-            that is True when the movie should NOT be re-encoded.
+        tuple: The chosen CRF, the VMAF at that CRF, all probes, a flag that
+            is True when the movie should NOT be re-encoded, and the size
+            factor the decision computed for the returned CRF (all-window
+            when the cache carries every window's size, the one-window
+            fallback otherwise; the top-of-range bound factor when the
+            bound itself skipped). The plan reports its estimate from this
+            factor (issue #388) instead of re-probing a window of its own.
     """
     if samples is None:
         samples = [
@@ -821,7 +826,7 @@ def find_optimal_crf_and_skip(
             f"Skipping '{movie.name}': no size gain (re-encode would not "
             f"shrink it, probe factor {factor:.2f} at CRF {crf_range[1]})."
         )
-        return crf_range[1], 0.0, [], True
+        return crf_range[1], 0.0, [], True, factor
 
     chosen, achieved, probes = find_optimal_crf(
         movie,
@@ -868,8 +873,8 @@ def find_optimal_crf_and_skip(
             f"Skipping '{movie.name}': no size gain (re-encode would not "
             f"shrink it, probe factor {chosen_factor:.2f} at the chosen CRF {chosen})."
         )
-        return chosen, achieved, probes, True
-    return chosen, achieved, probes, False
+        return chosen, achieved, probes, True, chosen_factor
+    return chosen, achieved, probes, False, chosen_factor
 
 
 def check_chosen_crf_shrinks(

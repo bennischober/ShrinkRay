@@ -229,7 +229,6 @@ class TestProbeProgress(unittest.TestCase):
                 patch.object(
                     engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]
                 ) as fake,
-                patch.object(engine_plan, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
                 patch.object(engine_search, "probe_crf", return_value=95.0),
                 patch.object(engine_search, "probe_crf", return_value=95.0),
@@ -249,20 +248,17 @@ class TestProbeProgress(unittest.TestCase):
                 patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
                 patch.object(engine_plan, "find_handbrake", return_value="hb"),
                 patch.object(
-                    engine_plan, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
+                    engine_plan,
+                    "find_optimal_crf_and_skip",
+                    return_value=(20, 95.0, [], False, 0.5),
                 ) as fake_search,
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-                patch.object(
-                    engine_plan, "estimate_size_factor", return_value=0.5
-                ) as fake_estimate,
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
             ):
                 result = engine_plan.plan_quality(src, progress=events.append)
         self.assertTrue(result.success)
         fake_search.assert_called_once()
         self.assertIsNotNone(fake_search.call_args.kwargs.get("progress"))
-        fake_estimate.assert_called_once()
-        self.assertIsNotNone(fake_estimate.call_args.kwargs.get("progress"))
 
     def test_encode_with_quality_threads_progress_to_probes(self):
         """The encode's PROBE phase streams steps too (before HandBrake's
@@ -310,25 +306,32 @@ class TestProbeProgress(unittest.TestCase):
         self.assertEqual(fake_probe.call_args.kwargs.get("encoder_threads"), 4)
 
     def test_plan_forwards_thread_cap_to_both_size_probes(self):
-        """plan's report size probe must use the same cap as the CRF search
-        and the encode that follows, or the estimate comes from a different
-        thread configuration than the real encode."""
+        """The thread cap reaches BOTH size probes through the search (issue
+        #388: the plan reports the decision's factor, so the decision's own
+        probe calls are the only size encodes left): the search's bound probe
+        AND its chosen-CRF check each receive the plan's cap."""
         with (
             patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
             patch.object(engine_plan, "find_handbrake", return_value="hb"),
+            patch.object(engine_plan, "source_codec", return_value="h264"),
+            patch.object(engine_plan, "source_bit_depth", return_value=None),
             patch.object(
-                engine_plan, "find_optimal_crf_and_skip", return_value=(20, 95.0, [], False)
-            ) as fake_search,
+                engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
+            ),
+            patch.object(engine_plan, "detect_crop_summary_cached", return_value=None),
+            patch.object(engine_plan, "detect_crop_rect", return_value=None),
             patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
-            patch.object(engine_plan, "estimate_size_factor", return_value=0.5) as fake_estimate,
-            patch.object(engine_search, "estimate_size_factor", return_value=0.5),
+            patch.object(engine_search, "estimate_size_factor", return_value=0.5) as fake_estimate,
+            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+            patch.object(engine_search, "measure_vmaf", return_value=95.5),
             tempfile.TemporaryDirectory() as tmp,
         ):
             src = Path(tmp) / "in.mkv"
             src.write_bytes(b"x" * 8)
             engine_plan.plan_quality(src, encoder_threads=4)
-        self.assertEqual(fake_search.call_args.kwargs.get("encoder_threads"), 4)
-        self.assertEqual(fake_estimate.call_args.kwargs.get("encoder_threads"), 4)
+        self.assertEqual(fake_estimate.call_count, 2, "the bound + the chosen-CRF check")
+        for call in fake_estimate.call_args_list:
+            self.assertEqual(call.kwargs.get("encoder_threads"), 4)
 
     def test_size_probe_does_not_measure_vmaf(self):
         """The size probe only needs a byte ratio; VMAF there is a full
