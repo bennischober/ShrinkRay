@@ -743,6 +743,8 @@ def watch(
             encode IN PLACE: each verified output takes the source's own path
             and the original is renamed aside and kept.
         target_vmaf (float): The VMAF quality floor.
+        min_saving_percent (int): The minimum predicted saving (percent)
+            the decision demands (issue #316; 0 = any real shrink).
         encoder (str): The video encoder.
         probe_encoder_preset (str): The PROBE's speed preset (a measurement
             setting, issue #22).

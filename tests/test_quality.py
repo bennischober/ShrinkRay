@@ -2231,6 +2231,85 @@ class TestMinSavingThreshold(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.min_saving_percent, 25)
 
+    def test_the_encode_boundary_is_exact(self) -> None:
+        """Exactly at the threshold the encode proceeds - a `<` -> `<=`
+        mutation fails here; just below it skips with both numbers."""
+        from shrinkray.engine.pipeline import _probe_movie
+        from shrinkray.engine.search import SkipEncode
+
+        def run(factor: float, required: int):
+            with (
+                patch.object(engine_pipeline, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+                patch.object(
+                    engine_pipeline,
+                    "find_optimal_crf_and_skip",
+                    return_value=(22, 96.0, [], False, factor),
+                ),
+                patch.object(engine_pipeline, "detect_crop_summary_cached", return_value=None),
+                patch.object(engine_pipeline, "detect_crop_rect", return_value=None),
+                patch.object(engine_pipeline, "extract_samples", return_value=[]),
+                patch.object(engine_pipeline, "capture_run_identity") as ident,
+                patch.object(engine_pipeline, "_source_snapshot", return_value={}),
+            ):
+                ident.size = 64
+                ident.mtime = 1.0
+                return _probe_movie(
+                    self.movie,
+                    96.0,
+                    required,
+                    (14, 45),
+                    2,
+                    10.0,
+                    "svt_av1",
+                    "5",
+                    cancel=None,
+                    db_file=None,
+                    encoder_threads=None,
+                    progress=None,
+                    use_probe_cache=False,
+                    crop_sample_count=3,
+                    source_width=1920,
+                    source_height=1080,
+                    source_bit_depth=None,
+                )
+
+        run(0.5, 50)  # exactly 50%: encodes
+        with self.assertRaises(SkipEncode) as ctx:
+            run(0.51, 50)  # 49% < 50%: skips
+        self.assertIn("predicted saving 49.0%", str(ctx.exception))
+        self.assertIn("required 50%", str(ctx.exception))
+
+    def test_the_encode_skip_records_the_threshold_verdict(self) -> None:
+        """The encode path's SkipEncode handler records `saving below minimum`
+        (the plan path's slug) and logs the numbers (issue #316 AC 2)."""
+        from loguru import logger
+
+        from shrinkray.engine.search import SkipEncode
+
+        captured: list[str] = []
+        sink_id = logger.add(lambda m: captured.append(str(m)), level="INFO")
+        try:
+            with (
+                patch.object(engine_pipeline, "capture_run_identity") as ident,
+                patch.object(engine_pipeline, "_source_snapshot", return_value={}),
+                patch.object(
+                    engine_pipeline,
+                    "_probe_movie",
+                    side_effect=SkipEncode("predicted saving 6.2% < required 15%"),
+                ),
+                patch.object(engine_pipeline, "check_disk_space", return_value=(True, "")),
+            ):
+                ident.return_value.size = self.movie.stat().st_size
+                ident.return_value.mtime = self.movie.stat().st_mtime
+                result = engine_pipeline.encode_with_quality(
+                    self.movie, self.movie.with_suffix(".enc.mkv"), db_file=None
+                )
+        finally:
+            logger.remove(sink_id)
+        self.assertEqual(result.skipped_reason, "saving below minimum")
+        self.assertTrue(any("6.2%" in line and "15%" in line for line in captured), captured)
+
     def test_the_encode_path_applies_the_same_gate(self) -> None:
         """plan and encode agree: the encode's search-phase skip carries the
         same verdict the plan's would (the SkipEncode message names both)."""
