@@ -350,8 +350,9 @@ def check_stability(path: Path) -> Stability:
     blocks show the holes. Video is already compressed, so a finished file on
     a compressing filesystem (ZFS, btrfs) stays well above
     SPARSE_ALLOCATED_FLOOR. Accepted gaps: a fully preallocated (fallocate)
-    download that stalls, and a network mount serving stale metadata - #436's
-    run identity aborts a run whose file changes after this check.
+    download that stalls, and a network mount serving stale metadata. #436's
+    run identity aborts a run whose file changes while it is measured, up to
+    the start of the final encode - not during or after that encode.
 
     Args:
         path (Path): The file to judge.

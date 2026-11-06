@@ -70,7 +70,10 @@ A skipped file is never recorded as decided: a later run, or the watcher once th
 
 **What the witness cannot see** (accepted in the #479 decision):
 
-- **A fully reserved (`fallocate`) download that stalls for more than 60 s.** Its unwritten parts are allocated, so `stat` cannot see them. Only a filesystem-specific query (FIEMAP) could, which is not portable and not reliable in a container. If the download resumes while a run is measuring the file, the run identity (#436, `ensure_unchanged` in `engine/identity.py`) aborts the run before a decision is committed or an encode starts. If it resumes after the encoded file was swapped in, the downloader writes into the new file; the original is still kept as `<name>.shrinkray-original`.
+- **A fully reserved (`fallocate`) download that stalls for more than 60 s.** Its unwritten parts are allocated, so `stat` cannot see them. Only a filesystem-specific query (FIEMAP) could, which is not portable and not reliable in a container. What happens when the download resumes depends on when:
+  - **While the file is being measured (probes and CRF search):** the run identity (#436, `ensure_unchanged` in `engine/identity.py`) aborts the run before a decision is committed or the final encode starts.
+  - **During the final encode:** nothing rechecks the source after the encode starts (the last check is in `encode_with_quality`, `engine/pipeline.py`, just before HandBrake). The encode of the partly-empty file can be swapped into the source's path. The original is still kept as `<name>.shrinkray-original`, so it can be recovered with `shrinkray retained`.
+  - **After the swap:** where the downloader's writes land depends on how it writes. A writer that keeps the file open follows the renamed original; a writer that reopens the path writes into the encoded file.
 - **Network mounts that cache metadata (NFS, SMB).** A client can see a stale modification time and a stale size together. The target deployment mounts `/media` locally.
 
 Such downloads normally sit in the downloader's own incomplete folder, not in the library. The safe setup is to write elsewhere and **move into the library**: a rename on one filesystem is atomic, so a half-written file never appears in the library at all (`docs/docker.md`, *Adding files to the library*).
