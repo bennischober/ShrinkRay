@@ -16,7 +16,7 @@ answers — is this file bigger than its quality requires, and does it carry bar
 | Sample windows | `samples.py` | `sample_offsets`, `extract_samples`, `DEFAULT_SAMPLE_EVERY = 600.0` |
 | Encoder by bit depth | `encoders.py` | `encoder_for` (>8 bit: `HDR_ENCODER`), `DEFAULT_ENCODER` |
 | Scan -> DB rows | `scan.py` | `scan_movies`, `process_movie`, `resolve_input_paths`; pool `min(8, cpu)` |
-| Inbox watchdog | `watch.py` | `watch`, `_FsWaiter`, `decide`, `next_poll_interval` |
+| Inbox watchdog | `watch.py` | `watch`, `_FsWaiter`, `decide`, `next_poll_interval`; `check_stability` (the is-it-complete witness: age + not sparse, one stat, no sleep, #479) and `wait_until_settled` (the CLI's bounded wait on it) |
 | One encoder per contended dir | `lock.py` | `guard_encodes`, keyed on the movie's own directory in place; 60 s heartbeat, 5 min silence window; busy raises, never waits |
 | Pause: the operator's, and for a manual encode | `pause.py` | `pause_reason`, `manual_encode` (CLI marker), `wait_while_paused` (jobs), `set_operator_paused` (the TUI's switch); markers carry the process start time, so a reused pid never pauses (issue #250) |
 

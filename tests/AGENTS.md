@@ -11,7 +11,7 @@ Flat by design: `tests/fixtures/` is the only subdirectory, and no `tests/engine
 | `test_quality` | `engine.search` + `engine.samples` CRF bisect, probe cache, plan reuse, subprocess timeouts; also greps `src/shrinkray/{__main__,server/app,server/jobs}.py` for a restated `95.0` literal |
 | `test_db` | `db` schema + migrations, `engine.plan`, `server.app`, `server.jobs` |
 | `test_encode` | `engine.pipeline` + `engine.lock`, `__main__` encode callbacks (`_record_encodes`, `_quality_progress_callback`), `tools.vmaf`, stall-watchdog CR/LF |
-| `test_watch` | `engine.watch` (`decide`, `is_stable`, `find_new_movies`, `_identity`), lock acquire/release, the `replace` staging/retained suffixes |
+| `test_watch` | `engine.watch` (`decide`, `check_stability`, `find_new_movies`, `_identity`), lock acquire/release, the `replace` staging/retained suffixes |
 | `test_jobs` | `server.jobs` lifecycle, retention, thread cap, UI dist routes |
 | `test_cli` | `__main__` commands through `typer.testing.CliRunner`, plus `TestReadmeInvocations` parsing real `README.md` argv |
 | `test_crop_timeline` | `engine.crop` timeline pass; asserts a library scan never runs it |

@@ -1311,8 +1311,8 @@ class TestEncodeLock(unittest.TestCase):
                     ),
                     mock.patch("shrinkray.__main__.record_quality_results"),
                     # the fresh fixture would sit out the real stability wait
-                    # (~90 s, issue #478); its own tests are test_file_stability's
-                    mock.patch("shrinkray.engine.watch.wait_for_stable", return_value=True),
+                    # (~60 s, issue #478); its own tests are test_file_stability's
+                    mock.patch("shrinkray.engine.watch.wait_until_settled", return_value=None),
                 ):
                     _record_encodes(
                         connection,
@@ -1376,7 +1376,7 @@ class TestEncodeLock(unittest.TestCase):
                             side_effect=fake_quality,
                         ),
                         mock.patch("shrinkray.__main__.record_quality_results"),
-                        mock.patch("shrinkray.engine.watch.wait_for_stable", return_value=True),
+                        mock.patch("shrinkray.engine.watch.wait_until_settled", return_value=None),
                     ):
                         _record_encodes(
                             connection,
@@ -1443,8 +1443,8 @@ class TestEncodeLock(unittest.TestCase):
                     ),
                     mock.patch("shrinkray.__main__.record_quality_results"),
                     # the fresh fixture would sit out the real stability wait
-                    # (~90 s, issue #478); its own tests are test_file_stability's
-                    mock.patch("shrinkray.engine.watch.wait_for_stable", return_value=True),
+                    # (~60 s, issue #478); its own tests are test_file_stability's
+                    mock.patch("shrinkray.engine.watch.wait_until_settled", return_value=None),
                 ):
                     _record_encodes(
                         connection,
