@@ -631,6 +631,7 @@ def source_vmaf_ceiling(
     recipe: VmafRecipe | None = None,
     crop: tuple[int, int, int, int] | None = None,
     cancel: threading.Event | None = None,
+    db_file: Path | None = None,
 ) -> float:
     """Measures a source's own VMAF ceiling (each sample against itself).
 
@@ -663,7 +664,15 @@ def source_vmaf_ceiling(
     for sample, _offset in samples:
         _check_cancel(cancel)
         scores.append(
-            measure_vmaf(sample, sample, workdir, recipe=recipe, crop=crop, crop_distorted=True)
+            measure_vmaf(
+                sample,
+                sample,
+                workdir,
+                recipe=recipe,
+                crop=crop,
+                crop_distorted=True,
+                db_file=db_file,
+            )
         )
     if not scores:
         raise RuntimeError("cannot measure the source's VMAF ceiling: no samples")
@@ -748,7 +757,9 @@ def find_optimal_crf(
     # absolute target is not. margin 0 keeps the absolute target exactly.
     effective_target = target_vmaf
     if vmaf_margin > 0:
-        ceiling = source_vmaf_ceiling(samples, workdir, recipe, crop=crop, cancel=cancel)
+        ceiling = source_vmaf_ceiling(
+            samples, workdir, recipe, crop=crop, cancel=cancel, db_file=db_file
+        )
         effective_target = min(target_vmaf, ceiling - vmaf_margin)
         if progress:
             progress({"stage": "probe", "detail": f"source ceiling VMAF {ceiling:.2f}"})
@@ -1092,6 +1103,8 @@ class SkipEncode(Exception):
         chosen_crf (int | None): The best CRF the search reached.
         achieved_vmaf (float | None): The VMAF measured there.
         probe_count (int): How many CRF probes were spent.
+        target_vmaf (float | None): The floor the search aimed at (the
+            configured target, or the source-ceiling clamp of issue #584).
     """
 
     def __init__(
@@ -1100,8 +1113,10 @@ class SkipEncode(Exception):
         chosen_crf: int | None = None,
         achieved_vmaf: float | None = None,
         probe_count: int = 0,
+        target_vmaf: float | None = None,
     ) -> None:
         super().__init__(message)
         self.chosen_crf = chosen_crf
         self.achieved_vmaf = achieved_vmaf
         self.probe_count = probe_count
+        self.target_vmaf = target_vmaf

@@ -81,6 +81,42 @@ class TestTheClampedFloorIsRecorded(unittest.TestCase):
         self.assertAlmostEqual(float(row[0]), 95.46)
 
 
+class TestTheSkipPathRecordsTheFloor(unittest.TestCase):
+    """An encode skip must record the floor the search used (issue #584).
+
+    Round 4 measured the opposite: all three SkipEncode verdicts recorded 96.0
+    while the search had aimed at 95.46 - the exception bypassed the clamp, so
+    the handler read the un-clamped local.
+    """
+
+    def test_a_skip_records_the_floors_the_search_used(self) -> None:
+        from shrinkray.engine.pipeline import encode_with_quality
+        from shrinkray.engine.search import SkipEncode
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        movie = Path(tmp.name) / "movie.mkv"
+        movie.write_bytes(b"x" * 200)
+        for verdict in ("re-encode would not shrink the file", "saving below minimum"):
+            with (
+                patch(
+                    "shrinkray.engine.pipeline._probe_movie",
+                    side_effect=SkipEncode(verdict, target_vmaf=95.46),
+                ),
+                patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+            ):
+                result = encode_with_quality(
+                    movie,
+                    Path(tmp.name) / "out.mkv",
+                    vmaf_margin=3.0,
+                    sample_count=1,
+                    db_file=None,
+                )
+            self.assertAlmostEqual(
+                result.target_vmaf, 95.46, msg=f"{verdict} recorded the configured floor"
+            )
+
+
 def _config():
     from shrinkray.config import Conf
 

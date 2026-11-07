@@ -303,7 +303,8 @@ class QualityResult:
         input (Path): The input file.
         output (Path): The output file.
         success (bool): True if the encode succeeded.
-        target_vmaf (float): The effective VMAF quality floor that was met:
+        target_vmaf (float): The floor the search aimed at - the configured
+            target, or the source-ceiling clamp (issue #584):
             the requested one.
         min_saving_percent (int): The minimum-saving threshold the verdict
             was decided under (issue #316; part of the plan fingerprint).

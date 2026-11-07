@@ -1006,8 +1006,9 @@ def _probe_movie(
             analysis pixel format).
 
     Returns:
-        tuple: The chosen CRF, its VMAF, all probes and the crop bars
-            (None when no crop is applied).
+        tuple: The chosen CRF, its VMAF, all probes, the crop bars
+            (None when no crop is applied) and the effective target the
+            search aimed at (issue #584).
 
     Raises:
         RuntimeError: If HandBrakeCLI is not installed or probing failed.
@@ -1072,6 +1073,7 @@ def _probe_movie(
         if skip:
             raise SkipEncode(
                 "re-encode would not shrink the file",
+                target_vmaf=effective_target,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
@@ -1083,6 +1085,7 @@ def _probe_movie(
         if saving_percent < min_saving_percent:
             raise SkipEncode(
                 f"predicted saving {saving_percent:.1f}% < required {min_saving_percent}%",
+                target_vmaf=effective_target,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
@@ -1094,6 +1097,7 @@ def _probe_movie(
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
+                target_vmaf=effective_target,
             )
         return crf, achieved, probes, crop, effective_target
     finally:
@@ -1494,7 +1498,7 @@ def encode_with_quality(
                 input=input_file,
                 output=output_file,
                 success=False,
-                target_vmaf=effective_target,
+                target_vmaf=e.target_vmaf if e.target_vmaf is not None else effective_target,
                 error=f"skipped: {e}",
                 chosen_crf=e.chosen_crf,
                 achieved_vmaf=e.achieved_vmaf,
@@ -1663,7 +1667,7 @@ def encode_with_quality(
                 f"Verified '{input_file.name}': full-file VMAF "
                 f"{verified_vmaf:.2f}"
                 + (f" (sub-sampled 1/{verified_subsample})" if verified_subsample else "")
-                + f" vs target {target_vmaf}"
+                + f" vs target {effective_target}"
             )
         except Cancelled:
             raise
