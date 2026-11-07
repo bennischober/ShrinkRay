@@ -224,7 +224,16 @@ the claim, because `--verify` arrived in v0.11.7.
 - The comparison runs inside one ffmpeg invocation with both inputs in a single filtergraph
   (`[0:v][1:v]libvmaf=...`), as ab-av1's does.
 
-  **The target is absolute, the ceiling is not.** VMAF's model does not score identical frames as 100: its maximum is content-dependent (measured 97.4-99.9 across four shapes, [#584](https://github.com/bennischober/ShrinkRay/issues/584)), so an absolute 96 is stricter on flat content than on a detailed film, and unreachable where the ceiling sits below it. `quality.vmaf_margin` (default 3, `--vmaf-margin`) makes the effective target `min(target_vmaf, ceiling - vmaf_margin)`, where the ceiling is the source measured against itself - one VMAF pass per probe window, no encode. `0` restores the fixed absolute target exactly. The margin is a real quality change: with the default 3 and a ceiling of 98.50 the effective target is **95.50**, below today's 96 - so a source that could meet the absolute target still gets a lower floor. Only `vmaf_margin: 0` keeps the absolute target everywhere.
+  **The absolute target is tried first; the ceiling is the fallback.** VMAF's model does not score identical
+  frames as 100: its maximum is content-dependent (measured 97.43-99.85 across four shapes,
+  [#584](https://github.com/bennischober/ShrinkRay/issues/584)), so an absolute 96 is unreachable on some
+  content - real animation read 92.99-95.97 even at CRF 0 and was skipped. The search runs at
+  `quality.target_vmaf` first: a source that meets it keeps it, and no ceiling is measured. Only when the target
+  is unreachable at the CRF floor does the search measure the source's own ceiling (each probe window against
+  itself, one VMAF pass per window, no encode) and run a second search at
+  `min(target_vmaf, ceiling - vmaf_margin)` - `quality.vmaf_margin`, default 3, `--vmaf-margin`. So a file that
+  is encodable today is held to exactly today's bar, and only a file that would be skipped is relaxed to at most
+  the margin below what it can reach. `vmaf_margin: 0` disables the second phase entirely.
 
 **Deliberate deviations, each with its reason:**
 

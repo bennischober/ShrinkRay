@@ -1,11 +1,12 @@
-"""The effective VMAF target: an absolute floor or a margin below the ceiling.
+"""The effective VMAF target: absolute first, then a margin below the ceiling.
 
 The VMAF model does not score identical frames as 100: its maximum is
 content-dependent (measured 97.4-99.9 across four shapes, issue #584), so an
-absolute target is stricter on flat content than on a detailed film and
-unreachable where the ceiling sits below it. `quality.vmaf_margin` turns the
-target into `min(target_vmaf, ceiling - vmaf_margin)`; 0 keeps the absolute
-target exactly (issue #584, the maintainer's decision).
+absolute target is unreachable on some content. The search tries the ABSOLUTE target
+first - a source that can meet it keeps it, and no ceiling is measured - and only a
+source that would otherwise be skipped pays for the ceiling and aims at
+`min(target_vmaf, ceiling - vmaf_margin)`. `vmaf_margin` 0 disables that second
+phase entirely.
 """
 
 import unittest
@@ -45,35 +46,47 @@ class TestEffectiveTarget(unittest.TestCase):
             ceiling=98.46,
             margin=0.0,
         )
-        self.assertEqual(effective, 96.0, "margin 0 must keep the absolute target")
+        self.assertEqual(effective, 96.0)
         self.assertEqual(chosen, 30)
         measured.assert_not_called()
 
-    def test_a_margin_clamps_the_target_below_the_ceiling(self):
-        """A ceiling of 98.46 with margin 3 aims at 95.46, not 96."""
+    def test_a_reachable_source_never_pays_for_the_ceiling(self):
+        """A source that meets the absolute target keeps it (issue #584)."""
         chosen, _achieved, _probes, effective, _seen, measured = self._search(
-            {30: 96.2, 31: 95.6, 32: 95.0, 33: 94.0, 34: 93.0, 35: 92.0},
+            {30: 96.2, 31: 95.0, 32: 94.0, 33: 93.0, 34: 92.0, 35: 91.0},
+            ceiling=98.46,
+            margin=3.0,
+        )
+        self.assertEqual(effective, 96.0, "a reachable source must keep the absolute target")
+        self.assertEqual(chosen, 30)
+        measured.assert_not_called()
+
+    def test_an_unreachable_source_aims_below_its_ceiling(self):
+        """The second phase: ceiling 98.46, margin 3 -> 95.46, and the search resumes."""
+        chosen, achieved, _probes, effective, seen, measured = self._search(
+            # the floor misses the relaxed 95.46 too, so the second phase must probe
+            {30: 95.2, 31: 95.5, 32: 95.0, 33: 94.0, 34: 93.0, 35: 92.0},
             ceiling=98.46,
             margin=3.0,
         )
         self.assertAlmostEqual(effective, 95.46)
-        # 31 passes the clamped target (95.6 >= 95.46) and 32 does not
-        self.assertEqual(chosen, 31)
         measured.assert_called()
+        # the first phase exhausted the floor, then the relaxed phase found 31
+        self.assertEqual(chosen, 31)
+        self.assertGreaterEqual(achieved, 95.46)
+        self.assertGreater(len(seen), 2, "the second phase must probe again")
 
     def test_a_margin_never_raises_a_target_that_is_already_lower(self):
-        """The clamp is a min: a target below ceiling - margin is untouched."""
         chosen, _achieved, _probes, effective, _seen, _measured = self._search(
-            {30: 90.2, 31: 89.0, 32: 88.0, 33: 87.0, 34: 86.0, 35: 85.0},
+            {30: 89.2, 31: 89.0, 32: 88.0, 33: 87.0, 34: 86.0, 35: 85.0},
             ceiling=98.46,
             margin=3.0,
             target=90.0,
         )
-        self.assertEqual(effective, 90.0, "the margin must never lower a lower target")
+        self.assertEqual(effective, 90.0)
         self.assertEqual(chosen, 30)
 
     def test_the_ceiling_is_the_mean_of_the_samples_against_themselves(self):
-        """One VMAF pass per sample, each against itself."""
         calls: list[tuple[str, str]] = []
 
         def fake_measure(distorted, reference, *args, **kwargs):

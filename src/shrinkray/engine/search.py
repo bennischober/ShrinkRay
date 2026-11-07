@@ -754,23 +754,11 @@ def find_optimal_crf(
     if recipe is None:
         recipe = vmaf_recipe(crop=crop)
 
-    # the effective target (issue #584): the model's ceiling is content-dependent,
-    # so a margin below the source's own ceiling can be reachable where the
-    # absolute target is not. margin 0 keeps the absolute target exactly.
+    # The absolute target is searched FIRST (issue #584): a source that can meet it
+    # keeps it, and the ceiling measurement (one extra VMAF pass per window) is only
+    # paid by a source that would otherwise be skipped as unreachable. Only then does
+    # the margin apply, aiming at `min(target, ceiling - margin)`.
     effective_target = target_vmaf
-    if vmaf_margin > 0:
-        ceiling = source_vmaf_ceiling(
-            samples, workdir, recipe, crop=crop, cancel=cancel, db_file=db_file
-        )
-        effective_target = min(target_vmaf, ceiling - vmaf_margin)
-        if progress:
-            progress({"stage": "probe", "detail": f"source ceiling VMAF {ceiling:.2f}"})
-        if effective_target < target_vmaf:
-            log(
-                f"'{movie.name}' source VMAF ceiling {ceiling:.2f}: aiming at "
-                f"{effective_target:.2f} instead of {target_vmaf:.2f} "
-                f"(margin {vmaf_margin:.1f})"
-            )
 
     def check(crf: int) -> float:
         _check_cancel(cancel)
@@ -809,8 +797,31 @@ def find_optimal_crf(
         return vmaf
 
     lo, hi = crf_range
-    chosen = bisect_crf(check, lo, hi, effective_target)
+    chosen = bisect_crf(check, lo, hi, target_vmaf)
     achieved = next(p.vmaf for p in reversed(probes) if p.crf == chosen)
+
+    # the absolute target was unreachable at the floor: aim at the source's own
+    # ceiling minus the margin instead of skipping the file (issue #584). The
+    # ceiling is only measured on this path, so a source that meets the absolute
+    # target never pays for it.
+    if vmaf_margin > 0 and achieved < target_vmaf and chosen == lo:
+        ceiling = source_vmaf_ceiling(
+            samples, workdir, recipe, crop=crop, cancel=cancel, db_file=db_file
+        )
+        clamped = min(target_vmaf, ceiling - vmaf_margin)
+        effective_target = clamped
+        if progress:
+            progress({"stage": "probe", "detail": f"source ceiling VMAF {ceiling:.2f}"})
+        log(
+            f"'{movie.name}' absolute target VMAF {target_vmaf:.2f} unreachable "
+            f"(best {achieved:.2f} at CRF {lo}); source ceiling "
+            f"{ceiling:.2f}, aiming at {clamped:.2f} (margin {vmaf_margin:.1f})"
+        )
+        if clamped > achieved:
+            # a higher CRF may meet the relaxed target
+            chosen = bisect_crf(check, lo, hi, clamped)
+            achieved = next(p.vmaf for p in reversed(probes) if p.crf == chosen)
+
     return chosen, achieved, probes, effective_target
 
 
