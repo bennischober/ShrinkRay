@@ -465,7 +465,9 @@ class TestPlanReuse(unittest.TestCase):
             # the fingerprint's crop-independent recipe part (the tests'
             # source snapshot has no dimensions, so the model and scale
             # cannot enter it)
-            vmaf_recipe=overrides.pop("vmaf_recipe", tools_vmaf.vmaf_recipe().fingerprint()),
+            vmaf_recipe=overrides.pop(
+                "vmaf_recipe", engine_plan._plan_fingerprint(tools_vmaf.vmaf_recipe(), 0.0)
+            ),
         )
         config = type("Conf", (), {"handbrake_encoder": "svt_av1", "min_saving_percent": 15})()
         record_plan = overrides.pop("record_plan", service.record_plan)

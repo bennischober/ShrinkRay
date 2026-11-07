@@ -761,6 +761,11 @@ def find_optimal_crf(
     effective_target = target_vmaf
 
     def check(crf: int) -> float:
+        # the second phase re-uses a probe the first one already paid for: same
+        # CRF, same score, no duplicate encode and no duplicate log line
+        already = next((p for p in probes if p.crf == crf), None)
+        if already is not None:
+            return already.vmaf
         _check_cancel(cancel)
         if progress:
             progress({"stage": "probe", "detail": f"probe encode (CRF {crf})"})

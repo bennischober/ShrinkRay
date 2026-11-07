@@ -72,6 +72,9 @@ from shrinkray.engine.plan import (
     _plan_crop as _plan_crop,
 )
 from shrinkray.engine.plan import (
+    _plan_fingerprint as _plan_fingerprint,
+)
+from shrinkray.engine.plan import (
     _plan_probes as _plan_probes,
 )
 from shrinkray.engine.plan import (
@@ -1384,11 +1387,14 @@ def encode_with_quality(
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             crop_sample_count=crop_sample_count,
-            vmaf_recipe=vmaf_recipe(
-                width=snapshot["width"],
-                height=snapshot["height"],
-                bit_depth=snapshot["bit_depth"],
-            ).fingerprint(),
+            vmaf_recipe=_plan_fingerprint(
+                vmaf_recipe(
+                    width=snapshot["width"],
+                    height=snapshot["height"],
+                    bit_depth=snapshot["bit_depth"],
+                ),
+                vmaf_margin,
+            ),
             min_saving_percent=min_saving_percent,
         )
     crf_source: str | None = None
