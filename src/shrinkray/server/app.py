@@ -31,7 +31,6 @@ from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
 from shrinkray.config import (
-    DEFAULT_VMAF_MARGIN,
     Conf,
     encode_window_open,
     load_config,
@@ -333,7 +332,6 @@ class JobRequest(BaseModel):
     # only encode mode; jobs.py rejects an explicit false payload regardless
     quality: bool = True
     target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
-    vmaf_margin: float = Field(DEFAULT_VMAF_MARGIN, ge=0.0, le=50.0)
     overwrite: bool = False
     verify: bool = False
     workers: int | None = Field(None, ge=1, le=64)

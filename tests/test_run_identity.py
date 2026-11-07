@@ -308,7 +308,7 @@ class TestPlanPathGuard(unittest.TestCase):
             # BEFORE the engine's recheck: a size-only guard would bless this
             self.movie.write_bytes(b"REPLACED" * 100)
             calls.append({"searched": True})
-            return 20, 96.5, [], False, 0.5, 96.5
+            return 20, 96.5, [], False, 0.5, 96.0
 
         with (
             patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
@@ -350,7 +350,7 @@ class TestPlanPathGuard(unittest.TestCase):
 
         def fake_search(*args, **kwargs):
             mtimes.append(self.movie.stat().st_mtime)
-            return 20, 96.5, [], False, 0.5, 96.5
+            return 20, 96.5, [], False, 0.5, 96.0
 
         with (
             patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
@@ -405,7 +405,7 @@ class TestEncodeStartRecheck(unittest.TestCase):
             # the replacement happens AFTER the search decided (inside the
             # probe step) and BEFORE the engine's recheck
             self.movie.write_bytes(b"REPLACED" * 100)
-            return 20, 96.5, [], None
+            return 20, 96.5, [], None, 96.5
 
         def exploding_encode(*args, **kwargs):
             raise AssertionError("the encode must not start on replaced bytes")
@@ -431,7 +431,9 @@ class TestEncodeStartRecheck(unittest.TestCase):
         with (
             patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
             patch("shrinkray.engine.pipeline.detect_crop_summary_cached", return_value=None),
-            patch("shrinkray.engine.pipeline._probe_movie", return_value=(20, 96.5, [], None)),
+            patch(
+                "shrinkray.engine.pipeline._probe_movie", return_value=(20, 96.5, [], None, 96.5)
+            ),
             patch(
                 "shrinkray.engine.pipeline._encode_with_command",
                 return_value=SimpleNamespace(success=True, cancelled=False, error=None),

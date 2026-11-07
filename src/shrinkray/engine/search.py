@@ -696,6 +696,8 @@ def find_optimal_crf(
         workdir (Path): Working directory for samples and probes.
         handbrake (str): Path to the HandBrakeCLI binary.
         target_vmaf (float): The VMAF quality floor to meet.
+        vmaf_margin (float): The margin below the source's own measured VMAF
+            ceiling (issue #584); 0 = the fixed absolute target.
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.

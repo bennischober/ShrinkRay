@@ -1668,7 +1668,8 @@ class TestEncodeLock(unittest.TestCase):
                 stub.chmod(0o755)
             with (
                 mock.patch(
-                    "shrinkray.engine.pipeline._probe_movie", return_value=(20, 95.2, [], None)
+                    "shrinkray.engine.pipeline._probe_movie",
+                    return_value=(20, 95.2, [], None, 96.0),
                 ) as probe,
                 mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
                 mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
@@ -1706,7 +1707,8 @@ class TestEncodeLock(unittest.TestCase):
 
             with (
                 mock.patch(
-                    "shrinkray.engine.pipeline._probe_movie", return_value=(20, 95.2, [], None)
+                    "shrinkray.engine.pipeline._probe_movie",
+                    return_value=(20, 95.2, [], None, 96.0),
                 ),
                 mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
                 mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
@@ -1743,7 +1745,8 @@ class TestEncodeLock(unittest.TestCase):
                 stub.chmod(0o755)
             with (
                 mock.patch(
-                    "shrinkray.engine.pipeline._probe_movie", return_value=(20, 95.2, [], None)
+                    "shrinkray.engine.pipeline._probe_movie",
+                    return_value=(20, 95.2, [], None, 96.0),
                 ),
                 mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
                 mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
@@ -1781,7 +1784,8 @@ class TestEncodeLock(unittest.TestCase):
                 stub.chmod(0o755)
             with (
                 mock.patch(
-                    "shrinkray.engine.pipeline._probe_movie", return_value=(20, 95.2, [], None)
+                    "shrinkray.engine.pipeline._probe_movie",
+                    return_value=(20, 95.2, [], None, 96.0),
                 ),
                 mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
                 mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
@@ -1922,7 +1926,7 @@ class TestEncodeOutcomeLine(unittest.TestCase):
                     patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=6000.0),
                     patch.object(engine_pipeline, "source_codec", return_value="h264"),
                     patch.object(
-                        engine_pipeline, "_probe_movie", return_value=(20, 96.0, [], None)
+                        engine_pipeline, "_probe_movie", return_value=(20, 96.0, [], None, 96.0)
                     ),
                     patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode),
                     patch.object(engine_pipeline, "find_handbrake", return_value="hb"),

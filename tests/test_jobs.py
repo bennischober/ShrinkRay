@@ -89,7 +89,7 @@ class TestJobs(unittest.TestCase):
                 stub.chmod(0o755)
 
             def fake_probe(*args, **kwargs):
-                return 20, 95.2, [], None
+                return 20, 95.2, [], None, 96.0
 
             with (
                 mock.patch("shrinkray.engine.pipeline._probe_movie", side_effect=fake_probe),

@@ -268,7 +268,7 @@ class TestProbeProgress(unittest.TestCase):
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(engine_pipeline, "_source_snapshot", return_value=None),
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
             tempfile.TemporaryDirectory() as tmp,
@@ -291,7 +291,7 @@ class TestProbeProgress(unittest.TestCase):
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(engine_pipeline, "_source_snapshot", return_value=None),
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
             tempfile.TemporaryDirectory() as tmp,

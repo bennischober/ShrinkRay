@@ -975,7 +975,7 @@ def _probe_movie(
     source_height: int | None = None,
     source_bit_depth: int | None = None,
     vmaf_margin: float = 0.0,
-) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
+) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None, float]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
     Args:
@@ -1095,7 +1095,7 @@ def _probe_movie(
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
             )
-        return crf, achieved, probes, crop
+        return crf, achieved, probes, crop, effective_target
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -1439,7 +1439,7 @@ def encode_with_quality(
         log(f"Using plan for '{input_file.name}' (probed {plan['created_at']}): CRF {crf}")
     else:
         try:
-            crf, achieved, probes, crop = _probe_movie(
+            crf, achieved, probes, crop, effective_target = _probe_movie(
                 input_file,
                 target_vmaf,
                 min_saving_percent,
@@ -1556,7 +1556,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             chosen_crf=crf,
             achieved_vmaf=achieved,
             probes=probes,

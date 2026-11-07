@@ -520,7 +520,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie, min_saving_percent=15)
         with (
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
@@ -536,7 +536,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie, success=False, skipped_reason="too short", achieved_vmaf=None)
         with (
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
@@ -548,7 +548,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie)
         with (
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
@@ -603,7 +603,7 @@ class TestPlanReuse(unittest.TestCase):
             ),
             patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
-            patch.object(engine_pipeline, "_probe_movie", return_value=(21, 95.5, [], None)),
+            patch.object(engine_pipeline, "_probe_movie", return_value=(21, 95.5, [], None, 96.0)),
             patch.object(engine_pipeline, "build_encode_command", side_effect=fake_build),
             patch.object(
                 engine_pipeline,
@@ -638,7 +638,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie, chosen_crf=21)
         with (
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
@@ -658,7 +658,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie, chosen_crf=21)
         with (
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
@@ -672,7 +672,7 @@ class TestPlanReuse(unittest.TestCase):
         movie.write_bytes(b"x" * 64)  # size change => fingerprint mismatch
         with (
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
@@ -685,7 +685,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie, success=False, skipped_reason="no size gain")
         with (
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_pipeline, "_encode_with_command") as fake_encode,
         ):
@@ -701,7 +701,7 @@ class TestPlanReuse(unittest.TestCase):
         self._store_plan(movie)
         with (
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
@@ -714,7 +714,7 @@ class TestPlanReuse(unittest.TestCase):
         movie = self._movie()
         with (
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.1, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_search, "_tool_versions", return_value="hb 1.0"),
         ):
@@ -3143,7 +3143,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(
                     engine_pipeline,
                     "_probe_movie",
-                    return_value=(20, engine_search.DEFAULT_TARGET_VMAF, [], None),
+                    return_value=(20, engine_search.DEFAULT_TARGET_VMAF, [], None, 96.0),
                 ) as fake_probe,
             ):
                 encoded = engine_pipeline.encode_with_quality(src, Path(tmp) / "out.mkv")
@@ -3250,7 +3250,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 patch.object(engine_plan, "is_hdr_file", return_value=False),
                 patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
                 patch.object(
-                    engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
+                    engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None, 96.0)
                 ) as fake_probe,
             ):
                 encoded = engine_pipeline.encode_with_quality(

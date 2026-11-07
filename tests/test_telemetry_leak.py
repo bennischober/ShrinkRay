@@ -39,7 +39,8 @@ class TestVerifyTelemetryLeak(unittest.TestCase):
             before = set(Path.cwd().glob("logs/*"))
             with (
                 mock.patch(
-                    "shrinkray.engine.pipeline._probe_movie", return_value=(20, 95.2, [], None)
+                    "shrinkray.engine.pipeline._probe_movie",
+                    return_value=(20, 95.2, [], None, 96.0),
                 ),
                 mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
                 mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),

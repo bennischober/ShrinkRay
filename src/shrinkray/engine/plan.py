@@ -416,6 +416,8 @@ def plan_quality(
     Args:
         input_file (Path): The file to analyze.
         target_vmaf (float): The VMAF quality floor to meet.
+        vmaf_margin (float): The margin below the source's own measured VMAF
+            ceiling (issue #584); 0 = the fixed absolute target.
         min_saving_percent (int): The minimum predicted saving (percent)
             the decision demands (issue #316; 0 = any real shrink). Part of
             the stored plan fingerprint.
@@ -806,7 +808,7 @@ def plan_quality(
             input=input_file,
             output=input_file,
             success=True,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             min_saving_percent=min_saving_percent,
             chosen_crf=crf,
             achieved_vmaf=achieved,
