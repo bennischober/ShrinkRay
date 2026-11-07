@@ -266,6 +266,9 @@ def vmaf_recipe(
 
     Args:
         crop (tuple | None): Crop bars (top, bottom, left, right) the encode
+        crop_distorted (bool): Crop the DISTORTED side too. The ceiling
+            compares a source against itself, so both branches must carry
+            the crop or libvmaf refuses the pair (issue #584).
             applies, so the analysis dimensions are the cropped ones.
         width (int | None): The SOURCE frame width, None when unknown.
         height (int | None): The SOURCE frame height, None when unknown.
@@ -303,6 +306,7 @@ def build_vmaf_command(
     crop: tuple[int, int, int, int] | None = None,
     subsample: int | None = None,
     recipe: VmafRecipe | None = None,
+    crop_distorted: bool = False,
 ) -> list[str]:
     """Builds the ffmpeg command measuring the VMAF of an encode.
 
@@ -380,13 +384,21 @@ def build_vmaf_command(
     # (--crop), so only the reference is cropped here. HDR sources never
     # reach a measurement: the skip gate (issue #518) refuses them first,
     # so there is no tone-map chain to maintain.
-    ref_chain: list[str] = []
+    crop_filter = ""
     if crop is not None:
         top, bottom, left, right = crop
-        ref_chain.append(f"crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}")
+        crop_filter = f"crop=iw-{left + right}:ih-{top + bottom}:{left}:{top}"
+    ref_chain: list[str] = []
+    if crop_filter:
+        ref_chain.append(crop_filter)
     ref_chain.append(suffix)
 
+    # the ceiling measurement compares a source against itself, so the crop must
+    # apply to BOTH sides or the geometry differs and libvmaf refuses the pair
+    # (issue #584 review round 2)
     dis_chain = [suffix]
+    if crop_distorted and crop_filter:
+        dis_chain = [crop_filter, suffix]
     filtergraph = f"[0:v]{','.join(dis_chain)}[d];[1:v]{','.join(ref_chain)}[r];[d][r]{vmaf}"
     return [
         FFMPEG_BINARY,
@@ -437,7 +449,7 @@ def _recipe_for_file(
 
     Args:
         distorted (Path): The encoded file to measure.
-        crop (tuple | None): Crop bars applied to the REFERENCE (the distorted
+        crop (tuple | None): Crop bars (top, bottom, left, right) applied to the REFERENCE (the distorted
             side is already cropped).
 
     Returns:
@@ -473,6 +485,7 @@ def measure_vmaf(
     db_file: Path | None = None,
     subsample: int | None = None,
     recipe: VmafRecipe | None = None,
+    crop_distorted: bool = False,
 ) -> float:
     """Measures the mean VMAF of an encode against its source.
 
@@ -517,7 +530,13 @@ def measure_vmaf(
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0
     command = build_vmaf_command(
-        distorted, reference, threads, crop=crop, subsample=subsample, recipe=recipe
+        distorted,
+        reference,
+        threads,
+        crop=crop,
+        subsample=subsample,
+        recipe=recipe,
+        crop_distorted=crop_distorted,
     )
     # watchdog=False (issue #431): libvmaf is silent by design until the whole
     # file is scored - a full-precision measurement of a large movie produces

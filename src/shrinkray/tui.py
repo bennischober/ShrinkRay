@@ -84,6 +84,15 @@ def fields_for(defaults: Conf) -> list[Field]:
         ),
         Field(
             "Quality",
+            "quality.vmaf_margin",
+            "VMAF margin below the source ceiling",
+            "float",
+            defaults.vmaf_margin,
+            "0 = the fixed absolute target (issue #584)",
+            remeasures=True,
+        ),
+        Field(
+            "Quality",
             "quality.min_saving_percent",
             "Minimum saving %",
             "int",

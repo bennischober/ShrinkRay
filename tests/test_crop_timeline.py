@@ -643,7 +643,7 @@ class TestPlanUsesTheTimelineDetector(unittest.TestCase):
             def fake_find(movie, workdir, handbrake, **kwargs):
                 assert kwargs["crop"] == (140, 140, 0, 0), kwargs["crop"]
                 # a real skip result: the search measures nothing further
-                return (20, 95.0, [], True, 1.3)
+                return (20, 95.0, [], True, 1.3, 95.0)
 
             with (
                 patch("shrinkray.engine.plan.detect_crop_summary_cached", return_value=summary),
@@ -757,7 +757,7 @@ class TestCropBarsOrFallback(unittest.TestCase):
                 ),
                 patch(
                     "shrinkray.engine.plan.find_optimal_crf_and_skip",
-                    return_value=(20, 96.0, [], False, 0.5),
+                    return_value=(20, 96.0, [], False, 0.5, 96.0),
                 ),
                 patch("shrinkray.engine.plan.extract_samples", return_value=[]),
             ):
@@ -806,7 +806,7 @@ class TestCropBarsOrFallback(unittest.TestCase):
                 patch("shrinkray.engine.pipeline.detect_crop_rect", sampled),
                 patch(
                     "shrinkray.engine.pipeline.find_optimal_crf_and_skip",
-                    return_value=(20, 96.0, [], False, 0.5),
+                    return_value=(20, 96.0, [], False, 0.5, 96.0),
                 ),
                 patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=6000.0),
                 patch.object(

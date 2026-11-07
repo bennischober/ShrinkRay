@@ -846,6 +846,7 @@ def execute_plan(
                 result = plan_quality(
                     movie,
                     target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                    vmaf_margin=payload.get("vmaf_margin", config.vmaf_margin),
                     min_saving_percent=config.min_saving_percent,
                     encoder=config.handbrake_encoder,
                     probe_encoder_preset=payload.get(
@@ -1086,6 +1087,7 @@ def _encode_measured(
                     movie,
                     output_dir / movie.name,
                     target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                    vmaf_margin=payload.get("vmaf_margin", config.vmaf_margin),
                     min_saving_percent=config.min_saving_percent,
                     encoder=config.handbrake_encoder,
                     probe_encoder_preset=payload.get(

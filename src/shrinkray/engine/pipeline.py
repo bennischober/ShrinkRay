@@ -72,6 +72,9 @@ from shrinkray.engine.plan import (
     _plan_crop as _plan_crop,
 )
 from shrinkray.engine.plan import (
+    _plan_fingerprint as _plan_fingerprint,
+)
+from shrinkray.engine.plan import (
     _plan_probes as _plan_probes,
 )
 from shrinkray.engine.plan import (
@@ -974,12 +977,17 @@ def _probe_movie(
     source_width: int | None = None,
     source_height: int | None = None,
     source_bit_depth: int | None = None,
-) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None]:
+    vmaf_margin: float = 0.0,
+) -> tuple[int, float, list[SampleProbe], tuple[int, int, int, int] | None, float]:
     """Shared probing pipeline of plan_quality and encode_with_quality.
 
     Args:
         input_file (Path): The file to probe.
         target_vmaf (float): The VMAF quality floor to meet.
+        vmaf_margin (float): The margin below the source's own VMAF ceiling
+            (issue #584); 0 = the fixed absolute target.
+        vmaf_margin (float): The margin below the source's own VMAF ceiling
+            (issue #584); 0 = the fixed absolute target.
         min_saving_percent (int): The minimum predicted saving (percent) the
             decision demands (issue #316; 0 = any real shrink).
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
@@ -1003,8 +1011,9 @@ def _probe_movie(
             analysis pixel format).
 
     Returns:
-        tuple: The chosen CRF, its VMAF, all probes and the crop bars
-            (None when no crop is applied).
+        tuple: The chosen CRF, its VMAF, all probes, the crop bars
+            (None when no crop is applied) and the effective target the
+            search aimed at (issue #584).
 
     Raises:
         RuntimeError: If HandBrakeCLI is not installed or probing failed.
@@ -1047,12 +1056,13 @@ def _probe_movie(
             bit_depth=source_bit_depth,
         )
         log(f"Probing '{input_file.name}' (target VMAF {target_vmaf})...")
-        crf, achieved, probes, skip, chosen_factor = find_optimal_crf_and_skip(
+        crf, achieved, probes, skip, chosen_factor, effective_target = find_optimal_crf_and_skip(
             input_file,
             workdir,
             handbrake,
             target_vmaf=target_vmaf,
             crf_range=crf_range,
+            vmaf_margin=vmaf_margin,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             encoder=encoder,
@@ -1068,6 +1078,7 @@ def _probe_movie(
         if skip:
             raise SkipEncode(
                 "re-encode would not shrink the file",
+                target_vmaf=effective_target,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
@@ -1079,18 +1090,21 @@ def _probe_movie(
         if saving_percent < min_saving_percent:
             raise SkipEncode(
                 f"predicted saving {saving_percent:.1f}% < required {min_saving_percent}%",
+                target_vmaf=effective_target,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
             )
-        if achieved < target_vmaf and crf == crf_range[0]:
+        if achieved < effective_target and crf == crf_range[0]:
             raise SkipEncode(
-                f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})",
+                f"target VMAF {effective_target:.2f} unreachable "
+                f"(best {achieved} at CRF {crf_range[0]})",
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
+                target_vmaf=effective_target,
             )
-        return crf, achieved, probes, crop
+        return crf, achieved, probes, crop, effective_target
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -1113,6 +1127,7 @@ def encode_with_quality(
     input_file: Path,
     output_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
+    vmaf_margin: float = 0.0,
     min_saving_percent: int = 15,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
     sample_count: int | None = None,
@@ -1217,6 +1232,9 @@ def encode_with_quality(
 
     duration = _probe_duration(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
+    # the floor a decision records: the configured target until the search clamps it
+    # to the source's own ceiling (issue #584)
+    effective_target = target_vmaf
     if hdr:
         # the maintainer's decision (issue #340, 2026-10-31; issue #518): HDR
         # is not supported yet - the tone-mapped SDR measurement is not valid
@@ -1228,7 +1246,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error="HDR: not supported yet (no validated quality measurement); tracked in issue #519",
             skipped_reason="hdr not supported",
             input_size=identity.size,
@@ -1242,7 +1260,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
             skipped_reason="too short",
             input_size=identity.size,
@@ -1273,7 +1291,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=(
                 f"resolution {shown} is below the {min_source_width}x"
                 f"{min_source_height} 1080p class minimum "
@@ -1293,7 +1311,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=(
                 f"size {size_gb:.2f} GB is below the {min_source_size_gb:.2f} GB "
                 "minimum (too little to save for the probe cost)"
@@ -1316,7 +1334,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=(
                 f"source codec '{codec}' is not in the candidate codec list "
                 f"({', '.join(allowed)}) - a source outside it is "
@@ -1339,7 +1357,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=space_message,
             input_size=identity.size,
             input_mtime=identity.mtime,
@@ -1369,11 +1387,14 @@ def encode_with_quality(
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             crop_sample_count=crop_sample_count,
-            vmaf_recipe=vmaf_recipe(
-                width=snapshot["width"],
-                height=snapshot["height"],
-                bit_depth=snapshot["bit_depth"],
-            ).fingerprint(),
+            vmaf_recipe=_plan_fingerprint(
+                vmaf_recipe(
+                    width=snapshot["width"],
+                    height=snapshot["height"],
+                    bit_depth=snapshot["bit_depth"],
+                ),
+                vmaf_margin,
+            ),
             min_saving_percent=min_saving_percent,
         )
     crf_source: str | None = None
@@ -1396,7 +1417,7 @@ def encode_with_quality(
                 input=input_file,
                 output=output_file,
                 success=False,
-                target_vmaf=target_vmaf,
+                target_vmaf=effective_target,
                 chosen_crf=plan["chosen_crf"],
                 achieved_vmaf=plan["achieved_vmaf"],
                 probes=_plan_probes(plan),
@@ -1433,7 +1454,7 @@ def encode_with_quality(
         log(f"Using plan for '{input_file.name}' (probed {plan['created_at']}): CRF {crf}")
     else:
         try:
-            crf, achieved, probes, crop = _probe_movie(
+            crf, achieved, probes, crop, effective_target = _probe_movie(
                 input_file,
                 target_vmaf,
                 min_saving_percent,
@@ -1442,6 +1463,7 @@ def encode_with_quality(
                 sample_seconds,
                 effective_encoder,
                 probe_encoder_preset,
+                vmaf_margin=vmaf_margin,
                 cancel=cancel,
                 db_file=db_file,
                 encoder_threads=encoder_threads,
@@ -1484,7 +1506,7 @@ def encode_with_quality(
                 input=input_file,
                 output=output_file,
                 success=False,
-                target_vmaf=target_vmaf,
+                target_vmaf=e.target_vmaf if e.target_vmaf is not None else effective_target,
                 error=f"skipped: {e}",
                 chosen_crf=e.chosen_crf,
                 achieved_vmaf=e.achieved_vmaf,
@@ -1549,7 +1571,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             chosen_crf=crf,
             achieved_vmaf=achieved,
             probes=probes,
@@ -1573,7 +1595,7 @@ def encode_with_quality(
             input=input_file,
             output=input_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             chosen_crf=crf,
             achieved_vmaf=achieved,
             probes=probes,
@@ -1653,7 +1675,7 @@ def encode_with_quality(
                 f"Verified '{input_file.name}': full-file VMAF "
                 f"{verified_vmaf:.2f}"
                 + (f" (sub-sampled 1/{verified_subsample})" if verified_subsample else "")
-                + f" vs target {target_vmaf}"
+                + f" vs target {effective_target}"
             )
         except Cancelled:
             raise
@@ -1676,7 +1698,7 @@ def encode_with_quality(
         input=input_file,
         output=output_file,
         success=True,
-        target_vmaf=target_vmaf,
+        target_vmaf=effective_target,
         chosen_crf=crf,
         achieved_vmaf=achieved,
         probes=probes,

@@ -30,7 +30,12 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
-from shrinkray.config import Conf, encode_window_open, load_config, refresh_config
+from shrinkray.config import (
+    Conf,
+    encode_window_open,
+    load_config,
+    refresh_config,
+)
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import cap_threads
@@ -672,6 +677,7 @@ def _conf_to_dict(conf: Conf) -> dict:
         ),
         quality=QualitySection(
             target_vmaf=conf.target_vmaf,
+            vmaf_margin=conf.vmaf_margin,
             sample_every=conf.sample_every,
             sample_count=conf.sample_count,
             sample_seconds=conf.sample_seconds,
@@ -1659,6 +1665,7 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
         return WatchSettings(
             max_threads=cap_threads(config.handbrake_max_threads),
             target_vmaf=config.target_vmaf,
+            vmaf_margin=config.vmaf_margin,
             min_saving_percent=config.min_saving_percent,
             min_source_height=config.min_source_height,
             min_source_width=config.min_source_width,

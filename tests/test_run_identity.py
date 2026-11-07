@@ -182,7 +182,7 @@ class TestProbeScratchAttribution(unittest.TestCase):
             patch("shrinkray.engine.plan.extract_samples", return_value=[]),
             patch(
                 "shrinkray.engine.plan.find_optimal_crf_and_skip",
-                return_value=(20, 96.5, [], False, 0.5),
+                return_value=(20, 96.5, [], False, 0.5, 96.5),
             ),
             patch("shrinkray.engine.plan.tempfile.mkdtemp", side_effect=fake_mkdtemp),
         ):
@@ -215,7 +215,7 @@ class TestProbeScratchAttribution(unittest.TestCase):
             patch("shrinkray.engine.pipeline.extract_samples", return_value=[]),
             patch(
                 "shrinkray.engine.pipeline.find_optimal_crf_and_skip",
-                return_value=(20, 96.5, [], False, 0.5),
+                return_value=(20, 96.5, [], False, 0.5, 96.5),
             ),
             patch("shrinkray.engine.pipeline.tempfile.mkdtemp", side_effect=fake_mkdtemp),
             # the verification measurement is a real binary seam; this test's
@@ -308,7 +308,7 @@ class TestPlanPathGuard(unittest.TestCase):
             # BEFORE the engine's recheck: a size-only guard would bless this
             self.movie.write_bytes(b"REPLACED" * 100)
             calls.append({"searched": True})
-            return 20, 96.5, [], False, 0.5
+            return 20, 96.5, [], False, 0.5, 96.0
 
         with (
             patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
@@ -335,7 +335,7 @@ class TestPlanPathGuard(unittest.TestCase):
                 sample_seconds=10.0,
                 crop_sample_count=10,
                 vmaf_statistic="mean",
-                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no;margin=0",
                 min_saving_percent=15,
             )
         )
@@ -350,7 +350,7 @@ class TestPlanPathGuard(unittest.TestCase):
 
         def fake_search(*args, **kwargs):
             mtimes.append(self.movie.stat().st_mtime)
-            return 20, 96.5, [], False, 0.5
+            return 20, 96.5, [], False, 0.5, 96.0
 
         with (
             patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
@@ -376,7 +376,7 @@ class TestPlanPathGuard(unittest.TestCase):
             sample_seconds=10.0,
             crop_sample_count=10,
             vmaf_statistic="mean",
-            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no;margin=0",
             min_saving_percent=15,
         )
         self.assertIsNotNone(row)
@@ -405,7 +405,7 @@ class TestEncodeStartRecheck(unittest.TestCase):
             # the replacement happens AFTER the search decided (inside the
             # probe step) and BEFORE the engine's recheck
             self.movie.write_bytes(b"REPLACED" * 100)
-            return 20, 96.5, [], None
+            return 20, 96.5, [], None, 96.5
 
         def exploding_encode(*args, **kwargs):
             raise AssertionError("the encode must not start on replaced bytes")
@@ -431,7 +431,9 @@ class TestEncodeStartRecheck(unittest.TestCase):
         with (
             patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
             patch("shrinkray.engine.pipeline.detect_crop_summary_cached", return_value=None),
-            patch("shrinkray.engine.pipeline._probe_movie", return_value=(20, 96.5, [], None)),
+            patch(
+                "shrinkray.engine.pipeline._probe_movie", return_value=(20, 96.5, [], None, 96.5)
+            ),
             patch(
                 "shrinkray.engine.pipeline._encode_with_command",
                 return_value=SimpleNamespace(success=True, cancelled=False, error=None),
@@ -469,7 +471,7 @@ class TestEngineSkipPathGuard(unittest.TestCase):
 
         def fake_search(*args, **kwargs):
             self.movie.write_bytes(b"REPLACED" * 100)
-            return 20, 96.5, [], True, 1.3
+            return 20, 96.5, [], True, 1.3, 96.5
 
         with (
             patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
@@ -501,7 +503,7 @@ class TestEngineSkipPathGuard(unittest.TestCase):
                 sample_seconds=10.0,
                 crop_sample_count=10,
                 vmaf_statistic="mean",
-                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no;margin=0",
                 min_saving_percent=15,
             )
         )
@@ -516,7 +518,7 @@ class TestEngineSkipPathGuard(unittest.TestCase):
         from shrinkray.service import record_plan
 
         def fake_search(*args, **kwargs):
-            return 20, 96.5, [], True, 1.3
+            return 20, 96.5, [], True, 1.3, 96.5
 
         with (
             patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),

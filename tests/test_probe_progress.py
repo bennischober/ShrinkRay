@@ -158,7 +158,7 @@ class TestProbeProgress(unittest.TestCase):
             patch.object(engine_search, "probe_crf", side_effect=lambda *a, **k: 95.0),
             patch.object(engine_search, "probe_crf", side_effect=lambda *a, **k: 95.0),
         ):
-            chosen, _achieved, probes = engine_search.find_optimal_crf(
+            chosen, _achieved, probes, _effective = engine_search.find_optimal_crf(
                 Path("movie.mkv"),
                 Path("work"),
                 "hb",
@@ -250,7 +250,7 @@ class TestProbeProgress(unittest.TestCase):
                 patch.object(
                     engine_plan,
                     "find_optimal_crf_and_skip",
-                    return_value=(20, 95.0, [], False, 0.5),
+                    return_value=(20, 95.0, [], False, 0.5, 95.0),
                 ) as fake_search,
                 patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
                 patch.object(engine_search, "estimate_size_factor", return_value=0.5),
@@ -268,7 +268,7 @@ class TestProbeProgress(unittest.TestCase):
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(engine_pipeline, "_source_snapshot", return_value=None),
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
             tempfile.TemporaryDirectory() as tmp,
@@ -291,7 +291,7 @@ class TestProbeProgress(unittest.TestCase):
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(engine_pipeline, "_source_snapshot", return_value=None),
             patch.object(
-                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None)
+                engine_pipeline, "_probe_movie", return_value=(20, 95.0, [], None, 96.0)
             ) as fake_probe,
             patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
             tempfile.TemporaryDirectory() as tmp,
@@ -322,7 +322,7 @@ class TestProbeProgress(unittest.TestCase):
             patch.object(engine_plan, "detect_crop_rect", return_value=None),
             patch.object(engine_plan, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
             patch.object(engine_search, "estimate_size_factor", return_value=0.5) as fake_estimate,
-            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [])),
+            patch.object(engine_search, "find_optimal_crf", return_value=(22, 95.5, [], 95.5)),
             patch.object(engine_search, "measure_vmaf", return_value=95.5),
             tempfile.TemporaryDirectory() as tmp,
         ):

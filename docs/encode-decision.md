@@ -224,6 +224,17 @@ the claim, because `--verify` arrived in v0.11.7.
 - The comparison runs inside one ffmpeg invocation with both inputs in a single filtergraph
   (`[0:v][1:v]libvmaf=...`), as ab-av1's does.
 
+  **The absolute target is tried first; the ceiling is the fallback.** VMAF's model does not score identical
+  frames as 100: its maximum is content-dependent (measured 97.43-99.85 across four shapes,
+  [#584](https://github.com/bennischober/ShrinkRay/issues/584)), so an absolute 96 is unreachable on some
+  content - real animation read 92.99-95.97 even at CRF 0 and was skipped. The search runs at
+  `quality.target_vmaf` first: a source that meets it keeps it, and no ceiling is measured. Only when the target
+  is unreachable at the CRF floor does the search measure the source's own ceiling (each probe window against
+  itself, one VMAF pass per window, no encode) and run a second search at
+  `min(target_vmaf, ceiling - vmaf_margin)` - `quality.vmaf_margin`, default 3, `--vmaf-margin`. So a file that
+  is encodable today is held to exactly today's bar, and only a file that would be skipped is relaxed to at most
+  the margin below what it can reach. `vmaf_margin: 0` disables the second phase entirely.
+
 **Deliberate deviations, each with its reason:**
 
 - **Sample windows sit between 10% and 90% of the runtime** (`engine/samples.py:56-57`): lead-in and

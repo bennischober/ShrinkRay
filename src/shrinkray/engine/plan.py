@@ -44,7 +44,7 @@ from shrinkray.engine.search import (
 from shrinkray.logger import log
 from shrinkray.tools.ffprobe import get_data, probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
-from shrinkray.tools.vmaf import vmaf_recipe
+from shrinkray.tools.vmaf import VmafRecipe, vmaf_recipe
 
 # the codec gate: which source codecs are candidates at all (issue #21).
 # One whitelist, spelled out: an operator's config extends it (candidate_codecs),
@@ -303,8 +303,10 @@ class QualityResult:
         input (Path): The input file.
         output (Path): The output file.
         success (bool): True if the encode succeeded.
-        target_vmaf (float): The effective VMAF quality floor that was met:
-            the requested one.
+        target_vmaf (float): The floor the search aimed at - the configured
+            target, or the source-ceiling clamp (issue #584):
+            the floor the search aimed at: the configured target, or the
+            source-ceiling clamp (issue #584).
         min_saving_percent (int): The minimum-saving threshold the verdict
             was decided under (issue #316; part of the plan fingerprint).
         chosen_crf (int | None): The CRF selected by the bisect.
@@ -382,9 +384,21 @@ class QualityResult:
         return round((1 - self.output_size / self.input_size) * 100, 2)
 
 
+def _plan_fingerprint(recipe: VmafRecipe, vmaf_margin: float) -> str:
+    """The plan cache key's measurement fingerprint (issue #584).
+
+    The margin decides which target the search aimed at, so it belongs in the
+    fingerprint: a plan measured under the absolute target must not be reused by a
+    run that would have aimed lower (the pre-#584 "target unreachable" row would
+    otherwise keep an animation skipped after the upgrade).
+    """
+    return f"{recipe.fingerprint()};margin={vmaf_margin:g}"
+
+
 def plan_quality(
     input_file: Path,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
+    vmaf_margin: float = 0.0,
     min_saving_percent: int = 15,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
     sample_count: int | None = None,
@@ -415,6 +429,8 @@ def plan_quality(
     Args:
         input_file (Path): The file to analyze.
         target_vmaf (float): The VMAF quality floor to meet.
+        vmaf_margin (float): The margin below the source's own measured VMAF
+            ceiling (issue #584); 0 = the fixed absolute target.
         min_saving_percent (int): The minimum predicted saving (percent)
             the decision demands (issue #316; 0 = any real shrink). Part of
             the stored plan fingerprint.
@@ -664,12 +680,13 @@ def plan_quality(
                 input_file, workdir, sample_count, sample_seconds, cancel=cancel, progress=progress
             )
         ]
-        crf, achieved, probes, skip, factor = find_optimal_crf_and_skip(
+        crf, achieved, probes, skip, factor, effective_target = find_optimal_crf_and_skip(
             input_file,
             workdir,
             handbrake,
             target_vmaf=target_vmaf,
             crf_range=crf_range,
+            vmaf_margin=vmaf_margin,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
             encoder=effective_encoder,
@@ -702,7 +719,7 @@ def plan_quality(
                 input=input_file,
                 output=input_file,
                 success=False,
-                target_vmaf=target_vmaf,
+                target_vmaf=effective_target,
                 min_saving_percent=min_saving_percent,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
@@ -723,7 +740,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
-                vmaf_recipe=recipe.fingerprint(),
+                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
             )
 
         if skip:
@@ -738,7 +755,7 @@ def plan_quality(
                 input=input_file,
                 output=input_file,
                 success=False,
-                target_vmaf=target_vmaf,
+                target_vmaf=effective_target,
                 min_saving_percent=min_saving_percent,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
@@ -756,9 +773,9 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
-                vmaf_recipe=recipe.fingerprint(),
+                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
             )
-        if achieved < target_vmaf and crf == crf_range[0]:
+        if achieved < effective_target and crf == crf_range[0]:
             # the unreachable verdict is recorded like a skip (issue #436):
             # the same record-time recheck applies
             ensure_unchanged(input_file, identity, "plan")
@@ -767,7 +784,7 @@ def plan_quality(
                 input=input_file,
                 output=input_file,
                 success=False,
-                target_vmaf=target_vmaf,
+                target_vmaf=effective_target,
                 min_saving_percent=min_saving_percent,
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
@@ -775,7 +792,7 @@ def plan_quality(
                 input_size=identity.size,
                 output_size=identity.size,
                 error=(
-                    f"skipped: target VMAF {target_vmaf} unreachable "
+                    f"skipped: target VMAF {effective_target:.2f} unreachable "
                     f"(best {achieved} at CRF {crf_range[0]})"
                 ),
                 skipped_reason="target unreachable",
@@ -788,7 +805,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
-                vmaf_recipe=recipe.fingerprint(),
+                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
             )
 
         # the record-time recheck on the SUCCESS path too (issue #436): the
@@ -804,7 +821,7 @@ def plan_quality(
             input=input_file,
             output=input_file,
             success=True,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             min_saving_percent=min_saving_percent,
             chosen_crf=crf,
             achieved_vmaf=achieved,
@@ -821,7 +838,7 @@ def plan_quality(
             sample_seconds=sample_seconds,
             hdr=hdr,
             encoder=effective_encoder,
-            vmaf_recipe=recipe.fingerprint(),
+            vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

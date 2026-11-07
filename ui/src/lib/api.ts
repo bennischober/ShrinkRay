@@ -221,6 +221,7 @@ export interface Config {
   resources?: { idle_priority?: boolean }
   quality?: {
     target_vmaf?: number
+    vmaf_margin?: number
     sample_every?: number
     sample_count?: number | null
     sample_seconds?: number

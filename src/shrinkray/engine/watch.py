@@ -708,6 +708,9 @@ class WatchSettings:
     candidate_codecs: tuple[str, ...]
     crop_sample_count: int
     min_saving_percent: int = 15
+    # the margin below the source's own VMAF ceiling (issue #584); 0 = the
+    # fixed absolute target
+    vmaf_margin: float = 0.0
     audio_languages: list[str] | None = None
     subtitle_languages: list[str] | None = None
     # the daily encode window (issue #434): resident automation holds back
@@ -735,6 +738,7 @@ def watch(
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = ("h264",),
     crop_sample_count: int = 10,
+    vmaf_margin: float = 0.0,
     audio_languages: list[str] | None = None,
     subtitle_languages: list[str] | None = None,
     progress: ProgressCallback | None = None,
@@ -758,6 +762,8 @@ def watch(
             encode IN PLACE: each verified output takes the source's own path
             and the original is renamed aside and kept.
         target_vmaf (float): The VMAF quality floor.
+        vmaf_margin (float): The margin below the source's own VMAF ceiling
+            (issue #584); 0 = the fixed absolute target.
         min_saving_percent (int): The minimum predicted saving (percent)
             the decision demands (issue #316; 0 = any real shrink).
         encoder (str): The video encoder.
@@ -821,6 +827,7 @@ def watch(
         min_source_size_gb=min_source_size_gb,
         candidate_codecs=candidate_codecs,
         crop_sample_count=crop_sample_count,
+        vmaf_margin=vmaf_margin,
         audio_languages=audio_languages if audio_languages is not None else default_audio_languages,
         subtitle_languages=subtitle_languages
         if subtitle_languages is not None
@@ -1061,6 +1068,7 @@ def watch(
                                 # kill path (review on PR #468, finding 1)
                                 cancel=stop_event,
                                 target_vmaf=current.target_vmaf,
+                                vmaf_margin=current.vmaf_margin,
                                 encoder=encoder,
                                 probe_encoder_preset=probe_encoder_preset,
                                 encoder_preset=encoder_preset,
