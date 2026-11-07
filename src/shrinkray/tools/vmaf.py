@@ -527,7 +527,13 @@ def measure_vmaf(
         # legacy libvmaf (ffmpeg < 6) is single-threaded regardless of the option
         threads = 0
     command = build_vmaf_command(
-        distorted, reference, threads, crop=crop, subsample=subsample, recipe=recipe
+        distorted,
+        reference,
+        threads,
+        crop=crop,
+        subsample=subsample,
+        recipe=recipe,
+        crop_distorted=crop_distorted,
     )
     # watchdog=False (issue #431): libvmaf is silent by design until the whole
     # file is scored - a full-precision measurement of a large movie produces

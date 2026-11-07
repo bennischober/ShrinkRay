@@ -1223,6 +1223,9 @@ def encode_with_quality(
 
     duration = _probe_duration(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
+    # the floor a decision records: the configured target until the search clamps it
+    # to the source's own ceiling (issue #584)
+    effective_target = target_vmaf
     if hdr:
         # the maintainer's decision (issue #340, 2026-10-31; issue #518): HDR
         # is not supported yet - the tone-mapped SDR measurement is not valid
@@ -1234,7 +1237,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error="HDR: not supported yet (no validated quality measurement); tracked in issue #519",
             skipped_reason="hdr not supported",
             input_size=identity.size,
@@ -1248,7 +1251,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
             skipped_reason="too short",
             input_size=identity.size,
@@ -1279,7 +1282,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=(
                 f"resolution {shown} is below the {min_source_width}x"
                 f"{min_source_height} 1080p class minimum "
@@ -1299,7 +1302,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=(
                 f"size {size_gb:.2f} GB is below the {min_source_size_gb:.2f} GB "
                 "minimum (too little to save for the probe cost)"
@@ -1322,7 +1325,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=(
                 f"source codec '{codec}' is not in the candidate codec list "
                 f"({', '.join(allowed)}) - a source outside it is "
@@ -1345,7 +1348,7 @@ def encode_with_quality(
             input=input_file,
             output=output_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             error=space_message,
             input_size=identity.size,
             input_mtime=identity.mtime,
@@ -1402,7 +1405,7 @@ def encode_with_quality(
                 input=input_file,
                 output=output_file,
                 success=False,
-                target_vmaf=target_vmaf,
+                target_vmaf=effective_target,
                 chosen_crf=plan["chosen_crf"],
                 achieved_vmaf=plan["achieved_vmaf"],
                 probes=_plan_probes(plan),
@@ -1491,7 +1494,7 @@ def encode_with_quality(
                 input=input_file,
                 output=output_file,
                 success=False,
-                target_vmaf=target_vmaf,
+                target_vmaf=effective_target,
                 error=f"skipped: {e}",
                 chosen_crf=e.chosen_crf,
                 achieved_vmaf=e.achieved_vmaf,
@@ -1580,7 +1583,7 @@ def encode_with_quality(
             input=input_file,
             output=input_file,
             success=False,
-            target_vmaf=target_vmaf,
+            target_vmaf=effective_target,
             chosen_crf=crf,
             achieved_vmaf=achieved,
             probes=probes,
@@ -1683,7 +1686,7 @@ def encode_with_quality(
         input=input_file,
         output=output_file,
         success=True,
-        target_vmaf=target_vmaf,
+        target_vmaf=effective_target,
         chosen_crf=crf,
         achieved_vmaf=achieved,
         probes=probes,

@@ -648,6 +648,8 @@ def source_vmaf_ceiling(
         workdir (Path): Working directory for the model and log files.
         recipe (VmafRecipe | None): The measurement recipe. None derives the
             1080p model at native size.
+        crop (tuple | None): Crop bars applied to BOTH sides of the self-comparison,
+            so the ceiling is measured on the same geometry as the probes.
         cancel (threading.Event | None): Cooperative cancellation.
 
     Returns:
