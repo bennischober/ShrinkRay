@@ -44,7 +44,7 @@ from shrinkray.engine.search import (
 from shrinkray.logger import log
 from shrinkray.tools.ffprobe import get_data, probe_duration_seconds
 from shrinkray.tools.handbrake import HANDBRAKE_BINARY, find_handbrake
-from shrinkray.tools.vmaf import vmaf_recipe
+from shrinkray.tools.vmaf import VmafRecipe, vmaf_recipe
 
 # the codec gate: which source codecs are candidates at all (issue #21).
 # One whitelist, spelled out: an operator's config extends it (candidate_codecs),
@@ -305,7 +305,8 @@ class QualityResult:
         success (bool): True if the encode succeeded.
         target_vmaf (float): The floor the search aimed at - the configured
             target, or the source-ceiling clamp (issue #584):
-            the requested one.
+            the floor the search aimed at: the configured target, or the
+            source-ceiling clamp (issue #584).
         min_saving_percent (int): The minimum-saving threshold the verdict
             was decided under (issue #316; part of the plan fingerprint).
         chosen_crf (int | None): The CRF selected by the bisect.
@@ -381,6 +382,17 @@ class QualityResult:
         if self.input_size <= 0 or self.output_size <= 0:
             return 0.0
         return round((1 - self.output_size / self.input_size) * 100, 2)
+
+
+def _plan_fingerprint(recipe: VmafRecipe, vmaf_margin: float) -> str:
+    """The plan cache key's measurement fingerprint (issue #584).
+
+    The margin decides which target the search aimed at, so it belongs in the
+    fingerprint: a plan measured under the absolute target must not be reused by a
+    run that would have aimed lower (the pre-#584 "target unreachable" row would
+    otherwise keep an animation skipped after the upgrade).
+    """
+    return f"{recipe.fingerprint()};margin={vmaf_margin:g}"
 
 
 def plan_quality(
@@ -728,7 +740,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
-                vmaf_recipe=recipe.fingerprint(),
+                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
             )
 
         if skip:
@@ -761,7 +773,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
-                vmaf_recipe=recipe.fingerprint(),
+                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
             )
         if achieved < effective_target and crf == crf_range[0]:
             # the unreachable verdict is recorded like a skip (issue #436):
@@ -793,7 +805,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
-                vmaf_recipe=recipe.fingerprint(),
+                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
             )
 
         # the record-time recheck on the SUCCESS path too (issue #436): the
@@ -826,7 +838,7 @@ def plan_quality(
             sample_seconds=sample_seconds,
             hdr=hdr,
             encoder=effective_encoder,
-            vmaf_recipe=recipe.fingerprint(),
+            vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

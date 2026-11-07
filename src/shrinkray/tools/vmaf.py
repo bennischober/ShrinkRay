@@ -266,6 +266,9 @@ def vmaf_recipe(
 
     Args:
         crop (tuple | None): Crop bars (top, bottom, left, right) the encode
+        crop_distorted (bool): Crop the DISTORTED side too. The ceiling
+            compares a source against itself, so both branches must carry
+            the crop or libvmaf refuses the pair (issue #584).
             applies, so the analysis dimensions are the cropped ones.
         width (int | None): The SOURCE frame width, None when unknown.
         height (int | None): The SOURCE frame height, None when unknown.
@@ -446,7 +449,7 @@ def _recipe_for_file(
 
     Args:
         distorted (Path): The encoded file to measure.
-        crop (tuple | None): Crop bars applied to the REFERENCE (the distorted
+        crop (tuple | None): Crop bars (top, bottom, left, right) applied to the REFERENCE (the distorted
             side is already cropped).
 
     Returns:

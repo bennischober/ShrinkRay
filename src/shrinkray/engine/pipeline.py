@@ -983,6 +983,8 @@ def _probe_movie(
         target_vmaf (float): The VMAF quality floor to meet.
         vmaf_margin (float): The margin below the source's own VMAF ceiling
             (issue #584); 0 = the fixed absolute target.
+        vmaf_margin (float): The margin below the source's own VMAF ceiling
+            (issue #584); 0 = the fixed absolute target.
         min_saving_percent (int): The minimum predicted saving (percent) the
             decision demands (issue #316; 0 = any real shrink).
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.

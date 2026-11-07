@@ -97,7 +97,11 @@ class TestTheSkipPathRecordsTheFloor(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         movie = Path(tmp.name) / "movie.mkv"
         movie.write_bytes(b"x" * 200)
-        for verdict in ("re-encode would not shrink the file", "saving below minimum"):
+        for verdict in (
+            "re-encode would not shrink the file",
+            "saving below minimum",
+            "target VMAF 95.46 unreachable (best 95.2 at CRF 14)",
+        ):
             with (
                 patch(
                     "shrinkray.engine.pipeline._probe_movie",
@@ -115,6 +119,27 @@ class TestTheSkipPathRecordsTheFloor(unittest.TestCase):
             self.assertAlmostEqual(
                 result.target_vmaf, 95.46, msg=f"{verdict} recorded the configured floor"
             )
+
+
+class TestThePlanCacheKeysOnTheMargin(unittest.TestCase):
+    """A margin-0 plan must not be reused by a margin-3 run (issue #584).
+
+    Round 5 measured the opposite: the margin never reached the plan lookup, so a
+    pre-upgrade "target unreachable" row at 96 was reused and the animation the
+    change exists for stayed skipped.
+    """
+
+    def test_the_fingerprint_carries_the_margin(self) -> None:
+        from shrinkray.engine.plan import _plan_fingerprint
+        from shrinkray.tools.vmaf import vmaf_recipe
+
+        recipe = vmaf_recipe()
+        self.assertNotEqual(
+            _plan_fingerprint(recipe, 0.0),
+            _plan_fingerprint(recipe, 3.0),
+            "a margin change must invalidate the stored plan",
+        )
+        self.assertIn("margin=3", _plan_fingerprint(recipe, 3.0))
 
 
 def _config():

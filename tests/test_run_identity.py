@@ -335,7 +335,7 @@ class TestPlanPathGuard(unittest.TestCase):
                 sample_seconds=10.0,
                 crop_sample_count=10,
                 vmaf_statistic="mean",
-                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no;margin=0",
                 min_saving_percent=15,
             )
         )
@@ -376,7 +376,7 @@ class TestPlanPathGuard(unittest.TestCase):
             sample_seconds=10.0,
             crop_sample_count=10,
             vmaf_statistic="mean",
-            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no;margin=0",
             min_saving_percent=15,
         )
         self.assertIsNotNone(row)
@@ -503,7 +503,7 @@ class TestEngineSkipPathGuard(unittest.TestCase):
                 sample_seconds=10.0,
                 crop_sample_count=10,
                 vmaf_statistic="mean",
-                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no;margin=0",
                 min_saving_percent=15,
             )
         )

@@ -648,7 +648,7 @@ def source_vmaf_ceiling(
         samples (list): The (path, offset) windows the search probes.
         workdir (Path): Working directory for the model and log files.
         recipe (VmafRecipe | None): The measurement recipe. None derives the
-            1080p model at native size.
+            1080p model at native size, which is the pre-#308 measurement.
         crop (tuple | None): Crop bars applied to BOTH sides of the self-comparison,
             so the ceiling is measured on the same geometry as the probes.
         cancel (threading.Event | None): Cooperative cancellation.
@@ -707,6 +707,8 @@ def find_optimal_crf(
         workdir (Path): Working directory for samples and probes.
         handbrake (str): Path to the HandBrakeCLI binary.
         target_vmaf (float): The VMAF quality floor to meet.
+        vmaf_margin (float): The margin below the source's own VMAF ceiling
+            (issue #584); 0 = the fixed absolute target.
         vmaf_margin (float): The margin below the source's own measured VMAF
             ceiling (issue #584); 0 = the fixed absolute target.
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
