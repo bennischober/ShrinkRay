@@ -7,6 +7,7 @@ means the IN-PLACE form: staging inside the scanned root, swap after verify,
 original retained - the same contract the CLI documents.
 """
 
+import os
 import tempfile
 import threading
 import unittest
@@ -25,6 +26,7 @@ class TestEncodeJobInPlace(unittest.TestCase):
         self.root.mkdir()
         self.movie = self.root / "movie.mkv"
         self.movie.write_bytes(b"x" * 16)
+        os.utime(self.movie, (0, 0))  # old enough for the witness (#586)
         from shrinkray import db
 
         self.connection = db.connect(Path(self.tmp.name) / "test.db")
@@ -475,6 +477,7 @@ class TestEncodeJobInPlace(unittest.TestCase):
         nested.mkdir()
         movie = nested / "deep.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         payload = {"paths": [str(self.root)], "quality": True}
         job = jobs.Job(kind=jobs.JobKind.ENCODE, payload=payload)
 
@@ -508,6 +511,7 @@ class TestEncodeJobInPlace(unittest.TestCase):
         root_b.mkdir()
         movie_b = root_b / "b.mkv"
         movie_b.write_bytes(b"x" * 16)
+        os.utime(movie_b, (0, 0))  # old enough for the witness (#586)
         payload = {"paths": [str(self.root), str(root_b)], "quality": True}
         job = jobs.Job(kind=jobs.JobKind.ENCODE, payload=payload)
 
