@@ -986,8 +986,6 @@ def _probe_movie(
         target_vmaf (float): The VMAF quality floor to meet.
         vmaf_margin (float): The margin below the source's own VMAF ceiling
             (issue #584); 0 = the fixed absolute target.
-        vmaf_margin (float): The margin below the source's own VMAF ceiling
-            (issue #584); 0 = the fixed absolute target.
         min_saving_percent (int): The minimum predicted saving (percent) the
             decision demands (issue #316; 0 = any real shrink).
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
@@ -1161,6 +1159,10 @@ def encode_with_quality(
         input_file (Path): The file to re-encode.
         output_file (Path): The target file (must not exist).
         target_vmaf (float): The VMAF quality floor to meet.
+        vmaf_margin (float): The margin below the source's own VMAF ceiling
+            (issue #584), used only when `target_vmaf` is unreachable at the
+            CRF floor; part of the plan fingerprint. 0 = the fixed absolute
+            target.
         min_saving_percent (int): The minimum predicted saving (percent)
             the decision demands (issue #316; 0 = any real shrink).
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
@@ -1394,12 +1396,16 @@ def encode_with_quality(
                     bit_depth=snapshot["bit_depth"],
                 ),
                 vmaf_margin,
+                target_vmaf,
             ),
             min_saving_percent=min_saving_percent,
         )
     crf_source: str | None = None
     plan_created_at: str | None = None
     if plan is not None:
+        # a clamped plan (issue #584) recorded the floor its search aimed at, below
+        # the requested one; the reused decision is held to that same floor
+        effective_target = float(plan["target_vmaf"])
         if plan["skipped_reason"]:
             # the plan already rejected this movie - trust the verdict,
             # no probing, no encode. The skip decision is as valuable

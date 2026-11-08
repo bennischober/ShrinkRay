@@ -127,9 +127,10 @@ def _lookup_plan(
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
         crop_sample_count (int): The pending encode's crop sample count.
-        vmaf_recipe (str): The crop-independent part of the measurement
-            recipe (`VmafRecipe.fingerprint`, issue #308). An empty string is
-            a stored plan measured before the recipe existed - never a match.
+        vmaf_recipe (str): The plan fingerprint, `_plan_fingerprint`: the
+            crop-independent part of the measurement recipe (issue #308) plus
+            the margin and the requested target (issue #584). An empty string
+            is a stored plan measured before the recipe existed - never a match.
 
     Returns:
         sqlite3.Row | None: The valid plan row, or None.
@@ -303,10 +304,8 @@ class QualityResult:
         input (Path): The input file.
         output (Path): The output file.
         success (bool): True if the encode succeeded.
-        target_vmaf (float): The floor the search aimed at - the configured
-            target, or the source-ceiling clamp (issue #584):
-            the floor the search aimed at: the configured target, or the
-            source-ceiling clamp (issue #584).
+        target_vmaf (float): The floor the search aimed at: the configured
+            target, or the source-ceiling clamp (issue #584).
         min_saving_percent (int): The minimum-saving threshold the verdict
             was decided under (issue #316; part of the plan fingerprint).
         chosen_crf (int | None): The CRF selected by the bisect.
@@ -384,15 +383,29 @@ class QualityResult:
         return round((1 - self.output_size / self.input_size) * 100, 2)
 
 
-def _plan_fingerprint(recipe: VmafRecipe, vmaf_margin: float) -> str:
+def _plan_fingerprint(recipe: VmafRecipe, vmaf_margin: float, target_vmaf: float) -> str:
     """The plan cache key's measurement fingerprint (issue #584).
 
     The margin decides which target the search aimed at, so it belongs in the
     fingerprint: a plan measured under the absolute target must not be reused by a
     run that would have aimed lower (the pre-#584 "target unreachable" row would
     otherwise keep an animation skipped after the upgrade).
+
+    The REQUESTED target belongs in it too: a clamped plan stores the floor it
+    aimed at (below the requested one) in `plans.target_vmaf`, so that column no
+    longer identifies the request. `db.get_valid_plan` reuses a measured row
+    stored below the requested target only on an exact fingerprint match - the
+    same request, clamped by the same search.
+
+    Args:
+        recipe (VmafRecipe): The measurement recipe.
+        vmaf_margin (float): The configured margin below the source ceiling.
+        target_vmaf (float): The configured (requested) target, before any clamp.
+
+    Returns:
+        str: The fingerprint stored with the plan and compared on lookup.
     """
-    return f"{recipe.fingerprint()};margin={vmaf_margin:g}"
+    return f"{recipe.fingerprint()};margin={vmaf_margin:g};target={target_vmaf:g}"
 
 
 def plan_quality(
@@ -740,7 +753,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
-                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
+                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin, target_vmaf),
             )
 
         if skip:
@@ -773,7 +786,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
-                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
+                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin, target_vmaf),
             )
         if achieved < effective_target and crf == crf_range[0]:
             # the unreachable verdict is recorded like a skip (issue #436):
@@ -805,7 +818,7 @@ def plan_quality(
                 sample_seconds=sample_seconds,
                 hdr=hdr,
                 encoder=effective_encoder,
-                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
+                vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin, target_vmaf),
             )
 
         # the record-time recheck on the SUCCESS path too (issue #436): the
@@ -838,7 +851,7 @@ def plan_quality(
             sample_seconds=sample_seconds,
             hdr=hdr,
             encoder=effective_encoder,
-            vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin),
+            vmaf_recipe=_plan_fingerprint(recipe, vmaf_margin, target_vmaf),
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

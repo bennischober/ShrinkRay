@@ -466,7 +466,7 @@ class TestPlanReuse(unittest.TestCase):
             # source snapshot has no dimensions, so the model and scale
             # cannot enter it)
             vmaf_recipe=overrides.pop(
-                "vmaf_recipe", engine_plan._plan_fingerprint(tools_vmaf.vmaf_recipe(), 0.0)
+                "vmaf_recipe", engine_plan._plan_fingerprint(tools_vmaf.vmaf_recipe(), 0.0, 96.0)
             ),
         )
         config = type("Conf", (), {"handbrake_encoder": "svt_av1", "min_saving_percent": 15})()

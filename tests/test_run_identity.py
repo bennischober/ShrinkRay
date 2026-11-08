@@ -18,8 +18,9 @@ from unittest.mock import patch
 
 from shrinkray import db
 from shrinkray.engine.pipeline import encode_with_quality
-from shrinkray.engine.plan import QualityResult, plan_quality
+from shrinkray.engine.plan import QualityResult, _plan_fingerprint, plan_quality
 from shrinkray.engine.search import DEFAULT_CRF_RANGE
+from shrinkray.tools.vmaf import vmaf_recipe
 
 
 def _movie(root: Path, content: bytes) -> Path:
@@ -335,7 +336,7 @@ class TestPlanPathGuard(unittest.TestCase):
                 sample_seconds=10.0,
                 crop_sample_count=10,
                 vmaf_statistic="mean",
-                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no;margin=0",
+                vmaf_recipe=_plan_fingerprint(vmaf_recipe(), 0.0, 96.0),
                 min_saving_percent=15,
             )
         )
@@ -376,7 +377,7 @@ class TestPlanPathGuard(unittest.TestCase):
             sample_seconds=10.0,
             crop_sample_count=10,
             vmaf_statistic="mean",
-            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no;margin=0",
+            vmaf_recipe=_plan_fingerprint(vmaf_recipe(), 0.0, 96.0),
             min_saving_percent=15,
         )
         self.assertIsNotNone(row)
@@ -503,7 +504,7 @@ class TestEngineSkipPathGuard(unittest.TestCase):
                 sample_seconds=10.0,
                 crop_sample_count=10,
                 vmaf_statistic="mean",
-                vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no;margin=0",
+                vmaf_recipe=_plan_fingerprint(vmaf_recipe(), 0.0, 96.0),
                 min_saving_percent=15,
             )
         )

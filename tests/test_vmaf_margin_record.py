@@ -52,14 +52,11 @@ class TestTheClampedFloorIsRecorded(unittest.TestCase):
         result = self._plan(margin=0.0)
         self.assertAlmostEqual(result.target_vmaf, 96.0)
 
-    def test_the_recorded_row_carries_the_effective_floor(self) -> None:
-        """The row stores 95.46, not 96: an absolute-target lookup asks for 96
-        and so cannot match it - the plan re-probes instead of being reused."""
-        result = self._plan(margin=3.0)
+    def _record(self, result: engine_plan.QualityResult) -> None:
+        from shrinkray.service import record_plan
+
         connection = db.connect(self.db_file)
         try:
-            from shrinkray.service import record_plan
-
             db.upsert_file(
                 connection,
                 db.MovieRecord(
@@ -72,6 +69,35 @@ class TestTheClampedFloorIsRecorded(unittest.TestCase):
             )
             connection.commit()
             record_plan(connection, self.movie, result, _config())
+        finally:
+            connection.close()
+
+    def _lookup(self, result: engine_plan.QualityResult, target: float, margin: float):
+        """The encode path's lookup, with the fingerprint built the way it builds it."""
+        from shrinkray.engine.pipeline import _lookup_plan, _plan_fingerprint
+        from shrinkray.tools.vmaf import vmaf_recipe
+
+        return _lookup_plan(
+            self.db_file,
+            self.movie,
+            encoder=result.encoder,
+            encoder_preset=result.probe_encoder_preset,
+            target_vmaf=target,
+            crf_range=result.crf_range,
+            sample_count=result.sample_count,
+            sample_seconds=result.sample_seconds,
+            crop_sample_count=result.crop_sample_count,
+            vmaf_recipe=_plan_fingerprint(
+                vmaf_recipe(width=1920, height=1080, bit_depth=None), margin, target
+            ),
+            min_saving_percent=result.min_saving_percent,
+        )
+
+    def test_the_recorded_row_carries_the_effective_floor(self) -> None:
+        """The row stores 95.46, not 96: the floor the search aimed at."""
+        self._record(self._plan(margin=3.0))
+        connection = db.connect(self.db_file)
+        try:
             row = connection.execute(
                 "SELECT target_vmaf FROM plans ORDER BY created_at DESC LIMIT 1"
             ).fetchone()
@@ -79,6 +105,40 @@ class TestTheClampedFloorIsRecorded(unittest.TestCase):
             connection.close()
         self.assertIsNotNone(row, "the plan row must exist")
         self.assertAlmostEqual(float(row[0]), 95.46)
+
+    def test_the_same_request_reuses_a_clamped_plan(self) -> None:
+        """plan stores, encode looks up: the request that clamped it must hit.
+
+        Before the requested target entered the fingerprint, the lookup asked for
+        96 against the stored 95.46 and missed, so every file the margin rescued
+        re-ran its whole search on encode.
+        """
+        result = self._plan(margin=3.0)
+        self._record(result)
+        row = self._lookup(result, target=96.0, margin=3.0)
+        self.assertIsNotNone(row, "the request that produced the clamped plan must reuse it")
+        self.assertAlmostEqual(float(row["target_vmaf"]), 95.46)
+
+    def test_another_request_never_reuses_a_clamped_plan(self) -> None:
+        result = self._plan(margin=3.0)
+        self._record(result)
+        self.assertIsNone(
+            self._lookup(result, target=96.0, margin=0.0),
+            "an absolute-target request must not reuse a plan aimed below it",
+        )
+        self.assertIsNone(
+            self._lookup(result, target=95.46, margin=3.0),
+            "a request for 95.46 never searched 96 first: a different decision",
+        )
+        self.assertIsNone(
+            self._lookup(result, target=97.0, margin=3.0),
+            "a higher request must re-probe",
+        )
+
+    def test_a_reachable_plan_is_reused_at_its_own_target(self) -> None:
+        result = self._plan(margin=0.0)
+        self._record(result)
+        self.assertIsNotNone(self._lookup(result, target=96.0, margin=0.0))
 
 
 class TestTheSkipPathRecordsTheFloor(unittest.TestCase):
@@ -135,11 +195,22 @@ class TestThePlanCacheKeysOnTheMargin(unittest.TestCase):
 
         recipe = vmaf_recipe()
         self.assertNotEqual(
-            _plan_fingerprint(recipe, 0.0),
-            _plan_fingerprint(recipe, 3.0),
+            _plan_fingerprint(recipe, 0.0, 96.0),
+            _plan_fingerprint(recipe, 3.0, 96.0),
             "a margin change must invalidate the stored plan",
         )
-        self.assertIn("margin=3", _plan_fingerprint(recipe, 3.0))
+        self.assertIn("margin=3", _plan_fingerprint(recipe, 3.0, 96.0))
+
+    def test_the_fingerprint_carries_the_requested_target(self) -> None:
+        """A clamped row stores the floor, so only the key still names the request."""
+        from shrinkray.engine.plan import _plan_fingerprint
+        from shrinkray.tools.vmaf import vmaf_recipe
+
+        recipe = vmaf_recipe()
+        self.assertNotEqual(
+            _plan_fingerprint(recipe, 3.0, 96.0), _plan_fingerprint(recipe, 3.0, 95.46)
+        )
+        self.assertIn("target=96", _plan_fingerprint(recipe, 3.0, 96.0))
 
 
 def _config():

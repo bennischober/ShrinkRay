@@ -45,7 +45,15 @@ approximation.
    The fingerprint ALSO carries `quality.vmaf_margin` (`;margin=<value>`, issue
    #584): the margin decides whether the search fell back below the source's own
    ceiling, so a plan measured at the absolute target must not be reused by a run
-   that would have aimed lower.
+   that would have aimed lower. It carries the REQUESTED target too
+   (`;target=<value>`): a clamped plan stores the floor its search aimed at
+   (`target_vmaf` = `ceiling - margin`, below the request), so that column alone
+   no longer names the request. `get_valid_plan` therefore accepts a measured
+   row whose `target_vmaf` is BELOW the requested one only when the fingerprint
+   matches exactly - the same request, clamped by the same search - and the
+   reused decision is verified against the stored floor. A stored floor above
+   the request, or any other request (another margin, another target), misses
+   and re-probes.
 4. **Provenance** — a plan-driven encode records `crf_source='plan'` +
    `plan_created_at` (in the QualityResult AND the encodes row). A
    decision's origin stays visible: "probed now" vs "trusted plan from

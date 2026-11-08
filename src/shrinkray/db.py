@@ -886,14 +886,17 @@ def get_valid_plan(
         encoder (str): The encoder of the pending encode.
         encoder_preset (str): The PROBE's speed preset of the pending
             encode (a plan is a probe result, issue #22).
-        target_vmaf (float): The VMAF target of the pending encode.
+        target_vmaf (float): The VMAF target of the pending encode, as
+            requested. A measured row stored below it matches only on an
+            exact `vmaf_recipe` match (a clamped plan, issue #584).
         crf_range (tuple[int, int]): The pending encode's search range.
         sample_count (int): The pending encode's sample count.
         sample_seconds (float): The pending encode's sample length.
         crop_sample_count (int): The pending encode's crop sample count.
-        vmaf_recipe (str): The pending encode's measurement recipe
-            (crop-independent part, issue #308). An empty string never
-            matches: a plan stored before the recipe existed is re-probed.
+        vmaf_recipe (str): The pending encode's measurement fingerprint: the
+            recipe's crop-independent part (issue #308) plus the margin and the
+            requested target (issue #584). An empty string never matches: a
+            plan stored before the recipe existed is re-probed.
         min_saving_percent (int): The pending encode's minimum-saving
             threshold (issue #316). Only measured plans carry it: a gate
             skip never reached the size decision, so its verdict is
@@ -920,7 +923,20 @@ def get_valid_plan(
         or stat.st_size != row["input_size"]
         or row["encoder"] != encoder
         or row["encoder_preset"] != encoder_preset
-        or abs(row["target_vmaf"] - target_vmaf) > 0.01
+        or (
+            abs(row["target_vmaf"] - target_vmaf) > 0.01
+            # a measured plan may store a floor BELOW the requested target: the
+            # search clamped it to the source's own ceiling (issue #584). The
+            # fingerprint carries the requested target and the margin, so an
+            # exact match below is the same request clamped by the same search;
+            # a stored floor above the request never matches
+            and not (
+                row["achieved_vmaf"] is not None
+                and row["target_vmaf"] < target_vmaf
+                and vmaf_recipe != ""
+                and str(row["vmaf_recipe"]) == vmaf_recipe
+            )
+        )
         or row["crf_low"] != crf_range[0]
         or row["crf_high"] != crf_range[1]
         or row["sample_count"] != sample_count
