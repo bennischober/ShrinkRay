@@ -13,7 +13,7 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 ### Fixed
 
-- **A file whose quality target is out of reach is reported as "target unreachable"** ([#591](https://github.com/bennischober/ShrinkRay/issues/591)): when even the lowest CRF of the search missed the VMAF target, `plan` and `encode` recorded the skip as "no size gain" or "saving below minimum" whenever the file would also have grown or shrunk too little at that CRF. That is common for already low-bitrate sources. The quality verdict now comes first, as `docs/encode-decision.md` orders the gates, and the size at that CRF is no longer measured for it, which saves a sample encode when the probe cache has no size for it. The file is skipped either way. Plans stored before the fix keep their old label until the file is planned again.
+- **A file whose quality target is out of reach is reported as "target unreachable"** ([#591](https://github.com/bennischober/ShrinkRay/issues/591), [#592](https://github.com/bennischober/ShrinkRay/pull/592)): when even the lowest CRF of the search missed the VMAF target, `plan` and `encode` recorded the skip as "no size gain" or "saving below minimum" whenever the file would also have grown or shrunk too little at that CRF. That is common for already low-bitrate sources. The quality verdict now comes first, as `docs/encode-decision.md` orders the gates, and the size at that CRF is no longer measured for it, which saves a sample encode when the probe cache has no size for it. The file is skipped either way. Plans stored before the fix keep their old label until the file is planned again.
 
 ## [0.6.1] - 2026-11-06
 
