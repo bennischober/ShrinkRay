@@ -169,6 +169,25 @@ below the best passing CRF (never more) - a slightly bigger file. An unreachable
 instead of 1. On real titles (#395) all three measured titles were unreachable at the default target under
 ShrinkRay's measurement, so the passing-path saving is not yet measured on real content.
 
+## Animated sources: "target unreachable" stands (issue #584)
+
+**Decision** (the maintainer's, 2026-11-08): an animated source whose probes stay below `quality.target_vmaf` at the CRF floor is skipped at gate 7 as "target unreachable", like any other source. The target is not lowered for it, and nothing measures the source to relax the target. Revisit when high-bitrate animated sources that pass gates 1-5 are available to measure; the one tested series was already a compressed copy (below).
+
+**Why animation reads low.** The measurement is not broken: scoring a sample window against itself with ShrinkRay's filtergraph pairs every frame correctly (all VIF and ADM features ≥ 0.99996 on every frame), yet the 1080p model (vmaf_v0.6.1) does not give 100. With identical frames its score depends only on the motion feature, which models temporal masking: a static frame scores 97.43, and the score rises to 100 from a motion value of about 2. Animation is mostly static or slow (2033 of the 2653 sampled frames of one episode read a motion value below 0.5), so three episodes of one 1080p animated series scored 97.95, 97.79 and 97.86 against themselves (mean of the three probe windows), while a short 1080p H.264 clip scored 99.89. The model scores static content more strictly on purpose; the per-frame data is in [#584](https://github.com/bennischober/ShrinkRay/issues/584)'s measurement comment.
+
+**What the probes measured** (`shrinkray plan`, target 96, default sampling, probe preset 5), on those three episodes: the best score at the CRF floor (14) was 95.05, 95.80 and 92.77. The sources are HEVC at 1.4-1.6 Mbit/s, already lossy copies, and the curve is flat: CRF 42 scored 93.53, 94.87 and 91.69, under two points below CRF 14.
+
+**What was tried and not adopted** (PR [#588](https://github.com/bennischober/ShrinkRay/pull/588), closed unmerged): when the target is unreachable at the floor, measure the source's self-score and search again at `min(target_vmaf, self-score - margin)`, with a margin of 3. On the three episodes it changed one decision: one episode encodes at CRF 42 (sample VMAF 94.87, a predicted 25% saving) instead of being skipped; one is still skipped because the encode would grow; one stays below even the relaxed target. A full-preset encode of two 40-second excerpts of the rescued episode at CRF 42 scored 94.60 and 93.79, and in one unblinded side-by-side viewing the maintainer saw no difference from the source apart from a colour shift, which was traced to the comparison file (ffmpeg converted one half between colour matrices), not to the encode.
+
+**Why that is not enough to change the rule:**
+
+- The sources were already compressed, so "no visible difference" means "no worse than an existing lossy copy", not transparent to a master.
+- One series, one art style (flat cel shading), one viewer who knew which side was which: no blind comparison.
+- The margin (3) is not calibrated against anything; it is a choice, and it lowers the floor for every source the absolute target cannot reach, not only animation.
+- vmaf_v0.6.1 was trained on live-action content, and its features (VIF, ADM, motion) read the luma plane only, so a colour shift is invisible to it. None was present where it was checked: over the first 10 s of one excerpt, the encode's mean chroma matched the source within 0.02 code values.
+
+**What a revisit needs:** animated sources that are not already low-bitrate copies (for example disc sources above the size floor), in several styles (cel, grain or gradient-heavy, CGI); a blind A/B comparison on more than one viewer; and a quality floor calibrated from those viewings, or a model or statistic that scores static content without the motion penalty. PR [#588](https://github.com/bennischober/ShrinkRay/pull/588) holds a working, tested implementation of the self-score fallback to start from.
+
 ## The prior art this matches
 
 `Find_CRF_for_folder_V4.ps1` walks the directory, filters by size (`-MinFileSizeGB`) and height
