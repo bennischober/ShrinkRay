@@ -2641,6 +2641,18 @@ class TestRecordedScoreKeepsTheSearchVerdict(unittest.TestCase):
         crf, achieved, _probes, _crop = self._probe(96.004)
         self.assertEqual((crf, achieved), (self.FLOOR, 96.0))
 
+    def test_a_floor_pass_of_a_finer_target_is_not_unreachable(self) -> None:
+        """The reverse crossing: against a three-decimal target, 95.5541 at the
+        floor passes inside the search; plain rounding recorded 95.55, which
+        the verdict read as a miss and skipped a file that met its target."""
+        chosen, achieved, _probes = self._search(self._scores(95.5541), 95.554)
+        self.assertEqual((chosen, achieved), (self.FLOOR, 95.56))
+        self.assertFalse(
+            engine_search.target_unreachable(
+                chosen, achieved, 95.554, engine_search.DEFAULT_CRF_RANGE
+            )
+        )
+
     def test_every_recorded_score_keeps_the_search_verdict(self) -> None:
         """For any target (also a finer one than the two recorded decimals),
         every recorded probe lies on the side of the target the search judged
