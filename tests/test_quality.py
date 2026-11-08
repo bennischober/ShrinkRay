@@ -2505,6 +2505,168 @@ class TestUnreachableIsDecidedBeforeSize(unittest.TestCase):
         self.assertEqual((crf, achieved), (30, 96.4))
 
 
+class TestRecordedScoreKeepsTheSearchVerdict(unittest.TestCase):
+    """Issue #595: the search judges each probe on the unrounded score, but the
+    recorded score (the probe list, `achieved`, the plan row, the log) is
+    rounded to two decimals, and `target_unreachable` re-derives the verdict
+    from it. A floor score just below the target (95.996 against 96) must not
+    be recorded as the target itself: it was a miss, so the file is
+    unreachable, and no plan or encode may claim it met the target.
+
+    The real `find_optimal_crf` and `bisect_crf` run in every test; only the
+    probe measurement (`probe_crf`) and the size seams are faked.
+    """
+
+    FLOOR, TOP = engine_search.DEFAULT_CRF_RANGE
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.movie = root / "movie.mkv"
+        self.movie.write_bytes(b"x" * 1000)
+        self.sample = root / "sample.mkv"
+        self.sample.write_bytes(b"y" * 100)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _scores(self, floor_score: float):
+        """A curve that scores `floor_score` at the CRF floor and 0.1 less per
+        CRF step above it, so every CRF above the floor misses a target the
+        floor score sits near."""
+
+        def fake_probe(samples, crf, *args, **kwargs):
+            return floor_score - 0.1 * (crf - self.FLOOR)
+
+        return fake_probe
+
+    @contextlib.contextmanager
+    def _measured(self, probe):
+        with contextlib.ExitStack() as stack:
+            for target, value in (
+                ("probe_crf", {"side_effect": probe}),
+                ("estimate_size_factor", {"return_value": 0.5}),
+                ("check_chosen_crf_shrinks", {"return_value": 0.5}),
+                ("extract_samples", {"return_value": [(self.sample, 10.0)]}),
+                ("probe_duration_seconds", {"return_value": 600.0}),
+            ):
+                stack.enter_context(patch.object(engine_search, target, **value))
+            yield stack
+
+    def _search(self, probe, target_vmaf: float):
+        with self._measured(probe):
+            return engine_search.find_optimal_crf(
+                self.movie,
+                Path(self.tmp.name),
+                "hb",
+                target_vmaf=target_vmaf,
+                samples=[(self.sample, 10.0)],
+            )
+
+    def _plan(self, floor_score: float):
+        with self._measured(self._scores(floor_score)) as stack:
+            for name, value in (
+                ("probe_duration_seconds", 600.0),
+                ("_source_dimensions", {"width": 1920, "height": 1080}),
+                ("source_codec", "h264"),
+                ("source_bit_depth", None),
+                ("find_handbrake", "hb"),
+                ("detect_crop_summary_cached", None),
+                ("detect_crop_rect", None),
+                ("extract_samples", [(self.sample, 10.0)]),
+            ):
+                stack.enter_context(patch.object(engine_plan, name, return_value=value))
+            return engine_plan.plan_quality(
+                self.movie, target_vmaf=96.0, min_saving_percent=15, db_file=None
+            )
+
+    def _probe(self, floor_score: float):
+        from shrinkray.engine.pipeline import _probe_movie
+
+        with self._measured(self._scores(floor_score)) as stack:
+            stack.enter_context(patch.object(engine_pipeline, "find_handbrake", return_value="hb"))
+            for name in ("detect_crop_summary_cached", "detect_crop_rect"):
+                stack.enter_context(patch.object(engine_pipeline, name, return_value=None))
+            return _probe_movie(
+                self.movie,
+                96.0,
+                15,
+                engine_search.DEFAULT_CRF_RANGE,
+                1,
+                10.0,
+                "svt_av1",
+                "5",
+                cancel=None,
+                db_file=None,
+                encoder_threads=None,
+                progress=None,
+                use_probe_cache=False,
+                crop_sample_count=3,
+                source_width=1920,
+                source_height=1080,
+                source_bit_depth=None,
+            )
+
+    def test_a_floor_miss_just_below_the_target_is_unreachable(self) -> None:
+        """The issue's case: 95.996 at the floor fails inside the search; the
+        recorded score must say so (95.99), so the verdict is unreachable."""
+        chosen, achieved, probes = self._search(self._scores(95.996), 96.0)
+        self.assertEqual(chosen, self.FLOOR)
+        self.assertEqual(achieved, 95.99)
+        self.assertTrue(
+            engine_search.target_unreachable(
+                chosen, achieved, 96.0, engine_search.DEFAULT_CRF_RANGE
+            )
+        )
+        self.assertEqual([p.vmaf for p in probes if p.crf == self.FLOOR], [95.99])
+
+    def test_plan_reports_a_floor_miss_as_unreachable(self) -> None:
+        result = self._plan(95.996)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "target unreachable")
+        self.assertIn(f"best 95.99 at CRF {self.FLOOR}", result.error)
+        self.assertEqual(result.achieved_vmaf, 95.99)
+
+    def test_encode_reports_a_floor_miss_as_unreachable(self) -> None:
+        from shrinkray.engine.search import SkipEncode
+
+        with self.assertRaises(SkipEncode) as ctx:
+            self._probe(95.996)
+        self.assertIn("unreachable", str(ctx.exception))
+        self.assertIn(f"best 95.99 at CRF {self.FLOOR}", str(ctx.exception))
+
+    def test_a_floor_pass_just_above_the_target_still_encodes(self) -> None:
+        """The guard: 96.004 met the target, records as 96.0 and goes on to
+        the encode at the floor CRF."""
+        crf, achieved, _probes, _crop = self._probe(96.004)
+        self.assertEqual((crf, achieved), (self.FLOOR, 96.0))
+
+    def test_every_recorded_score_keeps_the_search_verdict(self) -> None:
+        """For any target (also a finer one than the two recorded decimals),
+        every recorded probe lies on the side of the target the search judged
+        it on, within 0.01 of the measurement; outside the half-hundredth
+        window around the target it is the plain two-decimal rounding. The
+        scores one float step either side of the target guard the arithmetic:
+        scaling such a score by 100 rounds it onto a whole hundredth."""
+        for target in (96.0, 95.5, 90.0, 95.554, 95.556):
+            offsets = (-0.3, -0.006, -0.005, -0.004, -0.001, 0.0, 0.001, 0.004, 0.006)
+            scores = [target + offset for offset in offsets]
+            scores += [math.nextafter(target, 0.0), math.nextafter(target, 100.0)]
+            for score in scores:
+
+                def flat(samples, crf, *args, _score=score, **kwargs):
+                    return _score
+
+                with self.subTest(target=target, score=score):
+                    _chosen, _achieved, probes = self._search(flat, target)
+                    for probe in probes:
+                        self.assertEqual(probe.vmaf < target, score < target)
+                        self.assertLessEqual(abs(probe.vmaf - score), 0.01 + 1e-9)
+                        self.assertEqual(probe.vmaf, round(probe.vmaf, 2))
+                        if (round(score, 2) < target) == (score < target):
+                            self.assertEqual(probe.vmaf, round(score, 2))
+
+
 class TestPlanReportsTheDecisionFactor(unittest.TestCase):
     """Issue #388 (the maintainer's 2026-10-31 decision): the plan's savings
     estimate is the factor the size decision already computed — the same
