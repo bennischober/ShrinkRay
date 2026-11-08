@@ -40,6 +40,7 @@ from shrinkray.engine.search import (
     SampleProbe,
     find_optimal_crf_and_skip,
     sample_count_for,
+    target_unreachable,
 )
 from shrinkray.logger import log
 from shrinkray.tools.ffprobe import get_data, probe_duration_seconds
@@ -684,6 +685,41 @@ def plan_quality(
             samples=samples,
         )
 
+        if target_unreachable(crf, achieved, target_vmaf, crf_range):
+            # gate 7 before gate 8 (issue #591): an unreachable search is
+            # skipped for its quality, whatever the size at the floor CRF (the
+            # search measured none). The verdict is recorded like a skip (issue
+            # #436): the same record-time recheck applies
+            ensure_unchanged(input_file, identity, "plan")
+            log(f"Plan for '{input_file.name}': skip (target unreachable)")
+            return QualityResult(
+                input=input_file,
+                output=input_file,
+                success=False,
+                target_vmaf=target_vmaf,
+                min_saving_percent=min_saving_percent,
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probes=probes,
+                input_size=identity.size,
+                output_size=identity.size,
+                error=(
+                    f"skipped: target VMAF {target_vmaf} unreachable "
+                    f"(best {achieved} at CRF {crf_range[0]})"
+                ),
+                skipped_reason="target unreachable",
+                input_mtime=identity.mtime,
+                encoder_preset=encoder_preset,
+                probe_encoder_preset=probe_encoder_preset,
+                crop=crop,
+                crf_range=crf_range,
+                sample_count=sample_count,
+                sample_seconds=sample_seconds,
+                hdr=hdr,
+                encoder=effective_encoder,
+                vmaf_recipe=recipe.fingerprint(),
+            )
+
         # the minimum-saving threshold (issue #316, the maintainer's
         # 2026-10-31 decision): the decision to SPEND the encode demands more
         # than "smaller" - the all-window factor the search decided with (the
@@ -758,39 +794,6 @@ def plan_quality(
                 encoder=effective_encoder,
                 vmaf_recipe=recipe.fingerprint(),
             )
-        if achieved < target_vmaf and crf == crf_range[0]:
-            # the unreachable verdict is recorded like a skip (issue #436):
-            # the same record-time recheck applies
-            ensure_unchanged(input_file, identity, "plan")
-            log(f"Plan for '{input_file.name}': skip (target unreachable)")
-            return QualityResult(
-                input=input_file,
-                output=input_file,
-                success=False,
-                target_vmaf=target_vmaf,
-                min_saving_percent=min_saving_percent,
-                chosen_crf=crf,
-                achieved_vmaf=achieved,
-                probes=probes,
-                input_size=identity.size,
-                output_size=identity.size,
-                error=(
-                    f"skipped: target VMAF {target_vmaf} unreachable "
-                    f"(best {achieved} at CRF {crf_range[0]})"
-                ),
-                skipped_reason="target unreachable",
-                input_mtime=identity.mtime,
-                encoder_preset=encoder_preset,
-                probe_encoder_preset=probe_encoder_preset,
-                crop=crop,
-                crf_range=crf_range,
-                sample_count=sample_count,
-                sample_seconds=sample_seconds,
-                hdr=hdr,
-                encoder=effective_encoder,
-                vmaf_recipe=recipe.fingerprint(),
-            )
-
         # the record-time recheck on the SUCCESS path too (issue #436): the
         # chosen CRF and the size estimate are decisions about these bytes,
         # and the fingerprint they commit under must be the run-start stat

@@ -2355,6 +2355,156 @@ class TestMinSavingThreshold(unittest.TestCase):
         self.assertIn("required 15%", str(ctx.exception))
 
 
+class TestUnreachableIsDecidedBeforeSize(unittest.TestCase):
+    """Issue #591: gate 7 (the search, "target unreachable") precedes gate 8
+    (the size gate) in docs/encode-decision.md. A search that ends at the CRF
+    floor below the target is reported as unreachable by plan and encode
+    alike, whatever the size at that CRF - and the size there is never
+    measured, because the verdict does not depend on it.
+
+    The real search driver runs in every test (only its measurements are
+    faked), so the order is pinned end to end, not on a mocked return tuple.
+    """
+
+    FLOOR, TOP = engine_search.DEFAULT_CRF_RANGE
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.movie = root / "movie.mkv"
+        self.movie.write_bytes(b"x" * 1000)
+        self.sample = root / "sample.mkv"
+        self.sample.write_bytes(b"y" * 100)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @contextlib.contextmanager
+    def _measured(self, chosen: int, achieved: float, chosen_factor: float, checked: list):
+        """Fakes the search's measurements: the bound shrinks (0.5), the bisect
+        ends at `chosen` with `achieved`, the chosen CRF's size is `chosen_factor`
+        (and every call of the chosen-CRF check is recorded in `checked`)."""
+
+        def fake_check(*args, **kwargs):
+            checked.append(args[3])
+            return chosen_factor
+
+        with contextlib.ExitStack() as stack:
+            for target, value in (
+                ("estimate_size_factor", {"return_value": 0.5}),
+                ("find_optimal_crf", {"return_value": (chosen, achieved, [])}),
+                ("check_chosen_crf_shrinks", {"side_effect": fake_check}),
+                ("extract_samples", {"return_value": [(self.sample, 10.0)]}),
+                ("probe_duration_seconds", {"return_value": 600.0}),
+            ):
+                stack.enter_context(patch.object(engine_search, target, **value))
+            yield stack
+
+    def _plan(self, chosen: int, achieved: float, chosen_factor: float, checked: list):
+        with self._measured(chosen, achieved, chosen_factor, checked) as stack:
+            for name, value in (
+                ("probe_duration_seconds", 600.0),
+                ("_source_dimensions", {"width": 1920, "height": 1080}),
+                ("source_codec", "h264"),
+                ("source_bit_depth", None),
+                ("find_handbrake", "hb"),
+                ("detect_crop_summary_cached", None),
+                ("detect_crop_rect", None),
+                ("extract_samples", [(self.sample, 10.0)]),
+            ):
+                stack.enter_context(patch.object(engine_plan, name, return_value=value))
+            return engine_plan.plan_quality(
+                self.movie, target_vmaf=96.0, min_saving_percent=15, db_file=None
+            )
+
+    def _probe(self, chosen: int, achieved: float, chosen_factor: float, checked: list):
+        from shrinkray.engine.pipeline import _probe_movie
+
+        with self._measured(chosen, achieved, chosen_factor, checked) as stack:
+            stack.enter_context(patch.object(engine_pipeline, "find_handbrake", return_value="hb"))
+            for name in ("detect_crop_summary_cached", "detect_crop_rect"):
+                stack.enter_context(patch.object(engine_pipeline, name, return_value=None))
+            return _probe_movie(
+                self.movie,
+                96.0,
+                15,
+                engine_search.DEFAULT_CRF_RANGE,
+                1,
+                10.0,
+                "svt_av1",
+                "5",
+                cancel=None,
+                db_file=None,
+                encoder_threads=None,
+                progress=None,
+                use_probe_cache=False,
+                crop_sample_count=3,
+                source_width=1920,
+                source_height=1080,
+                source_bit_depth=None,
+            )
+
+    def test_the_search_never_sizes_an_unreachable_floor(self) -> None:
+        """The driver returns the unreachable search as a skip without the
+        chosen-CRF size check (a cache miss would encode a window for it)."""
+        checked: list = []
+        with self._measured(self.FLOOR, 92.77, 3.82, checked):
+            crf, achieved, _probes, skip, _factor = engine_search.find_optimal_crf_and_skip(
+                self.movie, Path(self.tmp.name), "hb", target_vmaf=96.0
+            )
+        self.assertEqual((crf, achieved), (self.FLOOR, 92.77))
+        self.assertTrue(skip, "an unreachable search must still report a skip")
+        self.assertEqual(checked, [], "the unreachable floor CRF was size-checked")
+
+    def test_plan_reports_unreachable_over_a_growth(self) -> None:
+        """The issue's measured case: best 92.77 at the floor, the file would
+        grow there (3.82) - the verdict is the target, not the size."""
+        result = self._plan(self.FLOOR, 92.77, 3.82, [])
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "target unreachable")
+        self.assertIn(f"best 92.77 at CRF {self.FLOOR}", result.error)
+
+    def test_plan_reports_unreachable_over_a_small_saving(self) -> None:
+        """A floor CRF that shrinks too little is unreachable too, not a
+        'saving below minimum' (the min-saving check ran first before #591)."""
+        result = self._plan(self.FLOOR, 92.77, 0.9, [])
+        self.assertEqual(result.skipped_reason, "target unreachable")
+
+    def test_encode_reports_unreachable_over_a_growth(self) -> None:
+        from shrinkray.engine.search import SkipEncode
+
+        checked: list = []
+        with self.assertRaises(SkipEncode) as ctx:
+            self._probe(self.FLOOR, 92.77, 3.82, checked)
+        self.assertIn("unreachable", str(ctx.exception))
+        self.assertIn(f"best 92.77 at CRF {self.FLOOR}", str(ctx.exception))
+        self.assertEqual(checked, [])
+
+    def test_encode_reports_unreachable_over_a_small_saving(self) -> None:
+        from shrinkray.engine.search import SkipEncode
+
+        with self.assertRaises(SkipEncode) as ctx:
+            self._probe(self.FLOOR, 92.77, 0.9, [])
+        self.assertIn("unreachable", str(ctx.exception))
+
+    def test_a_reachable_search_keeps_the_size_verdicts(self) -> None:
+        """The regression guard: a search that met the target - also AT the
+        floor - is still size-checked, and its size verdicts stand."""
+        from shrinkray.engine.search import SkipEncode
+
+        checked: list = []
+        self.assertEqual(self._plan(30, 96.4, 1.2, checked).skipped_reason, "no size gain")
+        self.assertEqual(checked, [30])
+        self.assertEqual(
+            self._plan(self.FLOOR, 96.0, 0.9, []).skipped_reason, "saving below minimum"
+        )
+        with self.assertRaises(SkipEncode) as ctx:
+            self._probe(self.FLOOR, 96.0, 1.2, [])
+        self.assertIn("would not shrink", str(ctx.exception))
+        crf, achieved, _probes, _crop = self._probe(30, 96.4, 0.6, [])
+        self.assertEqual((crf, achieved), (30, 96.4))
+
+
 class TestPlanReportsTheDecisionFactor(unittest.TestCase):
     """Issue #388 (the maintainer's 2026-10-31 decision): the plan's savings
     estimate is the factor the size decision already computed — the same
