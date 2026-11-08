@@ -243,7 +243,8 @@ def encode(
         min=0.0,
         max=50.0,
         help=(
-            "How far below the source's own VMAF ceiling the search may aim. "
+            "How far below the source's own VMAF ceiling the search may aim when "
+            "the target is unreachable at the CRF floor. "
             "The VMAF model's maximum is content-dependent, so an absolute "
             "target can be unreachable on flat content; 0 = the fixed absolute "
             "target, whatever the ceiling. Default: quality.vmaf_margin "
@@ -780,7 +781,8 @@ def plan(
         min=0.0,
         max=50.0,
         help=(
-            "How far below the source's own VMAF ceiling the search may aim. "
+            "How far below the source's own VMAF ceiling the search may aim when "
+            "the target is unreachable at the CRF floor. "
             "The VMAF model's maximum is content-dependent, so an absolute "
             "target can be unreachable on flat content; 0 = the fixed absolute "
             "target, whatever the ceiling. Default: quality.vmaf_margin "

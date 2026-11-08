@@ -266,9 +266,6 @@ def vmaf_recipe(
 
     Args:
         crop (tuple | None): Crop bars (top, bottom, left, right) the encode
-        crop_distorted (bool): Crop the DISTORTED side too. The ceiling
-            compares a source against itself, so both branches must carry
-            the crop or libvmaf refuses the pair (issue #584).
             applies, so the analysis dimensions are the cropped ones.
         width (int | None): The SOURCE frame width, None when unknown.
         height (int | None): The SOURCE frame height, None when unknown.
@@ -341,6 +338,10 @@ def build_vmaf_command(
             pixel format). None derives one with no dimensions known, which is
             the 1080p model at native size in the source's own format - the
             pre-#308 behaviour, kept for callers that have no dimensions.
+        crop_distorted (bool): Apply the crop to the DISTORTED input too. The
+            source-ceiling measurement compares an uncropped sample against
+            itself, so both branches must carry the crop or libvmaf refuses
+            the pair (issue #584).
 
     Returns:
         list[str]: The command as argument list (run with cwd=workdir).
@@ -381,9 +382,10 @@ def build_vmaf_command(
     # (issue #307: the bars must not influence the measurement, and the
     # analysis dimensions are the post-crop ones), then the shared analysis
     # prefix. The distorted input arrives already cropped by HandBrake
-    # (--crop), so only the reference is cropped here. HDR sources never
-    # reach a measurement: the skip gate (issue #518) refuses them first,
-    # so there is no tone-map chain to maintain.
+    # (--crop), so only the reference is cropped here - unless crop_distorted
+    # says the distorted input is an uncropped source too (below). HDR sources
+    # never reach a measurement: the skip gate (issue #518) refuses them
+    # first, so there is no tone-map chain to maintain.
     crop_filter = ""
     if crop is not None:
         top, bottom, left, right = crop
@@ -449,7 +451,7 @@ def _recipe_for_file(
 
     Args:
         distorted (Path): The encoded file to measure.
-        crop (tuple | None): Crop bars (top, bottom, left, right) applied to the REFERENCE (the distorted
+        crop (tuple | None): Crop bars applied to the REFERENCE (the distorted
             side is already cropped).
 
     Returns:
@@ -511,6 +513,10 @@ def measure_vmaf(
             the geometry being scored (issue #309) - a caller cannot silently
             measure a 4K file with the 1080p model. The engine passes an
             explicit one so the probe and the verification agree.
+        crop_distorted (bool): Apply the crop to the distorted input too, for
+            a self-comparison of an uncropped source (the issue #584 ceiling).
+            Pass an explicit recipe with it: the derived one reads the
+            uncropped distorted file's dimensions.
 
     Returns:
         float: The mean VMAF score.

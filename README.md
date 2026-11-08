@@ -274,7 +274,7 @@ removed it: an unmeasured encode can take a library file's path).
 | Option | Effect |
 |---|---|
 | `--target-vmaf N` | quality floor (default: `96`) |
-| `--vmaf-margin N` | how far below the source's own VMAF ceiling the search may aim (default: `3`; `0` = the fixed absolute target, [#584](https://github.com/bennischober/ShrinkRay/issues/584)) |
+| `--vmaf-margin N` | how far below the source's own VMAF ceiling the search may aim when the target is unreachable at the CRF floor (default: `3`; `0` = the fixed absolute target, [#584](https://github.com/bennischober/ShrinkRay/issues/584)) |
 | `--probe-encoder-preset N` | the PROBES' encoder speed preset (default: the `handbrake.probe_encoder_preset` config value, shipped as `5`; SVT-AV1 speed -1 to 10, higher = faster (a lower preset is slower and compresses better); a measurement setting — changing it invalidates stored plans) |
 | `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `3`; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
@@ -507,7 +507,7 @@ Example [config.json](config.json):
     },
     "quality": {
         "target_vmaf": 96,            // the required VMAF (--target-vmaf overrides it)
-        "vmaf_margin": 3,             // aim below the source's own ceiling (--vmaf-margin overrides it)
+        "vmaf_margin": 3,             // an unreachable target falls back below the source's own ceiling (--vmaf-margin overrides it)
         "min_saving_percent": 15      // skip when the predicted saving is below this (0 = any shrink)
     },
     "resources": {

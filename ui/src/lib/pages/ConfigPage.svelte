@@ -106,7 +106,7 @@
         <span class="dim">VMAF target</span>
         <span class="mono vmaf-value">{configTargetVmaf ?? targetVmaf ?? 96}</span>
       </div>
-      <HintMark text="VMAF is the measured visual similarity to the source (0-100). 96 is the project's decided 'visually transparent' floor: encodes below it are visibly worse. Higher target = larger files. The engine searches the largest CRF that still reaches this target on real samples, aiming at most quality.vmaf_margin below the source's own measured ceiling (0 = the fixed absolute target). Change both in config.json (quality.target_vmaf, quality.vmaf_margin) or via shrinkray setup." />
+      <HintMark text="VMAF is the measured visual similarity to the source (0-100). 96 is the project's decided 'visually transparent' floor: encodes below it are visibly worse. Higher target = larger files. The engine searches the largest CRF that still reaches this target on real samples. Only a source that cannot reach the target even at the lowest CRF falls back to at most quality.vmaf_margin below its own measured ceiling (0 = the fixed absolute target, no fallback). Change both in config.json (quality.target_vmaf, quality.vmaf_margin) or via shrinkray setup." />
     </div>
   </section>
 
