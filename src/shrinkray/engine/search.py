@@ -638,8 +638,9 @@ def source_vmaf_ceiling(
     The VMAF model does not score identical frames as 100: its maximum is
     content-dependent (measured 97.4-99.9 across four shapes, issue #584), so an
     absolute target is stricter on flat content than on a detailed film - and
-    unreachable where the ceiling sits below it. This is the reference that turns
-    the absolute target into a relative one: `min(target, ceiling - margin)`.
+    unreachable where the ceiling sits below it. `find_optimal_crf` measures it
+    only when the absolute target is unreachable at the CRF floor, and then aims
+    at `min(target, ceiling - margin)`.
 
     Costs one VMAF pass per sample (no encode): the samples the search already
     extracted.
@@ -647,11 +648,14 @@ def source_vmaf_ceiling(
     Args:
         samples (list): The (path, offset) windows the search probes.
         workdir (Path): Working directory for the model and log files.
-        recipe (VmafRecipe | None): The measurement recipe. None derives the
-            1080p model at native size, which is the pre-#308 measurement.
+        recipe (VmafRecipe | None): The measurement recipe; pass the probes'
+            own. None lets `measure_vmaf` derive one from the sample's
+            UNCROPPED dimensions, which differs from the probes' recipe when
+            a crop changes the model or the scale.
         crop (tuple | None): Crop bars applied to BOTH sides of the self-comparison,
             so the ceiling is measured on the same geometry as the probes.
         cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file for failure-evidence logs.
 
     Returns:
         float: The mean self-measured VMAF of the samples.
@@ -707,10 +711,9 @@ def find_optimal_crf(
         workdir (Path): Working directory for samples and probes.
         handbrake (str): Path to the HandBrakeCLI binary.
         target_vmaf (float): The VMAF quality floor to meet.
-        vmaf_margin (float): The margin below the source's own VMAF ceiling
-            (issue #584); 0 = the fixed absolute target.
         vmaf_margin (float): The margin below the source's own measured VMAF
-            ceiling (issue #584); 0 = the fixed absolute target.
+            ceiling (issue #584), used only when `target_vmaf` is unreachable
+            at the CRF floor; 0 = the fixed absolute target, no second phase.
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
@@ -822,8 +825,10 @@ def find_optimal_crf(
             f"(best {achieved:.2f} at CRF {lo}); source ceiling "
             f"{ceiling:.2f}, aiming at {clamped:.2f} (margin {vmaf_margin:.1f})"
         )
-        if clamped > achieved:
-            # a higher CRF may meet the relaxed target
+        if achieved >= clamped:
+            # the floor meets the relaxed target, so a higher CRF may too: search
+            # for the largest one. When the floor misses it, no higher CRF can
+            # (the curve is monotonic) and the floor stays the unreachable verdict.
             chosen = bisect_crf(check, lo, hi, clamped)
             achieved = next(p.vmaf for p in reversed(probes) if p.crf == chosen)
 
@@ -863,6 +868,9 @@ def find_optimal_crf_and_skip(
         handbrake (str): Path to the HandBrakeCLI binary.
         target_vmaf (float): The VMAF quality floor to meet.
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
+        vmaf_margin (float): The margin below the source's own measured VMAF
+            ceiling (issue #584), passed to `find_optimal_crf`; 0 = the fixed
+            absolute target.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
         encoder (str): The video encoder, e.g. 'svt_av1'.
@@ -887,6 +895,8 @@ def find_optimal_crf_and_skip(
             fallback otherwise; the top-of-range bound factor when the
             bound itself skipped). The plan reports its estimate from this
             factor (issue #388) instead of re-probing a window of its own.
+            Last, the effective target the search aimed at (issue #584): the
+            configured one, or the source-ceiling clamp.
     """
     if samples is None:
         samples = [

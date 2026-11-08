@@ -62,19 +62,36 @@ class TestEffectiveTarget(unittest.TestCase):
         measured.assert_not_called()
 
     def test_an_unreachable_source_aims_below_its_ceiling(self):
-        """The second phase: ceiling 98.46, margin 3 -> 95.46, and the search resumes."""
-        chosen, achieved, _probes, effective, seen, measured = self._search(
-            # the floor misses the relaxed 95.46 too, so the second phase must probe
-            {30: 95.2, 31: 95.5, 32: 95.0, 33: 94.0, 34: 93.0, 35: 92.0},
+        """The second phase: ceiling 98.46, margin 3 -> 95.46, and the search resumes.
+
+        The curve is monotonic, as `bisect_crf` requires: the floor (95.9) misses the
+        absolute 96 but meets the relaxed 95.46, so the largest CRF meeting 95.46
+        (32 at 95.5) must be chosen - not the floor, which is the largest output.
+        """
+        chosen, achieved, probes, effective, seen, measured = self._search(
+            {30: 95.9, 31: 95.7, 32: 95.5, 33: 95.3, 34: 95.0, 35: 94.0},
             ceiling=98.46,
             margin=3.0,
         )
         self.assertAlmostEqual(effective, 95.46)
         measured.assert_called()
-        # the first phase exhausted the floor, then the relaxed phase found 31
-        self.assertEqual(chosen, 31)
-        self.assertGreaterEqual(achieved, 95.46)
-        self.assertGreater(len(seen), 2, "the second phase must probe again")
+        self.assertEqual(chosen, 32, "the relaxed search must leave the CRF floor")
+        self.assertEqual(achieved, 95.5)
+        self.assertEqual(len(seen), len(set(seen)), "a CRF is probed at most once")
+        self.assertEqual(sorted(p.crf for p in probes), sorted(seen))
+
+    def test_a_source_below_even_the_relaxed_target_stays_unreachable(self):
+        """The floor misses ceiling - margin too: the floor is reported, no extra probe."""
+        chosen, achieved, _probes, effective, seen, measured = self._search(
+            {30: 95.2, 31: 95.0, 32: 94.8, 33: 94.0, 34: 93.0, 35: 92.0},
+            ceiling=98.46,
+            margin=3.0,
+        )
+        self.assertAlmostEqual(effective, 95.46)
+        measured.assert_called()
+        self.assertEqual((chosen, achieved), (30, 95.2))
+        self.assertLess(achieved, effective, "the caller's unreachable verdict must fire")
+        self.assertEqual(seen, [33, 31, 30], "no probe is spent once the floor fails")
 
     def test_a_margin_never_raises_a_target_that_is_already_lower(self):
         chosen, _achieved, _probes, effective, _seen, _measured = self._search(
