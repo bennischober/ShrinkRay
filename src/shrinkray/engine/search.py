@@ -736,6 +736,27 @@ def find_optimal_crf(
     return chosen, achieved, probes
 
 
+def target_unreachable(
+    chosen: int, achieved: float, target_vmaf: float, crf_range: tuple[int, int]
+) -> bool:
+    """Tells whether a finished search missed the target at the CRF floor.
+
+    The one home of gate 7's verdict (issue #591): the search driver, the
+    plan and the encode all ask it, so their order cannot drift apart.
+
+    Args:
+        chosen (int): The CRF the search returned.
+        achieved (float): The VMAF measured at that CRF.
+        target_vmaf (float): The VMAF quality floor the search aimed at.
+        crf_range (tuple[int, int]): The (lowest, highest) CRF searched.
+
+    Returns:
+        bool: True when even the lowest CRF of the range scores below the
+            target, so no CRF in the range can meet it.
+    """
+    return achieved < target_vmaf and chosen == crf_range[0]
+
+
 def find_optimal_crf_and_skip(
     movie: Path,
     workdir: Path,
@@ -790,8 +811,11 @@ def find_optimal_crf_and_skip(
             factor the decision computed for the returned CRF (all-window
             when the cache carries every window's size, the one-window
             fallback otherwise; the top-of-range bound factor when the
-            bound itself skipped). The plan reports its estimate from this
-            factor (issue #388) instead of re-probing a window of its own.
+            bound itself skipped, or when the search ended unreachable -
+            `target_unreachable` - and no size was measured at the chosen
+            CRF). The plan reports its estimate from this factor (issue
+            #388) instead of re-probing a window of its own. Callers report
+            an unreachable search before any size verdict (issue #591).
     """
     if samples is None:
         samples = [
@@ -853,6 +877,13 @@ def find_optimal_crf_and_skip(
         progress=progress,
         use_probe_cache=use_probe_cache,
     )
+    # gate 7 before gate 8 (issue #591, docs/encode-decision.md "The pipeline,
+    # in order"): a search that ended below the target at the floor is skipped
+    # for its quality, whatever the size there, so the size is not measured.
+    # skip=True is the safe direction: a caller that missed the reason check
+    # would mislabel the skip, never encode a file below the target.
+    if target_unreachable(chosen, achieved, target_vmaf, crf_range):
+        return chosen, achieved, probes, True, factor
     # the bound above answered "can ANY CRF in the range shrink this file?".
     # The product asks a narrower question: would THIS file, at the CRF the
     # search picked, actually get smaller? The chosen CRF sits far below the
