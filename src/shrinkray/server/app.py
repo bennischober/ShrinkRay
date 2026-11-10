@@ -133,6 +133,14 @@ def _is_loopback(host: str) -> bool:
     return host in ("127.0.0.1", "::1", "localhost")
 
 
+# the SPA shell is the login surface (issue #600): the document and its
+# static assets must load without a token so the built-in paste-token
+# prompt (issue #36) can appear — the shell carries no operator data, and
+# every API route stays gated. GET only: a write is not the shell.
+SPA_SHELL_PATHS = ("/", "/favicon.ico", "/favicon.svg", "/apple-touch-icon.png")
+SPA_SHELL_PREFIX = "/assets/"
+
+
 @app.middleware("http")
 async def require_token(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -141,7 +149,14 @@ async def require_token(
 
     A middleware rather than a per-route dependency: the point is that a NEW
     route cannot be added unauthenticated by forgetting a decorator. The SSE
-    stream and the static UI are covered for the same reason.
+    stream is covered the same way.
+
+    The SPA shell — the document (`GET /`) and its static assets — is the one
+    path-shape exemption (issue #600): a browser navigation cannot send an
+    Authorization header, so the shell must load without a token for the
+    built-in paste-token prompt (issue #36) to appear. The shell carries no
+    operator data and renders nothing without a valid token; every API route
+    stays gated, and the exemption is GET only.
 
     The comparison is constant-time (`hmac.compare_digest`) so a wrong token
     leaks nothing through timing, and the response never echoes the token.
@@ -155,6 +170,10 @@ async def require_token(
     """
     token = _configured_token()
     if token is None:
+        return await call_next(request)
+    if request.method == "GET" and (
+        request.url.path in SPA_SHELL_PATHS or request.url.path.startswith(SPA_SHELL_PREFIX)
+    ):
         return await call_next(request)
     presented = request.headers.get("authorization", "")
     prefix = "Bearer "

@@ -63,23 +63,71 @@ class TestAuthEnabled(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
-    def test_every_route_rejects_a_missing_token(self) -> None:
-        """A route added without auth must fail this test, not the deployment."""
+    def test_every_api_route_rejects_a_missing_token(self) -> None:
+        """A route added without auth must fail this test, not the deployment.
+
+        The SPA shell is deliberately absent from this list (issue #600): the
+        document and its static assets are the login surface, and their
+        serving without a token is pinned by the shell tests below.
+        """
         for method, path in (
-            ("GET", "/"),
-            ("GET", "/favicon.ico"),
-            ("GET", "/favicon.svg"),
-            ("GET", "/apple-touch-icon.png"),
             ("GET", "/api/status"),
             ("GET", "/api/library"),
             ("GET", "/api/jobs"),
             ("GET", "/api/snapshot"),
             ("GET", "/api/events"),
             ("GET", "/api/config"),
+            ("GET", "/metrics"),
+            ("POST", "/api/reveal"),
         ):
             with self.subTest(path=path):
                 response = self.client.request(method, path)
                 self.assertEqual(response.status_code, 401, f"{method} {path} was not guarded")
+
+    def test_the_spa_document_serves_without_a_token(self) -> None:
+        """Issue #600: a browser navigation cannot send the Authorization
+        header, so the document must load unauthenticated — the paste-token
+        prompt (issue #36) lives inside the SPA and can never appear
+        otherwise."""
+        dist = Path(__file__).parent.parent / "ui" / "dist"
+        response = self.client.get("/")
+        self.assertNotEqual(response.status_code, 401)
+        if not (dist / "index.html").is_file():
+            self.skipTest("UI not built")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<html", response.text.lower())
+
+    def test_the_shell_assets_serve_without_a_token(self) -> None:
+        """Issue #600: the document's static assets load unauthenticated too,
+        and the asset route's containment still holds under auth — a
+        traversal attempt is 404, never served and never a 401-shaped
+        fallback."""
+        response = self.client.get("/assets/..%2F..%2Fpyproject.toml")
+        self.assertEqual(response.status_code, 404)
+        dist = Path(__file__).parent.parent / "ui" / "dist" / "assets"
+        if dist.is_dir():
+            asset = sorted(p.name for p in dist.iterdir() if p.is_file())[0]
+            ok = self.client.get(f"/assets/{asset}")
+            self.assertNotEqual(ok.status_code, 401)
+            self.assertEqual(ok.status_code, 200)
+        else:
+            self.skipTest("UI not built")
+
+    def test_the_shell_exemption_is_get_and_head_only(self) -> None:
+        """The shell paths are exempt for safe reads only: a write to them
+        still needs the token."""
+        for method, path in (("POST", "/"), ("PUT", "/assets/x.js")):
+            with self.subTest(path=path):
+                response = self.client.request(method, path)
+                self.assertEqual(response.status_code, 401)
+
+    def test_the_favicon_routes_serve_without_a_token(self) -> None:
+        """Issue #600: the document references the favicon files from the dist
+        root; a browser fetches them during the unauthenticated load."""
+        for path in ("/favicon.ico", "/favicon.svg", "/apple-touch-icon.png"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertNotEqual(response.status_code, 401)
 
     def test_a_valid_token_is_accepted(self) -> None:
         response = self.client.get("/api/status", headers={"Authorization": f"Bearer {TOKEN}"})

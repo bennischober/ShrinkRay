@@ -32,7 +32,11 @@ product-rule violation, not a feature.
   which is tracked. It is a MIDDLEWARE, not a per-route dependency, so a new route
   cannot be added unauthenticated. Comparison is `hmac.compare_digest`.
   `/api/events` additionally accepts `?token=` because `EventSource` cannot set a
-  header — only there.
+  header — only there. The SPA shell (`GET /`, `/assets/*`, the favicon routes) is
+  the one path-shape exemption (issue #600): the browser navigation that loads the
+  document cannot send the header, the shell is the login surface for the
+  paste-token prompt (issue #36) and carries no operator data; it is GET
+  only, and every API route stays gated.
 - Auth off is loopback-only by construction: `run_app` raises `ValueError` for a
   non-loopback bind with no token, and refuses to start at all on an
   unusable toolchain (`service.all_problems()`).
@@ -62,8 +66,9 @@ product-rule violation, not a feature.
 ## ANTI-PATTERNS
 
 - Do not add an auth-exempt route. `/metrics` is registered after `require_token`
-  precisely so it is covered (`app.py`); the SSE query-token allowance is the one
-  documented exception.
+  precisely so it is covered (`app.py`); the documented exceptions are the SSE
+  query-token allowance and the SPA-shell path shape (issue #600, GET only) —
+  anything else exempted is a defect.
 - Do not make `db_access` yield a lock — a generator-yielded lock is released by a
   different threadpool thread (`app.py`).
 - `JobRequest` (`app.py`) is dead: no route and no importer. Do not wire it up
