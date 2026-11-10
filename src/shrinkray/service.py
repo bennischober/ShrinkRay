@@ -116,6 +116,13 @@ def swap_encode_into_place(
             #240's 1:1 check, where the artifact itself is fine but tracks
             were lost). A declined swap keeps the artifact, never touches
             the source.
+        input_size: The source's size in the run identity (issue #436), when
+            the caller carries one. A source whose size or mtime differs at
+            swap time declines the swap (issue #585).
+        input_mtime: The source's mtime in the run identity (issue #436).
+            Compared strictly, like `engine.identity.ensure_unchanged`; the
+            1 s tolerance in `db.py` belongs to the plan cache's fingerprint,
+            a different mechanism.
 
     Returns:
         SwapOutcome: What happened (replaced / declined, and why).
@@ -126,17 +133,15 @@ def swap_encode_into_place(
         # a mover's re-copy) must not be replaced by an encode of its old
         # bytes. #436's identity guards the decisions and the encode's start;
         # this is the same comparison at the swap, the last code before the
-        # library. A same-size, mtime-preserved change is the remaining
+        # library - strict, like `ensure_unchanged`, because the identity was
+        # captured by a stat of this very file and an unchanged file re-stats
+        # identical. A same-size, mtime-preserved change is the remaining
         # boundary (#438's case).
         try:
             current = source.stat()
         except OSError:
             current = None
-        if (
-            current is None
-            or current.st_size != input_size
-            or abs(current.st_mtime - input_mtime) > 1.0
-        ):
+        if current is None or current.st_size != input_size or current.st_mtime != input_mtime:
             reason = "the source changed during the encode"
             log_error(f"Not replacing '{source.name}': {reason}")
             _encode_discarded(connection, encode_id)

@@ -1221,6 +1221,13 @@ def _swap(
         error (str | None): The encode's verification finding (issue #240: a
             lost track, an unverifiable probe). A finding declines the swap
             before any filesystem work: the source is never touched.
+        input_size (int | None): The source's size in the run identity
+            (issue #436), when the watcher carries one. A source whose size
+            or mtime differs at swap time declines the swap (issue #585).
+        input_mtime (float | None): The source's mtime in the run identity
+            (issue #436). Compared strictly, like
+            `engine.identity.ensure_unchanged`; the 1 s tolerance in `db.py`
+            belongs to the plan cache's fingerprint, a different mechanism.
 
     Returns:
         bool: True when the source was replaced, False when the swap was
@@ -1244,16 +1251,15 @@ def _swap(
         # the swap is the most consequential write (issue #585): a source that
         # changed since the encode was decided must not be replaced by an encode
         # of its old bytes (#436's identity, compared at the last code before
-        # the library; a same-size, mtime-preserved change is #438's boundary)
+        # the library - strict, like `ensure_unchanged`, because the identity
+        # was captured by a stat of this very file and an unchanged file
+        # re-stats identical; a same-size, mtime-preserved change is #438's
+        # boundary)
         try:
             current = source.stat()
         except OSError:
             current = None
-        if (
-            current is None
-            or current.st_size != input_size
-            or abs(current.st_mtime - input_mtime) > 1.0
-        ):
+        if current is None or current.st_size != input_size or current.st_mtime != input_mtime:
             log_error(
                 f"Not replacing '{source.name}': the source changed during the "
                 "encode => the original is kept, the encode is discarded."

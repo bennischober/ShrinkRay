@@ -784,16 +784,72 @@ class TestWatcherSwapIdentity(unittest.TestCase):
 
         before = self.source.stat()
         self.source.write_bytes(b"CHANGED-DURING-THE-ENCODE" * 10)
+        with patch.object(watch_mod, "log_error") as fake_log:
+            replaced = watch_mod._swap(
+                None,
+                self.source,
+                self.output,
+                None,
+                input_size=before.st_size,
+                input_mtime=before.st_mtime,
+            )
+        self.assertFalse(replaced)
+        self.assertEqual(self.source.read_bytes(), b"CHANGED-DURING-THE-ENCODE" * 10)
+        logged = "".join(str(call.args[0]) for call in fake_log.call_args_list)
+        self.assertIn("the source changed during the encode", logged)
+
+    def test_a_declined_swap_corrects_the_encode_row(self) -> None:
+        """Issue #585 with the #232 contract: the watcher's declined swap
+        discards the encode, so its row must stop pointing at the staging
+        path."""
+        from shrinkray import db
+        from shrinkray.engine import watch as watch_mod
+
+        db_file = self.root / "metadata.db"
+        connection = db.connect(db_file)
+        file_id = db.upsert_file(
+            connection,
+            db.MovieRecord(
+                path=self.source,
+                mtime=self.source.stat().st_mtime,
+                size=self.source.stat().st_size,
+                name="movie",
+                category="Cat",
+            ),
+        )
+        encode_id = db.add_encode(
+            connection,
+            file_id,
+            "VMAF>95",
+            "svt_av1",
+            self.source.stat().st_size,
+            self.output.stat().st_size,
+            96.0,
+            chosen_crf=30,
+            achieved_vmaf=95.2,
+            output_file=str(self.output),
+        )
+        connection.close()
+        before = self.source.stat()
+        self.source.write_bytes(b"CHANGED-DURING-THE-ENCODE" * 10)
         replaced = watch_mod._swap(
-            None,
+            db_file,
             self.source,
             self.output,
-            None,
+            encode_id,
             input_size=before.st_size,
             input_mtime=before.st_mtime,
         )
         self.assertFalse(replaced)
         self.assertEqual(self.source.read_bytes(), b"CHANGED-DURING-THE-ENCODE" * 10)
+        connection = db.connect(db_file)
+        try:
+            row = connection.execute(
+                "SELECT output_file FROM encodes WHERE id = ?", (encode_id,)
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertIsNone(row[0])
 
 
 if __name__ == "__main__":

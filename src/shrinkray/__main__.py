@@ -435,6 +435,9 @@ def _swap_into_place(
         encode_id: The encode row the run just wrote (None: stateless).
         error: A verification finding from the encode (a swap on an unverified
             artifact would make the finding permanent; None: nothing to check).
+        input_size: The source's size in the run identity (issue #436), passed
+            through to the swap gate (issue #585).
+        input_mtime: The source's mtime in the run identity (issue #436).
     """
     from shrinkray import service
 
