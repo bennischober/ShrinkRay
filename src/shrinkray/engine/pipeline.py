@@ -137,6 +137,7 @@ from shrinkray.engine.search import (
 from shrinkray.engine.search import (
     sample_count_for as sample_count_for,
 )
+from shrinkray.engine.search import target_unreachable
 from shrinkray.logger import log, log_error
 from shrinkray.tools import process as resources
 from shrinkray.tools.ffprobe import (
@@ -1065,6 +1066,15 @@ def _probe_movie(
             progress=progress,
             use_probe_cache=use_probe_cache,
         )
+        # gate 7 before gate 8 (issue #591): an unreachable search is skipped
+        # for its quality; no size verdict was measured for it
+        if target_unreachable(crf, achieved, target_vmaf, crf_range):
+            raise SkipEncode(
+                f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})",
+                chosen_crf=crf,
+                achieved_vmaf=achieved,
+                probe_count=len(probes),
+            )
         if skip:
             raise SkipEncode(
                 "re-encode would not shrink the file",
@@ -1079,13 +1089,6 @@ def _probe_movie(
         if saving_percent < min_saving_percent:
             raise SkipEncode(
                 f"predicted saving {saving_percent:.1f}% < required {min_saving_percent}%",
-                chosen_crf=crf,
-                achieved_vmaf=achieved,
-                probe_count=len(probes),
-            )
-        if achieved < target_vmaf and crf == crf_range[0]:
-            raise SkipEncode(
-                f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})",
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
