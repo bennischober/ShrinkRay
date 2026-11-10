@@ -56,6 +56,99 @@ class TestSwap(unittest.TestCase):
             replace.swap(self.source, staged)
         self.assertEqual(self.source.read_bytes(), b"ORIGINAL" * 100)
 
+    def test_a_source_changed_during_the_encode_declines_the_swap(self) -> None:
+        """Issue #585: the swap is the most consequential write - a source whose
+        size or mtime moved since the run identity must not be replaced by an
+        encode of its old bytes. The original stays in place, the encode is
+        discarded, and the reason is visible."""
+        from shrinkray import service
+
+        before = self.source.stat()
+        self.source.write_bytes(b"CHANGED-DURING-THE-ENCODE" * 10)
+        outcome = service.swap_encode_into_place(
+            None,
+            self.source,
+            self.output,
+            None,
+            input_size=before.st_size,
+            input_mtime=before.st_mtime,
+        )
+        self.assertFalse(outcome.replaced)
+        self.assertIn("changed during the encode", outcome.reason or "")
+        self.assertEqual(self.source.read_bytes(), b"CHANGED-DURING-THE-ENCODE" * 10)
+
+    def test_a_same_size_source_with_a_moved_mtime_declines_the_swap(self) -> None:
+        """Issue #585: the mtime comparison is strict, like
+        `engine.identity.ensure_unchanged` - a same-size rewrite whose mtime
+        moved by half a second is still a changed source. The 1 s tolerance in
+        `db.py` belongs to the plan cache's fingerprint, a different mechanism,
+        and was never the run identity's."""
+        import os
+
+        from shrinkray import service
+
+        before = self.source.stat()
+        os.utime(self.source, ns=(before.st_atime_ns, before.st_mtime_ns + 500_000_000))
+        outcome = service.swap_encode_into_place(
+            None,
+            self.source,
+            self.output,
+            None,
+            input_size=before.st_size,
+            input_mtime=before.st_mtime,
+        )
+        self.assertFalse(outcome.replaced)
+        self.assertIn("changed during the encode", outcome.reason or "")
+        self.assertEqual(self.source.read_bytes(), b"ORIGINAL" * 100)
+
+    def test_a_declined_swap_corrects_the_encode_row(self) -> None:
+        """Issue #585 with the #232 contract: a declined swap discards the
+        encode with its staging directory, so its row must stop pointing at
+        the staging path."""
+        from shrinkray import service
+
+        db_file = self.root / "metadata.db"
+        connection = db.connect(db_file)
+        file_id = db.upsert_file(
+            connection,
+            db.MovieRecord(
+                path=self.source,
+                mtime=self.source.stat().st_mtime,
+                size=self.source.stat().st_size,
+                name="movie",
+                category="Cat",
+            ),
+        )
+        encode_id = db.add_encode(
+            connection,
+            file_id,
+            "VMAF>95",
+            "svt_av1",
+            self.source.stat().st_size,
+            self.output.stat().st_size,
+            96.0,
+            chosen_crf=30,
+            achieved_vmaf=95.2,
+            output_file=str(self.output),
+        )
+        before = self.source.stat()
+        self.source.write_bytes(b"CHANGED-DURING-THE-ENCODE" * 10)
+        outcome = service.swap_encode_into_place(
+            connection,
+            self.source,
+            self.output,
+            encode_id,
+            input_size=before.st_size,
+            input_mtime=before.st_mtime,
+        )
+        self.assertFalse(outcome.replaced)
+        row = connection.execute(
+            "SELECT output_file FROM encodes WHERE id = ?", (encode_id,)
+        ).fetchone()
+        self.assertIsNone(row[0])
+        self.assertEqual(self.source.read_bytes(), b"CHANGED-DURING-THE-ENCODE" * 10)
+        connection.close()
+
     def test_a_verification_finding_declines_the_swap(self):
         """Review finding 1: a swap on an artifact with a verification finding
         (a lost track, an unverifiable probe) would make the finding permanent:

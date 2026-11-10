@@ -417,6 +417,8 @@ def _swap_into_place(
     output: Path,
     encode_id: int | None = None,
     error: str | None = None,
+    input_size: int | None = None,
+    input_mtime: float | None = None,
 ) -> None:
     """Swaps a verified encode into the source's path, reporting it to the console.
 
@@ -433,10 +435,15 @@ def _swap_into_place(
         encode_id: The encode row the run just wrote (None: stateless).
         error: A verification finding from the encode (a swap on an unverified
             artifact would make the finding permanent; None: nothing to check).
+        input_size: The source's size in the run identity (issue #436), passed
+            through to the swap gate (issue #585).
+        input_mtime: The source's mtime in the run identity (issue #436).
     """
     from shrinkray import service
 
-    outcome = service.swap_encode_into_place(connection, source, output, encode_id, error)
+    outcome = service.swap_encode_into_place(
+        connection, source, output, encode_id, error, input_size, input_mtime
+    )
     if not outcome.replaced:
         return
     retained = outcome.retained_path
@@ -709,6 +716,8 @@ def _record_encodes(
                                             output_dir / movie.name,
                                             outcome.encode_id if outcome else None,
                                             error=result.error,
+                                            input_size=result.input_size,
+                                            input_mtime=getattr(result, "input_mtime", None),
                                         )
                                     # a verification finding is logged by the engine's
                                     # tracks check (its own error line) and rides
