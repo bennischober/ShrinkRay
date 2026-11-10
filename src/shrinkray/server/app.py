@@ -559,6 +559,12 @@ def ui_asset(asset_path: str) -> Response:
         FileResponse: The asset file.
     """
     dist = os.path.realpath(str(_ui_dist() / "assets"))
+    # a NUL byte in the path raises from the filesystem calls, not a clean
+    # 404 — and since #600 the shell's error paths are public, so it must
+    # stay an ordinary 404. It can only arrive percent-encoded (%00) and it
+    # names no asset.
+    if "\x00" in asset_path:
+        raise HTTPException(status_code=404, detail="asset not found")
     # realpath normalizes away '..' segments => the result must stay a child
     # of the assets directory, otherwise the path escapes the build output
     normalized = os.path.realpath(os.path.join(dist, asset_path))

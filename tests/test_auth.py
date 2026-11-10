@@ -1,9 +1,11 @@
 """Tests for the dashboard's optional bearer-token authentication (issue #36).
 
 Auth is opt-in: with no token configured the loopback development flow is
-unchanged. With $SHRINKRAY_TOKEN set, every route requires the token - the
-middleware is the guard, so a new route cannot be added unauthenticated by
-forgetting a decorator.
+unchanged. With $SHRINKRAY_TOKEN set, every API route requires the token —
+the middleware is the guard, so a new route cannot be added unauthenticated
+by forgetting a decorator. The one exception is the SPA shell (issue #600):
+the document and its static assets are the login surface, and a browser
+navigation cannot send the header that would fetch them.
 """
 
 import asyncio
@@ -74,9 +76,12 @@ class TestAuthEnabled(unittest.TestCase):
             ("GET", "/api/status"),
             ("GET", "/api/library"),
             ("GET", "/api/jobs"),
+            ("GET", "/api/jobs/x"),
             ("GET", "/api/snapshot"),
             ("GET", "/api/events"),
             ("GET", "/api/config"),
+            ("GET", "/api/movie"),
+            ("GET", "/api/retained"),
             ("GET", "/metrics"),
             ("POST", "/api/reveal"),
         ):
@@ -113,7 +118,14 @@ class TestAuthEnabled(unittest.TestCase):
         else:
             self.skipTest("UI not built")
 
-    def test_the_shell_exemption_is_get_and_head_only(self) -> None:
+    def test_a_nul_byte_in_an_asset_path_is_a_404_not_a_500(self) -> None:
+        """Round-1 review finding 1: the shell is unauthenticated now, so its
+        error paths are public too — a %00 in the asset path must be the
+        route's own 404, never a server error."""
+        response = self.client.get("/assets/%00")
+        self.assertEqual(response.status_code, 404)
+
+    def test_the_shell_exemption_is_get_only(self) -> None:
         """The shell paths are exempt for safe reads only: a write to them
         still needs the token."""
         for method, path in (("POST", "/"), ("PUT", "/assets/x.js")):
