@@ -940,7 +940,6 @@ def plan_quality(
     encoder_threads: int | None = None,
     progress: ProgressCallback | None = None,
     use_probe_cache: bool = True,
-    samples: list[tuple[Path, float]] | None = None,
     min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
     min_source_width: int = DEFAULT_MIN_SOURCE_WIDTH,
     min_source_size_gb: float = 0.0,

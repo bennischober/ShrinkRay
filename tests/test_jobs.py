@@ -507,11 +507,6 @@ class TestJobs(unittest.TestCase):
                 "shrinkray.engine.plan.search_quality",
                 side_effect=lambda movie, *a, **k: _prediction(movie),
             ),
-            patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
-            patch(
-                "shrinkray.engine.plan.search_quality",
-                side_effect=lambda movie, *a, **k: _prediction(movie),
-            ),
             patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode_with_quality),
             patch(
                 "shrinkray.service.record_quality_results",
@@ -619,11 +614,6 @@ class TestJobs(unittest.TestCase):
             )
 
         with (
-            patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
-            patch(
-                "shrinkray.engine.plan.search_quality",
-                side_effect=lambda movie, *a, **k: _prediction(movie),
-            ),
             patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
             patch(
                 "shrinkray.engine.plan.search_quality",

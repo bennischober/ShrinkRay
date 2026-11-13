@@ -305,7 +305,7 @@ class JobQueue:
         self._wake.set()
         return job
 
-    def stage(self, parent: Job, kind: JobKind, payload: dict) -> Job:
+    def stage(self, kind: JobKind, payload: dict) -> Job:
         """Records one per-file stage row a running folder job executes.
 
         The folder job stays the runner (issue #602): the decision, the CRF
@@ -315,7 +315,6 @@ class JobQueue:
         and picked up a second time.
 
         Args:
-            parent (Job): The folder job that runs the stage.
             kind (JobKind): The stage's kind (decision, crf-search, encode).
             payload (dict): The stage's payload (the file it is about).
 
@@ -901,7 +900,7 @@ def execute_plan(
         # and keeps the single-call shape.
         if queue is not None:
             decision_row = queue.stage(
-                job, JobKind.DECISION, {"paths": [str(movie)], "pipeline": "plan"}
+                JobKind.DECISION, {"paths": [str(movie)], "pipeline": "plan"}
             )
             try:
                 # the [i/N] prefix on this file's decision lines (issue #471)
@@ -956,7 +955,7 @@ def execute_plan(
                 )
                 continue
             search_row = queue.stage(
-                job, JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "plan"}
+                JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "plan"}
             )
             try:
                 with file_scope(index + 1, total):
@@ -977,6 +976,9 @@ def execute_plan(
                         progress=progress,
                         crop_sample_count=config.crop_sample_count,
                     )
+            except Cancelled:
+                queue.mark_cancelled(search_row)
+                raise
             except (RuntimeError, FileNotFoundError) as e:
                 queue.fail_stage(search_row, str(e))
                 plans.append({"movie": movie.name, "state": "error", "error": str(e)})
@@ -1220,10 +1222,11 @@ def _encode_measured(
         # Jobs page shows a decision row, a CRF-search row and an encode row per
         # file. A direct executor call (the one-shot CLI, tests) has no queue
         # and keeps the single-call shape below.
+        encode_row: Job | None = None
         if queue is not None:
             sample_every, sample_count, sample_seconds = config.probe_settings()
             decision_row = queue.stage(
-                job, JobKind.DECISION, {"paths": [str(movie)], "pipeline": "encode"}
+                JobKind.DECISION, {"paths": [str(movie)], "pipeline": "encode"}
             )
             try:
                 decision = decide_quality(
@@ -1237,6 +1240,11 @@ def _encode_measured(
                     sample_count=sample_count,
                     sample_seconds=sample_seconds,
                 )
+            except Cancelled:
+                # a stop must not leave the stage row running (issue #602):
+                # the worker marks the folder job cancelled, this row too
+                queue.mark_cancelled(decision_row)
+                raise
             except (RuntimeError, FileNotFoundError) as e:
                 queue.fail_stage(decision_row, str(e))
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
@@ -1258,7 +1266,7 @@ def _encode_measured(
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": skipped.error})
                 continue
             search_row = queue.stage(
-                job, JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "encode"}
+                JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "encode"}
             )
             try:
                 prediction = search_quality(
@@ -1276,6 +1284,9 @@ def _encode_measured(
                     progress=progress,
                     crop_sample_count=config.crop_sample_count,
                 )
+            except Cancelled:
+                queue.mark_cancelled(search_row)
+                raise
             except (RuntimeError, FileNotFoundError) as e:
                 queue.fail_stage(search_row, str(e))
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
@@ -1297,9 +1308,11 @@ def _encode_measured(
             try:
                 record_plan(connection, movie, prediction, config)
             except (RuntimeError, FileNotFoundError) as e:
-                queue.fail_stage(search_row, str(e))
-                outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
-                continue
+                # best-effort exactly as before the split: a failed plan write
+                # must never stop the encode (the boundary re-plans when no
+                # plan is stored), so the search row stays done and the
+                # failure is only reported
+                log(f"could not record the plan for '{movie.name}': {e}")
             if prediction.skipped_reason is not None:
                 # the search's own skip (no size gain, target unreachable,
                 # saving below the threshold) is recorded as before the split
@@ -1308,9 +1321,7 @@ def _encode_measured(
                 )
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": skipped.error})
                 continue
-            encode_row = queue.stage(
-                job, JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"}
-            )
+            encode_row = queue.stage(JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"})
         if progress:
             progress(
                 {
