@@ -618,7 +618,9 @@
             <span class={partial ? 'partial' : job.state === 'done' ? 'ok' : job.state === 'failed' ? 'bad' : 'dim'}>
               {job.state}{#if partial} · partial{/if}
             </span>
-            <span class="dim">{fmtWhen(job.finished_at ?? job.started_at)}</span>
+            <span class="dim when">
+              {#if job.finished_at}finished {fmtWhen(job.finished_at)}{:else if job.started_at}started {fmtWhen(job.started_at)}{:else}—{/if}
+            </span>
             <!-- the movie's own outcome first (it names the real failure),
                  then the job-level error as fallback -->
             <span
