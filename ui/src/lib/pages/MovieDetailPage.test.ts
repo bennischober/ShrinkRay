@@ -44,6 +44,12 @@ function job(overrides: Partial<Job> = {}): Job {
 
 describe('MovieDetailPage job trail (issue #616)', () => {
   it('states whether a trail time is a start or a finish', async () => {
+    const queued = job({
+      id: 3,
+      state: 'queued',
+      started_at: null,
+      finished_at: null,
+    })
     const running = job({
       id: 2,
       state: 'running',
@@ -60,14 +66,15 @@ describe('MovieDetailPage job trail (issue #616)', () => {
     render(MovieDetailPage, {
       movie: movie(),
       targetVmaf: 96,
-      allJobs: [running, done],
+      allJobs: [queued, running, done],
       onclose: () => {},
       onjobs: () => {},
     })
     const trail = screen.getByText('JOB TRAIL').closest('section')!
-    await waitFor(() => expect(trail.querySelectorAll('.hist-row').length).toBe(2))
+    await waitFor(() => expect(trail.querySelectorAll('.hist-row').length).toBe(3))
     const rows = [...trail.querySelectorAll('.hist-row')]
-    expect(rows[0].textContent).toContain('started ')
-    expect(rows[1].textContent).toContain('finished ')
+    expect(rows[0].textContent).toContain('—')
+    expect(rows[1].textContent).toContain('started ')
+    expect(rows[2].textContent).toContain('finished ')
   })
 })
