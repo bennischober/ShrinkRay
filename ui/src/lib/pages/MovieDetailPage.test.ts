@@ -73,8 +73,9 @@ describe('MovieDetailPage job trail (issue #616)', () => {
     const trail = screen.getByText('JOB TRAIL').closest('section')!
     await waitFor(() => expect(trail.querySelectorAll('.hist-row').length).toBe(3))
     const rows = [...trail.querySelectorAll('.hist-row')]
-    expect(rows[0].textContent).toContain('—')
-    expect(rows[1].textContent).toContain('started ')
-    expect(rows[2].textContent).toContain('finished ')
+    const when = (row: Element) => (row.querySelector('.when')?.textContent ?? '').trim()
+    expect(when(rows[0])).toBe('—')
+    expect(when(rows[1])).toContain('started ')
+    expect(when(rows[2])).toContain('finished ')
   })
 })
