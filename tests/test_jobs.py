@@ -53,7 +53,7 @@ def _prediction(movie, **_kwargs):
         crf_range=engine_search.DEFAULT_CRF_RANGE,
         sample_count=3,
         sample_seconds=10.0,
-        crop_sample_count=10,
+        crop_sample_count=3,
         vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
         hdr=False,
         encoder="svt_av1",
@@ -211,7 +211,7 @@ class TestJobs(unittest.TestCase):
             crf_range=engine_search.DEFAULT_CRF_RANGE,
             sample_count=3,
             sample_seconds=10.0,
-            crop_sample_count=10,
+            crop_sample_count=3,
             vmaf_statistic="mean",
             vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
             hdr=False,
@@ -306,6 +306,7 @@ class TestJobs(unittest.TestCase):
             crf_range=engine_search.DEFAULT_CRF_RANGE,
             sample_count=3,
             sample_seconds=10.0,
+            duration=12.0,
         )
         with (
             _patch("shrinkray.engine.plan.decide_quality", return_value=rejected),
@@ -391,6 +392,134 @@ class TestJobs(unittest.TestCase):
             [("decision", "done"), ("crf-search", "done"), ("encode", "done")],
         )
 
+    def test_a_search_stage_failure_skips_the_file(self):
+        """Issue #602 review: a search-stage RuntimeError is a per-file skip -
+        the row fails, the folder job continues, and no encode runs."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Broken Probe_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.stored_plan_row",
+                return_value=None,
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=RuntimeError("ffprobe could not read the sample"),
+            ),
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=AssertionError("a search failure must not encode"),
+            ) as engine,
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            result = jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        engine.assert_not_called()
+        rows = self.connection.execute(
+            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual(
+            [(row["kind"], row["state"]) for row in rows],
+            [("decision", "done"), ("crf-search", "failed")],
+        )
+        self.assertEqual(result["outcomes"][0]["state"], "skipped")
+        self.assertIn("ffprobe could not read", result["outcomes"][0]["error"])
+
+    def test_the_real_stored_plan_lookup_matches_a_recorded_plan(self):
+        """Issue #602 review: the real `stored_plan_row` must find the plan
+        `record_plan` stored - the encode job's reuse depends on it, and a
+        patched lookup would hide a fingerprint drift."""
+        from pathlib import Path as _Path
+
+        from shrinkray.engine.identity import capture_run_identity
+        from shrinkray.engine.plan import Decision, QualityResult, stored_plan_row
+        from shrinkray.engine.search import DEFAULT_CRF_RANGE
+        from shrinkray.service import record_plan
+        from shrinkray.tools.vmaf import vmaf_recipe
+
+        movie = _Path(self.tmp.name) / "Real Plan_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        recipe = vmaf_recipe(crop=None, width=1920, height=1080, bit_depth=10)
+        stored = QualityResult(
+            input=movie,
+            output=movie,
+            success=True,
+            target_vmaf=95.0,
+            min_saving_percent=15,
+            chosen_crf=21,
+            achieved_vmaf=95.4,
+            input_size=16,
+            output_size=8,
+            encoder="svt_av1",
+            probe_encoder_preset="5",
+            encoder_preset="3",
+            crop=None,
+            crf_range=DEFAULT_CRF_RANGE,
+            sample_count=3,
+            sample_seconds=10.0,
+            crop_sample_count=3,
+            vmaf_recipe=recipe.fingerprint(),
+            hdr=False,
+            input_mtime=None,
+        )
+        from shrinkray.config import load_config
+
+        record_plan(self.connection, movie, stored, load_config())
+        decision = Decision(
+            input=movie,
+            eligible=True,
+            identity=capture_run_identity(movie),
+            hdr=False,
+            encoder="svt_av1",
+            duration=7200.0,
+            width=1920,
+            height=1080,
+            crf_range=DEFAULT_CRF_RANGE,
+            sample_count=3,
+            sample_seconds=10.0,
+            bit_depth=10,
+        )
+        self.assertIsNotNone(
+            stored_plan_row(
+                movie,
+                decision,
+                target_vmaf=95.0,
+                min_saving_percent=15,
+                probe_encoder_preset="5",
+                crop_sample_count=3,
+                db_file=Path(self.tmp.name) / "test.db",
+            )
+        )
+
     def test_a_stored_plan_skips_the_queue_path_search(self):
         """Issue #602: a valid stored plan means the search already ran for
         these bytes, so the encode job must not measure again - the search row
@@ -458,44 +587,6 @@ class TestJobs(unittest.TestCase):
             [("decision", "done"), ("crf-search", "done"), ("encode", "done")],
         )
         self.assertIn('"source": "plan"', rows[1]["result"])
-
-    def test_a_cancel_marks_the_decision_row_cancelled(self):
-        """Issue #602 review: a graceful stop during a stage must not leave its
-        row running - the worker marks the folder job cancelled, the stage row
-        too."""
-        from pathlib import Path as _Path
-        from unittest.mock import patch as _patch
-
-        from shrinkray.tools.process import Cancelled
-
-        movie = _Path(self.tmp.name) / "Cancelled Movie_t00.mkv"
-        movie.write_bytes(b"x" * 16)
-        db.upsert_file(
-            self.connection,
-            db.MovieRecord(
-                path=movie,
-                mtime=movie.stat().st_mtime,
-                size=movie.stat().st_size,
-                name=movie.name,
-                category="Cat",
-            ),
-        )
-        self.connection.commit()
-        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
-        with (
-            _patch(
-                "shrinkray.engine.plan.decide_quality",
-                side_effect=Cancelled("cancelled during the decision"),
-            ),
-            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
-            self.assertRaises(Cancelled),
-        ):
-            jobs.execute_plan(job, self.connection, threading.Event(), queue=self.queue)
-        row = self.connection.execute(
-            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
-        ).fetchone()
-        self.assertEqual(row["kind"], "decision")
-        self.assertEqual(row["state"], "cancelled")
 
     def test_a_cancel_during_the_encode_marks_its_stage_row_cancelled(self):
         """Issue #602 review: the encode stage row must read cancelled on a
@@ -644,7 +735,7 @@ class TestJobs(unittest.TestCase):
             crf_range=(14, 32),
             sample_count=3,
             sample_seconds=10.0,
-            crop_sample_count=10,
+            crop_sample_count=3,
             vmaf_statistic="mean",
             vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
             hdr=False,

@@ -761,7 +761,7 @@ class TestCropBarsOrFallback(unittest.TestCase):
                 ),
                 patch("shrinkray.engine.plan.extract_samples", return_value=[]),
             ):
-                result = plan_quality(movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+                result = plan_quality(movie, target_vmaf=95.0, db_file=None)
             sampled.assert_not_called()
             self.assertIsNone(result.crop, "the measured veto must stand")
 

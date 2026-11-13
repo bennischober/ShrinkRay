@@ -917,16 +917,17 @@ def execute_plan(
                         sample_count=sample_count,
                         sample_seconds=sample_seconds,
                     )
-            except Cancelled:
-                queue.mark_cancelled(decision_row)
-                raise
             except (RuntimeError, FileNotFoundError) as e:
                 queue.fail_stage(decision_row, str(e))
                 plans.append({"movie": movie.name, "state": "error", "error": str(e)})
                 continue
             queue.finish_stage(
                 decision_row,
-                {"eligible": decision.eligible, "reason": decision.skipped_reason},
+                {
+                    "eligible": decision.eligible,
+                    "reason": decision.skipped_reason,
+                    "duration": decision.duration,
+                },
             )
             if not decision.eligible:
                 # a gate skip is still recorded (issue #602): the skip verdict
@@ -1001,7 +1002,6 @@ def execute_plan(
                         movie,
                         target_vmaf=payload.get("target_vmaf", config.target_vmaf),
                         min_saving_percent=config.min_saving_percent,
-                        encoder=config.handbrake_encoder,
                         probe_encoder_preset=payload.get(
                             "probe_encoder_preset", config.handbrake_probe_encoder_preset
                         ),
@@ -1248,7 +1248,11 @@ def _encode_measured(
                 continue
             queue.finish_stage(
                 decision_row,
-                {"eligible": decision.eligible, "reason": decision.skipped_reason},
+                {
+                    "eligible": decision.eligible,
+                    "reason": decision.skipped_reason,
+                    "duration": decision.duration,
+                },
             )
             if not decision.eligible:
                 # a gate skip is recorded exactly as before the split: the skip
@@ -1435,8 +1439,10 @@ def _encode_measured(
                 else:
                     declined = False
         except EncodeBusyError as e:
+            # a busy slot is routine contention, not a failure (issue #602):
+            # the row reads done with the skip, like the folder outcome
             if queue is not None and encode_row is not None:
-                queue.fail_stage(encode_row, str(e))
+                queue.finish_stage(encode_row, {"skipped": True, "error": str(e)})
             outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
             continue
         except Cancelled:

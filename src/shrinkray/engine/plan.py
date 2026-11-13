@@ -993,7 +993,6 @@ def plan_quality(
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
-    encoder: str = "svt_av1",
     probe_encoder_preset: str = "5",
     encoder_preset: str = "3",
     cancel: threading.Event | None = None,
@@ -1023,8 +1022,6 @@ def plan_quality(
         crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
         sample_count (int): The number of samples to probe.
         sample_seconds (float): The length of each sample in seconds.
-        encoder (str): The video encoder, e.g. 'svt_av1'. for HDR the engine
-            switches to the 10-bit variant and the result carries it.
         probe_encoder_preset (str): The PROBE's encoder speed preset (a
             measurement setting, issue #22); the plan's fingerprint keys
             on this value.
