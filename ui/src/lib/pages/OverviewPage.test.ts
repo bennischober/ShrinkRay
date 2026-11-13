@@ -44,10 +44,10 @@ const status: Status = {
   reveal_available: false,
 }
 
-function renderOverview(runningJobs: Job[] = []) {
+function renderOverview(runningJobs: Job[] = [], movies: Movie[] = [movie()], history?: Job[]) {
   return render(OverviewPage, {
-    movies: [movie()],
-    history: runningJobs.length ? runningJobs : [job()],
+    movies,
+    history: history ?? (runningJobs.length ? runningJobs : [job()]),
     status,
     targetVmaf: 96,
     savedTotalGb: 0.5,
@@ -80,5 +80,44 @@ describe('OverviewPage render (issue #239)', () => {
     // button nor the dialog may exist
     expect(screen.queryByText(/ENCODE ALL/i)).toBeNull()
     expect(screen.queryByText(/ENCODE THE ENTIRE LIBRARY/i)).toBeNull()
+  })
+})
+
+describe('OverviewPage VMAF display (issue #599)', () => {
+  it('a measured score just below the target is not printed as the target', () => {
+    renderOverview(
+      [],
+      [
+        movie({
+          encode: {
+            preset: 'svt_av1',
+            crf: 30,
+            vmaf: 95.96,
+            input_size: 1024 ** 3,
+            output_size: 512 ** 2,
+            saved_percent: 99,
+          },
+        }),
+      ],
+    )
+    expect(screen.getAllByText('95.9').length).toBeGreaterThan(0)
+    expect(screen.queryByText('96.0')).toBeNull()
+  })
+
+  it('reads a plan score against the target its job was run with', () => {
+    // 95.04 rounds onto 95.0 under the job's 95 target: the display must
+    // step up to 95.1, which only the payload target can produce (the live
+    // 96 target would leave 95.0 untouched).
+    const planJob = job({
+      kind: 'plan',
+      state: 'done',
+      payload: { path: '/m/a', quality: true, target_vmaf: 95 },
+      result: {
+        plans: [{ movie: 'a.mkv', state: 'encode', crf: 30, vmaf: 95.04, estimated_size: 1024 ** 2, saved_percent: 50 }],
+      },
+    })
+    renderOverview([], [movie()], [planJob])
+    expect(screen.getAllByText('95.1').length).toBeGreaterThan(0)
+    expect(screen.queryByText('95.0')).toBeNull()
   })
 })

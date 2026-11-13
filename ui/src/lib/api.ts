@@ -248,9 +248,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** The dashboard's bearer token (issue #36).
  *
- * Auth is opt-in on the server: with $SHRINKRAY_TOKEN set, every route
- * requires the token, and the operator pastes it once — it is kept in
- * localStorage so the prompt appears once per browser, not per request.
+ * Auth is opt-in on the server: with $SHRINKRAY_TOKEN set, every API route
+ * requires the token. The dashboard document loads without it (issue #600),
+ * and the operator pastes the token once — it is kept in localStorage so
+ * the prompt appears once per browser, not per request.
  * With no token stored the header is omitted entirely, which is the
  * loopback development flow (the server does not ask for one). */
 const TOKEN_KEY = 'shrinkray.token'
@@ -457,6 +458,20 @@ export function fmtSeconds(seconds: number | null | undefined): string {
   if (m < 60) return `${m}m ${s}s`
   const h = Math.floor(m / 60)
   return `${h}h ${m % 60}m`
+}
+
+/** Formats a VMAF score to one decimal without letting the printed
+ * number cross the target the score was judged against (#599). A recorded
+ * 95.96 under a 96 target prints 95.9, never "96.0" beside "target
+ * unreachable"; 96.01 prints 96.1. Scores away from the target keep
+ * their one-decimal form, and a missing score is a dash. */
+export function fmtVmaf(score: number | null | undefined, target?: number | null): string {
+  if (score == null) return '—'
+  const rounded = Number(score.toFixed(1))
+  if (target == null) return rounded.toFixed(1)
+  if (score < target && rounded >= target) return (rounded - 0.1).toFixed(1)
+  if (score > target && rounded <= target) return (rounded + 0.1).toFixed(1)
+  return rounded.toFixed(1)
 }
 
 /** Formats a saved-percentage-like value honestly: growth is not a gain. */
