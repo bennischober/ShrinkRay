@@ -115,6 +115,7 @@ describe('JobsPage render', () => {
       )!
     // the enqueue time must not be presented as the moment work began
     expect(text(rowFor('QUEUED').querySelector('.when')!)).toBe('—')
+    expect(rowFor('QUEUED').querySelector('.when')!.getAttribute('title')).toBe('not started yet')
     expect(text(rowFor('RUNNING').querySelector('.when')!)).toMatch(/\d/)
     expect(text(rowFor('DONE').querySelector('.when')!)).toMatch(/\d/)
     // the expansion still shows all three timestamps, labeled - selected by

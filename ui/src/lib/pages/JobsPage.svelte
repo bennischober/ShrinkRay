@@ -170,7 +170,7 @@
             <span class="state {stateClass(job)}">
               {job.state.toUpperCase()}{#if job.state === 'done' && failedOutcomeNote(job) !== ''} · PARTIAL{/if}{#if liveElapsed(job)} · {liveElapsed(job)}{/if}
             </span>
-            <span class="when" title={job.started_at ?? ''}>{fmtWhen(job.started_at)}</span>
+            <span class="when" title={job.started_at ?? 'not started yet'}>{fmtWhen(job.started_at)}</span>
             <span class="dur">{job.state === 'done' ? fmtSpan(job.started_at, job.finished_at) ?? '—' : job.state === 'running' ? '…' : '—'}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
