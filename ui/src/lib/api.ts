@@ -423,8 +423,8 @@ export function fmtGb(bytes: number | null | undefined): string {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`
 }
 
-/** Formats a saved percentage ('—' for none, +X% for growth). */
-/** Formats an ISO timestamp as a short "when" (time today, date+time before).
+/** Formats an ISO timestamp as a short "when" ('—' for null; time today,
+ * date+time before).
  * The backend stores UTC ('datetime now' in sqlite is UTC); naive strings
  * get Z appended here at the API boundary — the one place that decides. */
 export function fmtWhen(iso: string | null | undefined): string {

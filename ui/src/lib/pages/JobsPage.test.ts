@@ -99,4 +99,35 @@ describe('JobsPage render', () => {
     })
     expect(container.querySelector('button.movie-link')).toBeNull()
   })
+
+  it('a queued job shows no start time; running and done rows keep theirs (issue #603)', async () => {
+    const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null, result: null })
+    const running = job({ id: 3, state: 'running', started_at: '2026-10-24T10:00:01Z', finished_at: null })
+    const done = job({ id: 1, state: 'done' })
+    const { container } = render(JobsPage, {
+      history: [queued, running, done],
+      onopenMovie: () => {},
+    })
+    const text = (el: Element) => (el.textContent ?? '').trim()
+    const rowFor = (state: string) =>
+      [...container.querySelectorAll('.entry')].find((el) =>
+        (el.querySelector('.state')?.textContent ?? '').trim().startsWith(state),
+      )!
+    // the enqueue time must not be presented as the moment work began
+    expect(text(rowFor('QUEUED').querySelector('.when')!)).toBe('—')
+    expect(rowFor('QUEUED').querySelector('.when')!.getAttribute('title')).toBe('not started yet')
+    expect(text(rowFor('RUNNING').querySelector('.when')!)).toMatch(/\d/)
+    expect(text(rowFor('DONE').querySelector('.when')!)).toMatch(/\d/)
+    // the expansion still shows all three timestamps, labeled - selected by
+    // the row itself, not by fixture order
+    const queuedRow = [...container.querySelectorAll('.entry')].find(
+      (el) => (el.querySelector('.when')?.textContent ?? '').trim() === '—',
+    )!
+    fireEvent.click(queuedRow.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+    await expect.poll(() => container.querySelector('.detail')).toBeTruthy()
+    const stamps = [...container.querySelectorAll('.detail pre')].map((p) => p.textContent ?? '')
+    const row = stamps.find((t) => t.startsWith('created ')) ?? ''
+    expect(row).toContain('started —')
+    expect(row).toContain('finished —')
+  })
 })
