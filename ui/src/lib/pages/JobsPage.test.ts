@@ -101,7 +101,7 @@ describe('JobsPage render', () => {
   })
 
   it('a queued job shows no start time; running and done rows keep theirs (issue #603)', async () => {
-    const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null })
+    const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null, result: null })
     const running = job({ id: 3, state: 'running', started_at: '2026-10-24T10:00:01Z', finished_at: null })
     const done = job({ id: 1, state: 'done' })
     const { container } = render(JobsPage, {
@@ -112,8 +112,8 @@ describe('JobsPage render', () => {
     const text = (el: Element) => (el.textContent ?? '').trim()
     // the enqueue time must not be presented as the moment work began
     expect(text(whens[0])).toBe('—')
-    expect(text(whens[1])).not.toBe('—')
-    expect(text(whens[2])).not.toBe('—')
+    expect(text(whens[1])).toMatch(/\d/)
+    expect(text(whens[2])).toMatch(/\d/)
     // the expansion still shows all three timestamps, labeled
     fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
     await expect.poll(() => container.querySelector('.detail')).toBeTruthy()
