@@ -340,8 +340,6 @@ class QualityResult:
     probe_encoder_preset: str | None = None
     encode_seconds: float | None = None
     probe_seconds: float | None = None
-    verified_vmaf: float | None = None
-    verified_subsample: int | None = None
     hdr: bool = False
     tool_versions: str | None = None
     input_mtime: float | None = None

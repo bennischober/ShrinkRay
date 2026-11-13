@@ -467,27 +467,6 @@ def save_encode(
     )
 
 
-def save_verification(
-    connection: sqlite3.Connection, encode_id: int, result: QualityResult
-) -> None:
-    """Attaches a quality result's verification data to its encode row.
-
-    Args:
-        connection: The database connection.
-        encode_id (int): The encode row id (from save_encode).
-        result (QualityResult): The engine result (verified_vmaf and
-            verified_subsample are read from it; None => no-op).
-    """
-    if result.verified_vmaf is None:
-        return
-    db.record_verification(
-        connection,
-        encode_id,
-        float(result.verified_vmaf),
-        result.verified_subsample,
-    )
-
-
 def save_skip(
     connection: sqlite3.Connection,
     movie: Path,
@@ -622,7 +601,6 @@ def record_quality_results(
             crf_source=result.crf_source or "probe",
             plan_created_at=result.plan_created_at,
         )
-        save_verification(connection, encode_id, result)
         return EncodeOutcome(movie=str(movie), encoded=True, encode_id=encode_id)
     if result.skipped_reason is not None:
         # the record-time recheck (issue #436): the skip verdict rides the

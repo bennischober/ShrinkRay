@@ -262,15 +262,6 @@ def encode(
         min=1,
         help="Probe windows, overriding --sample-every when set explicitly. Default: quality.sample_count when configured, otherwise density (quality.sample_every).",
     ),
-    verify: bool = typer.Option(
-        False,
-        "--verify",
-        help=(
-            "Measure the FULL output file against the source "
-            "after each encode (ground truth beyond the 10s probes; "
-            "sub-sampled 1/10 for files > 2 GB). Slow for large libraries."
-        ),
-    ),
     replan: bool = typer.Option(
         False,
         "--replan",
@@ -393,7 +384,6 @@ def encode(
                 overwrite,
                 quality,
                 target_vmaf,
-                verify,
                 threads,
                 db_file,
                 replan,
@@ -506,7 +496,6 @@ def _record_encodes(
     overwrite: bool,
     quality: bool,
     target_vmaf: float,
-    verify: bool,
     threads: int | None,
     db_file: Path | None,
     replan: bool = False,
@@ -530,7 +519,6 @@ def _record_encodes(
         overwrite (bool): Whether existing output files may be replaced.
         quality (bool): Accepted as a no-op alias (quality mode IS the only mode).
         target_vmaf (float): VMAF quality floor for quality mode.
-        verify (bool): Full-file VMAF verification after each encode.
         db_file (Path): The database file (failure-evidence logs location).
         replan (bool): Ignore stored plans and re-probe (quality mode).
         probe_encoder_preset (str): The PROBE's speed preset (measurement).
@@ -657,7 +645,6 @@ def _record_encodes(
                                         threads or config.handbrake_max_threads
                                     ),
                                     progress=quality_progress,
-                                    verify=verify,
                                     force_reprobe=replan,
                                     probe_encoder_preset=probe_encoder_preset,
                                     encoder_preset=encoder_preset,

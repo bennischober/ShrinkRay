@@ -136,9 +136,9 @@ class TestProbeScratchAttribution(unittest.TestCase):
         prefixes: list[str] = []
         self._plan_with_patched_scratch(prefixes)
         self._encode_with_patched_scratch(prefixes)
-        # three sites created three scratch dirs (an empty list would pass
+        # two sites created two scratch dirs (an empty list would pass
         # the loop above vacuously)
-        self.assertEqual(len(prefixes), 3)
+        self.assertEqual(len(prefixes), 2)
         for prefix in prefixes:
             self.assertTrue(
                 prefix.startswith("shrinkray-probe-movie-"),
@@ -189,9 +189,8 @@ class TestProbeScratchAttribution(unittest.TestCase):
             plan_quality(self.movie, db_file=None)
 
     def _encode_with_patched_scratch(self, prefixes: list[str]) -> None:
-        """Runs encode_with_quality (verify=True, so the verification workdir
-        is created too) with every external seam mocked and the scratch
-        mkdtemp captured."""
+        """Runs encode_with_quality with every external seam mocked and the
+        scratch mkdtemp captured."""
         real_mkdtemp = tempfile.mkdtemp
 
         def fake_encode(input_file, output_file, command, **kwargs):
@@ -229,7 +228,7 @@ class TestProbeScratchAttribution(unittest.TestCase):
             # gate ("a re-encode happens only when the file gets smaller")
             # returns before the verification block otherwise, and the third
             # scratch site (the verify workdir) is never created
-            encode_with_quality(self.movie, out, db_file=None, verify=True)
+            encode_with_quality(self.movie, out, db_file=None)
 
     def test_scratch_name_is_decoration_for_the_probe_cache(self) -> None:
         """The cache is keyed only from its supplied identity inputs: two

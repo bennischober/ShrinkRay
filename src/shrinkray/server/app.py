@@ -994,7 +994,6 @@ def snapshot(
                         "preset": r["preset"],
                         "crf": r["chosen_crf"],
                         "vmaf": r["achieved_vmaf"],
-                        "verified_vmaf": r["verified_vmaf"],
                         "input_size": r["input_size"],
                         "output_size": r["output_size"],
                         "saved_percent": r["saved_percent"],
@@ -1015,7 +1014,7 @@ def snapshot(
                     """
                     SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                            f.size, f.hdr, f.missing_scans, f.missing_since,
-                           e.preset, e.chosen_crf, e.achieved_vmaf, e.verified_vmaf, e.input_size, e.output_size,
+                           e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                            e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
                            e.encode_seconds,
                            e.probe_count, e.probe_seconds, e.tool_versions,
@@ -1176,7 +1175,7 @@ def library(
             """
             SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                    f.size, f.hdr, f.missing_scans, f.missing_since,
-                   e.preset, e.chosen_crf, e.achieved_vmaf, e.verified_vmaf, e.input_size, e.output_size,
+                   e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                    e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
                    e.encode_seconds,
                    e.probe_count, e.probe_seconds, e.tool_versions
@@ -1267,9 +1266,6 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "preset": r["preset"],
                 "crf": r["chosen_crf"],
                 "vmaf": r["achieved_vmaf"],
-                # the full-file verification measurement (issue #235: the
-                # number was recorded by the db and readable by nothing)
-                "verified_vmaf": r["verified_vmaf"],
                 "input_size": r["input_size"],
                 "output_size": r["output_size"],
                 "saved_percent": r["saved_percent"],

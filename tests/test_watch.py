@@ -431,11 +431,6 @@ class TestWatch(unittest.TestCase):
             # into the watch output dir
             self.assertEqual(captured["output"], out / "movie.mkv")
             self.assertIn("encoder_threads", captured["kwargs"])
-            # the resident mode verifies every encode (issue #235): the
-            # watcher is the component that does the real work unattended,
-            # and the full-file VMAF is the only evidence the operator ever
-            # gets that the encode met the target
-            self.assertTrue(captured["kwargs"].get("verify"))
 
     def test_a_second_root_movie_is_scanned_under_its_own_root(self):
         """Issue #404: a movie found under root B is recorded with a category

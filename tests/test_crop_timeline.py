@@ -826,7 +826,7 @@ class TestCropBarsOrFallback(unittest.TestCase):
                 patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode),
             ):
                 result = engine_pipeline.encode_with_quality(
-                    src, out, target_vmaf=95.0, encoder="svt_av1", verify=False
+                    src, out, target_vmaf=95.0, encoder="svt_av1"
                 )
             sampled.assert_not_called()
             # the veto's observable effect: the encode runs UNCROPPED — the

@@ -774,7 +774,6 @@ class TestPlanReuse(unittest.TestCase):
         result, _output = self._encode_growing(movie, factor=1.5)
         self.assertFalse(result.success)
         self.assertEqual(result.skipped_reason, "output not smaller")
-        self.assertIsNone(result.verified_vmaf)
 
     def test_a_grown_encode_names_both_sizes(self):
         """The reason must carry the numbers, so the operator can see how far
