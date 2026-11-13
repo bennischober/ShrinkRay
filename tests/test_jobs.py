@@ -13,6 +13,72 @@ from shrinkray.engine import search as engine_search
 from shrinkray.server import jobs
 
 
+def _eligible_decision(movie, **_kwargs):
+    """A passing eligibility decision for the stage seams (issue #602)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        input=movie,
+        eligible=True,
+        skipped_reason=None,
+        error=None,
+        identity=SimpleNamespace(size=16, mtime=None),
+        hdr=False,
+        encoder="svt_av1",
+        duration=7200.0,
+        width=1920,
+        height=1080,
+        crf_range=engine_search.DEFAULT_CRF_RANGE,
+        sample_count=3,
+        sample_seconds=10.0,
+    )
+
+
+def _prediction(movie, **_kwargs):
+    """A passing CRF-search prediction for the stage seams (issue #602)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        input=movie,
+        output=movie,
+        success=True,
+        skipped_reason=None,
+        error=None,
+        chosen_crf=21,
+        achieved_vmaf=95.4,
+        probes=[],
+        input_size=16,
+        output_size=8,
+        crf_range=engine_search.DEFAULT_CRF_RANGE,
+        sample_count=3,
+        sample_seconds=10.0,
+        crop_sample_count=10,
+        vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+        hdr=False,
+        encoder="svt_av1",
+        input_mtime=None,
+        probe_encoder_preset="5",
+        encoder_preset="3",
+        crop=None,
+        vmaf_statistic="mean",
+        target_vmaf=95.0,
+        min_saving_percent=15,
+        saved_percent=50.0,
+        plan_created_at=None,
+        crf_source="probe",
+        encode_seconds=None,
+        probe_seconds=None,
+        input_width=None,
+        input_height=None,
+        input_codec=None,
+        input_duration=None,
+        input_bitrate=None,
+        output_bitrate=None,
+        input_bit_depth=None,
+        tool_versions=None,
+    )
+
+
 class TestJobs(unittest.TestCase):
     def setUp(self):
         import tempfile
@@ -152,7 +218,8 @@ class TestJobs(unittest.TestCase):
             input_mtime=None,  # a duck-typed result without the #436 field
         )
         with (
-            patch("shrinkray.engine.plan.plan_quality", return_value=fake_result),
+            patch("shrinkray.engine.plan.decide_quality", return_value=_eligible_decision(movie)),
+            patch("shrinkray.engine.plan.search_quality", return_value=fake_result),
             patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             result = jobs.execute_plan(job, self.connection, threading.Event())
@@ -163,6 +230,151 @@ class TestJobs(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["chosen_crf"], 21)
         self.assertEqual(row["path"], str(movie))
+
+    def test_a_plan_job_records_the_per_file_stages(self):
+        """Issue #602: a file's pipeline is its own job rows - the decision
+        (the gates) and the CRF search - each with its own state and outcome,
+        so the Jobs page can follow a file stage by stage."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Staged Movie_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job, self.connection, threading.Event(), queue=self.queue)
+        rows = self.connection.execute(
+            "SELECT kind, state, result FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual([row["kind"] for row in rows], ["decision", "crf-search"])
+        self.assertEqual([row["state"] for row in rows], ["done", "done"])
+        self.assertIn('"eligible": true', rows[0]["result"])
+        self.assertIn('"crf": 21', rows[1]["result"])
+
+    def test_a_rejected_file_records_no_search_row(self):
+        """Issue #602: a decision that rejects the file is the whole pipeline
+        for it - the decision row is done with its reason and no search row
+        exists (nothing measured, nothing spent)."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Rejected Movie_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        rejected = _NS(
+            input=movie,
+            eligible=False,
+            skipped_reason="too short",
+            error="duration 12s is below the 90s minimum",
+            identity=_NS(size=16, mtime=None),
+            hdr=False,
+            encoder="svt_av1",
+            crf_range=engine_search.DEFAULT_CRF_RANGE,
+            sample_count=3,
+            sample_seconds=10.0,
+        )
+        with (
+            _patch("shrinkray.engine.plan.decide_quality", return_value=rejected),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job, self.connection, threading.Event(), queue=self.queue)
+        rows = self.connection.execute(
+            "SELECT kind, state, result FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual([row["kind"] for row in rows], ["decision"])
+        self.assertIn('"reason": "too short"', rows[0]["result"])
+
+    def test_an_encode_job_records_the_three_stages(self):
+        """Issue #602: the encode pipeline is three consecutive rows - the
+        decision, the CRF search and the encode - so the Jobs page shows each
+        stage with its own state and outcome."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Three Stages_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+
+        def fake_encode(movie, output, *args, **kwargs):
+            output.write_bytes(b"y" * 8)
+            return _NS(
+                input_size=16,
+                output_size=8,
+                chosen_crf=21,
+                achieved_vmaf=95.4,
+                error=None,
+                input_mtime=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            _patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=True, skipped=False, error=None),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        rows = self.connection.execute(
+            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual([row["kind"] for row in rows], ["decision", "crf-search", "encode"])
+        self.assertEqual([row["state"] for row in rows], ["done", "done", "done"])
 
     def test_plan_job_passes_encoder_preset(self):
         """The plan job threads the preset: a payload override wins, the
@@ -219,7 +431,11 @@ class TestJobs(unittest.TestCase):
             )
         )
         with (
-            _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan,
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch("shrinkray.engine.plan.search_quality", return_value=fake_result) as fake_plan,
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job, self.connection, threading.Event())
@@ -227,7 +443,11 @@ class TestJobs(unittest.TestCase):
         # ...and without one, the config value does
         job2 = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
         with (
-            _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan2,
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch("shrinkray.engine.plan.search_quality", return_value=fake_result) as fake_plan2,
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job2, self.connection, threading.Event())
@@ -240,7 +460,11 @@ class TestJobs(unittest.TestCase):
             )
         )
         with (
-            _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan3,
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch("shrinkray.engine.plan.search_quality", return_value=fake_result) as fake_plan3,
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job3, self.connection, threading.Event())
@@ -278,6 +502,16 @@ class TestJobs(unittest.TestCase):
         from unittest.mock import patch
 
         with (
+            patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
+            patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=lambda movie, *a, **k: _prediction(movie),
+            ),
+            patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
+            patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=lambda movie, *a, **k: _prediction(movie),
+            ),
             patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode_with_quality),
             patch(
                 "shrinkray.service.record_quality_results",
@@ -332,6 +566,11 @@ class TestJobs(unittest.TestCase):
                 )
             )
             with (
+                _patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
+                _patch(
+                    "shrinkray.engine.plan.search_quality",
+                    side_effect=lambda movie, *a, **k: _prediction(movie),
+                ),
                 _patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode),
                 _patch(
                     "shrinkray.service.record_quality_results",
@@ -380,6 +619,16 @@ class TestJobs(unittest.TestCase):
             )
 
         with (
+            patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
+            patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=lambda movie, *a, **k: _prediction(movie),
+            ),
+            patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
+            patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=lambda movie, *a, **k: _prediction(movie),
+            ),
             patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode_with_quality),
             patch(
                 "shrinkray.service.record_quality_results",
@@ -649,7 +898,7 @@ class TestJobs(unittest.TestCase):
             release_gate.wait(timeout=5.0)
             return real_take_next()
 
-        def slow_encode(job, connection, cancel, progress=None):
+        def slow_encode(job, connection, cancel, progress=None, queue=None):
             started.set()
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
@@ -705,7 +954,7 @@ class TestJobs(unittest.TestCase):
         started = threading.Event()
         observed: dict = {}
 
-        def slow_encode(job, connection, cancel, progress=None):
+        def slow_encode(job, connection, cancel, progress=None, queue=None):
             started.set()
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:

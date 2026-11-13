@@ -22,6 +22,58 @@ from shrinkray.engine.plan import QualityResult, plan_quality
 from shrinkray.engine.search import DEFAULT_CRF_RANGE
 
 
+def _eligible_decision(movie: Path) -> SimpleNamespace:
+    """A passing eligibility decision for the stage seams (issue #602)."""
+    return SimpleNamespace(
+        input=movie,
+        eligible=True,
+        skipped_reason=None,
+        error=None,
+        identity=SimpleNamespace(size=movie.stat().st_size, mtime=None),
+        hdr=False,
+        encoder="svt_av1",
+        duration=7200.0,
+        width=1920,
+        height=1080,
+        crf_range=DEFAULT_CRF_RANGE,
+        sample_count=3,
+        sample_seconds=10.0,
+    )
+
+
+def _prediction(movie: Path) -> SimpleNamespace:
+    """A passing CRF-search prediction for the stage seams (issue #602)."""
+    return SimpleNamespace(
+        input=movie,
+        output=movie,
+        success=True,
+        skipped_reason=None,
+        error=None,
+        chosen_crf=21,
+        achieved_vmaf=95.4,
+        probes=[],
+        input_size=movie.stat().st_size,
+        output_size=movie.stat().st_size // 2,
+        crf_range=DEFAULT_CRF_RANGE,
+        sample_count=3,
+        sample_seconds=10.0,
+        crop_sample_count=10,
+        vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+        hdr=False,
+        encoder="svt_av1",
+        input_mtime=None,
+        probe_encoder_preset="5",
+        encoder_preset="3",
+        crop=None,
+        vmaf_statistic="mean",
+        target_vmaf=95.0,
+        min_saving_percent=15,
+        saved_percent=50.0,
+        plan_created_at=None,
+        crf_source="probe",
+    )
+
+
 def _movie(root: Path, content: bytes) -> Path:
     movie = root / "movie.mkv"
     movie.write_bytes(content)
@@ -667,6 +719,15 @@ class TestJobPathGuard(unittest.TestCase):
         # the telemetry bundle, which IS the honest report for a decision
         # that cannot be measured
         with (
+            patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            patch("shrinkray.service.record_plan", lambda *a, **k: None),
             patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=abort) as engine,
             patch("shrinkray.telemetry.save_failure") as telemetry,
         ):

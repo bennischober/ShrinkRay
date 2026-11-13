@@ -83,12 +83,12 @@
   // (round-5 H7) — two selects, the same pattern as the library toolbar.
   // Filter state persists per session (library sort persists; the jobs
   // filters resetting on F5 was the round-6 granularity inconsistency)
-  type KindFilter = 'all' | 'scan' | 'plan' | 'encode' | 'legacy'
+  type KindFilter = 'all' | 'scan' | 'plan' | 'decision' | 'crf-search' | 'encode' | 'legacy'
   type StateFilter = 'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled'
   const storedKind = sessionStorage.getItem('ms.jobsKind')
   const storedState = sessionStorage.getItem('ms.jobsState')
   let kindFilter = $state<KindFilter>(
-    ['all', 'scan', 'plan', 'encode', 'legacy'].includes(storedKind ?? '') ? (storedKind as KindFilter) : 'all'
+    ['all', 'scan', 'plan', 'decision', 'crf-search', 'encode', 'legacy'].includes(storedKind ?? '') ? (storedKind as KindFilter) : 'all'
   )
   let stateFilter = $state<StateFilter>(
     ['all', 'running', 'queued', 'done', 'partial', 'failed', 'cancelled'].includes(storedState ?? '')
@@ -123,6 +123,8 @@
           <option value="all">all kinds</option>
           <option value="scan">scan</option>
           <option value="plan">plan</option>
+          <option value="decision">decision</option>
+          <option value="crf-search">crf-search</option>
           <option value="encode">encode</option>
           <option value="legacy">legacy</option>
         </select>
