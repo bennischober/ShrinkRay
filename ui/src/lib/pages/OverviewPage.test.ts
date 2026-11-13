@@ -44,10 +44,10 @@ const status: Status = {
   reveal_available: false,
 }
 
-function renderOverview(runningJobs: Job[] = [], movies: Movie[] = [movie()]) {
+function renderOverview(runningJobs: Job[] = [], movies: Movie[] = [movie()], history?: Job[]) {
   return render(OverviewPage, {
     movies,
-    history: runningJobs.length ? runningJobs : [job()],
+    history: history ?? (runningJobs.length ? runningJobs : [job()]),
     status,
     targetVmaf: 96,
     savedTotalGb: 0.5,
@@ -102,5 +102,22 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     )
     expect(screen.getAllByText('95.9').length).toBeGreaterThan(0)
     expect(screen.queryByText('96.0')).toBeNull()
+  })
+
+  it('reads a plan score against the target its job was run with', () => {
+    // 95.04 rounds onto 95.0 under the job's 95 target: the display must
+    // step up to 95.1, which only the payload target can produce (the live
+    // 96 target would leave 95.0 untouched).
+    const planJob = job({
+      kind: 'plan',
+      state: 'done',
+      payload: { path: '/m/a', quality: true, target_vmaf: 95 },
+      result: {
+        plans: [{ movie: 'a.mkv', state: 'encode', crf: 30, vmaf: 95.04, estimated_size: 1024 ** 2, saved_percent: 50 }],
+      },
+    })
+    renderOverview([], [movie()], [planJob])
+    expect(screen.getAllByText('95.1').length).toBeGreaterThan(0)
+    expect(screen.queryByText('95.0')).toBeNull()
   })
 })
