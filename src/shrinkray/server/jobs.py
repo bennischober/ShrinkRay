@@ -1179,6 +1179,7 @@ def _encode_measured(
         decide_quality,
         search_quality,
         skipped_result,
+        stored_plan_row,
     )
     from shrinkray.service import (
         finished_movies,
@@ -1264,56 +1265,90 @@ def _encode_measured(
             search_row = queue.stage(
                 JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "encode"}
             )
-            try:
-                prediction = search_quality(
-                    decision,
-                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
-                    min_saving_percent=config.min_saving_percent,
-                    probe_encoder_preset=payload.get(
-                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
-                    ),
-                    encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    cancel=cancel,
-                    db_file=_db_file_of(connection),
-                    encoder_threads=cap_threads(config.handbrake_max_threads),
-                    progress=progress,
-                    crop_sample_count=config.crop_sample_count,
-                )
-            except Cancelled:
-                queue.mark_cancelled(search_row)
-                raise
-            except (RuntimeError, FileNotFoundError) as e:
-                queue.fail_stage(search_row, str(e))
-                outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
-                continue
-            queue.finish_stage(
-                search_row,
-                {
-                    "crf": prediction.chosen_crf,
-                    "vmaf": prediction.achieved_vmaf,
-                    "reason": prediction.skipped_reason,
-                },
+            # a valid stored plan means the folder job's search already
+            # measured these bytes and these settings (issue #602's
+            # no-double-probe rule): the search stage reports the reuse
+            # and the encode boundary below reuses the same plan.
+            stored = stored_plan_row(
+                movie,
+                decision,
+                target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                min_saving_percent=config.min_saving_percent,
+                probe_encoder_preset=payload.get(
+                    "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                ),
+                crop_sample_count=config.crop_sample_count,
+                db_file=_db_file_of(connection),
             )
-            # the prediction is recorded so the encode below REUSES it instead of
-            # measuring again (issue #602); the encode boundary still
-            # re-validates the gates and the fingerprint, so a stale search never
-            # encodes. Best-effort like the plan job's write.
-            try:
-                record_plan(connection, movie, prediction, config)
-            except (RuntimeError, FileNotFoundError) as e:
-                # best-effort exactly as before the split: a failed plan write
-                # must never stop the encode (the boundary re-plans when no
-                # plan is stored), so the search row stays done and the
-                # failure is only reported
-                log(f"could not record the plan for '{movie.name}': {e}")
-            if prediction.skipped_reason is not None:
-                # the search's own skip (no size gain, target unreachable,
-                # saving below the threshold) is recorded as before the split
-                skipped = record_quality_results(
-                    connection, movie, prediction, config, final_output=movie if in_place else None
+            if stored is not None:
+                queue.finish_stage(
+                    search_row,
+                    {
+                        "crf": stored["chosen_crf"],
+                        "vmaf": stored["achieved_vmaf"],
+                        "reason": stored["skipped_reason"],
+                        "source": "plan",
+                    },
                 )
-                outcomes.append({"movie": movie.name, "state": "skipped", "error": skipped.error})
-                continue
+            else:
+                try:
+                    prediction = search_quality(
+                        decision,
+                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                        min_saving_percent=config.min_saving_percent,
+                        probe_encoder_preset=payload.get(
+                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                        ),
+                        encoder_preset=payload.get(
+                            "encoder_preset", config.handbrake_encoder_preset
+                        ),
+                        cancel=cancel,
+                        db_file=_db_file_of(connection),
+                        encoder_threads=cap_threads(config.handbrake_max_threads),
+                        progress=progress,
+                        crop_sample_count=config.crop_sample_count,
+                    )
+                except Cancelled:
+                    queue.mark_cancelled(search_row)
+                    raise
+                except (RuntimeError, FileNotFoundError) as e:
+                    queue.fail_stage(search_row, str(e))
+                    outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
+                    continue
+                queue.finish_stage(
+                    search_row,
+                    {
+                        "crf": prediction.chosen_crf,
+                        "vmaf": prediction.achieved_vmaf,
+                        "reason": prediction.skipped_reason,
+                    },
+                )
+                # the prediction is recorded so the encode below REUSES it instead of
+                # measuring again (issue #602); the encode boundary still
+                # re-validates the gates and the fingerprint, so a stale search never
+                # encodes. Best-effort like the plan job's write.
+                try:
+                    record_plan(connection, movie, prediction, config)
+                except (RuntimeError, FileNotFoundError) as e:
+                    # best-effort exactly as before the split: a failed plan write
+                    # must never stop the encode (the boundary re-plans when no
+                    # plan is stored), so the search row stays done and the
+                    # failure is only reported
+                    log(f"could not record the plan for '{movie.name}': {e}")
+                if prediction.skipped_reason is not None:
+                    # the search's own skip (no size gain, target unreachable,
+                    # saving below the threshold) is recorded as before the split
+                    skipped = record_quality_results(
+                        connection,
+                        movie,
+                        prediction,
+                        config,
+                        final_output=movie if in_place else None,
+                    )
+                    outcomes.append(
+                        {"movie": movie.name, "state": "skipped", "error": skipped.error}
+                    )
+                    continue
             encode_row = queue.stage(JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"})
         if progress:
             progress(

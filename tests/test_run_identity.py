@@ -38,6 +38,7 @@ def _eligible_decision(movie: Path) -> SimpleNamespace:
         crf_range=DEFAULT_CRF_RANGE,
         sample_count=3,
         sample_seconds=10.0,
+        bit_depth=None,
     )
 
 

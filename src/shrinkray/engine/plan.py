@@ -410,6 +410,9 @@ class Decision:
         crf_range (tuple[int, int]): The search window the decision carries.
         sample_count (int): The sample count the decision carries.
         sample_seconds (float): The sample length the decision carries.
+        bit_depth (int | None): The source's bit depth, the recipe's last
+            input (issue #308), so the stored-plan lookup can rebuild it
+            without probing again.
     """
 
     input: Path
@@ -425,6 +428,7 @@ class Decision:
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE
     sample_count: int = DEFAULT_SAMPLE_COUNT
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS
+    bit_depth: int | None = None
 
 
 def decide_quality(
@@ -483,8 +487,10 @@ def decide_quality(
     hdr = is_hdr_file(input_file)
     # The encoder follows the SOURCE's bit depth (issue #234): a 10-bit
     # SDR master keeps its depth. The choice runs for every file - the
-    # skip result below still records it (issue #518).
-    effective_encoder = encoder_for(source_bit_depth(input_file))
+    # skip result below still records it (issue #518). Captured once: the
+    # recipe the stored-plan lookup rebuilds keys on it (issue #602).
+    bit_depth = source_bit_depth(input_file)
+    effective_encoder = encoder_for(bit_depth)
 
     duration = probe_duration_seconds(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
@@ -622,6 +628,7 @@ def decide_quality(
         crf_range=crf_range,
         sample_count=sample_count,
         sample_seconds=sample_seconds,
+        bit_depth=bit_depth,
     )
 
 
@@ -650,6 +657,63 @@ def skipped_result(decision: Decision, target_vmaf: float) -> QualityResult:
         sample_seconds=decision.sample_seconds,
         hdr=decision.hdr,
         encoder=decision.encoder,
+    )
+
+
+def stored_plan_row(
+    input_file: Path,
+    decision: Decision,
+    *,
+    target_vmaf: float,
+    min_saving_percent: int,
+    probe_encoder_preset: str,
+    crop_sample_count: int,
+    db_file: Path | None,
+) -> sqlite3.Row | None:
+    """Reads the stored plan an eligible decision may reuse.
+
+    The encode boundary and the resident search both consult this (issue #602):
+    a valid stored plan means the measurement already ran for these bytes and
+    these settings, so the search is not repeated. Any mismatch returns None
+    and the caller measures, never guesses (the fingerprint rule lives in
+    `_lookup_plan`).
+
+    Args:
+        input_file (Path): The eligible file.
+        decision (Decision): The eligibility verdict (its width, height, bit
+            depth and sample settings are the fingerprint inputs).
+        target_vmaf (float): The encode's target VMAF.
+        min_saving_percent (int): The encode's minimum-saving threshold.
+        probe_encoder_preset (str): The probe preset the plan was measured
+            with (the fingerprint keys on it, issue #22).
+        crop_sample_count (int): The stored plan's crop sample count.
+        db_file (Path | None): The database file (None = no cache).
+
+    Returns:
+        sqlite3.Row | None: The valid plan row, or None.
+    """
+    if db_file is None:
+        return None
+    recipe = vmaf_recipe(
+        # the fingerprint is crop-independent (issue #308): the crop pass
+        # does not have to run before this lookup
+        crop=None,
+        width=decision.width,
+        height=decision.height,
+        bit_depth=decision.bit_depth,
+    )
+    return _lookup_plan(
+        db_file,
+        input_file,
+        encoder=decision.encoder,
+        encoder_preset=probe_encoder_preset,
+        target_vmaf=target_vmaf,
+        crf_range=decision.crf_range,
+        sample_count=decision.sample_count,
+        sample_seconds=decision.sample_seconds,
+        crop_sample_count=crop_sample_count,
+        vmaf_recipe=recipe.fingerprint(),
+        min_saving_percent=min_saving_percent,
     )
 
 

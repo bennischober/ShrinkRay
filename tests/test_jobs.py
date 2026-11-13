@@ -31,6 +31,7 @@ def _eligible_decision(movie, **_kwargs):
         crf_range=engine_search.DEFAULT_CRF_RANGE,
         sample_count=3,
         sample_seconds=10.0,
+        bit_depth=None,
     )
 
 
@@ -389,6 +390,74 @@ class TestJobs(unittest.TestCase):
             [(row["kind"], row["state"]) for row in rows],
             [("decision", "done"), ("crf-search", "done"), ("encode", "done")],
         )
+
+    def test_a_stored_plan_skips_the_queue_path_search(self):
+        """Issue #602: a valid stored plan means the search already ran for
+        these bytes, so the encode job must not measure again - the search row
+        reports the reuse and the search is never called."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Reused Plan_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+
+        def fake_encode(movie, output, *args, **kwargs):
+            output.write_bytes(b"y" * 8)
+            return _NS(
+                input_size=16,
+                output_size=8,
+                chosen_crf=21,
+                achieved_vmaf=95.4,
+                error=None,
+                input_mtime=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.stored_plan_row",
+                return_value={"chosen_crf": 21, "achieved_vmaf": 95.4, "skipped_reason": None},
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=AssertionError("the search must not run for a stored plan"),
+            ) as search,
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=fake_encode,
+            ),
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=True, skipped=False, error=None),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        search.assert_not_called()
+        rows = self.connection.execute(
+            "SELECT kind, state, result FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual(
+            [(row["kind"], row["state"]) for row in rows],
+            [("decision", "done"), ("crf-search", "done"), ("encode", "done")],
+        )
+        self.assertIn('"source": "plan"', rows[1]["result"])
 
     def test_a_cancel_marks_the_decision_row_cancelled(self):
         """Issue #602 review: a graceful stop during a stage must not leave its
