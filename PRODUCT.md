@@ -404,7 +404,9 @@ to its quality** and whether its **frame matches its content**.
   decision can be explained and any run repeated.
 - **Authentication: an opt-in shared-secret token** (issue #36). With a token
   configured (`SHRINKRAY_TOKEN`, or the file named by `SHRINKRAY_TOKEN_FILE`) every
-  route requires it; with none, the dashboard is open, which is allowed only on a
+  `/api/*` route and `/metrics` require it. The dashboard document and its static assets
+  load without the header (issue #600), so a browser can open the page and paste the
+  token. With no token configured, the dashboard is open, which is allowed only on a
   loopback bind - a non-loopback bind without a token is refused at startup. The
   container sets `SHRINKRAY_TOKEN_FILE` and generates a token on first start into
   `/data/token` (issue #249). There is no TLS in the app: the token travels in
