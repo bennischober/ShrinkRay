@@ -28,20 +28,16 @@ class TestGateMypyFallback(unittest.TestCase):
         gate_path = REPO / "tools" / "gate.sh"
         # issue #598: on 2026-11-08 CI read only the last 443 of this file's
         # 4539 bytes, from the page-aligned offset 4096, so the first
-        # assertion below failed on a missing string that the file contains.
-        # `Path.read_text` cannot start at an offset, no test patches a read
-        # primitive (audited: every `Path.read_text` patch is a context
-        # manager; there is no `setattr`, `builtins.open` or shared handle),
-        # and the file is clean ASCII. So the short read came from outside the
-        # suite (a runner-side partial materialization or an `io` defect in
-        # CPython 3.15.2). The guard below names a short read with both byte
-        # counts instead of leaving a missing-string assertion; it is not a retry.
+        # assertion below failed on a string the file contains. No read-primitive
+        # patch outlives its scope (audited), and `Path.read_text` cannot start
+        # at an offset. The guard names a short read with both byte counts
+        # instead of leaving a missing-string assertion; it is not a retry.
         gate_bytes = gate_path.read_bytes()
+        size = gate_path.stat().st_size
         self.assertEqual(
             len(gate_bytes),
-            gate_path.stat().st_size,
-            f"the gate script was read short: {len(gate_bytes)} of "
-            f"{gate_path.stat().st_size} bytes (issue #598)",
+            size,
+            f"the gate script was read short: {len(gate_bytes)} of {size} bytes (issue #598)",
         )
         gate = gate_bytes.decode("utf-8")
         self.assertIn("run_mypy linux", gate)
