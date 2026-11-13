@@ -747,7 +747,7 @@ def watch(
     """Watches the inbox and encodes newly arrived movies.
 
     This function blocks (unless once=True); stop it with Ctrl+C - the stop
-    event ends the pass loop and terminates the running encode/verify child
+    event ends the pass loop and terminates the running encode child
     on the direct-encode route (issue #431; the submit route's running job
     is terminated by the worker's stop), and the process exits cleanly.
 
@@ -771,7 +771,7 @@ def watch(
         max_threads (int | None): Per-encode thread cap (None/0 = all cores).
         stop_event (threading.Event | None): Cooperative stop for the resident
             app: checked between passes AND passed to encode_with_quality as
-            its cancel event, so a stop terminates the running encode/verify
+            its cancel event, so a stop terminates the running encode
             child on the direct-encode route (the submit route's running job
             is terminated by the worker's stop, issue #431).
         db_file (Path | None): The sqlite database file - enables the stall
@@ -1056,7 +1056,7 @@ def watch(
                                 target_dir / movie.name,
                                 # the measurement child opts out of the stall
                                 # watchdog (issue #431): without this event a
-                                # hung verify pass is unbounded until the
+                                # hung measurement is unbounded until the
                                 # container stops - the shutdown event is the
                                 # kill path (review on PR #468, finding 1)
                                 cancel=stop_event,
@@ -1069,12 +1069,6 @@ def watch(
                                 # inbox automation must not silently depend on
                                 # plan staleness: watch always measures fresh
                                 force_reprobe=True,
-                                # the resident mode verifies every encode
-                                # (issue #235): nobody watches the log in an
-                                # unattended container, and the full-file VMAF
-                                # is the only evidence the encode met the
-                                # target that the operator will ever get
-                                verify=True,
                                 min_source_height=current.min_source_height,
                                 min_source_width=current.min_source_width,
                                 min_source_size_gb=current.min_source_size_gb,

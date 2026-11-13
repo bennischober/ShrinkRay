@@ -268,11 +268,12 @@ the claim, because `--verify` arrived in v0.11.7.
   `--reference-vfilter crop=...` is the same mechanism (its help text exists for exactly this), and
   the #306 harness uses it. The deviation is narrower: ab-av1 has no BAR DETECTION — the operator
   supplies the rectangle, ShrinkRay measures it.
-- **A full-file VERIFICATION re-measures the VMAF after the encode** (`engine/pipeline.py`, optionally
-  sub-sampled with `n_subsample`): the samples are 10 s windows, so the decision deserves one
-  measurement of the complete artifact. ab-av1 v0.11.7 verifies too — but it verifies DECODEABILITY
-  (`--verify`/`--verify-decode`/`--verify-duration`: the artifact decodes and has the right duration),
-  while ShrinkRay re-MEASURES the quality. What is verified differs, not whether anything is.
+- **The post-encode verification is an ARTIFACT check, not a quality re-measurement** (`engine/pipeline.py`,
+  `tracks_survived` + `durations_match`): the samples are 10 s windows, and the quality evidence
+  is the probe search itself (the full-file VMAF re-measurement was removed in v0.8.0, issue #605). ab-av1
+  v0.11.7 verifies DECODEABILITY (`--verify`/`--verify-decode`/`--verify-duration`: the artifact decodes
+  and has the right duration); ShrinkRay checks the same artifact properties and no longer re-measures the
+  quality after the encode. What is verified is the artifact, and the sampling density is the quality lever.
 
 **Search-side differences outside this milestone** (the measurement is not the search): #313 (the round
 structure of the CRF search), #314 (the size estimate), #315 (the CRF range), #316 (the minimum saving),

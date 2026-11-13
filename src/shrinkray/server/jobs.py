@@ -1096,13 +1096,6 @@ def _encode_measured(
                     cancel=cancel,
                     db_file=_db_file_of(connection),
                     encoder_threads=cap_threads(config.handbrake_max_threads),
-                    # the resident mode verifies every encode (issue
-                    # #235): the job worker is Mode B's other arm, same
-                    # reasoning as the watcher - nobody watches the log,
-                    # the verification number is the only evidence the
-                    # encode met the target. A payload can still opt out
-                    # with verify=false explicitly.
-                    verify=payload.get("verify", True),
                     min_source_height=config.min_source_height,
                     min_source_width=config.min_source_width,
                     min_source_size_gb=config.min_source_size_gb,
@@ -1207,7 +1200,7 @@ class JobWorker:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         # the running job's cancel event: a shutdown must terminate the
-        # encode/verify child, not leave it running unattended (issue #431
+        # encode child, not leave it running unattended (issue #431
         # review, round 2 finding 1 - the measurement path has opted out of
         # the stall watchdog, so the cancel event is its only kill path)
         self._running_cancel: threading.Event | None = None
@@ -1221,7 +1214,7 @@ class JobWorker:
         """Signals the worker to stop and joins it.
 
         The running job's cancel event is set too (issue #431): a shutdown
-        must terminate the running encode/verify child, not wait out a
+        must terminate the running encode child, not wait out a
         multi-hour measurement the watchdog no longer bounds. The default
         join covers the child's kill window (terminate_tree's 5 s SIGTERM +
         5 s SIGKILL and the pipe drainers' joins) plus the job's unwinding,

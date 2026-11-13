@@ -1423,68 +1423,6 @@ class TestDb(unittest.TestCase):
                 finished = service.finished_movies(self.connection, [movie], out_dir)
             self.assertEqual(finished, {str(movie)})
 
-    def test_verification_recorded_in_db(self):
-        """record_quality_results persists verified_vmaf/subsample on the
-        encode row (schema v8 columns)."""
-
-        from shrinkray import service
-        from shrinkray.engine.plan import QualityResult
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
-            movie = root / "movie.mkv"
-            movie.write_bytes(b"x")
-            result = QualityResult(
-                input=movie,
-                output=root / "enc" / "movie.mkv",
-                success=True,
-                target_vmaf=95.0,
-                chosen_crf=22,
-                achieved_vmaf=95.4,
-                input_size=1000,
-                output_size=400,
-                verified_vmaf=94.9,
-                verified_subsample=10,
-            )
-            outcome = service.record_quality_results(
-                self.connection, movie, result, config_helper.Conf()
-            )
-            self.assertTrue(outcome.encoded)
-            file_id = self.connection.execute(
-                "SELECT id FROM files WHERE path = ?", (str(movie),)
-            ).fetchone()["id"]
-            row = self.connection.execute(
-                "SELECT verified_vmaf, verified_at, verified_subsample FROM encodes "
-                "WHERE file_id = ?",
-                (file_id,),
-            ).fetchone()
-            self.assertIsNotNone(row)
-            self.assertAlmostEqual(row["verified_vmaf"], 94.9)
-            self.assertEqual(row["verified_subsample"], 10)
-            self.assertIsNotNone(row["verified_at"])
-
-    def test_verification_without_data_is_noop(self):
-        """A result without verification data must not touch the row (every
-        non-verify encode goes through the same record path)."""
-
-        from shrinkray import service
-        from shrinkray.engine.plan import QualityResult
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
-            movie = root / "movie.mkv"
-            movie.write_bytes(b"x")
-            result = QualityResult(
-                input=movie,
-                output=root / "enc" / "movie.mkv",
-                success=True,
-                input_size=1000,
-                output_size=400,
-            )
-            service.record_quality_results(self.connection, movie, result, config_helper.Conf())
-            row = self.connection.execute("SELECT verified_vmaf FROM encodes").fetchone()
-            self.assertIsNone(row["verified_vmaf"])
-
     def test_records_effective_target_vmaf(self):
         """The preset column carries the engine's EFFECTIVE target (what the
         encode was actually decided against), never the caller's — regression:
@@ -1803,23 +1741,6 @@ class TestDb(unittest.TestCase):
                     [],
                 )
                 self.assertTrue(live_verify.is_dir())
-
-    def test_the_verify_site_passes_its_kind_to_the_grammar_owner(self):
-        """The producer pin: the pipeline's verification workdir must ask the
-        grammar owner for the verify kind - deleting the argument keeps every
-        behavioral test green (their fixtures pass it themselves) while the
-        6 h floor silently stops applying to real runs (round-3's defect,
-        closed only when THIS pin exists)."""
-
-        import inspect
-
-        from shrinkray.engine import pipeline as pipeline_mod
-
-        source = inspect.getsource(pipeline_mod)
-        # the verify site's call carries the kind argument
-        self.assertIn('probe_scratch_prefix(input_file, kind="verify")', source)
-        # ...exactly once (the probe sites pass no kind)
-        self.assertEqual(source.count('kind="verify"'), 1)
 
     def test_the_historical_verify_grammar_keeps_its_floor(self):
         """The short-lived shrinkray_verify_ name (#435's first shape) still
