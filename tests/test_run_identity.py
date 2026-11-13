@@ -226,8 +226,7 @@ class TestProbeScratchAttribution(unittest.TestCase):
             out.parent.mkdir()
             # the mocked encode writes a SMALLER output: the product's size
             # gate ("a re-encode happens only when the file gets smaller")
-            # returns before the verification block otherwise, and the third
-            # scratch site (the verify workdir) is never created
+            # must not skip the encode, and the second scratch site is created
             encode_with_quality(self.movie, out, db_file=None)
 
     def test_scratch_name_is_decoration_for_the_probe_cache(self) -> None:

@@ -329,7 +329,6 @@ class JobRequest(BaseModel):
         quality (bool): Use VMAF-driven quality mode (encode/plan).
         target_vmaf (float): The VMAF quality floor.
         overwrite (bool): Re-encode already encoded movies.
-        verify (bool): Full-file VMAF verification after each quality encode.
         workers (int | None): Concurrent encodes (the scan's pool; unused by
             the measured encode path).
         encoder_preset (str | None): Quality mode's encoder speed preset
@@ -347,7 +346,6 @@ class JobRequest(BaseModel):
     quality: bool = True
     target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
     overwrite: bool = False
-    verify: bool = False
     workers: int | None = Field(None, ge=1, le=64)
     probe_encoder_preset: str | None = None
     encoder_preset: str | None = None

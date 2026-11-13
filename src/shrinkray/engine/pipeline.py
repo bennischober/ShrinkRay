@@ -1608,10 +1608,9 @@ def encode_with_quality(
         log_error(f"'{input_file.name}': {tracks_detail} (issue #240's 1:1 check).")
 
     # the encode's outcome line (issue #471): the transcript is silent from
-    # 'chosen CRF' until the verification line hours later without it. A
-    # verification finding is NOT repeated here: the tracks check logs its
-    # own error line above and the finding rides result.error (issue #471
-    # round 3, finding 1 — do not re-add a suffix here)
+    # 'chosen CRF' until this line at the end of the encode. The tracks check
+    # logs its own error line above and the finding rides result.error (issue
+    # #471 round 3, finding 1 — do not re-add a suffix here)
     log(
         f"Encode result for '{input_file.name}': CRF {crf}, output "
         f"{final_output_size / (1024**3):.2f} GB "

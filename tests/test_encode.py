@@ -1675,9 +1675,8 @@ class TestEncodeLock(unittest.TestCase):
             self.assertEqual(probe.call_args.kwargs.get("crop_sample_count"), 3)
 
     def test_tool_versions_never_fail_the_encode_without_ffmpeg(self):
-        """CI regression (run 160): ffmpeg is absent, the measurement
-        already failed non-fatally - and then result construction crashed
-        anyway because _tool_versions() probed ffmpeg unguarded. Version
+        """CI regression (run 160): ffmpeg is absent and result construction
+        crashed anyway because _tool_versions() probed ffmpeg unguarded. Version
         metadata must never fail an encode."""
         import tempfile
 
@@ -1702,9 +1701,6 @@ class TestEncodeLock(unittest.TestCase):
                 ),
                 mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
                 mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
-                mock.patch(
-                    "shrinkray.engine.pipeline.measure_vmaf", side_effect=RuntimeError("no ffmpeg")
-                ),
                 mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None),
                 mock.patch(
                     "shrinkray.tools.vmaf.detect_vmaf_style",
@@ -1797,8 +1793,7 @@ if __name__ == "__main__":
 
 class TestEncodeOutcomeLine(unittest.TestCase):
     """Issue #471: the transcript is silent from 'Chosen CRF n' until the
-    verification line hours later; the outcome line names the file, the CRF
-    and the output size."""
+    encode ends; the outcome line names the file, the CRF and the output size."""
 
     def test_the_outcome_line_names_the_result(self) -> None:
         import tempfile
