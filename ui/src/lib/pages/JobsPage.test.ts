@@ -99,4 +99,27 @@ describe('JobsPage render', () => {
     })
     expect(container.querySelector('button.movie-link')).toBeNull()
   })
+
+  it('a queued job shows no start time; running and done rows keep theirs (issue #603)', async () => {
+    const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null })
+    const running = job({ id: 3, state: 'running', started_at: '2026-10-24T10:00:01Z', finished_at: null })
+    const done = job({ id: 1, state: 'done' })
+    const { container } = render(JobsPage, {
+      history: [queued, running, done],
+      onopenMovie: () => {},
+    })
+    const whens = [...container.querySelectorAll('.when')]
+    const text = (el: Element) => (el.textContent ?? '').trim()
+    // the enqueue time must not be presented as the moment work began
+    expect(text(whens[0])).toBe('—')
+    expect(text(whens[1])).not.toBe('—')
+    expect(text(whens[2])).not.toBe('—')
+    // the expansion still shows all three timestamps, labeled
+    fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+    await expect.poll(() => container.querySelector('.detail')).toBeTruthy()
+    const stamps = [...container.querySelectorAll('.detail pre')].map((p) => p.textContent ?? '')
+    const row = stamps.find((t) => t.startsWith('created ')) ?? ''
+    expect(row).toContain('started —')
+    expect(row).toContain('finished —')
+  })
 })
