@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, type Movie } from '../api'
+  import { fmtGb, fmtSavedHonest, fmtVmaf, type Movie } from '../api'
 
   let {
     movies,
@@ -283,7 +283,7 @@
                 {/if}
               </td>
               <td class="mono num">{movie.encode?.crf ?? '—'}</td>
-              <td class="mono num measured">{movie.encode?.vmaf?.toFixed(1) ?? '—'}</td>
+              <td class="mono num measured">{fmtVmaf(movie.encode?.vmaf, targetVmaf)}</td>
               <td class="mono num" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
                 {#if movie.encode}
                   {@const saved = fmtSavedHonest(movie.encode.saved_percent)}

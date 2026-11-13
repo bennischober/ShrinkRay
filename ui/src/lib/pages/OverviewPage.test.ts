@@ -44,9 +44,9 @@ const status: Status = {
   reveal_available: false,
 }
 
-function renderOverview(runningJobs: Job[] = []) {
+function renderOverview(runningJobs: Job[] = [], movies: Movie[] = [movie()]) {
   return render(OverviewPage, {
-    movies: [movie()],
+    movies,
     history: runningJobs.length ? runningJobs : [job()],
     status,
     targetVmaf: 96,
@@ -80,5 +80,27 @@ describe('OverviewPage render (issue #239)', () => {
     // button nor the dialog may exist
     expect(screen.queryByText(/ENCODE ALL/i)).toBeNull()
     expect(screen.queryByText(/ENCODE THE ENTIRE LIBRARY/i)).toBeNull()
+  })
+})
+
+describe('OverviewPage VMAF display (issue #599)', () => {
+  it('a measured score just below the target is not printed as the target', () => {
+    renderOverview(
+      [],
+      [
+        movie({
+          encode: {
+            preset: 'svt_av1',
+            crf: 30,
+            vmaf: 95.96,
+            input_size: 1024 ** 3,
+            output_size: 512 ** 2,
+            saved_percent: 99,
+          },
+        }),
+      ],
+    )
+    expect(screen.getAllByText('95.9').length).toBeGreaterThan(0)
+    expect(screen.queryByText('96.0')).toBeNull()
   })
 })
