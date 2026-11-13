@@ -643,6 +643,7 @@ def skipped_result(decision: Decision, target_vmaf: float) -> QualityResult:
         QualityResult: success=False carrying the gate's reason.
     """
     identity = decision.identity
+    assert identity is not None  # decide_quality captures it before every return
     return QualityResult(
         input=decision.input,
         output=decision.input,
@@ -650,8 +651,8 @@ def skipped_result(decision: Decision, target_vmaf: float) -> QualityResult:
         target_vmaf=target_vmaf,
         error=decision.error,
         skipped_reason=decision.skipped_reason,
-        input_size=identity.size if identity is not None else 0,
-        input_mtime=identity.mtime if identity is not None else None,
+        input_size=identity.size,
+        input_mtime=identity.mtime,
         crf_range=decision.crf_range,
         sample_count=decision.sample_count,
         sample_seconds=decision.sample_seconds,

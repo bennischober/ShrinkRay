@@ -1256,7 +1256,7 @@ def _encode_measured(
             )
             if not decision.eligible:
                 # a gate skip is recorded exactly as before the split: the skip
-                # verdict rides the plans row through the same recorder
+                # verdict rides the encodes row through the same recorder
                 skipped = record_quality_results(
                     connection,
                     movie,

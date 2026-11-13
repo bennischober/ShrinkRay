@@ -19,13 +19,20 @@ approximation.
    CLI `plan` command) stores the plan via `service.record_plan()`. Skip
    outcomes are stored too (`skipped_reason` + chosen_crf/achieved): they
    short-circuit encodes later.
-2. **Read path** — `encode_with_quality()` looks up a valid plan BEFORE
-   probing. Valid hit:
+2. **Read path** — two readers share the one lookup (issue #602): the
+   resident encode job asks it at its search stage (`stored_plan_row`, so a
+   plan the folder job already decided is not measured twice) and
+   `encode_with_quality()` asks it BEFORE probing as the boundary that must
+   never trust a stale plan. Valid hit:
    - skip decision => return the skip `QualityResult` immediately (no
      probing, no encode);
    - encode decision => proceed straight to the final encode with the
      plan's `chosen_crf` and `crop`; the plan's `achieved_vmaf` carries
      over as the sample-based measurement.
+   A search-stage hit finishes its job row with `source: plan` and skips the
+   bar pass, the samples and the bisect; the encode boundary still
+   re-validates the gates and the fingerprint, so a search job can never
+   make a stale plan encode.
 3. **Fingerprint validation** — reuse ONLY when ALL match; ANY mismatch
    => normal probing path (fail-safe to re-probe, never guess):
    input mtime+size, encoder, encoder_preset, target_vmaf, crf_range,
