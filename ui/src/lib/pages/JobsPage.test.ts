@@ -108,12 +108,15 @@ describe('JobsPage render', () => {
       history: [queued, running, done],
       onopenMovie: () => {},
     })
-    const whens = [...container.querySelectorAll('.when')]
     const text = (el: Element) => (el.textContent ?? '').trim()
+    const rowFor = (state: string) =>
+      [...container.querySelectorAll('.entry')].find((el) =>
+        (el.querySelector('.state')?.textContent ?? '').trim().startsWith(state),
+      )!
     // the enqueue time must not be presented as the moment work began
-    expect(text(whens[0])).toBe('—')
-    expect(text(whens[1])).toMatch(/\d/)
-    expect(text(whens[2])).toMatch(/\d/)
+    expect(text(rowFor('QUEUED').querySelector('.when')!)).toBe('—')
+    expect(text(rowFor('RUNNING').querySelector('.when')!)).toMatch(/\d/)
+    expect(text(rowFor('DONE').querySelector('.when')!)).toMatch(/\d/)
     // the expansion still shows all three timestamps, labeled - selected by
     // the row itself, not by fixture order
     const queuedRow = [...container.querySelectorAll('.entry')].find(
