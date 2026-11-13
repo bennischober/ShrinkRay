@@ -907,7 +907,6 @@ def execute_plan(
                 with file_scope(index + 1, total):
                     decision = decide_quality(
                         movie,
-                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
                         min_source_height=config.min_source_height,
                         min_source_width=config.min_source_width,
                         min_source_size_gb=config.min_source_size_gb,
@@ -918,6 +917,9 @@ def execute_plan(
                         sample_count=sample_count,
                         sample_seconds=sample_seconds,
                     )
+            except Cancelled:
+                queue.mark_cancelled(decision_row)
+                raise
             except (RuntimeError, FileNotFoundError) as e:
                 queue.fail_stage(decision_row, str(e))
                 plans.append({"movie": movie.name, "state": "error", "error": str(e)})
@@ -960,7 +962,6 @@ def execute_plan(
             try:
                 with file_scope(index + 1, total):
                     result = search_quality(
-                        movie,
                         decision,
                         target_vmaf=payload.get("target_vmaf", config.target_vmaf),
                         min_saving_percent=config.min_saving_percent,
@@ -1181,6 +1182,7 @@ def _encode_measured(
     )
     from shrinkray.service import (
         finished_movies,
+        record_plan,
         record_quality_results,
         swap_encode_into_place,
     )
@@ -1223,15 +1225,14 @@ def _encode_measured(
         # file. A direct executor call (the one-shot CLI, tests) has no queue
         # and keeps the single-call shape below.
         encode_row: Job | None = None
+        sample_every, sample_count, sample_seconds = config.probe_settings()
         if queue is not None:
-            sample_every, sample_count, sample_seconds = config.probe_settings()
             decision_row = queue.stage(
                 JobKind.DECISION, {"paths": [str(movie)], "pipeline": "encode"}
             )
             try:
                 decision = decide_quality(
                     movie,
-                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
                     min_source_height=config.min_source_height,
                     min_source_width=config.min_source_width,
                     min_source_size_gb=config.min_source_size_gb,
@@ -1240,11 +1241,6 @@ def _encode_measured(
                     sample_count=sample_count,
                     sample_seconds=sample_seconds,
                 )
-            except Cancelled:
-                # a stop must not leave the stage row running (issue #602):
-                # the worker marks the folder job cancelled, this row too
-                queue.mark_cancelled(decision_row)
-                raise
             except (RuntimeError, FileNotFoundError) as e:
                 queue.fail_stage(decision_row, str(e))
                 outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
@@ -1270,7 +1266,6 @@ def _encode_measured(
             )
             try:
                 prediction = search_quality(
-                    movie,
                     decision,
                     target_vmaf=payload.get("target_vmaf", config.target_vmaf),
                     min_saving_percent=config.min_saving_percent,
@@ -1303,8 +1298,6 @@ def _encode_measured(
             # measuring again (issue #602); the encode boundary still
             # re-validates the gates and the fingerprint, so a stale search never
             # encodes. Best-effort like the plan job's write.
-            from shrinkray.service import record_plan
-
             try:
                 record_plan(connection, movie, prediction, config)
             except (RuntimeError, FileNotFoundError) as e:
@@ -1341,9 +1334,6 @@ def _encode_measured(
             # Two-directory mode keys on the output directory it writes into.
             # Per movie, never nested.
             lock_target = movie.parent if in_place else output_dir
-            # one precedence for every entry point (issue #526): the resident
-            # encode reads the same keys as the CLI and the plan job
-            sample_every, sample_count, sample_seconds = config.probe_settings()
             # the [i/N] prefix covers the record and swap lines too (issue
             # #471 round 1, finding 4): they are per-file lines
             with (
@@ -1414,6 +1404,12 @@ def _encode_measured(
                 queue.fail_stage(encode_row, str(e))
             outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
             continue
+        except Cancelled:
+            # a stop must not leave the stage row running (issue #602): the
+            # worker marks the folder job cancelled, this row too
+            if queue is not None and encode_row is not None:
+                queue.mark_cancelled(encode_row)
+            raise
         except Exception as e:
             # an unexpected failure must not leave the stage row RUNNING: the
             # folder job fails too, and the row carries the same reason

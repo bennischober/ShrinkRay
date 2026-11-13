@@ -429,7 +429,6 @@ class Decision:
 
 def decide_quality(
     input_file: Path,
-    target_vmaf: float = DEFAULT_TARGET_VMAF,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
@@ -450,7 +449,6 @@ def decide_quality(
 
     Args:
         input_file (Path): The file to decide.
-        target_vmaf (float): The VMAF quality floor the decision records.
         crf_range (tuple[int, int]): The (lowest, highest) CRF the decision
             carries to the search.
         sample_count (int): The fixed sample count (None = derived from
@@ -656,7 +654,6 @@ def skipped_result(decision: Decision, target_vmaf: float) -> QualityResult:
 
 
 def search_quality(
-    input_file: Path,
     decision: Decision,
     *,
     target_vmaf: float = DEFAULT_TARGET_VMAF,
@@ -679,7 +676,6 @@ def search_quality(
     re-validates at its boundary.
 
     Args:
-        input_file (Path): The eligible file.
         decision (Decision): The eligibility verdict this search runs under
             (its identity is the run-start stat every verdict commits under).
         target_vmaf (float): The VMAF quality floor to meet.
@@ -706,6 +702,7 @@ def search_quality(
         RuntimeError: If HandBrakeCLI is not installed or probing failed.
         Cancelled: When the cancel event fires.
     """
+    input_file = decision.input
     identity = decision.identity
     if identity is None:  # only an eligible decision reaches the search
         raise RuntimeError("search_quality needs an eligible decision")
@@ -1009,7 +1006,6 @@ def plan_quality(
     """
     decision = decide_quality(
         input_file,
-        target_vmaf=target_vmaf,
         crf_range=crf_range,
         sample_count=sample_count,
         sample_seconds=sample_seconds,
@@ -1022,7 +1018,6 @@ def plan_quality(
     if not decision.eligible:
         return skipped_result(decision, target_vmaf)
     return search_quality(
-        input_file,
         decision,
         target_vmaf=target_vmaf,
         min_saving_percent=min_saving_percent,

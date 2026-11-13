@@ -308,7 +308,6 @@ class TestJobs(unittest.TestCase):
         )
         with (
             _patch("shrinkray.engine.plan.decide_quality", return_value=rejected),
-            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job, self.connection, threading.Event(), queue=self.queue)
@@ -317,6 +316,165 @@ class TestJobs(unittest.TestCase):
         ).fetchall()
         self.assertEqual([row["kind"] for row in rows], ["decision"])
         self.assertIn('"reason": "too short"', rows[0]["result"])
+        # the rejection's plans row is written for real (issue #602): a later
+        # encode reuses the verdict instead of re-probing the file
+        plan = self.connection.execute(
+            "SELECT skipped_reason FROM plans p JOIN files f ON f.id = p.file_id"
+        ).fetchone()
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["skipped_reason"], "too short")
+
+    def test_a_failed_plan_write_still_encodes(self):
+        """Issue #602 review: a plan write that fails must never skip the
+        encode - the encode boundary re-plans when nothing is stored."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Plan Write_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+
+        def fake_encode(movie, output, *args, **kwargs):
+            output.write_bytes(b"y" * 8)
+            return _NS(
+                input_size=16,
+                output_size=8,
+                chosen_crf=21,
+                achieved_vmaf=95.4,
+                error=None,
+                input_mtime=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            _patch(
+                "shrinkray.service.record_plan",
+                side_effect=RuntimeError("database is locked"),
+            ),
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=fake_encode,
+            ) as engine,
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=True, skipped=False, error=None),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        engine.assert_called_once()
+        rows = self.connection.execute(
+            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual(
+            [(row["kind"], row["state"]) for row in rows],
+            [("decision", "done"), ("crf-search", "done"), ("encode", "done")],
+        )
+
+    def test_a_cancel_marks_the_decision_row_cancelled(self):
+        """Issue #602 review: a graceful stop during a stage must not leave its
+        row running - the worker marks the folder job cancelled, the stage row
+        too."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        from shrinkray.tools.process import Cancelled
+
+        movie = _Path(self.tmp.name) / "Cancelled Movie_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                side_effect=Cancelled("cancelled during the decision"),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            self.assertRaises(Cancelled),
+        ):
+            jobs.execute_plan(job, self.connection, threading.Event(), queue=self.queue)
+        row = self.connection.execute(
+            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchone()
+        self.assertEqual(row["kind"], "decision")
+        self.assertEqual(row["state"], "cancelled")
+
+    def test_a_cancel_during_the_encode_marks_its_stage_row_cancelled(self):
+        """Issue #602 review: the encode stage row must read cancelled on a
+        graceful stop, not failed - the worker marks the folder job cancelled."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        from shrinkray.tools.process import Cancelled
+
+        movie = _Path(self.tmp.name) / "Cancelled Encode_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=Cancelled("cancelled during the encode"),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            self.assertRaises(Cancelled),
+        ):
+            jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        rows = self.connection.execute(
+            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual(
+            [(row["kind"], row["state"]) for row in rows],
+            [("decision", "done"), ("crf-search", "done"), ("encode", "cancelled")],
+        )
 
     def test_an_encode_job_records_the_three_stages(self):
         """Issue #602: the encode pipeline is three consecutive rows - the
