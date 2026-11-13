@@ -459,6 +459,20 @@ export function fmtSeconds(seconds: number | null | undefined): string {
   return `${h}h ${m % 60}m`
 }
 
+/** Formats a VMAF score to one decimal without letting the printed
+ * number cross the target the score was judged against (#599). A recorded
+ * 95.96 under a 96 target prints 95.9, never "96.0" beside "target
+ * unreachable"; 96.01 prints 96.1. Scores away from the target keep
+ * their one-decimal form, and a missing score is a dash. */
+export function fmtVmaf(score: number | null | undefined, target?: number | null): string {
+  if (score == null) return '—'
+  const rounded = Number(score.toFixed(1))
+  if (target == null) return rounded.toFixed(1)
+  if (score < target && rounded >= target) return (rounded - 0.1).toFixed(1)
+  if (score > target && rounded <= target) return (rounded + 0.1).toFixed(1)
+  return rounded.toFixed(1)
+}
+
 /** Formats a saved-percentage-like value honestly: growth is not a gain. */
 export function fmtSavedHonest(percent: number | null | undefined): {
   text: string
