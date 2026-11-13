@@ -49,7 +49,11 @@ class TestAuthDisabled(unittest.TestCase):
 
 
 class TestAuthEnabled(unittest.TestCase):
-    """A configured token guards every route, SSE included."""
+    """A configured token guards every API route and /metrics.
+
+    The SPA shell is the one GET-only exception (issue #600): the document
+    and its static assets load without a token.
+    """
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -89,34 +93,50 @@ class TestAuthEnabled(unittest.TestCase):
                 response = self.client.request(method, path)
                 self.assertEqual(response.status_code, 401, f"{method} {path} was not guarded")
 
-    def test_the_spa_document_serves_without_a_token(self) -> None:
+    def test_the_spa_document_is_not_a_401(self) -> None:
         """Issue #600: a browser navigation cannot send the Authorization
-        header, so the document must load unauthenticated — the paste-token
+        header, so the document must not be rejected — the paste-token
         prompt (issue #36) lives inside the SPA and can never appear
-        otherwise."""
-        dist = Path(__file__).parent.parent / "ui" / "dist"
+        otherwise. This pin does not need a built UI: the route's own 404
+        is still not a 401."""
         response = self.client.get("/")
         self.assertNotEqual(response.status_code, 401)
+
+    def test_the_built_spa_document_is_html(self) -> None:
+        """When the UI is built, the unauthenticated document is the app.
+
+        The Python gate does not build ui/dist, so this skips there. The
+        not-401 pin above still runs.
+        """
+        dist = Path(__file__).parent.parent / "ui" / "dist"
         if not (dist / "index.html").is_file():
             self.skipTest("UI not built")
+        response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("<html", response.text.lower())
 
-    def test_the_shell_assets_serve_without_a_token(self) -> None:
-        """Issue #600: the document's static assets load unauthenticated too,
-        and the asset route's containment still holds under auth — a
-        traversal attempt is 404, never served and never a 401-shaped
-        fallback."""
+    def test_an_asset_traversal_under_auth_is_a_404(self) -> None:
+        """The asset route's containment holds under auth — a traversal
+        attempt is 404, never served and never a 401-shaped fallback.
+        This does not need a built UI."""
         response = self.client.get("/assets/..%2F..%2Fpyproject.toml")
         self.assertEqual(response.status_code, 404)
+
+    def test_a_built_shell_asset_serves_without_a_token(self) -> None:
+        """Issue #600: a built static asset loads unauthenticated.
+
+        Skips when ui/dist has no assets, which is the Python gate. The
+        traversal pin above still runs.
+        """
         dist = Path(__file__).parent.parent / "ui" / "dist" / "assets"
-        if dist.is_dir():
-            asset = sorted(p.name for p in dist.iterdir() if p.is_file())[0]
-            ok = self.client.get(f"/assets/{asset}")
-            self.assertNotEqual(ok.status_code, 401)
-            self.assertEqual(ok.status_code, 200)
-        else:
+        if not dist.is_dir():
             self.skipTest("UI not built")
+        names = sorted(p.name for p in dist.iterdir() if p.is_file())
+        if not names:
+            self.skipTest("UI not built")
+        ok = self.client.get(f"/assets/{names[0]}")
+        self.assertNotEqual(ok.status_code, 401)
+        self.assertEqual(ok.status_code, 200)
 
     def test_a_nul_byte_in_an_asset_path_is_a_404_not_a_500(self) -> None:
         """Round-1 review finding 1: the shell is unauthenticated now, so its

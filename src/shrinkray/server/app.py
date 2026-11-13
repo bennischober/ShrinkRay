@@ -724,8 +724,9 @@ def metrics(conn: sqlite3.Connection = Depends(db_access)) -> Response:
     """Serves the Prometheus text exposition format (issue #168).
 
     Pull-based on purpose: the scraper connects to ShrinkRay, so the container
-    opens no outbound connection. Covered by the token middleware like every
-    other route - it is registered after `require_token`, not exempted from it.
+    opens no outbound connection. Covered by the token middleware: it is
+    registered after `require_token` and is not part of the SPA-shell
+    exemption (issue #600).
 
     Args:
         conn: The database connection (db_access dependency).

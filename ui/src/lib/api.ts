@@ -248,9 +248,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** The dashboard's bearer token (issue #36).
  *
- * Auth is opt-in on the server: with $SHRINKRAY_TOKEN set, every route
- * requires the token, and the operator pastes it once — it is kept in
- * localStorage so the prompt appears once per browser, not per request.
+ * Auth is opt-in on the server: with $SHRINKRAY_TOKEN set, every API route
+ * requires the token. The dashboard document loads without it (issue #600),
+ * and the operator pastes the token once — it is kept in localStorage so
+ * the prompt appears once per browser, not per request.
  * With no token stored the header is omitted entirely, which is the
  * loopback development flow (the server does not ask for one). */
 const TOKEN_KEY = 'shrinkray.token'
