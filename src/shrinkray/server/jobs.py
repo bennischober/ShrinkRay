@@ -806,6 +806,7 @@ def execute_plan(
     """
     from shrinkray.config import load_config, refresh_config
     from shrinkray.engine.plan import plan_quality
+    from shrinkray.engine.watch import STABLE_MIN_AGE, check_stability
 
     payload = job.payload
     config = load_config()
@@ -826,6 +827,27 @@ def execute_plan(
         # (issue #247)
         config = refresh_config()
         apply_reloaded_config(config)
+        # the completeness witness (issues #437, #479, #586): the boot
+        # backlog's jobs run on whatever the boot scan catalogued - a copy
+        # a container restart interrupted, or a stalled sparse download,
+        # must not be decided from. Skip-and-leave, like the watcher: the
+        # file stays eligible and a later pass re-decides it once settled.
+        try:
+            stability = check_stability(movie)
+        except OSError as e:
+            plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+            continue
+        if not stability.settled:
+            reason = (
+                f"last write only {STABLE_MIN_AGE - stability.young_for:.0f} s ago "
+                f"(needs {STABLE_MIN_AGE:g} s of quiet)"
+                if stability.young_for > 0
+                else str(stability.incomplete)
+            )
+            plans.append(
+                {"movie": movie.name, "state": "skipped", "reason": f"not complete: {reason}"}
+            )
+            continue
         if progress:
             progress(
                 {
@@ -1015,6 +1037,7 @@ def _encode_measured(
     from shrinkray.config import refresh_config
     from shrinkray.engine.lock import EncodeBusyError, guard_encodes
     from shrinkray.engine.pipeline import encode_with_quality
+    from shrinkray.engine.watch import STABLE_MIN_AGE, check_stability
     from shrinkray.service import (
         finished_movies,
         record_quality_results,
@@ -1053,6 +1076,28 @@ def _encode_measured(
         apply_reloaded_config(config)
         if str(movie) in encoded_paths:
             outcomes.append({"movie": movie.name, "state": "already_encoded"})
+            continue
+        # the completeness witness (issues #437, #479, #586): the boot
+        # backlog's encode job runs on whatever the boot scan catalogued,
+        # and the watcher checks ITS submissions before submitting (#479)
+        # but this job also serves the backlog and the UI. Skip-and-leave,
+        # like the watcher: the file stays eligible and a later pass
+        # re-decides it once settled.
+        try:
+            stability = check_stability(movie)
+        except OSError as e:
+            outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
+            continue
+        if not stability.settled:
+            reason = (
+                f"last write only {STABLE_MIN_AGE - stability.young_for:.0f} s ago "
+                f"(needs {STABLE_MIN_AGE:g} s of quiet)"
+                if stability.young_for > 0
+                else str(stability.incomplete)
+            )
+            outcomes.append(
+                {"movie": movie.name, "state": "skipped", "reason": f"not complete: {reason}"}
+            )
             continue
         if progress:
             progress(

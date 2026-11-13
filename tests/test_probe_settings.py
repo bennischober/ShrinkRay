@@ -6,6 +6,8 @@ schema default is unset, so it no longer shadows density; a configured count
 still overrides it.
 """
 
+import os
+
 import threading
 import unittest
 from pathlib import Path
@@ -76,6 +78,7 @@ class TestTheResidentJobUsesTheSameRule(unittest.TestCase):
     def _plan_kwargs(self, config: Conf) -> dict:
         movie = Path(self.tmp.name) / "Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
