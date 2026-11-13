@@ -114,8 +114,12 @@ describe('JobsPage render', () => {
     expect(text(whens[0])).toBe('—')
     expect(text(whens[1])).toMatch(/\d/)
     expect(text(whens[2])).toMatch(/\d/)
-    // the expansion still shows all three timestamps, labeled
-    fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+    // the expansion still shows all three timestamps, labeled - selected by
+    // the row itself, not by fixture order
+    const queuedRow = [...container.querySelectorAll('.entry')].find(
+      (el) => (el.querySelector('.when')?.textContent ?? '').trim() === '—',
+    )!
+    fireEvent.click(queuedRow.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
     await expect.poll(() => container.querySelector('.detail')).toBeTruthy()
     const stamps = [...container.querySelectorAll('.detail pre')].map((p) => p.textContent ?? '')
     const row = stamps.find((t) => t.startsWith('created ')) ?? ''
