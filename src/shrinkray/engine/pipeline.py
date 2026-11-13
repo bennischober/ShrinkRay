@@ -177,9 +177,6 @@ from shrinkray.tools.vmaf import (
     _tool_versions as _tool_versions,
 )
 from shrinkray.tools.vmaf import (
-    measure_vmaf as measure_vmaf,
-)
-from shrinkray.tools.vmaf import (
     vmaf_recipe as vmaf_recipe,
 )
 

@@ -217,9 +217,6 @@ class TestProbeScratchAttribution(unittest.TestCase):
                 return_value=(20, 96.5, [], False, 0.5),
             ),
             patch("shrinkray.engine.pipeline.tempfile.mkdtemp", side_effect=fake_mkdtemp),
-            # the verification measurement is a real binary seam; this test's
-            # subject is the scratch grammar, not VMAF (review finding 3)
-            patch("shrinkray.engine.pipeline.measure_vmaf", return_value=94.5),
             patch("shrinkray.engine.pipeline._encode_with_command", side_effect=fake_encode),
         ):
             out = self.root / "out" / "movie.mkv"

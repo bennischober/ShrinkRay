@@ -70,6 +70,35 @@ class TestQuality(unittest.TestCase):
             )
             self.assertIsNone(bundle)
 
+    def test_telemetry_without_a_db_file_writes_nothing(self):
+        """db_file=None is the stateless caller's shape (the probe path passes
+        it when no database is in play): telemetry has no home it may use, so
+        nothing is written - in particular never a logs/ directory in the
+        process's working directory (the old fallback that leaked into the repo
+        root)."""
+        from shrinkray.telemetry import save_failure
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp) / "work"
+            workdir.mkdir()
+            (workdir / "vmaf.json").write_text("{}", encoding="utf-8")
+            before = set(Path.cwd().glob("logs/*"))
+            bundle = save_failure(
+                db_file=None,
+                kind="vmaf-measure",
+                command=["ffmpeg", "-i", "x.mkv"],
+                stderr="boom",
+                workdir=workdir,
+                artifacts=["vmaf.json"],
+                context={"returncode": 1},
+            )
+            self.assertIsNone(bundle)
+            self.assertEqual(
+                set(Path.cwd().glob("logs/*")) - before,
+                set(),
+                "a stateless failure created a telemetry bundle in the working directory",
+            )
+
     def test_the_decided_vmaf_default_is_96(self):
         """Issue #103: VMAF 96 is the decided default, and nothing repeats it.
 

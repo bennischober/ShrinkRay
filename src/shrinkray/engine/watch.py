@@ -1056,7 +1056,7 @@ def watch(
                                 target_dir / movie.name,
                                 # the measurement child opts out of the stall
                                 # watchdog (issue #431): without this event a
-                                # hung verify pass is unbounded until the
+                                # hung measurement is unbounded until the
                                 # container stops - the shutdown event is the
                                 # kill path (review on PR #468, finding 1)
                                 cancel=stop_event,
