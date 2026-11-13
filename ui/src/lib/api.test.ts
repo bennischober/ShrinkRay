@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   failedOutcomeNote,
   fmtSavedHonest,
+  fmtVmaf,
   fmtSeconds,
   fmtSpan,
   humanizeError,
@@ -49,6 +50,30 @@ describe('jobPaths (issue #100 regression)', () => {
 
   it('returns empty for a payload without targets', () => {
     expect(jobPaths(job({ payload: {} }))).toEqual([])
+  })
+})
+
+describe('fmtVmaf (issue #599)', () => {
+  it('keeps a score below the target below it after rounding', () => {
+    expect(fmtVmaf(95.96, 96)).toBe('95.9')
+    expect(fmtVmaf(95.99, 96)).toBe('95.9')
+  })
+
+  it('keeps a score above the target above it after rounding', () => {
+    expect(fmtVmaf(96.01, 96)).toBe('96.1')
+    expect(fmtVmaf(96.04, 96)).toBe('96.1')
+  })
+
+  it('leaves a score away from the target at its one-decimal form', () => {
+    expect(fmtVmaf(95.94, 96)).toBe('95.9')
+    expect(fmtVmaf(96.06, 96)).toBe('96.1')
+    expect(fmtVmaf(95.5, 96)).toBe('95.5')
+  })
+
+  it('formats without a target and renders null as a dash', () => {
+    expect(fmtVmaf(96.04)).toBe('96.0')
+    expect(fmtVmaf(null, 96)).toBe('—')
+    expect(fmtVmaf(undefined, 96)).toBe('—')
   })
 })
 
