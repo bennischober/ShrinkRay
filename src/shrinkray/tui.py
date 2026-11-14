@@ -132,6 +132,14 @@ def fields_for(defaults: Conf) -> list[Field]:
             remeasures=True,
         ),
         Field(
+            "Quality",
+            "quality.sample_seconds",
+            "Probe window length (s)",
+            "float",
+            defaults.sample_seconds,
+            remeasures=True,
+        ),
+        Field(
             "Resources",
             "handbrake.max_threads",
             "Thread cap per encode",
