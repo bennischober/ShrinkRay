@@ -207,6 +207,50 @@ class TestTheResidentJobUsesTheSameRule(unittest.TestCase):
                 **fingerprint,
             )
         )
+        # the window-length arm on its own: a row measured at the new 4 s
+        # length must not match a lookup at the old 10 s length (the count
+        # alone must not decide the miss)
+        db.save_plan(
+            self.connection,
+            file_id,
+            chosen_crf=22,
+            achieved_vmaf=96.1,
+            crop=None,
+            probes=[],
+            skipped_reason=None,
+            estimated_size=100,
+            input_mtime=movie.stat().st_mtime,
+            input_size=movie.stat().st_size,
+            encoder="svt_av1",
+            encoder_preset="5",
+            target_vmaf=96.0,
+            crf_low=14,
+            crf_high=70,
+            sample_count=30,
+            sample_seconds=DEFAULT_SAMPLE_SECONDS,
+            crop_sample_count=10,
+            vmaf_statistic="mean",
+            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+            min_saving_percent=15,
+        )
+        self.assertIsNone(
+            db.get_valid_plan(
+                self.connection,
+                movie,
+                sample_count=30,
+                sample_seconds=10.0,
+                **fingerprint,
+            )
+        )
+        self.assertIsNotNone(
+            db.get_valid_plan(
+                self.connection,
+                movie,
+                sample_count=30,
+                sample_seconds=DEFAULT_SAMPLE_SECONDS,
+                **fingerprint,
+            )
+        )
 
     def test_a_configured_count_reaches_the_job(self) -> None:
         kwargs = self._plan_kwargs(Conf({"quality": {"sample_count": 5}}))
