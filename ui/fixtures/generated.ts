@@ -37,8 +37,13 @@ function movie(index: number, nasty = false): Movie {
   }
 }
 
+/** A fixed instant, never `Date.now()`: a scenario whose timestamps move
+ * renders different text on every run (a "3 min ago" becomes "5 min ago"), and
+ * the page's width then depends on the run rather than on the layout. */
+const NOW = Date.parse('2026-11-14T12:00:00Z')
+
 function job(id: number, state: Job['state'], kind: Job['kind'], offsetMinutes: number): Job {
-  const started = new Date(Date.now() - offsetMinutes * 60_000).toISOString()
+  const started = new Date(NOW - offsetMinutes * 60_000).toISOString()
   return {
     id,
     kind,
@@ -78,7 +83,7 @@ export function busy(): Fixture {
       retained_path: '/media/Filme/Titel 7 (2020).mkv.shrinkray-original',
       size_before: 4_200_000_000,
       size_after: 1_100_000_000,
-      created_at: new Date(Date.now() - 3_600_000).toISOString(),
+      created_at: new Date(NOW - 3_600_000).toISOString(),
       present: true,
     }],
     config: { quality: { target_vmaf: 96 } },

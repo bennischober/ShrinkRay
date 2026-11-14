@@ -58,10 +58,9 @@ for (const scenario of SCENARIOS) {
       })
       page.on('pageerror', (error) => errors.push(String(error)))
 
-      // `networkidle` waits for the page's own snapshot request: on a cold dev
-      // server the first paint races the module compile, which made two runs of
-      // the same commit disagree about the same page
-      await page.goto(`/?fixture=${scenario}${hash}`, { waitUntil: 'networkidle' })
+      // `load`, never `networkidle`: the event stream stays open like the
+      // real one, so `networkidle` never settles and the whole run times out
+      await page.goto(`/?fixture=${scenario}${hash}`, { waitUntil: 'load' })
       await expect(page.locator('h1').first()).toBeVisible()
       // measure after the fonts settle: a swap changes text widths, which is
       // what made two runs of the same commit disagree about the same page
