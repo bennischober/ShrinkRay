@@ -75,6 +75,13 @@ for (const scenario of SCENARIOS) {
       // what made two runs of the same commit disagree about the same page
       await page.evaluate(() => document.fonts.ready)
 
+      // the picture is taken before the assertions: a failing case must leave
+      // an artifact too, and this one is the evidence for its page issue
+      await page.screenshot({
+        path: `test-results/screenshots/${name}-${scenario}-${testInfo.project.name}.png`,
+        fullPage: true,
+      })
+
       // The check runs whether or not the case is allowlisted: a case that
       // starts passing while it is still in the list is a stale entry and
       // fails the run, so the list can only shrink.
@@ -99,10 +106,6 @@ for (const scenario of SCENARIOS) {
         expect(failure, `this case is not in known-failures.json: ${failure}`).toBeNull()
       }
 
-      await page.screenshot({
-        path: `test-results/screenshots/${name}-${scenario}-${testInfo.project.name}.png`,
-        fullPage: true,
-      })
     })
   }
 }
