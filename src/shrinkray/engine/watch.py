@@ -8,6 +8,7 @@ logic as the encode/plan commands and encodes them (source stays untouched
 
 import contextlib
 import ctypes
+import errno
 import math
 import os
 import sqlite3
@@ -481,21 +482,39 @@ def acquire_lock(lock_file: Path) -> bool:
     refuse to start (issue #648; the PID heuristic it replaces read its
     own PID from the leftover file and saw a live process). A genuinely
     live second watcher holds its own descriptor's lock and still blocks.
+    The file is never unlinked while or after holding the lock: a stable
+    inode is what makes "the lock" one object - unlinking it after release
+    let a third process create a fresh inode and run alongside the second
+    (the classic unlink race).
 
     Args:
         lock_file (Path): The lock file path (the owner PID in it is
             diagnostics only).
 
     Returns:
-        bool: True if the lock was acquired (this is the only watcher).
+        bool: True if the lock was acquired (this is the only watcher);
+            False only when the OS lock is held by someone else.
+
+    Raises:
+        OSError: An infrastructure failure (the directory cannot be
+            created, the path is not a regular file, the lock call failed
+            for a reason other than "held") - the caller records the real
+            cause instead of mistaking it for "another watcher".
     """
     global _LOCK_FD
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    # O_NOFOLLOW (POSIX): a symlink planted at the fixed lock path must not
+    # make us truncate someone else's file (issue #648 review); %TEMP% is
+    # per-user on Windows, where the flag does not exist
+    fd = os.open(
+        lock_file,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
     try:
-        lock_file.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(lock_file, os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0))
-    except OSError:
-        return False
-    try:
+        import stat
+
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"the lock path is not a regular file: {lock_file}")
         if sys.platform == "win32":
             import msvcrt
 
@@ -505,9 +524,17 @@ def acquire_lock(lock_file: Path) -> bool:
             import fcntl
 
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except BlockingIOError:
+        # POSIX: the lock is held by another watcher - the one legitimate
+        # refusal
         os.close(fd)
         return False
+    except OSError as e:
+        os.close(fd)
+        if e.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+            # Windows: msvcrt.locking reports a held lock as EACCES/EDEADLK
+            return False
+        raise
     # acquired: keep the descriptor open (the lock lives on it) and record
     # the owner for diagnostics - a reader can see who holds the file even
     # though the text decides nothing
@@ -707,9 +734,14 @@ def _wait_or_stop(
 def release_lock(lock_file: Path) -> None:
     """Releases the single-instance lock if this process holds it.
 
+    The file is left in place on purpose: a stable inode is what makes
+    "the lock" one object (unlinking it after release lets a third process
+    create a fresh inode and run alongside the second), and a leftover
+    file decides nothing - the OS lock does.
+
     Args:
-        lock_file (Path): The lock file path (unlinked best-effort; a
-            leftover file decides nothing - the OS lock does).
+        lock_file (Path): The lock file path (unused by the unlock, which
+            works on the held descriptor; kept for signature stability).
     """
     global _LOCK_FD
     fd = _LOCK_FD
@@ -717,36 +749,31 @@ def release_lock(lock_file: Path) -> None:
     if fd is None:
         return
     try:
-        try:
-            if sys.platform == "win32":
-                import msvcrt
+        if sys.platform == "win32":
+            import msvcrt
 
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
 
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        except OSError:
-            pass  # the close below releases the lock regardless
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass  # the close below releases the lock regardless
     finally:
-        try:
-            os.close(fd)
-            lock_file.unlink(missing_ok=True)
-        except OSError:
-            pass
+        os.close(fd)
 
 
 # the single-instance lock's path: one watcher per machine. A module-level
-# constant so tests can point it at a per-test temp file - a shared /tmp
-# path plus pid reuse made watch() refuse to run in a test run (issue #176
-# follow-up: six watch tests failed with empty results because a leftover
-# lock's pid happened to be alive again).
+# constant so tests can point it at a per-test temp file (issue #176: a
+# shared /tmp path made one test run's lock block another's). The file's
+# text is diagnostics; the OS lock on it decides (issue #648).
 WATCH_LOCK_FILE = Path(tempfile.gettempdir()) / "shrinkray_watch.lock"
 
-# why the last watch() refused to run (issue #648): None while the watcher
-# is running, the reason when it returned early - /api/status carries it so
-# a stopped watcher is never a silent one
+# why the last watch() did not run (issue #648): None while the watcher is
+# running; the lock refusal sets it here, and a watch-loop crash is recorded
+# by the server's run_watch wrapper - /api/status carries it so a stopped
+# watcher is never a silent one
 WATCHER_ERROR: str | None = None
 
 # the descriptor the OS lock is held on (issue #648): the lock lives on the
@@ -928,7 +955,13 @@ def watch(
             )
 
     global WATCHER_ERROR
-    if not acquire_lock(lock_file):
+    try:
+        acquired = acquire_lock(lock_file)
+    except OSError as e:
+        WATCHER_ERROR = f"the single-instance lock could not be acquired: {e}"
+        log_error(f"The watcher did not start: {WATCHER_ERROR}.")
+        return
+    if not acquired:
         WATCHER_ERROR = "another watcher holds the single-instance lock"
         log_error(f"The watcher did not start: {WATCHER_ERROR}.")
         return

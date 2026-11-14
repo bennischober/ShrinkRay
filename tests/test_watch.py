@@ -4,6 +4,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -331,11 +332,15 @@ class TestWatch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "watch.lock"
             self.assertTrue(acquire_lock(lock))
-            # second acquire fails (our own pid is alive)
+            # second acquire fails: the OS lock is held on the descriptor
             self.assertFalse(acquire_lock(lock))
             release_lock(lock)
-            self.assertFalse(lock.exists())
-            # stale lock (dead pid) => take over
+            # the file STAYS (issue #648 review, finding 1): a stable inode
+            # is what makes the lock one object - unlinking after release
+            # let a third process create a fresh inode and run alongside
+            self.assertTrue(lock.exists())
+            # a stale lock (a dead pid in the text) => take over: the text
+            # decides nothing, the OS lock does
             lock.write_text("999999999", encoding="utf-8")
             self.assertTrue(acquire_lock(lock))
             release_lock(lock)
@@ -353,6 +358,28 @@ class TestWatch(unittest.TestCase):
             lock.write_text(str(os.getpid()), encoding="utf-8")
             self.assertTrue(acquire_lock(lock))
             release_lock(lock)
+
+    def test_a_symlink_at_the_lock_path_is_refused_loudly(self):
+        """Issue #648 review, finding 4: a symlink planted at the fixed lock
+        path must not make the watcher truncate someone else's file - the
+        open refuses it (O_NOFOLLOW) and the failure is raised, not
+        mistaken for 'another watcher'."""
+        import shutil
+
+        from shrinkray.engine.watch import acquire_lock
+
+        if sys.platform == "win32":
+            self.skipTest("O_NOFOLLOW is POSIX-only")
+        if not hasattr(shutil, "OS_DirEntry") and not hasattr(os, "symlink"):
+            self.skipTest("no symlink support")
+        with tempfile.TemporaryDirectory() as tmp:
+            victim = Path(tmp) / "victim.txt"
+            victim.write_text("do not truncate", encoding="utf-8")
+            lock = Path(tmp) / "watch.lock"
+            os.symlink(victim, lock)
+            with self.assertRaises(OSError):
+                acquire_lock(lock)
+            self.assertEqual(victim.read_text(encoding="utf-8"), "do not truncate")
 
     def test_a_refused_start_names_the_reason(self):
         """Issue #648: a stopped watcher is not silent - watch() records the

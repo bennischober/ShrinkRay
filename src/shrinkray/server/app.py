@@ -1750,6 +1750,9 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 extensions=list(refresh_config().extensions),
             )
         except Exception as e:
+            # a stopped watcher says why (issue #648): the crash reaches
+            # /api/status instead of dying in the log alone
+            watch_mod.WATCHER_ERROR = f"the watch loop crashed: {e}"
             log_error(f"watch loop crashed: {e}")
 
     state.watch_stop.clear()
