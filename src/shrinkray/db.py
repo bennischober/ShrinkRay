@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 if TYPE_CHECKING:
     # engine is ABOVE db in the layer contract; the summary type arrives as
@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS crops (
     ratios TEXT NOT NULL DEFAULT '{}',
     input_mtime REAL NOT NULL,
     input_size INTEGER NOT NULL,
+    detect_limit INTEGER NOT NULL DEFAULT 24,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -425,6 +426,21 @@ MIGRATIONS = {
         # shrink), so every pre-#316 plan misses the current lookup and is
         # re-probed - fail-safe to re-probe, never guess.
         "ALTER TABLE plans ADD COLUMN min_saving_percent INTEGER NOT NULL DEFAULT 0",
+    ],
+    21: [
+        # cropdetect's blackness threshold follows the source's bit depth
+        # (issue #637): the 8-bit value 24 found no black in limited-range
+        # 10-bit video (black is code 64), so every deeper source read as
+        # bar-free. Every existing crop row was measured at 24 (the constant
+        # never changed), so the column defaults to it: an 8-bit row stays a
+        # hit, a 10-bit row now misses and is measured again.
+        "ALTER TABLE crops ADD COLUMN detect_limit INTEGER NOT NULL DEFAULT 24",
+        # a stored plan carries the crop the encode reuses (pipeline's plan
+        # path), so every measured plan of a deeper-than-8-bit source - the
+        # recipe's analysis format is yuv420p10le exactly for those - encodes
+        # with its bars kept. Dropping the rows re-probes them, as the v15
+        # migration did for plans probed without bars; 8-bit plans are kept.
+        "DELETE FROM plans WHERE vmaf_recipe LIKE '%;fmt=yuv420p10le;%'",
     ],
 }
 
@@ -952,6 +968,8 @@ def save_crop_summary(
     connection: sqlite3.Connection,
     movie: Path,
     summary: CropSummary,
+    *,
+    limit: int,
 ) -> None:
     """Stores (upserts) the timeline detector's summary for one file version.
 
@@ -963,6 +981,8 @@ def save_crop_summary(
         connection: The database connection.
         movie (Path): The source movie file.
         summary (crop.CropSummary): The timeline detector's result.
+        limit (int): The cropdetect threshold the summary was measured with
+            (issue #637: part of the row's identity).
     """
     row = connection.execute("SELECT id FROM files WHERE path = ?", (str(movie),)).fetchone()
     if row is None:
@@ -978,8 +998,8 @@ def save_crop_summary(
         """
         INSERT INTO crops (
             file_id, bars, frame_width, frame_height, readings,
-            sustained_readings, ratios, input_mtime, input_size
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sustained_readings, ratios, input_mtime, input_size, detect_limit
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -991,21 +1011,24 @@ def save_crop_summary(
             ratios,
             stat.st_mtime,
             stat.st_size,
+            limit,
         ),
     )
     connection.commit()
 
 
-def get_crop_row(connection: sqlite3.Connection, movie: Path) -> sqlite3.Row | None:
+def get_crop_row(connection: sqlite3.Connection, movie: Path, *, limit: int) -> sqlite3.Row | None:
     """Returns the file's cached crop row when the file is unchanged.
 
-    Identity is size + mtime (the scan cache's rule): ANY change is a miss,
+    Identity is size + mtime (the scan cache's rule) plus the cropdetect
+    threshold the row was measured with (issue #637): ANY change is a miss,
     fail-safe to recompute. The ROW is returned raw: interpreting it into a
     summary (bars, ratios) is the engine's job — db stores, engine decides.
 
     Args:
         connection: The database connection.
         movie (Path): The source movie file.
+        limit (int): The threshold the caller would measure with now.
 
     Returns:
         sqlite3.Row | None: The raw crops row, or None.
@@ -1018,9 +1041,9 @@ def get_crop_row(connection: sqlite3.Connection, movie: Path) -> sqlite3.Row | N
         SELECT c.bars, c.frame_width, c.frame_height, c.readings,
                c.sustained_readings, c.ratios, c.input_mtime, c.input_size
         FROM crops c JOIN files f ON f.id = c.file_id
-        WHERE f.path = ?
+        WHERE f.path = ? AND c.detect_limit = ?
         """,
-        (str(movie),),
+        (str(movie), limit),
     ).fetchone()
     if row is None:
         return None

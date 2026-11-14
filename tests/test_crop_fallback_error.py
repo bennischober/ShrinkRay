@@ -40,7 +40,7 @@ class TestSampledFallbackMissingBinary(unittest.TestCase):
             ),
             self.assertRaisesRegex(RuntimeError, "ffmpeg") as ctx,
         ):
-            crop.detect_crop_rect(self.movie, Path(self.tmp.name), count=3)
+            crop.detect_crop_rect(self.movie, Path(self.tmp.name), count=3, bit_depth=8)
         self.assertIn("No such file or directory", str(ctx.exception))
 
     def test_an_unspawnable_ffmpeg_reports_the_oserror_cause(self) -> None:
@@ -53,7 +53,7 @@ class TestSampledFallbackMissingBinary(unittest.TestCase):
             patch("shrinkray.engine.crop._run", side_effect=PermissionError(13, "denied")),
             self.assertRaisesRegex(RuntimeError, "denied"),
         ):
-            crop.detect_crop_rect(self.movie, Path(self.tmp.name), count=3)
+            crop.detect_crop_rect(self.movie, Path(self.tmp.name), count=3, bit_depth=8)
 
     def test_the_guard_covers_the_fallback_not_the_timeline_pass(self) -> None:
         """The timeline pass owns its own #398 guard; this fix must not turn
@@ -68,7 +68,9 @@ class TestSampledFallbackMissingBinary(unittest.TestCase):
                 side_effect=FileNotFoundError(2, "No such file or directory: 'ffmpeg'"),
             ),
         ):
-            readings, frame = crop.run_crop_timeline(self.movie, cancel=None)
+            readings, frame = crop.run_crop_timeline(
+                self.movie, crop.CROP_DETECT_LIMIT, cancel=None
+            )
         self.assertEqual(readings, [])
         self.assertIsNone(frame)
 
@@ -119,7 +121,9 @@ class TestSampledWindowPositiveExit(unittest.TestCase):
             patch("shrinkray.engine.crop._run", side_effect=fake_run),
             patch("shrinkray.engine.crop.log", lines.append),
         ):
-            result = crop.detect_crop_rect(self.movie, Path(self.tmp.name), count=len(outcomes))
+            result = crop.detect_crop_rect(
+                self.movie, Path(self.tmp.name), count=len(outcomes), bit_depth=8
+            )
         return result, lines
 
     def test_a_failed_window_leaves_the_file_uncropped_and_logs_the_exit(self) -> None:
