@@ -960,6 +960,22 @@ def execute_plan(
             search_row = queue.stage(
                 JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "plan"}
             )
+            # the plan path's search row shows the same live progress as the
+            # folder job (issue #639): the search is usually the longest stage
+            plan_queue = queue
+            plan_row: list[Job | None] = [search_row]
+
+            def report_plan_search(
+                data: dict,
+                row_ref: list[Job | None] = plan_row,
+                job_queue: JobQueue = plan_queue,
+            ) -> None:
+                if progress is not None:
+                    progress(data)
+                row = row_ref[0]
+                if row is not None:
+                    job_queue.report_progress(row, data)
+
             try:
                 with file_scope(index + 1, total):
                     result = search_quality(
@@ -975,7 +991,7 @@ def execute_plan(
                         cancel=cancel,
                         db_file=_db_file_of(connection),
                         encoder_threads=cap_threads(config.handbrake_max_threads),
-                        progress=progress,
+                        progress=report_plan_search,
                         crop_sample_count=config.crop_sample_count,
                     )
             except Cancelled:

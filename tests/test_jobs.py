@@ -614,6 +614,52 @@ class TestJobs(unittest.TestCase):
         self.assertIn(10.0, folder_percents)
         self.assertIn(42.5, folder_percents)
 
+    def test_the_plan_path_search_row_reports_the_live_progress(self):
+        """Issue #639: the plan job's crf-search row shows the search's live
+        progress too - it is usually the longest stage of a plan run."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Plan Progress_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        bus = jobs.ProgressBus()
+        queue = jobs.JobQueue(self.connection, bus)
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        seen: dict[int, dict] = {}
+
+        def fake_search(decision, *args, **kwargs):
+            kwargs["progress"]({"stage": "probe", "percent": 33.0, "movie": decision.input.name})
+            seen.update(bus.latest())
+            return _prediction(movie)
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch("shrinkray.engine.plan.search_quality", side_effect=fake_search),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job, self.connection, threading.Event(), queue=queue)
+        row = self.connection.execute(
+            "SELECT id, kind FROM jobs WHERE id > ? AND kind = 'crf-search'", (job.id,)
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertIn(row["id"], seen)
+        self.assertEqual(seen[row["id"]]["percent"], 33.0)
+
     def test_a_stored_plan_skips_the_queue_path_search(self):
         """Issue #602: a valid stored plan means the search already ran for
         these bytes, so the encode job must not measure again - the search row
