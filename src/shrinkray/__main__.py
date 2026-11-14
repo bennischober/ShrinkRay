@@ -823,6 +823,7 @@ def plan(
     of a real encode run.
     """
     from shrinkray.engine.plan import plan_quality
+    from shrinkray.engine.watch import STABLE_MIN_AGE, check_stability
 
     config = load_config(config_file=config_file)
     # the flag wins; without it the config's required VMAF applies (issue #252)
@@ -885,6 +886,28 @@ def plan(
             # plan) is honoured here: plan_quality's crop pass would not see it
             if cancel.is_set():
                 raise _EncodeCancelled("cancelled by user")
+            # the stability witness, the same one encode asks (issues #437,
+            # #479, #587): a prediction made from a torn file is not a
+            # prediction, and a stored plan row under a stalled download's
+            # identity outlives it. plan reports at once - it is a prediction
+            # command, not a waiter: a young file or a stalled sparse download
+            # is listed as not decidable yet, with the witness's reason, and
+            # neither probed nor recorded.
+            try:
+                stability = check_stability(movie)
+            except OSError as e:
+                table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
+                errors += 1
+                continue
+            if not stability.settled:
+                reason = (
+                    f"last write only {STABLE_MIN_AGE - stability.young_for:.0f} s ago "
+                    f"(needs {STABLE_MIN_AGE:g} s of quiet)"
+                    if stability.young_for > 0
+                    else str(stability.incomplete)
+                )
+                table.add_row(movie.name, "[yellow]wait[/yellow]", "", "", "", "", reason)
+                continue
             try:
                 result = plan_quality(
                     movie,

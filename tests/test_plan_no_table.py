@@ -46,6 +46,7 @@ class TestPlanNoTable(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.movie = self.root / "one.mkv"
         self.movie.write_bytes(b"x" * 8)
+        os.utime(self.movie, (0, 0))  # old enough for the witness (#587)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
