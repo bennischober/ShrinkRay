@@ -213,8 +213,7 @@ def _encode_discarded(
     """
     if connection is None or encode_id is None:
         return
-    db.set_encode_output(connection, encode_id, None)
-    db.set_encode_outcome(connection, encode_id, "discarded", reason)
+    db.set_encode_output(connection, encode_id, None, reason)
 
 
 def _latest_encode_id(connection: sqlite3.Connection, source: Path) -> int | None:

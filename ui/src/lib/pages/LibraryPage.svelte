@@ -115,7 +115,16 @@
   const selectedCount = $derived(filtered.filter((m) => selectedPaths.has(m.path)).length)
   const selectedMovies = $derived(filtered.filter((m) => selectedPaths.has(m.path)))
   const selectedBase = $derived(
-    selectedMovies.reduce((sum, m) => sum + (m.encode?.output_size ?? m.size ?? 0), 0)
+    selectedMovies.reduce(
+      // a discarded attempt's output_size describes an artifact that was
+      // thrown away (issue #625): the bytes on disk are the original's
+      (sum, m) =>
+        sum +
+        (m.encode && m.encode.outcome !== 'discarded'
+          ? (m.encode.output_size ?? m.size ?? 0)
+          : (m.size ?? 0)),
+      0,
+    )
   )
   // Measured, not guessed (issue #324): the plan's own predictions are the
   // only source of an estimate. A selection with no plan row, or one whose
@@ -181,6 +190,7 @@
       <option value="planned">Planned</option>
       <option value="encoded">Encoded</option>
       <option value="skipped">Skipped</option>
+      <option value="discarded">Discarded</option>
       <option value="missing">Missing</option>
     </select>
     <span class="spacer"></span>

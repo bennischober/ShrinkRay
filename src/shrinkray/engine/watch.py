@@ -1233,11 +1233,9 @@ def _swap(
         if db_file is not None and encode_id is not None:
             connection = db.connect(db_file)
             try:
-                db.set_encode_output(connection, encode_id, None)
-                # the decline's reason rides the row's outcome (issue #625): a
-                # discarded encode is a measured attempt whose result was
-                # thrown away, and every surface must say so
-                db.set_encode_outcome(connection, encode_id, "discarded", reason)
+                # clearing the path IS the discard: one statement records the
+                # outcome and its reason (issue #625)
+                db.set_encode_output(connection, encode_id, None, reason)
             finally:
                 connection.close()
 

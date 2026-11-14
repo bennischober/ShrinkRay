@@ -156,9 +156,13 @@
    * predicted size against the latest encode's real output. Signed like
    * every delta in this console. */
   const planVsEncode = $derived.by(() => {
-    if (!plan?.estimated_size || !encode?.output_size || plan.skipped_reason) return null
-    const diff = plan.estimated_size - encode.output_size
-    const pct = (diff / encode.output_size) * 100
+    if (!plan?.estimated_size || plan.skipped_reason) return null
+    // a discarded attempt's output_size describes an artifact that was
+    // thrown away (issue #625): the honest base is the bytes on disk
+    const base = encode?.outcome === 'discarded' ? movie.size : encode?.output_size
+    if (!base) return null
+    const diff = plan.estimated_size - base
+    const pct = (diff / base) * 100
     return { text: `${diff <= 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% vs encode`, good: diff <= 0 }
   })
 
@@ -419,7 +423,7 @@
         <div class="facts">
           <div class="fact big">
             <span class="legend">RESULT</span>
-            <span class="mono result" class:bad={est?.grew}>{est?.text ?? '—'}</span>
+            <span class="mono result" class:bad={est?.grew} title={est?.title}>{est?.text ?? '—'}</span>
           </div>
           {#if encode.outcome === 'discarded'}
             <div class="fact"><span class="legend">SIZE</span><span class="mono" title={encode.outcome_reason ?? 'the swap was declined'}>{fmtGb(movie.size)} (original untouched)</span></div>

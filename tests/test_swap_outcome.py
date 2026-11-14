@@ -205,16 +205,6 @@ class TestDeclinedSwapIsNotAnEncode(unittest.TestCase):
         self.assertEqual(encode["outcome"], "discarded")
         self.assertTrue(encode["outcome_reason"])
 
-
-def patch_shrinkray_replace_swap():
-    """replace.swap is imported INSIDE _swap (`from shrinkray import db, replace`),
-    so the patch seam is the replace module's own attribute."""
-    from unittest.mock import patch
-
-    from shrinkray.replace import SwapError
-
-    return patch("shrinkray.replace.swap", side_effect=SwapError("the rename was refused"))
-
     def test_metrics_exclude_discarded_encodes(self) -> None:
         """The encode counter and the reclaimed-bytes gauge must not count a
         discarded attempt (the dashboard's RECLAIMED 16.0 GB came from here)."""
@@ -232,6 +222,102 @@ def patch_shrinkray_replace_swap():
         self.assertIsNotNone(encode)
         self.assertEqual(encode["outcome"], "applied")
         self.assertIsNone(encode["outcome_reason"])
+
+    def test_the_watchers_not_smaller_decline_records_the_outcome(self) -> None:
+        """The watcher's size gate is its fourth decline (issue #625 round 2):
+        the earlier pins never drove it because their output was smaller."""
+        from shrinkray.engine.watch import _swap
+
+        bigger = Path(self.tmp.name) / "bigger.mkv"
+        bigger.write_bytes(b"x" * 2000)
+        outcome = _swap(
+            Path(self.tmp.name) / "test.db",
+            self.source,
+            bigger,
+            encode_id=self.encode_id,
+        )
+        self.assertFalse(outcome)
+        encode = self._snapshot_library_encode()
+        self.assertEqual(encode["outcome"], "discarded")
+        self.assertIn("not smaller", encode["outcome_reason"])
+
+    def test_the_library_etag_moves_on_a_decline(self) -> None:
+        """The ETag fix (issue #625 round 1): an outcome update must change the
+        fingerprint, or the client's If-None-Match keeps the stale library."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            first = client.get("/api/snapshot")
+            etag = first.json()["library_etag"]
+            self._decline("output lost 2 subtitle track(s)")
+            stale = client.get("/api/snapshot", headers={"If-None-Match": etag})
+            self.assertNotEqual(
+                stale.json().get("library"),
+                None,
+                "the ETag must move on an outcome update, or the client keeps ENCODED",
+            )
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
+    def test_the_library_route_carries_the_outcome(self) -> None:
+        """/api/library is a second copy of the snapshot's query (issue #625
+        round 1): its encode block carries the same fields."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        self._decline("output lost 2 subtitle track(s)")
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            client = TestClient(fast_app)
+            body = client.get("/api/library").json()
+            movie = next(m for m in body if m["name"] == "source")
+            self.assertEqual(movie["encode"]["outcome"], "discarded")
+            self.assertIn("subtitle track", movie["encode"]["outcome_reason"])
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
+    def test_the_movie_history_carries_the_outcome(self) -> None:
+        """/api/movie's history lists the discarded attempt with its reason
+        (the issue's DoD)."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        self._decline("output lost 2 subtitle track(s)")
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+        try:
+            app_module.allow_roots([Path(self.tmp.name)])
+            client = TestClient(fast_app)
+            body = client.get("/api/movie", params={"path": str(self.source)}).json()
+            entry = next(h for h in body["history"] if h["id"] == self.encode_id)
+            self.assertEqual(entry["outcome"], "discarded")
+            self.assertIn("subtitle track", entry["outcome_reason"])
+        finally:
+            app_module.state.shutdown()
+            app_module.state = None
+
+
+def patch_shrinkray_replace_swap():
+    """replace.swap is imported INSIDE _swap (`from shrinkray import db, replace`),
+    so the patch seam is the replace module's own attribute."""
+    from unittest.mock import patch
+
+    from shrinkray.replace import SwapError
+
+    return patch("shrinkray.replace.swap", side_effect=SwapError("the rename was refused"))
 
 
 if __name__ == "__main__":

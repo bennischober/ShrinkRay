@@ -1124,6 +1124,12 @@ def add_encode(
             when reused from a stored plan, 'probe' when measured now.
         plan_created_at (str | None): When the trusted plan was probed
             ('plan' provenance only).
+        outcome (str): What the artifact became: 'applied' (the swap put it
+            in the library), 'discarded' (the swap declined it) or 'skipped'
+            (a skip marker row, written by add_skip).
+        outcome_reason (str | None): Why the outcome is what it is - the
+            decline's reason for a discarded attempt, the skip's reason for
+            a skip marker.
 
     Returns:
         int: The encode id.
@@ -1204,7 +1210,10 @@ def set_encode_outcome(
 
 
 def set_encode_output(
-    connection: sqlite3.Connection, encode_id: int, output_file: str | None
+    connection: sqlite3.Connection,
+    encode_id: int,
+    output_file: str | None,
+    reason: str | None = None,
 ) -> None:
     """Sets (or clears) an encode row's output_file after the fact.
 
@@ -1215,16 +1224,33 @@ def set_encode_output(
     `doctor` reports a vanished file for every declined swap and the
     generation chain links through a path that never held the artifact.
 
+    Clearing the path IS the discard (issue #625): the outcome and its reason
+    are written in the SAME statement, so a crash can never leave a row whose
+    sizes and saved-percent still read as an applied encode. (Two updates
+    committed separately left exactly that state for a kill between them:
+    `('applied', None, None)` with schema already at 21, unrepairable by the
+    backfill.)
+
     Args:
         connection (sqlite3.Connection): The database connection.
         encode_id (int): The encode row to update.
         output_file (str | None): The path that now holds the artifact, or
             None to record that the encode was discarded.
+        reason (str | None): The decline's reason (the discard case).
     """
-    connection.execute(
-        "UPDATE encodes SET output_file = ? WHERE id = ?",
-        (output_file, encode_id),
-    )
+    if output_file is None:
+        # clearing the path IS the discard: one statement, so a crash can
+        # never leave the sizes reading as an applied encode (issue #625)
+        connection.execute(
+            "UPDATE encodes SET output_file = NULL, outcome = 'discarded', "
+            "outcome_reason = ? WHERE id = ?",
+            (reason, encode_id),
+        )
+    else:
+        connection.execute(
+            "UPDATE encodes SET output_file = ? WHERE id = ?",
+            (output_file, encode_id),
+        )
     connection.commit()
 
 
