@@ -25,6 +25,7 @@
     sparkSamples = [],
     retainedFiles = [],
     loadedAt = null,
+    loadFailed = false,
     ondismiss,
     ongoto,
     onopenmovie,
@@ -49,6 +50,8 @@
     retainedFiles?: RetainedFile[]
     /** when the last successful load happened, null before the first one */
     loadedAt?: number | null
+    /** true when the last refresh failed: the values below are old, not absent */
+    loadFailed?: boolean
     ondismiss: (id: number | null) => void
     ongoto: (page: 'overview' | 'library' | 'jobs' | 'config' | 'retained') => void
     onopenmovie: (movie: Movie) => void
@@ -345,17 +348,18 @@
        on the rail badges and the stat band — those carry the counts) -->
   <div class="sysline mono dim">
     <span title="adaptive: 1s while work is queued/running, 3s idle, 10s in hidden tabs">POLL ADAPTIVE</span>
-    <span class={freshness(loadedAt, Date.now(), 3000) === 'stale' ? 'warn' : ''}
-      title={freshness(loadedAt, Date.now(), 3000) === 'unknown'
+    <span class={freshness(loadedAt, Date.now(), 3000, loadFailed) === 'stale' ? 'warn' : ''}
+      title={freshness(loadedAt, Date.now(), 3000, loadFailed) === 'unknown'
         ? 'this page has not loaded yet — the values below are not from the server'
-        : freshness(loadedAt, Date.now(), 3000) === 'stale'
+        : freshness(loadedAt, Date.now(), 3000, loadFailed) === 'stale'
           ? 'the last load is older than three poll intervals — the values below may be out of date'
           : 'loaded from the server'}>
-      {freshness(loadedAt, Date.now(), 3000) === 'unknown'
-        ? 'NOT LOADED'
-        : freshness(loadedAt, Date.now(), 3000) === 'stale'
-          ? 'STALE'
-          : 'LIVE'}
+      {{
+        unknown: 'NOT LOADED',
+        failed: 'LOAD FAILED',
+        stale: 'STALE',
+        fresh: 'LIVE',
+      }[freshness(loadedAt, Date.now(), 3000, loadFailed)]}
     </span>
     <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
     <span>{movies.length} TITLES · {measuredCount} MEASURED</span>

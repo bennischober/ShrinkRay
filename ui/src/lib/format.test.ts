@@ -172,4 +172,9 @@ describe('freshness', () => {
     expect(freshness(1_000, 9_000, 3_000)).toBe('fresh')
     expect(freshness(1_000, 10_001, 3_000)).toBe('stale')
   })
+
+  it('says a failed refresh out loud, even when the last value is still recent', () => {
+    expect(freshness(1_000, 1_500, 3_000, true)).toBe('failed')
+    expect(freshness(null, 1_500, 3_000, true)).toBe('failed')
+  })
 })

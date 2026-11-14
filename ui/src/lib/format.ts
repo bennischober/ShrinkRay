@@ -177,7 +177,9 @@ export function freshness(
   loadedAtMs: number | null,
   nowMs: number,
   pollIntervalMs: number,
-): 'fresh' | 'stale' | 'unknown' {
+  failed = false,
+): 'fresh' | 'stale' | 'unknown' | 'failed' {
+  if (failed) return 'failed'
   if (loadedAtMs == null) return 'unknown'
   return nowMs - loadedAtMs > pollIntervalMs * 3 ? 'stale' : 'fresh'
 }

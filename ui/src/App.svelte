@@ -197,6 +197,7 @@
   // read AND wrote its buffer looped itself to death (round-6.6). Pure
   // write-on-new-sample; capped at 40 (the sparkline's window).
   let lastLoadedAt = $state<number | null>(null)
+  let loadFailed = $state(false)
   let rssSamples = $state<number[]>([])
   function rememberRss(v: number | null | undefined) {
     if (v == null) return
@@ -212,6 +213,7 @@
       if (snap.library !== null) movies = snap.library // unchanged: keep the current array
       rememberRss(snap.status?.rss_mib)
       lastLoadedAt = Date.now()
+      loadFailed = false
       error = null
       needsToken = false
     } catch (e) {
@@ -222,6 +224,7 @@
         return
       }
       error = e instanceof Error ? e.message : String(e)
+      loadFailed = true
     }
   }
 
