@@ -1,10 +1,6 @@
 <script lang="ts">
   import {
     api,
-    fmtGb,
-    fmtSeconds,
-    fmtVmaf,
-    fmtWhen,
     humanizeError,
     jobPaths,
     failedOutcomeNote,
@@ -14,6 +10,7 @@
     type EncodeRecord,
     type MoviePlan,
   } from '../api'
+  import { bytes, duration, relative, vmaf } from '../format'
 
   /** The provenance page: everything recorded about one title — source
    * facts, the latest encode with every schema-v5 metric, the COMPLETE
@@ -331,7 +328,7 @@
         <div class="fact"><span class="legend">RESOLUTION</span><span class="mono">{movie.resolution?.join('×') ?? '—'}</span></div>
         <div class="fact"><span class="legend">DURATION</span><span class="mono">{fmtDuration(movie.duration) ?? '-'}</span></div>
         <div class="fact"><span class="legend">CODEC</span><span class="mono">{movie.codec ?? '—'}</span></div>
-        <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)}</span></div>
+        <div class="fact"><span class="legend">SIZE</span><span class="mono">{bytes(movie.size)}</span></div>
         {#if bitrateMbps(movie.size, movie.duration) != null}
           <div class="fact">
             <span class="legend">SOURCE BITRATE</span>
@@ -367,7 +364,7 @@
               {#if plan.achieved_vmaf != null && plan.crf != null}
                 <div class="fact">
                   <span class="legend">BEST FOUND</span>
-                  <span class="mono">CRF {plan.crf} · VMAF {fmtVmaf(plan.achieved_vmaf, plan.target_vmaf ?? targetVmaf)} (samples)</span>
+                  <span class="mono">CRF {plan.crf} · VMAF {vmaf(plan.achieved_vmaf, plan.target_vmaf ?? targetVmaf)} (samples)</span>
                 </div>
               {/if}
             {:else}
@@ -378,7 +375,7 @@
                 </span>
               </div>
               {#if plan.estimated_size != null && planEst != null}
-                <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)} → {fmtGb(plan.estimated_size)} (est.)</span></div>
+                <div class="fact"><span class="legend">SIZE</span><span class="mono">{bytes(movie.size)} → {bytes(plan.estimated_size)} (est.)</span></div>
                 {#if plan.estimate_note}
                   <div class="fact"><span class="legend">NOTE</span><span class="mono dim">{plan.estimate_note}</span></div>
                 {/if}
@@ -389,14 +386,14 @@
               {#if plan.achieved_vmaf != null}
                 <div class="fact">
                   <span class="legend">VMAF</span>
-                  <span class="mono measured">{fmtVmaf(plan.achieved_vmaf, plan.target_vmaf ?? targetVmaf)}</span>
+                  <span class="mono measured">{vmaf(plan.achieved_vmaf, plan.target_vmaf ?? targetVmaf)}</span>
                   <span class="dim">samples — encode will confirm</span>
                 </div>
               {/if}
             {/if}
             <div class="fact">
               <span class="legend">PROBED</span>
-              <span class="mono">{fmtWhen(plan.created_at)}</span>
+              <span class="mono">{relative(plan.created_at)}</span>
               {#if plan.stale}<span class="mono warn">FILE CHANGED SINCE</span>{/if}
             </div>
             <div class="fact">
@@ -413,15 +410,15 @@
             <span class="legend">RESULT</span>
             <span class="mono result" class:bad={est?.grew}>{est?.text ?? '—'}</span>
           </div>
-          <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(encode.input_size)} → {fmtGb(encode.output_size)}</span></div>
+          <div class="fact"><span class="legend">SIZE</span><span class="mono">{bytes(encode.input_size)} → {bytes(encode.output_size)}</span></div>
           <div class="fact">
             <span class="legend">VMAF</span>
             {#if encode.vmaf != null}
-              <span class="gauge" role="img" aria-label="VMAF {fmtVmaf(encode.vmaf, targetVmaf)} of target {targetVmaf}">
+              <span class="gauge" role="img" aria-label="VMAF {vmaf(encode.vmaf, targetVmaf)} of target {targetVmaf}">
                 <span class="gauge-fill" style="width: {Math.min(100, encode.vmaf)}%"></span>
                 <span class="gauge-target" style="left: {targetVmaf}%"></span>
               </span>
-              <span class="mono measured">{fmtVmaf(encode.vmaf, targetVmaf)}</span>
+              <span class="mono measured">{vmaf(encode.vmaf, targetVmaf)}</span>
             {:else}
               <!-- no gauge for an unmeasured row: an empty instrument track
                    next to the dash read as a broken meter (round-5) -->
@@ -434,7 +431,7 @@
             <div class="fact"><span class="legend">ENCODER PRESET</span><span class="mono">{encode.encoder_preset}</span></div>
           {/if}
           {#if encode.encode_seconds != null}
-            <div class="fact"><span class="legend">ENCODE TIME</span><span class="mono">{fmtSeconds(encode.encode_seconds)}</span></div>
+            <div class="fact"><span class="legend">ENCODE TIME</span><span class="mono">{duration(encode.encode_seconds)}</span></div>
           {/if}
           {#if bitrateMbps(encode.output_size, movie.duration) != null}
             <div class="fact"><span class="legend">OUTPUT BITRATE</span><span class="mono">{bitrateMbps(encode.output_size, movie.duration)?.toFixed(1)} Mbps</span></div>
@@ -442,7 +439,7 @@
           {#if encode.probe_count != null}
             <div class="fact">
               <span class="legend">PROBES</span>
-              <span class="mono">{encode.probe_count} · {fmtSeconds(encode.probe_seconds)}</span>
+              <span class="mono">{encode.probe_count} · {duration(encode.probe_seconds)}</span>
             </div>
           {/if}
           {#if encode.tool_versions}
@@ -452,7 +449,7 @@
             <!-- case 2: encode measured AND a plan exists — the next
                  encode's prediction, comparable against the real row -->
             <div class="fact plan-next">
-              <span class="legend">NEXT PLAN · {fmtWhen(plan.created_at)}{plan.stale ? ' · FILE CHANGED SINCE' : ''}</span>
+              <span class="legend">NEXT PLAN · {relative(plan.created_at)}{plan.stale ? ' · FILE CHANGED SINCE' : ''}</span>
               <span class="mono" class:good={planVsEncode.good} class:bad={!planVsEncode.good}>{planVsEncode.text}</span>
               {#if plan.crf != null}<span class="mono dim">· CRF {plan.crf}</span>{/if}
             </div>
@@ -553,9 +550,9 @@
                 title={producedThis ? 'this row produced the file being viewed' : (rec.generation ?? 1) === 1 ? 'encode of the original source' : `encode of generation ${(rec.generation ?? 1) - 1}`}
                 aria-label={producedThis ? `generation ${rec.generation ?? 1}: this row produced the file being viewed` : `generation ${rec.generation ?? 1}`}
               >{rec.generation ?? 1}</span>
-              <span class="dim">{fmtWhen(rec.encoded_at)}{fromElsewhere ? ` · ${rec.file_name}` : ''}</span>
+              <span class="dim">{relative(rec.encoded_at)}{fromElsewhere ? ` · ${rec.file_name}` : ''}</span>
               <span class="num">{rec.crf ?? '—'}</span>
-              <span class="num" class:measured={rec.vmaf != null}>{fmtVmaf(rec.vmaf, targetVmaf)}</span>
+              <span class="num" class:measured={rec.vmaf != null}>{vmaf(rec.vmaf, targetVmaf)}</span>
               <!-- the drift signal: measured in→out MBit/s (v7); the derived
                    fallback keeps pre-v7 rows honest without pretending -->
               <span
@@ -571,9 +568,9 @@
                   —
                 {/if}
               </span>
-              <span class="num">{fmtGb(rec.output_size)}</span>
+              <span class="num">{bytes(rec.output_size)}</span>
               <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
-              <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
+              <span class="num">{rec.encode_seconds != null ? duration(rec.encode_seconds) : '—'}</span>
               <span class="delta" title="delta vs the previous run (a comparison between consecutive encodes — siblings of one generation are two runs of the same source)">
                 {#if i < encodesDesc.length - 1}
                   {#each deltaParts(rec, encodesDesc[i + 1]) as part, pi (pi)}
@@ -610,7 +607,7 @@
               {job.state}{#if partial} · partial{/if}
             </span>
             <span class="dim when">
-              {#if job.finished_at}finished {fmtWhen(job.finished_at)}{:else if job.started_at}started {fmtWhen(job.started_at)}{:else}—{/if}
+              {#if job.finished_at}finished {relative(job.finished_at)}{:else if job.started_at}started {relative(job.started_at)}{:else}—{/if}
             </span>
             <!-- the movie's own outcome first (it names the real failure),
                  then the job-level error as fallback -->
@@ -631,7 +628,7 @@
                 {humanizeError(null, job.error)}
               {:else if job.kind === 'plan' && outcome}
                 {#if outcome.crf != null}
-                  CRF {outcome.crf}{#if outcome.vmaf != null} · VMAF {fmtVmaf(outcome.vmaf, jobTarget)}{/if}
+                  CRF {outcome.crf}{#if outcome.vmaf != null} · VMAF {vmaf(outcome.vmaf, jobTarget)}{/if}
                 {:else}
                   done
                 {/if}

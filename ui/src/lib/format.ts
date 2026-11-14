@@ -105,3 +105,23 @@ export function eta(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return ''
   return `about ${duration(seconds)} left`
 }
+
+export function span(
+  startIso: string | null | undefined,
+  endIso: string | null | undefined,
+): string {
+  if (!startIso || !endIso) return '—'
+  const start = parseStored(startIso)
+  const end = parseStored(endIso)
+  if (!start || !end) return '—'
+  return duration(Math.max(0, Math.round((end.getTime() - start.getTime()) / 1000)))
+}
+
+export function savedPercent(value: number | null | undefined): {
+  text: string
+  grew: boolean
+} {
+  if (value == null || !Number.isFinite(value)) return { text: '—', grew: false }
+  if (value <= 0) return { text: `${Math.abs(value).toFixed(1)}% larger`, grew: true }
+  return { text: `${value.toFixed(1)}%`, grew: false }
+}

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtVmaf, fmtWhen, humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { bytes, duration, relative, savedPercent, span, vmaf } from '../format'
   import { progressFor } from '../progress.svelte'
 
   /** Path equality that survives separator and case differences. */
@@ -137,7 +138,7 @@
         ? `−${(savedBytes / 1024 ** 3).toFixed(1)} GB`
         : `−${(savedBytes / 1024 ** 2).toFixed(0)} MB`
     const vmafs = encoded.map((o) => o.vmaf).filter((v) => v != null) as number[]
-    const wall = fmtSpan(lastEncodeRun.started_at, lastEncodeRun.finished_at)
+    const wall = span(lastEncodeRun.started_at, lastEncodeRun.finished_at)
     return {
       id: lastEncodeRun.id,
       state: lastEncodeRun.state,
@@ -226,9 +227,9 @@
   /** Plan age in honest units — a stale plan must say so. */
   const planAge = $derived.by(() => {
     if (!lastPlan?.finished_at) return ''
-    const span = fmtSpan(lastPlan.finished_at, new Date().toISOString())
+    const elapsed = span(lastPlan.finished_at, new Date().toISOString())
     if (!span) return ''
-    return `finished ${span} ago`
+    return `finished ${elapsed} ago`
   })
   /** Head summary in real terms: what happened SINCE the plan ran. */
   const planSummary = $derived.by(() => {
@@ -371,7 +372,7 @@
       </div>
       <div class="mono dim detail">
         {runningProgress?.detail ?? 'working…'}
-        · started {fmtWhen(runningJob.started_at)}
+        · started {relative(runningJob.started_at)}
         · {fmtEta(eta)}
       </div>
     </div>
@@ -380,7 +381,7 @@
       <div class="quiet-strip done-strip">
         <span class="mono">
           <span class="legend">LAST RUN #{runSummary.id}</span>
-          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${fmtVmaf(runSummary.minVmaf, targetVmaf)}` : ''}{runSummary.minVmaf != null && runSummary.minVmaf < targetVmaf ? ` (target ${targetVmaf})` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
+          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${vmaf(runSummary.minVmaf, targetVmaf)}` : ''}{runSummary.minVmaf != null && runSummary.minVmaf < targetVmaf ? ` (target ${targetVmaf})` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
           {#if runSummary.failed > 0}<span class="bad"> · {runSummary.failed} failed</span>{/if}
         </span>
         <button class="nav-link" onclick={() => ongoto('jobs')}>JOBS →</button>
@@ -502,20 +503,20 @@
       {:else}
         <div class="quality mono">
           <div class="q-head">
-            <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{fmtVmaf(meanVmaf, targetVmaf)}</span>
+            <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{vmaf(meanVmaf, targetVmaf)}</span>
             <span class="q-label legend">MEAN</span>
             {#if measured.length > 1}
               <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
                    the single row carrying exactly that) — the sub-line only
                    earns its place with a spread to summarize -->
-              <span class="q-sub mono dim">min {fmtVmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
+              <span class="q-sub mono dim">min {vmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
             {/if}
           </div>
           {#each measured.slice(0, 6) as m (m.path)}
-            <div class="q-row" title="{m.name}: VMAF {fmtVmaf(m.encode?.vmaf, targetVmaf)} (target {targetVmaf})">
+            <div class="q-row" title="{m.name}: VMAF {vmaf(m.encode?.vmaf, targetVmaf)} (target {targetVmaf})">
               <span class="q-name">{m.name}</span>
               <span class="q-bar"><span class="q-fill" style="width: {Math.min(100, ((m.encode?.vmaf ?? 0) / 100) * 100)}%"></span></span>
-              <span class="q-v mono" class:warn={(m.encode?.vmaf ?? 100) < targetVmaf}>{fmtVmaf(m.encode?.vmaf, targetVmaf)}</span>
+              <span class="q-v mono" class:warn={(m.encode?.vmaf ?? 100) < targetVmaf}>{vmaf(m.encode?.vmaf, targetVmaf)}</span>
             </div>
           {/each}
           {#if measured.length > 6}
@@ -540,7 +541,7 @@
           <button class="nav-link" onclick={() => ongoto('retained')}>RETAINED →</button>
         </div>
         <div class="dim pad mono">
-          {present.length} original{present.length === 1 ? '' : 's'} · {fmtGb(totalBytes)} held aside —
+          {present.length} original{present.length === 1 ? '' : 's'} · {bytes(totalBytes)} held aside —
           each has a verified encode in the library; delete them in your file manager when satisfied
         </div>
       </section>
@@ -637,15 +638,15 @@
             <span class="p-num" class:measured={done && rec?.crf != null} title={done && rec?.crf != null ? 'measured value — the plan predicted ' + (entry.crf ?? '—') : 'planned value'}>
               {#if done}{rec?.crf ?? '—'}{#if crfDelta != null && crfDelta !== 0}<span class="delta-mark"> ({crfDelta > 0 ? '+' : '−'}{Math.abs(crfDelta)})</span>{/if}{:else}{entry.crf ?? '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + fmtVmaf(entry.vmaf, planTargetVmaf) : 'planned value'}>
-              {#if done}{fmtVmaf(rec?.vmaf, planTargetVmaf)}{:else}{fmtVmaf(entry.vmaf, planTargetVmaf)}{/if}
+            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + vmaf(entry.vmaf, planTargetVmaf) : 'planned value'}>
+              {#if done}{vmaf(rec?.vmaf, planTargetVmaf)}{:else}{vmaf(entry.vmaf, planTargetVmaf)}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—') : 'planned value'}>
-              {#if done}{fmtGb(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}{/if}
+            <span class="p-num" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? bytes(entry.estimated_size) : '—') : 'planned value'}>
+              {#if done}{bytes(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? bytes(entry.estimated_size) : '—'}{/if}
             </span>
             <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.saved_percent != null ? 'measured value — the plan predicted ' + (plannedSaved != null ? plannedSaved.toFixed(0) + '%' : '—') : 'planned value'}>
               {#if done}
-                {@const saved = fmtSavedHonest(rec?.saved_percent)}
+                {@const saved = savedPercent(rec?.saved_percent)}
                 {saved.text}
               {:else}
                 {plannedSaved != null ? `${plannedSaved.toFixed(0)}%` : '—'}

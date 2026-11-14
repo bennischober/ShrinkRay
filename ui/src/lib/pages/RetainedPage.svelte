@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { fmtGb, type RetainedFile } from '../api'
+  import { type RetainedFile } from '../api'
+  import { bytes } from '../format'
   import HintButton from './HintButton.svelte'
 
   let { files, onrecover }: { files: RetainedFile[]; onrecover?: () => void } = $props()
@@ -29,8 +30,8 @@
     </p>
   {:else}
     <p class="summary mono">
-      {files.length} retained original{files.length === 1 ? '' : 's'} · {fmtGb(total)} swapped out ·
-      {fmtGb(reclaimable)} reclaimable
+      {files.length} retained original{files.length === 1 ? '' : 's'} · {bytes(total)} swapped out ·
+      {bytes(reclaimable)} reclaimable
     </p>
     <table class="retained-table mono">
       <thead>
@@ -50,8 +51,8 @@
               {#if !file.present}<span class="tag">already removed</span>{/if}
             </td>
             <td class="path" title={file.source_path}>{file.source_path}</td>
-            <td>{fmtGb(file.size_before)}</td>
-            <td>{fmtGb(file.size_after)}</td>
+            <td>{bytes(file.size_before)}</td>
+            <td>{bytes(file.size_after)}</td>
             <td>{file.created_at}</td>
           </tr>
         {/each}

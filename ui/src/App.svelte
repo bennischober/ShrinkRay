@@ -2,7 +2,6 @@
   import { onMount } from 'svelte'
   import {
     api,
-    fmtGb,
     isAuthFailure,
     jobPaths,
     storeToken,

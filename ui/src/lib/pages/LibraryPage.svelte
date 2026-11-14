@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, fmtVmaf, type Movie } from '../api'
+  import { type Movie } from '../api'
+  import { bytes, savedPercent, vmaf } from '../format'
 
   let {
     movies,
@@ -191,7 +192,7 @@
       </span>
       <span class="leader-note mono">
         {#if selectedEstimate > 0}
-          → PLAN-PREDICTED −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE
+          → PLAN-PREDICTED −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {bytes(selectedBase)} BASE
         {:else}
           → no estimate (selection already encoded)
         {/if}
@@ -263,7 +264,7 @@
                 </button>
               </td>
               <td class="dim">{movie.category}</td>
-              <td class="mono num">{fmtGb(movie.size)}</td>
+              <td class="mono num">{bytes(movie.size)}</td>
               <td>
                 {#if runningMovie != null && movie.path === runningMovie}
                   <span class="chip progress"><span class="swatch"></span>IN WORK {runningPercent != null ? `${runningPercent}%` : ''}</span>
@@ -283,10 +284,10 @@
                 {/if}
               </td>
               <td class="mono num">{movie.encode?.crf ?? '—'}</td>
-              <td class="mono num measured">{fmtVmaf(movie.encode?.vmaf, targetVmaf)}</td>
+              <td class="mono num measured">{vmaf(movie.encode?.vmaf, targetVmaf)}</td>
               <td class="mono num" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
                 {#if movie.encode}
-                  {@const saved = fmtSavedHonest(movie.encode.saved_percent)}
+                  {@const saved = savedPercent(movie.encode.saved_percent)}
                   <span title={saved.grew ? 'the re-encode is larger than the source' : ''}>{saved.text}</span>
                 {:else}
                   —

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { fmtGb, fmtWhen, fmtSpan, humanizeError, failedOutcomeNote, type Job } from '../api'
+  import { humanizeError, failedOutcomeNote, type Job } from '../api'
+  import { bytes, relative, span } from '../format'
   import { progressFor } from '../progress.svelte'
 
   /** The run log as an event log: every job with its timestamps, wall
@@ -172,8 +173,8 @@
             <span class="state {stateClass(job)}">
               {job.state.toUpperCase()}{#if job.state === 'done' && failedOutcomeNote(job) !== ''} · PARTIAL{/if}{#if liveElapsed(job)} · {liveElapsed(job)}{/if}
             </span>
-            <span class="when" title={job.started_at ?? 'not started yet'}>{fmtWhen(job.started_at)}</span>
-            <span class="dur">{job.state === 'done' ? fmtSpan(job.started_at, job.finished_at) ?? '—' : job.state === 'running' ? '…' : '—'}</span>
+            <span class="when" title={job.started_at ?? 'not started yet'}>{relative(job.started_at)}</span>
+            <span class="dur">{job.state === 'done' ? span(job.started_at, job.finished_at) ?? '—' : job.state === 'running' ? '…' : '—'}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}
@@ -216,7 +217,7 @@
               {/if}
               <div class="d-block">
                 <span class="legend">TIMESTAMPS</span>
-                <pre class="mono">created {fmtWhen(job.created_at)} · started {fmtWhen(job.started_at)} · finished {fmtWhen(job.finished_at)}</pre>
+                <pre class="mono">created {relative(job.created_at)} · started {relative(job.started_at)} · finished {relative(job.finished_at)}</pre>
               </div>
             </div>
           {/if}
