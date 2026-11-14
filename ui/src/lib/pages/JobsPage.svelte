@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job } from '../api'
-  import { bytes, kindWord, relative, span, stateWord } from '../format'
+  import { bytes, freshness, kindWord, relative, span, stateWord } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -14,9 +14,16 @@
 
   let {
     history,
+    loadedAt = null,
+    loadFailed = false,
+    needsToken = false,
     onopenMovie,
   }: {
     history: Job[]
+    /** when the last successful load happened, null before the first one */
+    loadedAt?: number | null
+    loadFailed?: boolean
+    needsToken?: boolean
     /** Open a movie's detail page (single-movie jobs link to their title). */
     onopenMovie: (path: string) => void
   } = $props()
@@ -123,7 +130,7 @@
 <div class="page page-in">
   <PageHeader
     title="Jobs"
-    description={`${filteredHistory.length} of ${history.length} entries · the full audit trail`}
+    description={`${filteredHistory.length} of ${history.length} entries · the full audit trail · ${{ fresh: 'live', stale: 'stale', failed: 'load failed', unknown: 'not loaded', unauthorised: 'token needed' }[freshness(loadedAt, Date.now(), 3000, loadFailed, needsToken)]}`}
   >
     {#if history.length > 0}
       <div class="filters">
