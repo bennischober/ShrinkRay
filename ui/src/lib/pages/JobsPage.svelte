@@ -138,12 +138,12 @@
         </select>
         <select class="mono" bind:value={stateFilter} aria-label="Filter by state">
           <option value="all">all states</option>
-          <option value="running">running</option>
-          <option value="queued">queued</option>
-          <option value="done">done</option>
-          <option value="partial">partial</option>
-          <option value="failed">failed</option>
-          <option value="cancelled">cancelled</option>
+          <option value="running">{stateWord('running')}</option>
+          <option value="queued">{stateWord('queued')}</option>
+          <option value="done">{stateWord('done')}</option>
+          <option value="partial">{stateWord('partial')}</option>
+          <option value="failed">{stateWord('failed')}</option>
+          <option value="cancelled">{stateWord('cancelled')}</option>
         </select>
       </div>
     {/if}

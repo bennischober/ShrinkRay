@@ -11,7 +11,7 @@
     type MoviePlan,
   } from '../api'
   import { bytes, duration, relative, vmaf } from '../format'
-  import { stateWord } from '../format'
+  import { kindWord, stateWord } from '../format'
   import FileName from '../components/FileName.svelte'
   import Time from '../components/Time.svelte'
 
@@ -629,7 +629,7 @@
           {@const partial = failedOutcomeNote(job) !== ''}
           <div class="hist-row mono">
             <span class="dim">#{job.id}</span>
-            <span>{job.kind}</span>
+            <span>{kindWord(job.kind)}</span>
             <!-- the job's lifecycle state, plus what THIS movie's slice of
                  it did: a batch DONE can hold this movie's failure (the
                  watchdog case read as green 'done' here), a plan DONE

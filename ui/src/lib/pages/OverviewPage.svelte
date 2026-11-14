@@ -385,7 +385,7 @@
         <span class="legend amber">Working · {kindWord(runningJob.kind)}</span>
         <span class="mono dim">{runningProgress?.done != null && runningProgress?.total != null ? `${runningProgress.done}/${runningProgress.total} · ` : ''}{runningProgress?.percent != null ? `${runningProgress.percent}%` : ''}</span>
       </div>
-      <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || runningJob.kind}</div>
+      <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || kindWord(runningJob.kind)}</div>
       <div class="trace" role="progressbar" aria-valuenow={runningProgress?.percent ?? undefined} aria-valuemin="0" aria-valuemax="100" aria-label="encode progress">
         <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
       </div>
@@ -432,7 +432,7 @@
           {@const errText = rawErr ? humanizeError(null, rawErr) : ''}
           {@const target = movies.find((m) => jobPaths(job).some((jp) => pathEq(m.path, jp)))}
           <div class="fail-row">
-            <span class="mono bad">#{job.id} {job.kind}</span>
+            <span class="mono bad">#{job.id} {kindWord(job.kind)}</span>
             <!-- the error is the diagnosis: a long one becomes a button that
                  expands inline, so keyboard users can actually read it -->
             {#if errText.length > 60}
