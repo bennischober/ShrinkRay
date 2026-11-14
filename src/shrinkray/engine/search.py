@@ -625,6 +625,35 @@ def estimate_size_factor(
             connection.close()
 
 
+def recorded_vmaf(score: float, target_vmaf: float) -> float:
+    """Rounds a probe's score to the two decimals it is recorded with.
+
+    The search judges the unrounded score (`bisect_crf`); everything after it -
+    `target_unreachable`, the plan row, the log, the dashboard - reads the
+    recorded one. Plain rounding can carry a score across the target (95.996
+    against 96 records 96.0, a miss shown as a pass, issue #595), so a score
+    whose rounding would cross is recorded as the next hundredth on its own
+    side instead. Every other score is recorded exactly as `round(score, 2)`.
+
+    Args:
+        score (float): The measured, unrounded VMAF.
+        target_vmaf (float): The VMAF quality floor the score was judged on.
+
+    Returns:
+        float: The score at two decimals, below the target exactly when the
+            measurement was, and never more than 0.01 from it.
+    """
+    shown = round(score, 2)
+    if (shown < target_vmaf) == (score < target_vmaf):
+        return shown
+    # a crossing puts score and target within half a hundredth of shown, so
+    # one hundredth further lands 0.005 or more clear of the target on the
+    # score's side - a margin no float error reaches, unlike floor(score * 100)
+    # whose product can round onto the whole hundredth it should stay below
+    step = 0.01 if score >= target_vmaf else -0.01
+    return round(shown + step, 2)
+
+
 def find_optimal_crf(
     movie: Path,
     workdir: Path,
@@ -714,17 +743,20 @@ def find_optimal_crf(
             encoder_threads=encoder_threads,
             use_probe_cache=use_probe_cache,
         )
-        probes.append(SampleProbe(crf=crf, vmaf=round(vmaf, 2)))
+        # the recorded score keeps the verdict bisect_crf reaches on the
+        # unrounded one (issue #595): target_unreachable reads it back
+        shown = recorded_vmaf(vmaf, target_vmaf)
+        probes.append(SampleProbe(crf=crf, vmaf=shown))
         # one line per probe in the transcript (issue #325): during the
         # search the operator saw only 'Probing ...' for minutes with no
         # sign of convergence - the progress event reaches the CLI's bar
         # (transient) and the daemon log, but neither is a transcript line
-        log(f"'{movie.name}' probe CRF {crf}: VMAF {round(vmaf, 2)} (probe {len(probes)})")
+        log(f"'{movie.name}' probe CRF {crf}: VMAF {shown} (probe {len(probes)})")
         if progress:
             progress(
                 {
                     "stage": "probe",
-                    "detail": f"CRF {crf}: VMAF {round(vmaf, 2)}",
+                    "detail": f"CRF {crf}: VMAF {shown}",
                     "probes_done": len(probes),
                 }
             )
@@ -742,7 +774,9 @@ def target_unreachable(
     """Tells whether a finished search missed the target at the CRF floor.
 
     The one home of gate 7's verdict (issue #591): the search driver, the
-    plan and the encode all ask it, so their order cannot drift apart.
+    plan and the encode all ask it, so their order cannot drift apart. It
+    reads the recorded score, which `recorded_vmaf` keeps on the side of the
+    target the search judged the unrounded one on (issue #595).
 
     Args:
         chosen (int): The CRF the search returned.
