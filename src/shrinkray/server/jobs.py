@@ -1226,12 +1226,14 @@ def _encode_measured(
         # file. A direct executor call (the one-shot CLI, tests) has no queue
         # and keeps the single-call shape below.
         encode_row: Job | None = None
-        # the stage row must show the same live progress as the folder job
-        # (issue #637): a row that receives no events reads "starting..." for
-        # the whole encode. The holder lets the closure see the row once it exists.
-        stage_row: list[Job | None] = [None]
+        # every stage row shows the same live progress as the folder job
+        # (issue #639): a row that receives no events reads "starting..." for
+        # the whole stage. The holder names the row that is running now; the
+        # default argument binds it per iteration (ruff's B rules reject a direct
+        # loop-variable capture in a closure).
+        active_row: list[Job | None] = [None]
 
-        def report_encode_progress(data: dict, row_ref: list[Job | None] = stage_row) -> None:
+        def report_stage_progress(data: dict, row_ref: list[Job | None] = active_row) -> None:
             if progress is not None:
                 progress(data)
             row = row_ref[0]
@@ -1281,6 +1283,7 @@ def _encode_measured(
             search_row = queue.stage(
                 JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "encode"}
             )
+            active_row[0] = search_row
             # a valid stored plan means the folder job's search already
             # measured these bytes and these settings (issue #602's
             # no-double-probe rule): the search stage reports the reuse
@@ -1321,7 +1324,7 @@ def _encode_measured(
                         cancel=cancel,
                         db_file=_db_file_of(connection),
                         encoder_threads=cap_threads(config.handbrake_max_threads),
-                        progress=progress,
+                        progress=report_stage_progress,
                         crop_sample_count=config.crop_sample_count,
                     )
                 except Cancelled:
@@ -1366,7 +1369,7 @@ def _encode_measured(
                     )
                     continue
             encode_row = queue.stage(JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"})
-            stage_row[0] = encode_row
+            active_row[0] = encode_row
         if progress:
             progress(
                 {
@@ -1402,7 +1405,7 @@ def _encode_measured(
                         "probe_encoder_preset", config.handbrake_probe_encoder_preset
                     ),
                     encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    progress=report_encode_progress,
+                    progress=report_stage_progress,
                     cancel=cancel,
                     db_file=_db_file_of(connection),
                     encoder_threads=cap_threads(config.handbrake_max_threads),

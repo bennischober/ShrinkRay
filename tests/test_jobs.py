@@ -521,8 +521,8 @@ class TestJobs(unittest.TestCase):
         )
 
     def test_the_encode_stage_row_reports_the_live_progress(self):
-        """Issue #637: the encode stage row shows the folder job's live progress -
-        a row with no events reads "starting..." for the whole encode."""
+        """Issue #639: the stage rows show the folder job's live progress -
+        a row with no events reads "starting..." for the whole stage."""
         from pathlib import Path as _Path
         from types import SimpleNamespace as _NS
         from unittest.mock import patch as _patch
@@ -556,6 +556,12 @@ class TestJobs(unittest.TestCase):
         )
 
         seen: dict[int, dict] = {}
+        folder_events: list[dict] = []
+
+        def fake_search(decision, *args, **kwargs):
+            kwargs["progress"]({"stage": "probe", "percent": 10.0, "movie": decision.input.name})
+            seen.update(bus.latest())
+            return _prediction(movie)
 
         def fake_encode(movie, output, *args, **kwargs):
             kwargs["progress"]({"stage": "encode", "percent": 42.5, "movie": movie.name})
@@ -581,10 +587,7 @@ class TestJobs(unittest.TestCase):
                 "shrinkray.engine.plan.stored_plan_row",
                 return_value=None,
             ),
-            _patch(
-                "shrinkray.engine.plan.search_quality",
-                return_value=_prediction(movie),
-            ),
+            _patch("shrinkray.engine.plan.search_quality", side_effect=fake_search),
             _patch("shrinkray.service.record_plan", lambda *a, **k: None),
             _patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode),
             _patch(
@@ -593,13 +596,23 @@ class TestJobs(unittest.TestCase):
             ),
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
-            jobs.execute_encode(job, self.connection, threading.Event(), queue=queue)
+            jobs.execute_encode(
+                job, self.connection, threading.Event(), progress=folder_events.append, queue=queue
+            )
         rows = self.connection.execute(
             "SELECT id, kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
         ).fetchall()
+        search_row = next(row for row in rows if row["kind"] == "crf-search")
         encode_row = next(row for row in rows if row["kind"] == "encode")
+        # both stage rows receive the engine's events...
+        self.assertIn(search_row["id"], seen)
+        self.assertEqual(seen[search_row["id"]]["percent"], 10.0)
         self.assertIn(encode_row["id"], seen)
         self.assertEqual(seen[encode_row["id"]]["percent"], 42.5)
+        # ...and the folder job keeps receiving them too
+        folder_percents = [event.get("percent") for event in folder_events]
+        self.assertIn(10.0, folder_percents)
+        self.assertIn(42.5, folder_percents)
 
     def test_a_stored_plan_skips_the_queue_path_search(self):
         """Issue #602: a valid stored plan means the search already ran for
