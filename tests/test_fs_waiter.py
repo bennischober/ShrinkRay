@@ -23,12 +23,12 @@ class TestFsWaiterStop(unittest.TestCase):
     """The drain thread must be out of select() before stop() closes the
     inotify descriptor (issue #642): the race let select run on a closed
     fd - EBADF killed the drain thread - and left the closed number free
-    for reuse under a still-running read. The synchronization is the CLOSE
-    event itself, not a scheduling beat: the parked select waits for
-    stop()'s close (which on main happens while the drain is parked, so
-    the released select hits the closed fd deterministically), and on the
-    fixed code the close waits for the join, so the select runs on the
-    still-open fd and the drain exits cleanly."""
+    for reuse under a still-running read. The park resumes on the code's
+    OWN signal, not a scheduling beat: on main stop() has returned by
+    then (the fd closed under the park, so the released select hits the
+    closed fd deterministically); on the fixed code stop() has reached
+    its join (observed through an instance-level Thread.join wrapper),
+    so the select runs on the still-open fd and the drain exits cleanly."""
 
     def test_stop_joins_the_drain_before_closing_the_fd(self) -> None:
         tmp = tempfile.TemporaryDirectory()
