@@ -438,14 +438,16 @@ MIGRATIONS = {
         # discarded the artifact, but the row kept its sizes and saved_percent
         # and every surface reported the file as encoded - a reclaimed figure
         # for space that was never reclaimed. Existing rows are backfilled
-        # from what they can still prove: a skip marker says so in its preset,
-        # a row whose output_file was nulled (#232) was discarded, everything
-        # else was applied.
+        # from what they can still prove: a skip marker says so in its preset;
+        # a row with a source_file but a nulled output_file was a post-v7
+        # discarded attempt (#232). A row with NEITHER is a pre-v7 applied
+        # encode - v7 introduced the chain columns without a backfill, so its
+        # output_file was never written and proves nothing about the artifact.
         "ALTER TABLE encodes ADD COLUMN outcome TEXT NOT NULL DEFAULT 'applied'",
         "ALTER TABLE encodes ADD COLUMN outcome_reason TEXT",
         "UPDATE encodes SET outcome = 'skipped' WHERE preset LIKE 'skipped%'",
         "UPDATE encodes SET outcome = 'discarded' "
-        "WHERE output_file IS NULL AND outcome = 'applied'",
+        "WHERE output_file IS NULL AND source_file IS NOT NULL AND outcome = 'applied'",
     ],
 }
 
@@ -1181,32 +1183,6 @@ def add_encode(
     )
     connection.commit()
     return int(cursor.lastrowid or 0)
-
-
-def set_encode_outcome(
-    connection: sqlite3.Connection,
-    encode_id: int,
-    outcome: str,
-    reason: str | None = None,
-) -> None:
-    """Records what an encode's artifact became (issue #625).
-
-    A swap that is declined discards the artifact; the row must then say so -
-    with the reason - or every surface that reads sizes and saved_percent
-    reports the file as encoded and a reclaimed figure for space that was
-    never reclaimed.
-
-    Args:
-        connection (sqlite3.Connection): The database connection.
-        encode_id (int): The encode row to update.
-        outcome (str): 'applied' or 'discarded'.
-        reason (str | None): Why the outcome changed (the decline reason).
-    """
-    connection.execute(
-        "UPDATE encodes SET outcome = ?, outcome_reason = ? WHERE id = ?",
-        (outcome, reason, encode_id),
-    )
-    connection.commit()
 
 
 def set_encode_output(

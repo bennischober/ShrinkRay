@@ -306,14 +306,21 @@ class TestDb(unittest.TestCase):
                     output_size, saved_percent, output_file)
                 VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0, '/tmp/movie.shrinkray-original');
                 -- a discarded attempt (#232): the swap was declined, the
-                -- output_file was nulled, the sizes stayed
+                -- output_file was nulled, the sizes stayed. A post-v7 row has
+                -- the chain columns, so its NULL output proves the discard.
                 INSERT INTO encodes (file_id, preset, encoder, input_size,
-                    output_size, saved_percent, output_file)
-                VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0, NULL);
+                    output_size, saved_percent, source_file, output_file)
+                VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0,
+                        '/tmp/movie.mkv', NULL);
                 -- a skip marker: zero sizes, the verdict in the preset
                 INSERT INTO encodes (file_id, preset, encoder, input_size,
                     output_size, saved_percent)
                 VALUES (1, 'skipped (no size gain)', 'none', 0, 0, 0.0);
+                -- a pre-v7 applied encode: v7 introduced the chain columns
+                -- without a backfill, so neither is written and proves nothing
+                INSERT INTO encodes (file_id, preset, encoder, input_size,
+                    output_size, saved_percent)
+                VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0);
                 """
             )
             connection.commit()
@@ -326,6 +333,9 @@ class TestDb(unittest.TestCase):
             self.assertEqual(rows[0]["outcome"], "applied")
             self.assertEqual(rows[1]["outcome"], "discarded")
             self.assertEqual(rows[2]["outcome"], "skipped")
+            # the pre-v7 shape stays applied: its missing chain columns prove
+            # nothing (the round-3 finding - the old rule misclassified it)
+            self.assertEqual(rows[3]["outcome"], "applied")
             migrated.close()
 
     def test_migration_v2_to_v3_absolute_paths(self):
@@ -586,7 +596,8 @@ class TestDb(unittest.TestCase):
                     input_size INTEGER NOT NULL,
                     output_size INTEGER NOT NULL,
                     saved_percent REAL NOT NULL,
-                    output_file TEXT
+                    output_file TEXT,
+                    source_file TEXT
                 );
                 CREATE TABLE plans (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
