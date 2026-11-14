@@ -6,6 +6,9 @@ platform without events (or on any error). The tests use real inotify events
 on Linux (the CI platform) and fake waiters elsewhere.
 """
 
+import os
+import select
+import sys
 import tempfile
 import threading
 import time
@@ -14,6 +17,73 @@ from pathlib import Path
 from unittest import mock
 
 from shrinkray.engine.watch import _FsWaiter, _sleep_plain
+
+
+@unittest.skipUnless(sys.platform == "linux", "inotify is Linux-only")
+class TestFsWaiterStop(unittest.TestCase):
+    """The drain thread must be out of select() before stop() closes the
+    inotify descriptor (issue #642): the race let select run on a closed
+    fd - EBADF killed the drain thread - and left the closed number free
+    for reuse under a still-running read. The synchronization is the CLOSE
+    event itself, not a scheduling beat: the parked select waits for
+    stop()'s close (which on main happens while the drain is parked, so
+    the released select hits the closed fd deterministically), and on the
+    fixed code the close waits for the join, so the select runs on the
+    still-open fd and the drain exits cleanly."""
+
+    def test_stop_joins_the_drain_before_closing_the_fd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            waiter = _FsWaiter([Path(tmp)])
+            waiter._start_linux()
+            self.addCleanup(waiter.stop)
+
+            real_select = select.select
+            in_select = threading.Event()
+            close_done = threading.Event()
+            real_close = os.close
+
+            def parked_select(rlist, wlist, xlist, timeout):
+                # the deterministic park: the drain stays INSIDE select
+                # until stop()'s close is observed (main) or the bounded
+                # window passes (fixed: the close waits behind the join)
+                in_select.set()
+                close_done.wait(0.5)
+                return real_select(rlist, wlist, xlist, 0.05)
+
+            def closing_close(fd):
+                real_close(fd)
+                close_done.set()
+
+            hook = mock.Mock()
+            old_hook = threading.excepthook
+            threading.excepthook = hook
+            try:
+                with (
+                    mock.patch("select.select", parked_select),
+                    mock.patch("os.close", closing_close),
+                ):
+                    self.assertTrue(in_select.wait(5.0), "the drain never parked in select")
+                    stop_finished = threading.Event()
+
+                    def do_stop():
+                        waiter.stop()
+                        stop_finished.set()
+
+                    stopper = threading.Thread(target=do_stop)
+                    stopper.start()
+                    stopper.join(5.0)
+                    waiter._thread.join(5.0)
+                # the drain exited without an unhandled exception...
+                self.assertFalse(
+                    hook.called,
+                    f"an unhandled thread exception escaped the drain: {hook.call_args}",
+                )
+                # ...stop() returned...
+                self.assertTrue(stop_finished.is_set())
+                # ...and the close it names happened (only after the join)
+                self.assertIsNone(waiter._fd)
+            finally:
+                threading.excepthook = old_hook
 
 
 class TestFsWaiter(unittest.TestCase):

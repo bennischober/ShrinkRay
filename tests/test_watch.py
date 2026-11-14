@@ -76,61 +76,6 @@ def _isolated_lock(stack, tmp) -> None:
         stack.enter_context(mock.patch.object(watch_mod, "STABLE_CHECK_INTERVAL", 0.0))
 
 
-class TestFsWaiterStop(unittest.TestCase):
-    """The drain thread must be out of select() before stop() closes the
-    inotify descriptor (issue #642): the race let select run on a closed
-    fd - EBADF killed the drain thread - and left the closed number free
-    for reuse under a still-running read."""
-
-    def test_stop_joins_the_drain_before_closing_the_fd(self) -> None:
-        import select as select_mod
-
-        with tempfile.TemporaryDirectory() as tmp:
-            waiter = watch_mod._FsWaiter([Path(tmp)])
-            waiter._start_linux()
-            self.addCleanup(waiter.stop)
-
-            real_select = select_mod.select
-            in_select = threading.Event()
-            release = threading.Event()
-
-            def parked_select(rlist, wlist, xlist, timeout):
-                # the deterministic park: the drain stays INSIDE select
-                # until the test releases it, whichever stop() does
-                in_select.set()
-                release.wait(5.0)
-                return real_select(rlist, wlist, xlist, 0.05)
-
-            hook = mock.Mock()
-            old_hook = threading.excepthook
-            threading.excepthook = hook
-            try:
-                with mock.patch("select.select", parked_select):
-                    self.assertTrue(in_select.wait(5.0), "the drain never parked in select")
-                    stop_finished = threading.Event()
-
-                    def do_stop():
-                        waiter.stop()
-                        stop_finished.set()
-
-                    stopper = threading.Thread(target=do_stop)
-                    stopper.start()
-                    # a beat for stop() to reach the close (main) or the
-                    # join (fixed) while the drain is parked
-                    stopper.join(timeout=1.0)
-                    release.set()
-                    stopper.join(5.0)
-                    waiter._thread.join(5.0)
-                # the drain must have exited without an unhandled exception
-                self.assertFalse(
-                    hook.called,
-                    f"an unhandled thread exception escaped the drain: {hook.call_args}",
-                )
-                self.assertTrue(stop_finished.is_set())
-            finally:
-                threading.excepthook = old_hook
-
-
 class TestWatch(unittest.TestCase):
     def test_a_library_below_a_shrinkray_named_ancestor_is_visible(self):
         """Issue #286: the staging filter scoped to the walk root - a library
