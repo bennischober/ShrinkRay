@@ -72,10 +72,13 @@ for (const scenario of SCENARIOS) {
       // the viewport must be the project's width before anything is measured:
       // the page renders its desktop sidebar whenever the emulated width has not
       // applied yet, which is why the same phone case passed and failed
+      // a scrollbar makes the viewport a few pixels narrower than the
+      // emulated width, so an exact match never settles and the gate hung
       await page.waitForFunction(
-        (width) => window.innerWidth === width,
+        (width) => Math.abs(window.innerWidth - width) <= 20,
         testInfo.project.use.viewport?.width,
       )
+
       await expect(page.locator('h1').first()).toBeVisible()
       // measure after the fonts settle: a swap changes text widths, which is
       // what made two runs of the same commit disagree about the same page
