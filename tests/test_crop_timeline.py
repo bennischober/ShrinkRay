@@ -158,7 +158,7 @@ class TestCropCache(unittest.TestCase):
         readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
         fake = self._timeline(readings, (1920, 1080))
         with patch("shrinkray.engine.crop.run_crop_timeline", side_effect=fake):
-            first = detect_crop_summary_cached(self.movie, self.db_file)
+            first = detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
             self.assertIsNotNone(first)
             self.assertEqual(first.bars, (140, 140, 0, 0))
             # second call: served from the db, the pass must not run again
@@ -166,7 +166,7 @@ class TestCropCache(unittest.TestCase):
                 "shrinkray.engine.crop.run_crop_timeline",
                 side_effect=AssertionError("the pass ran although a cache row exists"),
             ):
-                second = detect_crop_summary_cached(self.movie, self.db_file)
+                second = detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
         self.assertEqual(second.bars, (140, 140, 0, 0))
         # one row per file version, keyed by size + mtime
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 1)
@@ -198,7 +198,7 @@ class TestCropCache(unittest.TestCase):
             "shrinkray.engine.crop.run_crop_timeline",
             side_effect=self._timeline(readings, (1920, 1080)),
         ):
-            detect_crop_summary_cached(self.movie, self.db_file)
+            detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
         opened, recording = self._opened_connections()
         with (
             recording,
@@ -207,7 +207,7 @@ class TestCropCache(unittest.TestCase):
                 side_effect=AssertionError("the pass ran although a cache row exists"),
             ),
         ):
-            summary = detect_crop_summary_cached(self.movie, self.db_file)
+            summary = detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
         self.assertEqual(summary.bars, (140, 140, 0, 0))
         self.assert_closed(opened)
 
@@ -226,7 +226,7 @@ class TestCropCache(unittest.TestCase):
             ),
             self.assertRaises(_CacheReadFailed),
         ):
-            detect_crop_summary_cached(self.movie, self.db_file)
+            detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
         self.assert_closed(opened)
 
     def test_a_corrupt_database_computes_uncached(self) -> None:
@@ -243,7 +243,7 @@ class TestCropCache(unittest.TestCase):
             ),
             patch("shrinkray.engine.crop.log") as log,
         ):
-            summary = detect_crop_summary_cached(self.movie, corrupt)
+            summary = detect_crop_summary_cached(self.movie, corrupt, bit_depth=8)
         self.assertIsNotNone(summary)
         self.assertEqual(summary.bars, (140, 140, 0, 0))
         logged = " ".join(str(call.args[0]) for call in log.call_args_list)
@@ -266,7 +266,7 @@ class TestCropCache(unittest.TestCase):
             ),
             patch("shrinkray.engine.crop.log") as log,
         ):
-            summary = detect_crop_summary_cached(self.movie, self.db_file)
+            summary = detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
         self.assertIsNotNone(summary)
         self.assertEqual(summary.bars, (140, 140, 0, 0))
         logged = " ".join(str(call.args[0]) for call in log.call_args_list)
@@ -277,11 +277,11 @@ class TestCropCache(unittest.TestCase):
         readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
         fake = self._timeline(readings, (1920, 1080))
         with patch("shrinkray.engine.crop.run_crop_timeline", side_effect=fake):
-            detect_crop_summary_cached(self.movie, self.db_file)
+            detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
         # the file changed: identity (size + mtime) breaks, the cache misses
         self.movie.write_bytes(b"y" * 99)
         with patch("shrinkray.engine.crop.run_crop_timeline", side_effect=fake) as mock_run:
-            summary = detect_crop_summary_cached(self.movie, self.db_file)
+            summary = detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
         self.assertEqual(mock_run.call_count, 1, "a changed file must be re-measured")
         self.assertIsNotNone(summary)
 
@@ -290,7 +290,7 @@ class TestCropCache(unittest.TestCase):
             "shrinkray.engine.crop.run_crop_timeline",
             return_value=([], None),
         ):
-            summary = detect_crop_summary_cached(self.movie, self.db_file)
+            summary = detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
         self.assertIsNone(summary)
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
 
@@ -304,7 +304,7 @@ class TestCropCache(unittest.TestCase):
             patch("shrinkray.engine.crop._run", **run_result),
             patch("shrinkray.engine.crop.log") as log,
         ):
-            summary = detect_crop_summary_cached(self.movie, self.db_file)
+            summary = detect_crop_summary_cached(self.movie, self.db_file, bit_depth=8)
         self.assertIsNone(summary)
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
         return " ".join(str(call.args[0]) for call in log.call_args_list)
@@ -375,7 +375,9 @@ class TestCropCache(unittest.TestCase):
             patch("shrinkray.engine.crop._run", side_effect=run_child),
         ):
             threading.Timer(0.3, fire).start()
-            summary = detect_crop_summary_cached(self.movie, self.db_file, cancel=cancel)
+            summary = detect_crop_summary_cached(
+                self.movie, self.db_file, cancel=cancel, bit_depth=8
+            )
             elapsed = time.monotonic() - set_at[0]
         self.assertIsNone(summary)
         self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM crops").fetchone()[0], 0)
@@ -385,7 +387,7 @@ class TestCropCache(unittest.TestCase):
         readings = [_reading(float(i), 1920, 800, 0, 140) for i in range(41)]
         fake = self._timeline(readings, (1920, 1080))
         with patch("shrinkray.engine.crop.run_crop_timeline", side_effect=fake) as mock_run:
-            summary = detect_crop_summary_cached(self.movie, None)
+            summary = detect_crop_summary_cached(self.movie, None, bit_depth=8)
         self.assertEqual(mock_run.call_count, 1)
         self.assertEqual(summary.bars, (140, 140, 0, 0))
         # no db involvement: nothing was stored
@@ -430,7 +432,7 @@ class TestScanFlagProjection(unittest.TestCase):
     def test_a_cached_summary_drives_the_flag(self) -> None:
         from shrinkray.engine.scan import process_movie
 
-        db.save_crop_summary(self.connection, self.movie, self.summary)
+        db.save_crop_summary(self.connection, self.movie, self.summary, limit=24)
         with (
             patch("shrinkray.engine.scan.get_data", return_value=_fake_probe_data()),
             patch(
@@ -503,7 +505,7 @@ class TestCropCancelReachesBothPasses(unittest.TestCase):
                 patch("shrinkray.engine.crop._run", side_effect=run_child),
             ):
                 threading.Timer(0.3, fire).start()
-                rect = detect_crop_rect(movie, Path(tmp), count=3, cancel=cancel)
+                rect = detect_crop_rect(movie, Path(tmp), count=3, cancel=cancel, bit_depth=8)
                 elapsed = time.monotonic() - set_at[0]
         self.assertIsNone(rect)
         self.assertEqual(len(windows), 1, "the windows after the cancel must not start")
@@ -525,7 +527,7 @@ class TestCropCancelReachesBothPasses(unittest.TestCase):
                 patch("shrinkray.engine.crop._run", side_effect=[bars, (-9, ""), bars]),
                 patch("shrinkray.engine.crop.log") as log,
             ):
-                rect = detect_crop_rect(movie, Path(tmp), count=3)
+                rect = detect_crop_rect(movie, Path(tmp), count=3, bit_depth=8)
         self.assertIsNone(rect)
         self.assertIn("ffmpeg exited -9", " ".join(str(c.args[0]) for c in log.call_args_list))
 
@@ -550,11 +552,17 @@ class TestCropCancelReachesBothPasses(unittest.TestCase):
         pass received."""
         seen: dict[str, object] = {}
 
-        def timeline(movie: Path, db_file: Path | None, cancel: object = None) -> None:
+        def timeline(
+            movie: Path, db_file: Path | None, cancel: object = None, *, bit_depth: object
+        ) -> None:
             seen["timeline"] = cancel
+            seen["timeline_depth"] = bit_depth
 
-        def fallback(movie: Path, workdir: Path, count: int = 10, cancel: object = None) -> None:
+        def fallback(
+            movie: Path, workdir: Path, count: int = 10, cancel: object = None, *, bit_depth: object
+        ) -> None:
             seen["fallback"] = cancel
+            seen["fallback_depth"] = bit_depth
             raise _ReachedFallback
 
         stack.enter_context(
@@ -605,6 +613,227 @@ class TestCropCancelReachesBothPasses(unittest.TestCase):
         self.assertIs(seen.get("timeline"), cancel, "the timeline pass lost the cancel")
         self.assertIs(seen.get("fallback"), cancel, "the fallback lost the cancel")
 
+    def test_plan_quality_hands_the_source_depth_to_both_passes(self) -> None:
+        """Issue #637: the passes set cropdetect's black threshold from the
+        source's depth, so plan_quality must hand them the depth it probed."""
+        import shrinkray.engine.plan as plan_module
+
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 8)
+            seen = self._passes_seen("plan", stack)
+            stack.enter_context(
+                patch(
+                    "shrinkray.engine.plan.get_data",
+                    return_value={"hdr": False, "bit_depth": 10},
+                )
+            )
+            with self.assertRaises(_ReachedFallback):
+                plan_module.plan_quality(movie)
+        self.assertEqual(seen.get("timeline_depth"), 10, "the timeline pass lost the depth")
+        self.assertEqual(seen.get("fallback_depth"), 10, "the fallback lost the depth")
+
+    def test_the_encode_probe_hands_the_source_depth_to_both_passes(self) -> None:
+        import shrinkray.engine.pipeline as pipeline_module
+
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 8)
+            seen = self._passes_seen("pipeline", stack)
+            with self.assertRaises(_ReachedFallback):
+                pipeline_module._probe_movie(
+                    movie,
+                    target_vmaf=96.0,
+                    min_saving_percent=15,
+                    crf_range=(14, 45),
+                    sample_count=3,
+                    sample_seconds=2.0,
+                    encoder="svt_av1",
+                    probe_encoder_preset="8",
+                    source_bit_depth=10,
+                )
+        self.assertEqual(seen.get("timeline_depth"), 10, "the timeline pass lost the depth")
+        self.assertEqual(seen.get("fallback_depth"), 10, "the fallback lost the depth")
+
+
+class TestCropLimitFollowsBitDepth(unittest.TestCase):
+    """Issue #637: cropdetect reads an absolute limit in the stream's NATIVE
+    range, so the 8-bit value 24 found no black in limited-range 10-bit video
+    (black is code 64) and every 10-bit source kept its bars. The threshold
+    scales with the depth; the 8-bit filter string stays byte-identical."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.movie = self.root / "movie.mkv"
+        self.movie.write_bytes(b"x" * 8)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_the_threshold_scales_with_the_bit_depth(self) -> None:
+        from shrinkray.engine.crop import cropdetect_limit
+
+        self.assertEqual(cropdetect_limit(None), 24)
+        self.assertEqual(cropdetect_limit(8), 24)
+        self.assertEqual(cropdetect_limit(10), 96)
+        self.assertEqual(cropdetect_limit(12), 384)
+
+    def _timeline_filter(self, bit_depth: int | None) -> str:
+        """Runs the real cached detector (stateless) and returns its -vf."""
+        with (
+            patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=60.0),
+            patch("shrinkray.engine.crop._run", return_value=(0, "")) as run,
+        ):
+            detect_crop_summary_cached(self.movie, None, bit_depth=bit_depth)
+        args = run.call_args.args[0]
+        return str(args[args.index("-vf") + 1])
+
+    def test_planning_a_10_bit_source_measures_bars_at_10_bit_black(self) -> None:
+        """The defect end to end, through the real detectors (only the ffmpeg
+        seam is stubbed): planning a 10-bit source must hand every cropdetect
+        run the 10-bit threshold. On the broken code both passes ran with 24,
+        which no limited-range 10-bit pixel is at or below."""
+        import shrinkray.engine.plan as plan_module
+
+        with (
+            patch(
+                "shrinkray.engine.plan.get_data",
+                return_value={"hdr": False, "bit_depth": 10},
+            ),
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
+            patch("shrinkray.engine.crop._run", return_value=(0, "")) as run,
+            patch(
+                "shrinkray.engine.plan.extract_samples",
+                side_effect=_ReachedFallback("stop before the CRF search"),
+            ),
+            self.assertRaises(_ReachedFallback),
+        ):
+            plan_module.plan_quality(self.movie)
+        filters = [str(call.args[0][call.args[0].index("-vf") + 1]) for call in run.call_args_list]
+        self.assertTrue(filters, "no cropdetect pass ran")
+        for vf in filters:
+            self.assertTrue(vf.startswith("cropdetect=limit=96:"), vf)
+
+    def test_the_timeline_pass_measures_10_bit_at_its_native_black(self) -> None:
+        self.assertEqual(self._timeline_filter(10), "cropdetect=limit=96:round=2:reset=1")
+
+    def test_the_timeline_pass_keeps_the_8_bit_filter_unchanged(self) -> None:
+        self.assertEqual(self._timeline_filter(8), "cropdetect=limit=24:round=2:reset=1")
+        self.assertEqual(self._timeline_filter(None), "cropdetect=limit=24:round=2:reset=1")
+
+    def test_the_sampled_fallback_measures_10_bit_at_its_native_black(self) -> None:
+        from shrinkray.engine.crop import detect_crop_rect
+
+        with (
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
+            patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+            patch("shrinkray.engine.crop._run", return_value=(0, "crop=1920:800:0:140")) as run,
+        ):
+            rect = detect_crop_rect(self.movie, self.root, count=2, bit_depth=10)
+        self.assertEqual(rect, (140, 140, 0, 0))
+        for call in run.call_args_list:
+            args = call.args[0]
+            self.assertEqual(args[args.index("-vf") + 1], "cropdetect=limit=96:round=2:reset=0")
+
+    def test_the_scan_probe_measures_10_bit_at_its_native_black(self) -> None:
+        """has_black_bars passed a bare `cropdetect`, whose default limit is
+        the same 8-bit 24."""
+        from shrinkray.engine.crop import has_black_bars
+
+        with patch("shrinkray.engine.crop.subprocess.run") as run:
+            run.return_value.stderr = b"crop=1920:800:0:140"
+            flag = has_black_bars(self.movie, {"width": 1920, "height": 1080}, bit_depth=10)
+        self.assertEqual(flag, 1)
+        args = run.call_args.args[0]
+        self.assertEqual(args[args.index("-vf") + 1], "cropdetect=limit=96")
+
+
+class TestCropCacheKeysOnTheThreshold(unittest.TestCase):
+    """Issue #637: a summary measured at another threshold is not this
+    measurement - every row cached before the fix found no bars on a 10-bit
+    source, and reusing it would keep those bars forever."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.db_file = self.root / "test.db"
+        self.connection = db.connect(self.db_file)
+        self.movie = self.root / "movie.mkv"
+        self.movie.write_bytes(b"x" * 8)
+        stat = self.movie.stat()
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=self.movie, mtime=stat.st_mtime, size=stat.st_size, name="movie", category="C"
+            ),
+        )
+        # what the pre-fix detector cached for a 10-bit letterboxed film
+        self.no_bars = CropSummary(
+            bars=None,
+            frame_width=1920,
+            frame_height=1080,
+            readings=1335,
+            sustained_readings=1335,
+            ratios={},
+        )
+        db.save_crop_summary(self.connection, self.movie, self.no_bars, limit=24)
+
+    def tearDown(self) -> None:
+        self.connection.close()
+        self.tmp.cleanup()
+
+    def test_an_8_bit_source_keeps_its_cached_row(self) -> None:
+        from shrinkray.engine.crop import get_crop_summary
+
+        self.assertIsNotNone(get_crop_summary(self.connection, self.movie, bit_depth=8))
+        self.assertIsNotNone(get_crop_summary(self.connection, self.movie, bit_depth=None))
+
+    def test_a_10_bit_source_remeasures_a_row_cached_at_the_8_bit_threshold(self) -> None:
+        from shrinkray.engine.crop import get_crop_summary
+
+        self.assertIsNone(get_crop_summary(self.connection, self.movie, bit_depth=10))
+        measured = CropSummary(
+            bars=(140, 140, 0, 0),
+            frame_width=1920,
+            frame_height=1080,
+            readings=1335,
+            sustained_readings=1335,
+            ratios={},
+        )
+        with (
+            patch(
+                "shrinkray.engine.crop.run_crop_timeline", return_value=([], (1920, 1080))
+            ) as run,
+            patch("shrinkray.engine.crop.crop_summary_from_timeline", return_value=measured),
+        ):
+            summary = detect_crop_summary_cached(self.movie, self.db_file, bit_depth=10)
+        self.assertEqual(run.call_args.args[1], 96)
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.bars if summary else None, (140, 140, 0, 0))
+        cached = get_crop_summary(self.connection, self.movie, bit_depth=10)
+        self.assertEqual(cached.bars if cached else None, (140, 140, 0, 0))
+
+    def test_the_scan_does_not_project_a_row_cached_at_another_threshold(self) -> None:
+        """The scan's flag reads the cache too: a stale 'no bars' row must
+        not stand in for the 10-bit measurement."""
+        from shrinkray.engine.scan import process_movie
+
+        with (
+            patch(
+                "shrinkray.engine.scan.get_data",
+                return_value={**_fake_probe_data(), "bit_depth": 10},
+            ),
+            patch("shrinkray.engine.scan.has_black_bars", return_value=1) as probe,
+        ):
+            data, error = process_movie(self.movie, self.root, _config(), db_file=self.db_file)
+        self.assertIsNone(error)
+        self.assertEqual(data["crop"], 1)
+        self.assertEqual(probe.call_args.kwargs["bit_depth"], 10)
+
 
 class _ReachedFallback(Exception):
     """Stops an engine entry point once it has called the sampled fallback."""
@@ -637,7 +866,7 @@ class TestPlanUsesTheTimelineDetector(unittest.TestCase):
                 sustained_readings=118,
                 ratios={},
             )
-            db.save_crop_summary(connection, movie, summary)
+            db.save_crop_summary(connection, movie, summary, limit=24)
             connection.close()
 
             def fake_find(movie, workdir, handbrake, **kwargs):

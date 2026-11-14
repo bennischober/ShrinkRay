@@ -359,3 +359,69 @@ class TestSmokeColourRetag(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(os.environ.get("SHRINKRAY_SMOKE"), "smoke: opt-in (SHRINKRAY_SMOKE=1)")
+@unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI + ffprobe required on PATH")
+class TestSmokeBarsAtEveryBitDepth(unittest.TestCase):
+    """Issue #637: the real detector finds the same bars in 8- and 10-bit.
+
+    cropdetect reads its limit in the stream's native range, so the 8-bit
+    threshold found no black in limited-range 10-bit video and every 10-bit
+    letterboxed film kept its bars. Stub tests pin the filter string; only the
+    real binary proves the threshold actually classifies 10-bit black.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _letterboxed_clip(self, pix_fmt: str) -> Path:
+        """A 1920x800 picture padded with black to 1920x1080 (140 px bars).
+
+        libx265 encodes both depths in limited range, where black is code 16
+        (8-bit) or 64 (10-bit). A keyframe every second for 45 s gives the
+        timeline pass a sustained run past MIN_RUN_SECONDS (30 s).
+        """
+        clip = self.root / f"bars-{pix_fmt}.mkv"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=1920x800:rate=4:duration=45",
+                "-vf",
+                f"pad=1920:1080:0:140:black,format={pix_fmt}",
+                "-c:v",
+                "libx265",
+                "-preset",
+                "ultrafast",
+                "-x265-params",
+                "keyint=4:min-keyint=4:log-level=error",
+                str(clip),
+            ],
+            check=True,
+            timeout=300,
+        )
+        return clip
+
+    def _bars(self, clip: Path) -> tuple[int, int, int, int] | None:
+        from shrinkray.engine.crop import detect_crop_summary_cached
+        from shrinkray.engine.plan import source_bit_depth
+
+        summary = detect_crop_summary_cached(clip, None, bit_depth=source_bit_depth(clip))
+        self.assertIsNotNone(summary, "the timeline pass failed")
+        return summary.bars if summary is not None else None
+
+    def test_8_bit_bars_are_found(self):
+        self.assertEqual(self._bars(self._letterboxed_clip("yuv420p")), (140, 140, 0, 0))
+
+    def test_10_bit_bars_are_found(self):
+        self.assertEqual(self._bars(self._letterboxed_clip("yuv420p10le")), (140, 140, 0, 0))

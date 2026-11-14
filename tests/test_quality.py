@@ -2712,7 +2712,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 "shrinkray.engine.crop.subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
             ) as mocked:
-                self.assertIsNone(engine_crop.detect_crop_rect(movie, None, count=3))
+                self.assertIsNone(engine_crop.detect_crop_rect(movie, None, count=3, bit_depth=8))
             # exactly the ffprobe frame-size call was made (not the
             # cropdetect _run); the duration probe inside uses -show_format
             self.assertIn("-show_format", mocked.call_args.args[0])
@@ -2822,7 +2822,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch("shrinkray.engine.crop._run", side_effect=fake_run),
             ):
-                engine_crop.detect_crop_rect(movie, Path(tmp))
+                engine_crop.detect_crop_rect(movie, Path(tmp), bit_depth=8)
         self.assertEqual(len(commands), 10)
 
     def test_crop_samples_are_configurable(self):
@@ -2855,7 +2855,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch("shrinkray.engine.crop._run", side_effect=fake_run),
             ):
-                engine_crop.detect_crop_rect(movie, Path(tmp), count=4)
+                engine_crop.detect_crop_rect(movie, Path(tmp), count=4, bit_depth=8)
         self.assertEqual(len(commands), 4)
 
     def test_plan_fingerprint_records_crop_sample_count(self):

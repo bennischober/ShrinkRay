@@ -105,6 +105,16 @@ of 24 is correct for PQ sources generally: a file that genuinely has bars would 
 needed to test that, and this corpus has none. **The issue's Q5 is therefore
 unanswered, not answered** — one HDR film with no bars cannot calibrate a limit.
 
+> **Correction (issue #637, 2026-11-14).** The table above cannot show whether
+> Media01 has bars: every limit tried (8-48) lies below limited-range 10-bit black,
+> which is code 64. cropdetect reads an absolute `limit` in the stream's *native*
+> range (0-1023 for 10-bit), so no limit in that range classifies any 10-bit pixel
+> as black and every reading is full frame, bars or not. The shipped constant of 24
+> had the same flaw: a real 10-bit SDR film with ~140 px bars read as `1920x1080`
+> at 24 and as `1920x800` at 96. The detector now scales the limit with the source's
+> bit depth (`cropdetect_limit`, `engine/crop.py`: 24 at 8-bit, 96 at 10-bit, 384
+> at 12-bit), and the 8-bit filter string is unchanged.
+
 ## Q6: Dark segments
 
 This is the blind spot, and the corpus quantifies it. Media02 and Media03 keep a
