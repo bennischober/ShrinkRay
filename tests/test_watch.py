@@ -377,6 +377,25 @@ class TestWatch(unittest.TestCase):
                 acquire_lock(lock)
             self.assertEqual(victim.read_text(encoding="utf-8"), "do not truncate")
 
+    def test_a_failed_lock_acquisition_names_the_real_cause(self):
+        """Issue #648 round 1, finding 2's watch() half: an infrastructure
+        failure (the lock cannot be acquired at all) records the REAL cause
+        on WATCHER_ERROR - never the 'another watcher' text."""
+
+        from shrinkray.engine import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                watch_mod,
+                "acquire_lock",
+                side_effect=OSError("the lock path is not a regular file"),
+            ):
+                watch_mod.watch([Path(tmp) / "in"], Path(tmp) / "out", once=True, db_file=None)
+            self.assertIn("the lock path is not a regular file", watch_mod.WATCHER_ERROR or "")
+            self.assertNotIn("another watcher", watch_mod.WATCHER_ERROR or "")
+            # the module state is reset even when an assertion fails
+            self.addCleanup(setattr, watch_mod, "WATCHER_ERROR", None)
+
     def test_a_refused_start_names_the_reason(self):
         """Issue #648: a stopped watcher is not silent - watch() records the
         refusal reason and /api/status carries it (watcher_error), so the

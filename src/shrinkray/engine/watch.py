@@ -541,8 +541,10 @@ def acquire_lock(lock_file: Path) -> bool:
     try:
         os.ftruncate(fd, 0)
         os.write(fd, str(os.getpid()).encode())
-    except OSError:
-        pass
+    except OSError as e:
+        # the lock is held regardless; the PID text is diagnostics only, but
+        # a reader counting on it should know it may be stale
+        log_error(f"The lock file's owner-PID note could not be written: {e}")
     _LOCK_FD = fd
     return True
 
@@ -764,7 +766,8 @@ def release_lock(lock_file: Path) -> None:
         os.close(fd)
 
 
-# the single-instance lock's path: one watcher per machine. A module-level
+# the single-instance lock's path: one watcher per process (per container -
+# the path is the container's own temp dir). A module-level
 # constant so tests can point it at a per-test temp file (issue #176: a
 # shared /tmp path made one test run's lock block another's). The file's
 # text is diagnostics; the OS lock on it decides (issue #648).

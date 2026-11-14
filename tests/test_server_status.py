@@ -42,14 +42,15 @@ class TestTheWatchLoopCrashIsRecorded(unittest.TestCase):
         app_module.state.watch_stop = watch_stop
         with mock.patch.object(watch_mod, "watch", side_effect=OSError("the inbox vanished")):
             app_module.start_watch(app_module.state, [Path(self.tmp.name)], None)
+        # the module state is reset even when an assertion above fails, so
+        # the failure cannot poison the next test
+        self.addCleanup(setattr, watch_mod, "WATCHER_ERROR", None)
         thread = app_module.state.watch_thread
         assert thread is not None
         thread.join(timeout=10.0)
         self.assertFalse(thread.is_alive())
         self.assertIsNotNone(watch_mod.WATCHER_ERROR)
         self.assertIn("the inbox vanished", watch_mod.WATCHER_ERROR or "")
-        # the module state is reset for the other tests
-        watch_mod.WATCHER_ERROR = None
 
 
 class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
