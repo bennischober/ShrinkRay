@@ -4,11 +4,12 @@ libvmaf is silent by design until the whole file is scored: a full-precision
 measurement of a large movie produces no output for the entire run, so the
 stall watchdog (DEFAULT_STALL_MINUTES = 10.0, "a healthy child reports
 progress at least once per N minutes") kills a healthy measurement as hung.
-The shipped encode path is partially exposed: the verify pass sub-samples
-1/10 above 2 GiB (large outputs measure in minutes), but any output at or
-below 2 GiB is measured at full precision - for a long movie exactly the
-silent-past-10-minutes pass the issue reproduces. Other exposed callers
-are full-precision by design: scripts/vmaf_parity.py,
+The shipped encode path is the probe path: a probe measurement of a large
+movie produces no output for the entire run (the probe windows are encoded and
+scored before the final encode, and each window's measurement is silent until it
+finishes). The post-encode verify pass was removed in v0.8.0 (issue #605), so the
+silent-past-10-minutes shape is the probe measurement, not a second pass. Other
+exposed callers are full-precision by design: scripts/vmaf_parity.py,
 scripts/verify_fullmovie.py, any operator script on measure_vmaf.
 
 The fix (issue #431): the vmaf measurement is a silent child BY DESIGN, so

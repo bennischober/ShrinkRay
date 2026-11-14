@@ -1323,7 +1323,6 @@ class TestEncodeLock(unittest.TestCase):
                         overwrite=False,
                         quality=True,
                         target_vmaf=95.0,
-                        verify=False,
                         threads=None,
                         db_file=db_file,
                         encoder_preset="6",
@@ -1387,7 +1386,6 @@ class TestEncodeLock(unittest.TestCase):
                             overwrite=True,
                             quality=True,
                             target_vmaf=95.0,
-                            verify=False,
                             threads=None,
                             db_file=db_file,
                             sample_every=sample_every,
@@ -1455,7 +1453,6 @@ class TestEncodeLock(unittest.TestCase):
                         overwrite=False,
                         quality=True,
                         target_vmaf=95.0,
-                        verify=False,
                         threads=None,
                         db_file=db_file,
                         encoder_preset="6",
@@ -1677,90 +1674,9 @@ class TestEncodeLock(unittest.TestCase):
                 encode_with_quality(src, out, progress=None, crop_sample_count=3)
             self.assertEqual(probe.call_args.kwargs.get("crop_sample_count"), 3)
 
-    def test_encode_with_quality_verify_runs_measurement(self):
-        """verify=True measures the OUTPUT against the SOURCE after the
-        encode; a measurement failure is non-fatal (the encode stands)."""
-        import tempfile
-
-        from shrinkray.engine.pipeline import encode_with_quality
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
-            src = root / "in.mkv"
-            out_dir = root / "enc"
-            out_dir.mkdir()
-            out = out_dir / "in.mkv"
-            src.write_bytes(b"x" * 8)
-            stub = root / "hb_stub.cmd" if os.name == "nt" else root / "hb_stub.sh"
-            if os.name == "nt":
-                stub.write_bytes(b"@echo off\r\necho x > %~4\r\nexit 0\r\n")
-            else:
-                stub.write_bytes(b'#!/bin/sh\necho x > "$4"\nexit 0\n')
-                stub.chmod(0o755)
-
-            measured: list = []
-
-            def fake_measure(distorted, reference, workdir, **kwargs):
-                measured.append((distorted, reference, kwargs.get("subsample")))
-                return 94.5
-
-            with (
-                mock.patch(
-                    "shrinkray.engine.pipeline._probe_movie", return_value=(20, 95.2, [], None)
-                ),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
-                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
-                mock.patch("shrinkray.engine.pipeline.measure_vmaf", side_effect=fake_measure),
-                mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None),
-            ):
-                result = encode_with_quality(src, out, progress=None, verify=True)
-            self.assertTrue(result.success)
-            # measured OUTPUT vs SOURCE
-            self.assertEqual(len(measured), 1)
-            self.assertEqual(measured[0][0], out)
-            self.assertEqual(measured[0][1], src)
-            self.assertEqual(result.verified_vmaf, 94.5)
-
-    def test_encode_with_quality_verify_failure_nonfatal(self):
-        """A failed verification never invalidates the encode (it measured
-        fine at probe time): success stays true, verified_vmaf stays None."""
-        import tempfile
-
-        from shrinkray.engine.pipeline import encode_with_quality
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
-            src = root / "in.mkv"
-            out_dir = root / "enc"
-            out_dir.mkdir()
-            out = out_dir / "in.mkv"
-            src.write_bytes(b"x" * 8)
-            stub = root / "hb_stub.cmd" if os.name == "nt" else root / "hb_stub.sh"
-            if os.name == "nt":
-                stub.write_bytes(b"@echo off\r\necho x > %~4\r\nexit 0\r\n")
-            else:
-                stub.write_bytes(b'#!/bin/sh\necho x > "$4"\nexit 0\n')
-                stub.chmod(0o755)
-            with (
-                mock.patch(
-                    "shrinkray.engine.pipeline._probe_movie", return_value=(20, 95.2, [], None)
-                ),
-                mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
-                mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
-                mock.patch(
-                    "shrinkray.engine.pipeline.measure_vmaf",
-                    side_effect=RuntimeError("ffmpeg exploded"),
-                ),
-                mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None),
-            ):
-                result = encode_with_quality(src, out, progress=None, verify=True)
-            self.assertTrue(result.success)
-            self.assertIsNone(result.verified_vmaf)
-
-    def test_encode_with_quality_verify_without_ffmpeg_stands(self):
-        """CI regression (run 160): ffmpeg is absent, the verification
-        already failed non-fatally - and then result construction crashed
-        anyway because _tool_versions() probed ffmpeg unguarded. Version
+    def test_tool_versions_never_fail_the_encode_without_ffmpeg(self):
+        """CI regression (run 160): ffmpeg is absent and result construction
+        crashed anyway because _tool_versions() probed ffmpeg unguarded. Version
         metadata must never fail an encode."""
         import tempfile
 
@@ -1785,18 +1701,14 @@ class TestEncodeLock(unittest.TestCase):
                 ),
                 mock.patch("shrinkray.engine.pipeline.find_handbrake", return_value=str(stub)),
                 mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True),
-                mock.patch(
-                    "shrinkray.engine.pipeline.measure_vmaf", side_effect=RuntimeError("no ffmpeg")
-                ),
                 mock.patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None),
                 mock.patch(
                     "shrinkray.tools.vmaf.detect_vmaf_style",
                     side_effect=RuntimeError("ffmpeg not found"),
                 ),
             ):
-                result = encode_with_quality(src, out, progress=None, verify=True)
+                result = encode_with_quality(src, out, progress=None)
             self.assertTrue(result.success)
-            self.assertIsNone(result.verified_vmaf)
 
     def test_tool_versions_omits_libvmaf_without_ffmpeg(self):
         """_tool_versions degrades to the handbrake token (or an empty
@@ -1881,8 +1793,7 @@ if __name__ == "__main__":
 
 class TestEncodeOutcomeLine(unittest.TestCase):
     """Issue #471: the transcript is silent from 'Chosen CRF n' until the
-    verification line hours later; the outcome line names the file, the CRF
-    and the output size."""
+    encode ends; the outcome line names the file, the CRF and the output size."""
 
     def test_the_outcome_line_names_the_result(self) -> None:
         import tempfile
@@ -1932,7 +1843,6 @@ class TestEncodeOutcomeLine(unittest.TestCase):
                         out,
                         target_vmaf=95.0,
                         encoder="svt_av1",
-                        verify=False,
                     )
             finally:
                 logger.remove(sink_id)

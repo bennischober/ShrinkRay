@@ -25,7 +25,12 @@ from shrinkray.engine.encoders import (
     DEFAULT_ENCODER,
     encoder_for,
 )
-from shrinkray.engine.identity import capture_run_identity, ensure_unchanged, probe_scratch_prefix
+from shrinkray.engine.identity import (
+    RunIdentity,
+    capture_run_identity,
+    ensure_unchanged,
+    probe_scratch_prefix,
+)
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_COUNT,
     DEFAULT_SAMPLE_EVERY,
@@ -340,8 +345,6 @@ class QualityResult:
     probe_encoder_preset: str | None = None
     encode_seconds: float | None = None
     probe_seconds: float | None = None
-    verified_vmaf: float | None = None
-    verified_subsample: int | None = None
     hdr: bool = False
     tool_versions: str | None = None
     input_mtime: float | None = None
@@ -383,89 +386,94 @@ class QualityResult:
         return round((1 - self.output_size / self.input_size) * 100, 2)
 
 
-def plan_quality(
+@dataclass
+class Decision:
+    """The eligibility gates' verdict for one file (issue #602).
+
+    A decision is the first stage of the per-file pipeline and a job kind of
+    its own: nothing here measures or encodes, so the Jobs page can show whether
+    a file is a candidate before the expensive work starts.
+
+    Attributes:
+        input (Path): The file the decision is about.
+        eligible (bool): True when every gate passed.
+        skipped_reason (str | None): The gate that rejected the file, worded
+            as plan_quality reported it before the split.
+        error (str | None): The operator-facing explanation of a rejection.
+        identity (RunIdentity | None): The run-start identity the search and
+            the encode commit under (issue #436).
+        hdr (bool): Whether the source carries an HDR transfer.
+        encoder (str): The encoder the source's bit depth selects.
+        duration (float | None): The probed duration in seconds.
+        width (int | None): The probed width.
+        height (int | None): The probed height.
+        crf_range (tuple[int, int]): The search window the decision carries.
+        sample_count (int): The sample count the decision carries.
+        sample_seconds (float): The sample length the decision carries.
+        bit_depth (int | None): The source's bit depth, the recipe's last
+            input (issue #308), so the stored-plan lookup can rebuild it
+            without probing again.
+    """
+
+    input: Path
+    eligible: bool
+    skipped_reason: str | None = None
+    error: str | None = None
+    identity: RunIdentity | None = None
+    hdr: bool = False
+    encoder: str = DEFAULT_ENCODER
+    duration: float | None = None
+    width: int | None = None
+    height: int | None = None
+    crf_range: tuple[int, int] = DEFAULT_CRF_RANGE
+    sample_count: int = DEFAULT_SAMPLE_COUNT
+    sample_seconds: float = DEFAULT_SAMPLE_SECONDS
+    bit_depth: int | None = None
+
+
+def decide_quality(
     input_file: Path,
-    target_vmaf: float = DEFAULT_TARGET_VMAF,
-    min_saving_percent: int = 15,
     crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
     sample_count: int | None = None,
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
-    encoder: str = "svt_av1",
-    probe_encoder_preset: str = "5",
-    encoder_preset: str = "3",
-    cancel: threading.Event | None = None,
-    db_file: Path | None = None,
-    encoder_threads: int | None = None,
-    progress: ProgressCallback | None = None,
-    use_probe_cache: bool = True,
-    samples: list[tuple[Path, float]] | None = None,
     min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
     min_source_width: int = DEFAULT_MIN_SOURCE_WIDTH,
     min_source_size_gb: float = 0.0,
     candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
-    crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
-) -> QualityResult:
-    """Probes a movie and predicts the outcome without encoding it.
+) -> Decision:
+    """Runs the eligibility gates for one file, measuring nothing.
 
-    Runs the exact same probing pipeline as encode_with_quality (samples,
-    size estimate, CRF bisect) but stops before the full encode. The result
-    carries the predicted CRF, the measured VMAF and a size estimate based
-    on the sample probes.
+    The first stage of the per-file pipeline and a job kind of its own (issue
+    #602): it captures the run identity and applies the gates in their
+    cheapest-first order - HDR transfer, duration, resolution class, size floor,
+    codec whitelist. A rejecting gate returns the same skipped_reason and error
+    text plan_quality reported before the split; an eligible file returns the
+    identity and the probe metadata the search and the encode carry.
 
     Args:
-        input_file (Path): The file to analyze.
-        target_vmaf (float): The VMAF quality floor to meet.
-        min_saving_percent (int): The minimum predicted saving (percent)
-            the decision demands (issue #316; 0 = any real shrink). Part of
-            the stored plan fingerprint.
-        crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
-        sample_count (int): The number of samples to probe.
+        input_file (Path): The file to decide.
+        crf_range (tuple[int, int]): The (lowest, highest) CRF the decision
+            carries to the search.
+        sample_count (int): The fixed sample count (None = derived from
+            sample_every and the duration).
         sample_seconds (float): The length of each sample in seconds.
-        encoder (str): The video encoder, e.g. 'svt_av1'. for HDR the engine
-            switches to the 10-bit variant and the result carries it.
-        probe_encoder_preset (str): The PROBE's encoder speed preset (a
-            measurement setting, issue #22); the plan's fingerprint keys
-            on this value.
-        encoder_preset (str): The FINAL encode's speed preset (an output
-            setting, issue #22); plan never encodes, so this is recorded
-            on the result for provenance only.
-        cancel (threading.Event | None): Cooperative cancellation.
-        db_file (Path | None): The database file, used to locate the logs
-            directory for failure evidence (None => cwd metadata.db).
-        encoder_threads (int | None): Thread limit for the probe encodes
-            (None = no limit; must match a later encode's cap).
-        progress (callable | None): Callback progress(dict) for live step
-            updates of the probing pipeline (flow to the UI, never
-            persisted — the same events the console prints as log lines).
+        sample_every (float | None): The sample density (None = the fixed
+            count).
         min_source_height (int): Skip sources whose height AND width are both
-            below the 1080p-class floors (1080/1920 by default; a caller may
-            raise them, never lower them). Either dimension at class size
-            qualifies: a 1920x800 scope film is a 1080p-class master
-            (issue #233). A lower-resolution source has too few pixels to
-            save meaningfully, so the probe cost buys nothing.
-        min_source_size_gb (float): Skip sources below this size (0 = gate
-            off). Probe cost is roughly constant per file while the payoff
-            scales with size, so the smallest files have the worst
-            cost/benefit ratio.
+            below these floors (issue #233: either dimension at class size
+            qualifies).
+        min_source_width (int): The width floor (see min_source_height).
+        min_source_size_gb (float): Skip sources below this size (0 = off).
         candidate_codecs (tuple[str, ...]): Source codecs accepted beyond the
-            product whitelist SOURCE_CODECS (the config's extras). The gate
-            always applies the whitelist too, so this extends it, never
-            replaces it (issue #271).
-        crop_sample_count (int): cropdetect windows per movie. More
-            samples can only shrink the crop once the bars are the ones
-            common to every sample, the safe direction for an
-            irreversible crop.
+            product whitelist SOURCE_CODECS (issue #271).
 
     Returns:
-        QualityResult: The prediction (success=False with a skipped_reason
-            for skip decisions; input/output sizes carry the size estimate
-            as output_size = input_size * estimated factor).
+        Decision: eligible=False with the gate's reason, or eligible=True
+            carrying the captured identity and the probe metadata.
 
     Raises:
         FileNotFoundError: If the input file does not exist.
-        RuntimeError: If HandBrakeCLI is not installed or probing failed.
-        Cancelled: When the cancel event fires.
     """
     if not input_file.is_file():
         raise FileNotFoundError(f"Input file '{input_file}' does not exist!")
@@ -479,8 +487,10 @@ def plan_quality(
     hdr = is_hdr_file(input_file)
     # The encoder follows the SOURCE's bit depth (issue #234): a 10-bit
     # SDR master keeps its depth. The choice runs for every file - the
-    # skip result below still records it (issue #518).
-    effective_encoder = encoder_for(source_bit_depth(input_file))
+    # skip result below still records it (issue #518). Captured once: the
+    # recipe the stored-plan lookup rebuilds keys on it (issue #602).
+    bit_depth = source_bit_depth(input_file)
+    effective_encoder = encoder_for(bit_depth)
 
     duration = probe_duration_seconds(input_file)
     sample_count = sample_count_for(duration, sample_every, sample_count)
@@ -490,15 +500,12 @@ def plan_quality(
         # for HDR (libvmaf's docs: an SDR model on HDR pictures "is not
         # meaningful"). Support returns with libvmaf's HDR models (#519).
         log(f"Plan for '{input_file.name}': skip (hdr not supported)")
-        return QualityResult(
+        return Decision(
             input=input_file,
-            output=input_file,
-            success=False,
-            target_vmaf=target_vmaf,
+            eligible=False,
             error="HDR: not supported yet (no validated quality measurement); tracked in issue #519",
             skipped_reason="hdr not supported",
-            input_size=identity.size,
-            input_mtime=identity.mtime,
+            identity=identity,
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
@@ -512,15 +519,12 @@ def plan_quality(
         # every return carries the run's identity (issue #436): a row that
         # commits a verdict must commit the facts of the bytes it decided
         # about, never a commit-time stat
-        return QualityResult(
+        return Decision(
             input=input_file,
-            output=input_file,
-            success=False,
-            target_vmaf=target_vmaf,
+            eligible=False,
             error=f"duration {duration:.0f}s is below the {MIN_ENCODE_SECONDS:.0f}s minimum",
             skipped_reason="too short",
-            input_size=identity.size,
-            input_mtime=identity.mtime,
+            identity=identity,
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
@@ -545,19 +549,16 @@ def plan_quality(
             else (f"width {width}px" if width is not None else f"height {height}px")
         )
         log(f"Plan for '{input_file.name}': skip (resolution too low)")
-        return QualityResult(
+        return Decision(
             input=input_file,
-            output=input_file,
-            success=False,
-            target_vmaf=target_vmaf,
+            eligible=False,
             error=(
                 f"resolution {shown} is below the {min_source_width}x"
                 f"{min_source_height} 1080p class minimum "
                 "(a lower-resolution source saves too little to be worth the probe)"
             ),
             skipped_reason="resolution too low",
-            input_size=identity.size,
-            input_mtime=identity.mtime,
+            identity=identity,
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
@@ -571,18 +572,15 @@ def plan_quality(
     size_gb = input_file.stat().st_size / (1024**3)
     if min_source_size_gb > 0 and size_gb < min_source_size_gb:
         log(f"Plan for '{input_file.name}': skip (below min size)")
-        return QualityResult(
+        return Decision(
             input=input_file,
-            output=input_file,
-            success=False,
-            target_vmaf=target_vmaf,
+            eligible=False,
             error=(
                 f"size {size_gb:.2f} GB is below the {min_source_size_gb:.2f} GB "
                 "minimum (too little to save for the probe cost)"
             ),
             skipped_reason="below min size",
-            input_size=identity.size,
-            input_mtime=identity.mtime,
+            identity=identity,
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
@@ -601,19 +599,16 @@ def plan_quality(
     allowed = allowed_codecs(candidate_codecs)
     if codec is not None and codec not in allowed:
         log(f"Plan for '{input_file.name}': skip (source codec not a candidate)")
-        return QualityResult(
+        return Decision(
             input=input_file,
-            output=input_file,
-            success=False,
-            target_vmaf=target_vmaf,
+            eligible=False,
             error=(
                 f"source codec '{codec}' is not in the candidate codec list "
                 f"({', '.join(allowed)}) - a source outside it is "
                 "never re-encoded"
             ),
             skipped_reason="source codec not a candidate",
-            input_size=identity.size,
-            input_mtime=identity.mtime,
+            identity=identity,
             crf_range=crf_range,
             sample_count=sample_count,
             sample_seconds=sample_seconds,
@@ -621,6 +616,167 @@ def plan_quality(
             encoder=effective_encoder,
         )
 
+    return Decision(
+        input=input_file,
+        eligible=True,
+        identity=identity,
+        hdr=hdr,
+        encoder=effective_encoder,
+        duration=duration,
+        width=width,
+        height=height,
+        crf_range=crf_range,
+        sample_count=sample_count,
+        sample_seconds=sample_seconds,
+        bit_depth=bit_depth,
+    )
+
+
+def skipped_result(decision: Decision, target_vmaf: float) -> QualityResult:
+    """Rebuilds a rejecting decision as the result plan_quality returns.
+
+    Args:
+        decision (Decision): The rejecting decision.
+        target_vmaf (float): The requested VMAF floor.
+
+    Returns:
+        QualityResult: success=False carrying the gate's reason.
+    """
+    identity = decision.identity
+    assert identity is not None  # decide_quality captures it before every return
+    return QualityResult(
+        input=decision.input,
+        output=decision.input,
+        success=False,
+        target_vmaf=target_vmaf,
+        error=decision.error,
+        skipped_reason=decision.skipped_reason,
+        input_size=identity.size,
+        input_mtime=identity.mtime,
+        crf_range=decision.crf_range,
+        sample_count=decision.sample_count,
+        sample_seconds=decision.sample_seconds,
+        hdr=decision.hdr,
+        encoder=decision.encoder,
+    )
+
+
+def stored_plan_row(
+    input_file: Path,
+    decision: Decision,
+    *,
+    target_vmaf: float,
+    min_saving_percent: int,
+    probe_encoder_preset: str,
+    crop_sample_count: int,
+    db_file: Path | None,
+) -> sqlite3.Row | None:
+    """Reads the stored plan an eligible decision may reuse.
+
+    The encode boundary and the resident search both consult this (issue #602):
+    a valid stored plan means the measurement already ran for these bytes and
+    these settings, so the search is not repeated. Any mismatch returns None
+    and the caller measures, never guesses (the fingerprint rule lives in
+    `_lookup_plan`).
+
+    Args:
+        input_file (Path): The eligible file.
+        decision (Decision): The eligibility verdict (its width, height, bit
+            depth and sample settings are the fingerprint inputs).
+        target_vmaf (float): The encode's target VMAF.
+        min_saving_percent (int): The encode's minimum-saving threshold.
+        probe_encoder_preset (str): The probe preset the plan was measured
+            with (the fingerprint keys on it, issue #22).
+        crop_sample_count (int): The stored plan's crop sample count.
+        db_file (Path | None): The database file (None = no cache).
+
+    Returns:
+        sqlite3.Row | None: The valid plan row, or None.
+    """
+    if db_file is None:
+        return None
+    recipe = vmaf_recipe(
+        # the fingerprint is crop-independent (issue #308): the crop pass
+        # does not have to run before this lookup
+        crop=None,
+        width=decision.width,
+        height=decision.height,
+        bit_depth=decision.bit_depth,
+    )
+    return _lookup_plan(
+        db_file,
+        input_file,
+        encoder=decision.encoder,
+        encoder_preset=probe_encoder_preset,
+        target_vmaf=target_vmaf,
+        crf_range=decision.crf_range,
+        sample_count=decision.sample_count,
+        sample_seconds=decision.sample_seconds,
+        crop_sample_count=crop_sample_count,
+        vmaf_recipe=recipe.fingerprint(),
+        min_saving_percent=min_saving_percent,
+    )
+
+
+def search_quality(
+    decision: Decision,
+    *,
+    target_vmaf: float = DEFAULT_TARGET_VMAF,
+    min_saving_percent: int = 15,
+    probe_encoder_preset: str = "5",
+    encoder_preset: str = "3",
+    cancel: threading.Event | None = None,
+    db_file: Path | None = None,
+    encoder_threads: int | None = None,
+    progress: ProgressCallback | None = None,
+    use_probe_cache: bool = True,
+    crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
+) -> QualityResult:
+    """Runs the bar pass, the sample extraction and the CRF search.
+
+    The second stage of the per-file pipeline and a job kind of its own (issue
+    #602): starting from an eligible Decision it measures the bars, extracts the
+    sample windows, bisects the CRF and stops before the full encode. The
+    prediction it returns carries the chosen CRF and the size factor the encode
+    re-validates at its boundary.
+
+    Args:
+        decision (Decision): The eligibility verdict this search runs under
+            (its identity is the run-start stat every verdict commits under).
+        target_vmaf (float): The VMAF quality floor to meet.
+        min_saving_percent (int): The minimum predicted saving the decision
+            demands (issue #316; 0 = any real shrink).
+        probe_encoder_preset (str): The PROBE's encoder speed preset (issue
+            #22); the plan's fingerprint keys on this value.
+        encoder_preset (str): The FINAL encode's speed preset, recorded for
+            provenance only.
+        cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file, used to locate the logs
+            directory for failure evidence.
+        encoder_threads (int | None): Thread limit for the probe encodes.
+        progress (callable | None): Callback progress(dict) for live updates.
+        use_probe_cache (bool): Reuse stored probe scores (issue #29).
+        crop_sample_count (int): cropdetect windows per movie; more samples
+            can only shrink the crop (issue #181).
+
+    Returns:
+        QualityResult: The prediction (success=False with a skipped_reason
+            for the search's own skip verdicts).
+
+    Raises:
+        RuntimeError: If HandBrakeCLI is not installed or probing failed.
+        Cancelled: When the cancel event fires.
+    """
+    input_file = decision.input
+    identity = decision.identity
+    if identity is None:  # only an eligible decision reaches the search
+        raise RuntimeError("search_quality needs an eligible decision")
+    width, height = decision.width, decision.height
+    hdr = decision.hdr
+    effective_encoder = decision.encoder
+    sample_count = decision.sample_count
+    sample_seconds = decision.sample_seconds
+    crf_range = decision.crf_range
     handbrake = find_handbrake()
     if handbrake is None:
         raise RuntimeError(
@@ -828,6 +984,114 @@ def plan_quality(
         )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def plan_quality(
+    input_file: Path,
+    target_vmaf: float = DEFAULT_TARGET_VMAF,
+    min_saving_percent: int = 15,
+    crf_range: tuple[int, int] = DEFAULT_CRF_RANGE,
+    sample_count: int | None = None,
+    sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
+    sample_every: float | None = DEFAULT_SAMPLE_EVERY,
+    probe_encoder_preset: str = "5",
+    encoder_preset: str = "3",
+    cancel: threading.Event | None = None,
+    db_file: Path | None = None,
+    encoder_threads: int | None = None,
+    progress: ProgressCallback | None = None,
+    use_probe_cache: bool = True,
+    min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
+    min_source_width: int = DEFAULT_MIN_SOURCE_WIDTH,
+    min_source_size_gb: float = 0.0,
+    candidate_codecs: tuple[str, ...] = CANDIDATE_CODECS,
+    crop_sample_count: int = DEFAULT_CROP_SAMPLE_COUNT,
+) -> QualityResult:
+    """Probes a movie and predicts the outcome without encoding it.
+
+    Runs the exact same probing pipeline as encode_with_quality (samples,
+    size estimate, CRF bisect) but stops before the full encode. The result
+    carries the predicted CRF, the measured VMAF and a size estimate based
+    on the sample probes.
+
+    Args:
+        input_file (Path): The file to analyze.
+        target_vmaf (float): The VMAF quality floor to meet.
+        min_saving_percent (int): The minimum predicted saving (percent)
+            the decision demands (issue #316; 0 = any real shrink). Part of
+            the stored plan fingerprint.
+        crf_range (tuple[int, int]): The (lowest, highest) CRF to search.
+        sample_count (int): The number of samples to probe.
+        sample_seconds (float): The length of each sample in seconds.
+        probe_encoder_preset (str): The PROBE's encoder speed preset (a
+            measurement setting, issue #22); the plan's fingerprint keys
+            on this value.
+        encoder_preset (str): The FINAL encode's speed preset (an output
+            setting, issue #22); plan never encodes, so this is recorded
+            on the result for provenance only.
+        cancel (threading.Event | None): Cooperative cancellation.
+        db_file (Path | None): The database file, used to locate the logs
+            directory for failure evidence (None => cwd metadata.db).
+        encoder_threads (int | None): Thread limit for the probe encodes
+            (None = no limit; must match a later encode's cap).
+        progress (callable | None): Callback progress(dict) for live step
+            updates of the probing pipeline (flow to the UI, never
+            persisted — the same events the console prints as log lines).
+        min_source_height (int): Skip sources whose height AND width are both
+            below the 1080p-class floors (1080/1920 by default; a caller may
+            raise them, never lower them). Either dimension at class size
+            qualifies: a 1920x800 scope film is a 1080p-class master
+            (issue #233). A lower-resolution source has too few pixels to
+            save meaningfully, so the probe cost buys nothing.
+        min_source_size_gb (float): Skip sources below this size (0 = gate
+            off). Probe cost is roughly constant per file while the payoff
+            scales with size, so the smallest files have the worst
+            cost/benefit ratio.
+        candidate_codecs (tuple[str, ...]): Source codecs accepted beyond the
+            product whitelist SOURCE_CODECS (the config's extras). The gate
+            always applies the whitelist too, so this extends it, never
+            replaces it (issue #271).
+        crop_sample_count (int): cropdetect windows per movie. More
+            samples can only shrink the crop once the bars are the ones
+            common to every sample, the safe direction for an
+            irreversible crop.
+
+    Returns:
+        QualityResult: The prediction (success=False with a skipped_reason
+            for skip decisions; input/output sizes carry the size estimate
+            as output_size = input_size * estimated factor).
+
+    Raises:
+        FileNotFoundError: If the input file does not exist.
+        RuntimeError: If HandBrakeCLI is not installed or probing failed.
+        Cancelled: When the cancel event fires.
+    """
+    decision = decide_quality(
+        input_file,
+        crf_range=crf_range,
+        sample_count=sample_count,
+        sample_seconds=sample_seconds,
+        sample_every=sample_every,
+        min_source_height=min_source_height,
+        min_source_width=min_source_width,
+        min_source_size_gb=min_source_size_gb,
+        candidate_codecs=candidate_codecs,
+    )
+    if not decision.eligible:
+        return skipped_result(decision, target_vmaf)
+    return search_quality(
+        decision,
+        target_vmaf=target_vmaf,
+        min_saving_percent=min_saving_percent,
+        probe_encoder_preset=probe_encoder_preset,
+        encoder_preset=encoder_preset,
+        cancel=cancel,
+        db_file=db_file,
+        encoder_threads=encoder_threads,
+        progress=progress,
+        use_probe_cache=use_probe_cache,
+        crop_sample_count=crop_sample_count,
+    )
 
 
 def allowed_codecs(extra: tuple[str, ...]) -> tuple[str, ...]:

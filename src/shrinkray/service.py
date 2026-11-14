@@ -86,6 +86,8 @@ def swap_encode_into_place(
     output: Path,
     encode_id: int | None = None,
     error: str | None = None,
+    input_size: int | None = None,
+    input_mtime: float | None = None,
 ) -> SwapOutcome:
     """Swaps a verified encode into the source's path, retaining the original.
 
@@ -114,10 +116,36 @@ def swap_encode_into_place(
             #240's 1:1 check, where the artifact itself is fine but tracks
             were lost). A declined swap keeps the artifact, never touches
             the source.
+        input_size: The source's size in the run identity (issue #436), when
+            the caller carries one. A source whose size or mtime differs at
+            swap time declines the swap (issue #585).
+        input_mtime: The source's mtime in the run identity (issue #436).
+            Compared strictly, like `engine.identity.ensure_unchanged`; the
+            1 s tolerance in `db.py` belongs to the plan cache's fingerprint,
+            a different mechanism.
 
     Returns:
         SwapOutcome: What happened (replaced / declined, and why).
     """
+    if input_size is not None and input_mtime is not None:
+        # the swap is the most consequential write of the run (issue #585): a
+        # source that changed since the encode was decided (a resumed download,
+        # a mover's re-copy) must not be replaced by an encode of its old
+        # bytes. #436's identity guards the decisions and the encode's start;
+        # this is the same comparison at the swap, the last code before the
+        # library - strict, like `ensure_unchanged`, because the identity was
+        # captured by a stat of this very file and an unchanged file re-stats
+        # identical. A same-size, mtime-preserved change is the remaining
+        # boundary (#438's case).
+        try:
+            current = source.stat()
+        except OSError:
+            current = None
+        if current is None or current.st_size != input_size or current.st_mtime != input_mtime:
+            reason = "the source changed during the encode"
+            log_error(f"Not replacing '{source.name}': {reason}")
+            _encode_discarded(connection, encode_id)
+            return SwapOutcome(replaced=False, reason=reason)
     if error is not None:
         # the artifact is fine (the picture measured at target), but the
         # encode broke a promise the swap would make permanent: a lost track
@@ -439,27 +467,6 @@ def save_encode(
     )
 
 
-def save_verification(
-    connection: sqlite3.Connection, encode_id: int, result: QualityResult
-) -> None:
-    """Attaches a quality result's verification data to its encode row.
-
-    Args:
-        connection: The database connection.
-        encode_id (int): The encode row id (from save_encode).
-        result (QualityResult): The engine result (verified_vmaf and
-            verified_subsample are read from it; None => no-op).
-    """
-    if result.verified_vmaf is None:
-        return
-    db.record_verification(
-        connection,
-        encode_id,
-        float(result.verified_vmaf),
-        result.verified_subsample,
-    )
-
-
 def save_skip(
     connection: sqlite3.Connection,
     movie: Path,
@@ -594,7 +601,6 @@ def record_quality_results(
             crf_source=result.crf_source or "probe",
             plan_created_at=result.plan_created_at,
         )
-        save_verification(connection, encode_id, result)
         return EncodeOutcome(movie=str(movie), encoded=True, encode_id=encode_id)
     if result.skipped_reason is not None:
         # the record-time recheck (issue #436): the skip verdict rides the

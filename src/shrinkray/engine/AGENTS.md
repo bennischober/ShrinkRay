@@ -11,7 +11,7 @@ answers — is this file bigger than its quality requires, and does it carry bar
 |---|---|---|
 | The CRF search | `search.py` | `bisect_crf`, `probe_crf`, `find_optimal_crf_and_skip`, `SkipEncode`, `DEFAULT_TARGET_VMAF` (re-exported from `config.py`, #252), `DEFAULT_CRF_RANGE = (14, 70), calibrated in #315` |
 | The plan: gates, reuse | `plan.py` | `plan_quality`, `_lookup_plan`, `SOURCE_CODECS` whitelist, `is_1080p_class`, `MIN_ENCODE_SECONDS = 90.0` |
-| Encode + verify + batch loop | `pipeline.py` | `encode_with_quality`, `_encode_with_command`, `check_disk_space` |
+| Encode + batch loop | `pipeline.py` | `encode_with_quality`, `_encode_with_command`, `check_disk_space` |
 | Black bars, one detector | `crop.py` | keyframe timeline pass + `sustained_runs` + `intersect_crop_rects`; DB-cached; `detect_crop_rect` is the fallback for a pass that learned nothing (issue #525) |
 | Sample windows | `samples.py` | `sample_offsets`, `extract_samples`, `DEFAULT_SAMPLE_EVERY = 600.0` |
 | Encoder by bit depth | `encoders.py` | `encoder_for` (>8 bit: `HDR_ENCODER`), `DEFAULT_ENCODER` |
@@ -26,7 +26,7 @@ answers — is this file bigger than its quality requires, and does it carry bar
 duration (`plan.py`), resolution class, size, codec whitelist —
 then bar detection, then sample extraction, then the CRF search. The only
 difference is the tail: `plan` returns a prediction, `encode` runs the full encode
-and optionally verifies. Sizing permission is a skip, never an error:
+and checks the artifact. Sizing permission is a skip, never an error:
 `skipped_reason` is one of `too short`, `resolution too low`, `below min size`,
 `source codec not a candidate`, `hdr not supported` (issue #518: the maintainer's
 #340 decision — HDR is not supported until libvmaf's HDR models, #519; the gate keys
@@ -59,9 +59,9 @@ so stored SDR plans keep matching while historical `hdr=hable` plans never do.
   of the frame. The shipped rule is the intersection of sustained readings.
 - Never skip bar detection on a re-encode (`plan.py`): no bars is a normal
   outcome, not a skip. There is no crop-only path and no keep-bars flag.
-- Never let a broken database or a failed verification stop an encode
-  (`crop.py`, `pipeline.py`): compute uncached, and report the verification
-  as unmeasured rather than failing the artifact.
+- Never let a broken database or a failed artifact check stop an encode
+  (`crop.py`, `pipeline.py`): compute uncached, and report the failed check
+  rather than failing the artifact.
 - Never write into an output dir without `guard_encodes` — and take the slot BEFORE
   the pending/debris filter (`pipeline.py`), or a live encode's output is
   classified as debris and deleted.

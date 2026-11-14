@@ -22,6 +22,59 @@ from shrinkray.engine.plan import QualityResult, plan_quality
 from shrinkray.engine.search import DEFAULT_CRF_RANGE
 
 
+def _eligible_decision(movie: Path) -> SimpleNamespace:
+    """A passing eligibility decision for the stage seams (issue #602)."""
+    return SimpleNamespace(
+        input=movie,
+        eligible=True,
+        skipped_reason=None,
+        error=None,
+        identity=SimpleNamespace(size=movie.stat().st_size, mtime=None),
+        hdr=False,
+        encoder="svt_av1",
+        duration=7200.0,
+        width=1920,
+        height=1080,
+        crf_range=DEFAULT_CRF_RANGE,
+        sample_count=3,
+        sample_seconds=10.0,
+        bit_depth=None,
+    )
+
+
+def _prediction(movie: Path) -> SimpleNamespace:
+    """A passing CRF-search prediction for the stage seams (issue #602)."""
+    return SimpleNamespace(
+        input=movie,
+        output=movie,
+        success=True,
+        skipped_reason=None,
+        error=None,
+        chosen_crf=21,
+        achieved_vmaf=95.4,
+        probes=[],
+        input_size=movie.stat().st_size,
+        output_size=movie.stat().st_size // 2,
+        crf_range=DEFAULT_CRF_RANGE,
+        sample_count=3,
+        sample_seconds=10.0,
+        crop_sample_count=10,
+        vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+        hdr=False,
+        encoder="svt_av1",
+        input_mtime=None,
+        probe_encoder_preset="5",
+        encoder_preset="3",
+        crop=None,
+        vmaf_statistic="mean",
+        target_vmaf=95.0,
+        min_saving_percent=15,
+        saved_percent=50.0,
+        plan_created_at=None,
+        crf_source="probe",
+    )
+
+
 def _movie(root: Path, content: bytes) -> Path:
     movie = root / "movie.mkv"
     movie.write_bytes(content)
@@ -136,9 +189,9 @@ class TestProbeScratchAttribution(unittest.TestCase):
         prefixes: list[str] = []
         self._plan_with_patched_scratch(prefixes)
         self._encode_with_patched_scratch(prefixes)
-        # three sites created three scratch dirs (an empty list would pass
+        # two sites created two scratch dirs (an empty list would pass
         # the loop above vacuously)
-        self.assertEqual(len(prefixes), 3)
+        self.assertEqual(len(prefixes), 2)
         for prefix in prefixes:
             self.assertTrue(
                 prefix.startswith("shrinkray-probe-movie-"),
@@ -189,9 +242,8 @@ class TestProbeScratchAttribution(unittest.TestCase):
             plan_quality(self.movie, db_file=None)
 
     def _encode_with_patched_scratch(self, prefixes: list[str]) -> None:
-        """Runs encode_with_quality (verify=True, so the verification workdir
-        is created too) with every external seam mocked and the scratch
-        mkdtemp captured."""
+        """Runs encode_with_quality with every external seam mocked and the
+        scratch mkdtemp captured."""
         real_mkdtemp = tempfile.mkdtemp
 
         def fake_encode(input_file, output_file, command, **kwargs):
@@ -218,18 +270,14 @@ class TestProbeScratchAttribution(unittest.TestCase):
                 return_value=(20, 96.5, [], False, 0.5),
             ),
             patch("shrinkray.engine.pipeline.tempfile.mkdtemp", side_effect=fake_mkdtemp),
-            # the verification measurement is a real binary seam; this test's
-            # subject is the scratch grammar, not VMAF (review finding 3)
-            patch("shrinkray.engine.pipeline.measure_vmaf", return_value=94.5),
             patch("shrinkray.engine.pipeline._encode_with_command", side_effect=fake_encode),
         ):
             out = self.root / "out" / "movie.mkv"
             out.parent.mkdir()
             # the mocked encode writes a SMALLER output: the product's size
             # gate ("a re-encode happens only when the file gets smaller")
-            # returns before the verification block otherwise, and the third
-            # scratch site (the verify workdir) is never created
-            encode_with_quality(self.movie, out, db_file=None, verify=True)
+            # must not skip the encode, and the second scratch site is created
+            encode_with_quality(self.movie, out, db_file=None)
 
     def test_scratch_name_is_decoration_for_the_probe_cache(self) -> None:
         """The cache is keyed only from its supplied identity inputs: two
@@ -672,6 +720,15 @@ class TestJobPathGuard(unittest.TestCase):
         # the telemetry bundle, which IS the honest report for a decision
         # that cannot be measured
         with (
+            patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            patch("shrinkray.service.record_plan", lambda *a, **k: None),
             patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=abort) as engine,
             patch("shrinkray.telemetry.save_failure") as telemetry,
         ):

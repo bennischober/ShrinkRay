@@ -133,6 +133,14 @@ def _is_loopback(host: str) -> bool:
     return host in ("127.0.0.1", "::1", "localhost")
 
 
+# the SPA shell is the login surface (issue #600): the document and its
+# static assets must load without a token so the built-in paste-token
+# prompt (issue #36) can appear — the shell carries no operator data, and
+# every API route stays gated. GET only: a write is not the shell.
+SPA_SHELL_PATHS = ("/", "/favicon.ico", "/favicon.svg", "/apple-touch-icon.png")
+SPA_SHELL_PREFIX = "/assets/"
+
+
 @app.middleware("http")
 async def require_token(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -141,7 +149,14 @@ async def require_token(
 
     A middleware rather than a per-route dependency: the point is that a NEW
     route cannot be added unauthenticated by forgetting a decorator. The SSE
-    stream and the static UI are covered for the same reason.
+    stream is covered the same way.
+
+    The SPA shell — the document (`GET /`) and its static assets — is the one
+    path-shape exemption (issue #600): a browser navigation cannot send an
+    Authorization header, so the shell must load without a token for the
+    built-in paste-token prompt (issue #36) to appear. The shell carries no
+    operator data and renders nothing without a valid token; every API route
+    stays gated, and the exemption is GET only.
 
     The comparison is constant-time (`hmac.compare_digest`) so a wrong token
     leaks nothing through timing, and the response never echoes the token.
@@ -155,6 +170,10 @@ async def require_token(
     """
     token = _configured_token()
     if token is None:
+        return await call_next(request)
+    if request.method == "GET" and (
+        request.url.path in SPA_SHELL_PATHS or request.url.path.startswith(SPA_SHELL_PREFIX)
+    ):
         return await call_next(request)
     presented = request.headers.get("authorization", "")
     prefix = "Bearer "
@@ -310,7 +329,6 @@ class JobRequest(BaseModel):
         quality (bool): Use VMAF-driven quality mode (encode/plan).
         target_vmaf (float): The VMAF quality floor.
         overwrite (bool): Re-encode already encoded movies.
-        verify (bool): Full-file VMAF verification after each quality encode.
         workers (int | None): Concurrent encodes (the scan's pool; unused by
             the measured encode path).
         encoder_preset (str | None): Quality mode's encoder speed preset
@@ -328,7 +346,6 @@ class JobRequest(BaseModel):
     quality: bool = True
     target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
     overwrite: bool = False
-    verify: bool = False
     workers: int | None = Field(None, ge=1, le=64)
     probe_encoder_preset: str | None = None
     encoder_preset: str | None = None
@@ -540,6 +557,12 @@ def ui_asset(asset_path: str) -> Response:
         FileResponse: The asset file.
     """
     dist = os.path.realpath(str(_ui_dist() / "assets"))
+    # a NUL byte in the path raises from the filesystem calls, not a clean
+    # 404 — and since #600 the shell's error paths are public, so it must
+    # stay an ordinary 404. It can only arrive percent-encoded (%00) and it
+    # names no asset.
+    if "\x00" in asset_path:
+        raise HTTPException(status_code=404, detail="asset not found")
     # realpath normalizes away '..' segments => the result must stay a child
     # of the assets directory, otherwise the path escapes the build output
     normalized = os.path.realpath(os.path.join(dist, asset_path))
@@ -699,8 +722,9 @@ def metrics(conn: sqlite3.Connection = Depends(db_access)) -> Response:
     """Serves the Prometheus text exposition format (issue #168).
 
     Pull-based on purpose: the scraper connects to ShrinkRay, so the container
-    opens no outbound connection. Covered by the token middleware like every
-    other route - it is registered after `require_token`, not exempted from it.
+    opens no outbound connection. Covered by the token middleware: it is
+    registered after `require_token` and is not part of the SPA-shell
+    exemption (issue #600).
 
     Args:
         conn: The database connection (db_access dependency).
@@ -968,7 +992,6 @@ def snapshot(
                         "preset": r["preset"],
                         "crf": r["chosen_crf"],
                         "vmaf": r["achieved_vmaf"],
-                        "verified_vmaf": r["verified_vmaf"],
                         "input_size": r["input_size"],
                         "output_size": r["output_size"],
                         "saved_percent": r["saved_percent"],
@@ -989,7 +1012,7 @@ def snapshot(
                     """
                     SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                            f.size, f.hdr, f.missing_scans, f.missing_since,
-                           e.preset, e.chosen_crf, e.achieved_vmaf, e.verified_vmaf, e.input_size, e.output_size,
+                           e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                            e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
                            e.encode_seconds,
                            e.probe_count, e.probe_seconds, e.tool_versions,
@@ -1150,7 +1173,7 @@ def library(
             """
             SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                    f.size, f.hdr, f.missing_scans, f.missing_since,
-                   e.preset, e.chosen_crf, e.achieved_vmaf, e.verified_vmaf, e.input_size, e.output_size,
+                   e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                    e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
                    e.encode_seconds,
                    e.probe_count, e.probe_seconds, e.tool_versions
@@ -1241,9 +1264,6 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "preset": r["preset"],
                 "crf": r["chosen_crf"],
                 "vmaf": r["achieved_vmaf"],
-                # the full-file verification measurement (issue #235: the
-                # number was recorded by the db and readable by nothing)
-                "verified_vmaf": r["verified_vmaf"],
                 "input_size": r["input_size"],
                 "output_size": r["output_size"],
                 "saved_percent": r["saved_percent"],

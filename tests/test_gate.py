@@ -25,7 +25,21 @@ class TestGateMypyFallback(unittest.TestCase):
         candidate's non-139 verdict is returned as-is (a real type error is
         never mislabelled as a missing interpreter), and only an exhausted
         candidate list ends in 139."""
-        gate = (REPO / "tools" / "gate.sh").read_text(encoding="utf-8")
+        gate_path = REPO / "tools" / "gate.sh"
+        # issue #598: on 2026-11-08 CI read only the last 443 of this file's
+        # 4539 bytes, from the page-aligned offset 4096, so the first
+        # assertion below failed on a string the file contains. No read-primitive
+        # patch outlives its scope (audited), and `Path.read_text` cannot start
+        # at an offset. The guard names a short read with both byte counts
+        # instead of leaving a missing-string assertion; it is not a retry.
+        gate_bytes = gate_path.read_bytes()
+        size = gate_path.stat().st_size
+        self.assertEqual(
+            len(gate_bytes),
+            size,
+            f"the gate script was read short: {len(gate_bytes)} of {size} bytes (issue #598)",
+        )
+        gate = gate_bytes.decode("utf-8")
         self.assertIn("run_mypy linux", gate)
         self.assertIn("run_mypy win32", gate)
         # the rc is captured before branching: after `if cmd; then` with no

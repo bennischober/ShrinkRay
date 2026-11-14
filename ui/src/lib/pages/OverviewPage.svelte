@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtWhen, humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtVmaf, fmtWhen, humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
   import { progressFor } from '../progress.svelte'
 
   /** Path equality that survives separator and case differences. */
@@ -202,6 +202,11 @@
   const planEntries = $derived(
     (lastPlan?.result as { plans?: PlanEntry[] } | null)?.plans ?? []
   )
+  /** The target the last plan was decided against (its job payload), so
+   * a prediction's printed score is read against the target that judged it. */
+  const planTargetVmaf = $derived(
+    typeof lastPlan?.payload?.target_vmaf === 'number' ? lastPlan.payload.target_vmaf : targetVmaf
+  )
   /** A plan entry whose movie has an encode row is history, not a queue:
    * the prediction was overtaken by a measurement (the console must not
    * present "1 to encode" for titles that already encoded). */
@@ -375,7 +380,7 @@
       <div class="quiet-strip done-strip">
         <span class="mono">
           <span class="legend">LAST RUN #{runSummary.id}</span>
-          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${runSummary.minVmaf.toFixed(1)}` : ''}{runSummary.minVmaf != null && runSummary.minVmaf < targetVmaf ? ` (target ${targetVmaf})` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
+          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${fmtVmaf(runSummary.minVmaf, targetVmaf)}` : ''}{runSummary.minVmaf != null && runSummary.minVmaf < targetVmaf ? ` (target ${targetVmaf})` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
           {#if runSummary.failed > 0}<span class="bad"> · {runSummary.failed} failed</span>{/if}
         </span>
         <button class="nav-link" onclick={() => ongoto('jobs')}>JOBS →</button>
@@ -497,20 +502,20 @@
       {:else}
         <div class="quality mono">
           <div class="q-head">
-            <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{meanVmaf?.toFixed(1)}</span>
+            <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{fmtVmaf(meanVmaf, targetVmaf)}</span>
             <span class="q-label legend">MEAN</span>
             {#if measured.length > 1}
               <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
                    the single row carrying exactly that) — the sub-line only
                    earns its place with a spread to summarize -->
-              <span class="q-sub mono dim">min {minVmaf?.toFixed(1)} · {measured.length} measured</span>
+              <span class="q-sub mono dim">min {fmtVmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
             {/if}
           </div>
           {#each measured.slice(0, 6) as m (m.path)}
-            <div class="q-row" title="{m.name}: VMAF {m.encode?.vmaf?.toFixed(1)} (target {targetVmaf})">
+            <div class="q-row" title="{m.name}: VMAF {fmtVmaf(m.encode?.vmaf, targetVmaf)} (target {targetVmaf})">
               <span class="q-name">{m.name}</span>
               <span class="q-bar"><span class="q-fill" style="width: {Math.min(100, ((m.encode?.vmaf ?? 0) / 100) * 100)}%"></span></span>
-              <span class="q-v mono" class:warn={(m.encode?.vmaf ?? 100) < targetVmaf}>{m.encode?.vmaf?.toFixed(1)}</span>
+              <span class="q-v mono" class:warn={(m.encode?.vmaf ?? 100) < targetVmaf}>{fmtVmaf(m.encode?.vmaf, targetVmaf)}</span>
             </div>
           {/each}
           {#if measured.length > 6}
@@ -632,8 +637,8 @@
             <span class="p-num" class:measured={done && rec?.crf != null} title={done && rec?.crf != null ? 'measured value — the plan predicted ' + (entry.crf ?? '—') : 'planned value'}>
               {#if done}{rec?.crf ?? '—'}{#if crfDelta != null && crfDelta !== 0}<span class="delta-mark"> ({crfDelta > 0 ? '+' : '−'}{Math.abs(crfDelta)})</span>{/if}{:else}{entry.crf ?? '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + (entry.vmaf?.toFixed(1) ?? '—') : 'planned value'}>
-              {#if done}{rec?.vmaf?.toFixed(1) ?? '—'}{:else}{entry.vmaf?.toFixed(1) ?? '—'}{/if}
+            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + fmtVmaf(entry.vmaf, planTargetVmaf) : 'planned value'}>
+              {#if done}{fmtVmaf(rec?.vmaf, planTargetVmaf)}{:else}{fmtVmaf(entry.vmaf, planTargetVmaf)}{/if}
             </span>
             <span class="p-num" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—') : 'planned value'}>
               {#if done}{fmtGb(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}{/if}

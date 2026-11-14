@@ -747,7 +747,7 @@ def watch(
     """Watches the inbox and encodes newly arrived movies.
 
     This function blocks (unless once=True); stop it with Ctrl+C - the stop
-    event ends the pass loop and terminates the running encode/verify child
+    event ends the pass loop and terminates the running encode child
     on the direct-encode route (issue #431; the submit route's running job
     is terminated by the worker's stop), and the process exits cleanly.
 
@@ -771,7 +771,7 @@ def watch(
         max_threads (int | None): Per-encode thread cap (None/0 = all cores).
         stop_event (threading.Event | None): Cooperative stop for the resident
             app: checked between passes AND passed to encode_with_quality as
-            its cancel event, so a stop terminates the running encode/verify
+            its cancel event, so a stop terminates the running encode
             child on the direct-encode route (the submit route's running job
             is terminated by the worker's stop, issue #431).
         db_file (Path | None): The sqlite database file - enables the stall
@@ -1056,7 +1056,7 @@ def watch(
                                 target_dir / movie.name,
                                 # the measurement child opts out of the stall
                                 # watchdog (issue #431): without this event a
-                                # hung verify pass is unbounded until the
+                                # hung measurement is unbounded until the
                                 # container stops - the shutdown event is the
                                 # kill path (review on PR #468, finding 1)
                                 cancel=stop_event,
@@ -1069,12 +1069,6 @@ def watch(
                                 # inbox automation must not silently depend on
                                 # plan staleness: watch always measures fresh
                                 force_reprobe=True,
-                                # the resident mode verifies every encode
-                                # (issue #235): nobody watches the log in an
-                                # unattended container, and the full-file VMAF
-                                # is the only evidence the encode met the
-                                # target that the operator will ever get
-                                verify=True,
                                 min_source_height=current.min_source_height,
                                 min_source_width=current.min_source_width,
                                 min_source_size_gb=current.min_source_size_gb,
@@ -1115,7 +1109,13 @@ def watch(
                                 )
                                 if in_place_mode:
                                     if not _swap(
-                                        db_file, movie, result.output, encode_id, error=result.error
+                                        db_file,
+                                        movie,
+                                        result.output,
+                                        encode_id,
+                                        error=result.error,
+                                        input_size=result.input_size,
+                                        input_mtime=getattr(result, "input_mtime", None),
                                     ):
                                         # declined (a verification finding, a grown
                                         # output or a refused rename): _swap said why,
@@ -1192,6 +1192,8 @@ def _swap(
     output: Path,
     encode_id: int | None = None,
     error: str | None = None,
+    input_size: int | None = None,
+    input_mtime: float | None = None,
 ) -> bool:
     """Swaps a verified encode into the source's path, retaining the original.
 
@@ -1213,6 +1215,13 @@ def _swap(
         error (str | None): The encode's verification finding (issue #240: a
             lost track, an unverifiable probe). A finding declines the swap
             before any filesystem work: the source is never touched.
+        input_size (int | None): The source's size in the run identity
+            (issue #436), when the watcher carries one. A source whose size
+            or mtime differs at swap time declines the swap (issue #585).
+        input_mtime (float | None): The source's mtime in the run identity
+            (issue #436). Compared strictly, like
+            `engine.identity.ensure_unchanged`; the 1 s tolerance in `db.py`
+            belongs to the plan cache's fingerprint, a different mechanism.
 
     Returns:
         bool: True when the source was replaced, False when the swap was
@@ -1232,6 +1241,25 @@ def _swap(
         log_error(f"Not replacing '{source.name}': {error} => the original is kept.")
         _discard_row()
         return False
+    if input_size is not None and input_mtime is not None:
+        # the swap is the most consequential write (issue #585): a source that
+        # changed since the encode was decided must not be replaced by an encode
+        # of its old bytes (#436's identity, compared at the last code before
+        # the library - strict, like `ensure_unchanged`, because the identity
+        # was captured by a stat of this very file and an unchanged file
+        # re-stats identical; a same-size, mtime-preserved change is #438's
+        # boundary)
+        try:
+            current = source.stat()
+        except OSError:
+            current = None
+        if current is None or current.st_size != input_size or current.st_mtime != input_mtime:
+            log_error(
+                f"Not replacing '{source.name}': the source changed during the "
+                "encode => the original is kept, the encode is discarded."
+            )
+            _discard_row()
+            return False
     size_before = source.stat().st_size
     size_after = output.stat().st_size
     if size_after >= size_before:

@@ -120,7 +120,7 @@ tools/gate.sh && git push
 | Question | Read |
 |---|---|
 | Layers, root modules, package conventions | `src/shrinkray/AGENTS.md` |
-| CRF search, plan gates, encode/verify, bars, watchdog, lock | `src/shrinkray/engine/AGENTS.md` |
+| CRF search, plan gates, encode, bars, watchdog, lock | `src/shrinkray/engine/AGENTS.md` |
 | Routes, token auth, path containment, jobs, SSE | `src/shrinkray/server/AGENTS.md` |
 | The subprocess boundary, one module per binary | `src/shrinkray/tools/AGENTS.md` |
 | The test suite, fixtures, patch seams | `tests/AGENTS.md` |

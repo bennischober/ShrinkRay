@@ -78,6 +78,9 @@ CREATE TABLE IF NOT EXISTS encodes (
     output_file TEXT,
     generation INTEGER NOT NULL DEFAULT 1,
     tool_versions TEXT,
+    -- legacy columns from the removed full-file VMAF verification (issue
+    -- #605): no longer written or read, kept so no stored measurement is
+    -- destroyed (metadata.db is user data)
     verified_vmaf REAL,
     verified_at TEXT,
     verified_subsample INTEGER,
@@ -267,9 +270,10 @@ MIGRATIONS = {
         "ALTER TABLE encodes ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
     ],
     8: [
-        # full-file VMAF verification (opt-in --verify): the ground truth
-        # companion to the sample-based achieved_vmaf. subsample records the
-        # ffmpeg n_subsample divisor (NULL = full-file, every frame measured)
+        # full-file VMAF verification (opt-in --verify) added these columns;
+        # the feature was removed in v0.8.0 (issue #605) and the columns are
+        # kept UNREAD so no stored measurement is destroyed (metadata.db is
+        # user data). A future decision can drop them with a rebuild migration.
         "ALTER TABLE encodes ADD COLUMN verified_vmaf REAL",
         "ALTER TABLE encodes ADD COLUMN verified_at TEXT",
         "ALTER TABLE encodes ADD COLUMN verified_subsample INTEGER",
@@ -1171,53 +1175,6 @@ def set_encode_output(
         (output_file, encode_id),
     )
     connection.commit()
-
-
-def record_verification(
-    connection: sqlite3.Connection,
-    encode_id: int,
-    verified_vmaf: float,
-    subsample: int | None,
-) -> None:
-    """Attaches a full-file VMAF verification result to an encode row.
-
-    Args:
-        connection (sqlite3.Connection): The database connection.
-        encode_id (int): The encode row the verification belongs to.
-        verified_vmaf (float): The measured full-file (or sub-sampled) VMAF.
-        subsample (int | None): The ffmpeg n_subsample divisor used
-            (None = every frame measured).
-    """
-    connection.execute(
-        """
-        UPDATE encodes
-        SET verified_vmaf = ?, verified_at = datetime('now'), verified_subsample = ?
-        WHERE id = ?
-        """,
-        (verified_vmaf, subsample, encode_id),
-    )
-    connection.commit()
-
-
-def get_verification(
-    connection: sqlite3.Connection,
-    encode_id: int,
-) -> sqlite3.Row | None:
-    """Returns the verification columns of an encode row.
-
-    Args:
-        connection (sqlite3.Connection): The database connection.
-        encode_id (int): The encode row id.
-
-    Returns:
-        sqlite3.Row | None: The row (verified_vmaf/verified_at/
-            verified_subsample), None when the encode id is unknown.
-    """
-    row = connection.execute(
-        "SELECT verified_vmaf, verified_at, verified_subsample FROM encodes WHERE id = ?",
-        (encode_id,),
-    ).fetchone()
-    return cast("sqlite3.Row | None", row)
 
 
 def add_skip(

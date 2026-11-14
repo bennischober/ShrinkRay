@@ -262,15 +262,6 @@ def encode(
         min=1,
         help="Probe windows, overriding --sample-every when set explicitly. Default: quality.sample_count when configured, otherwise density (quality.sample_every).",
     ),
-    verify: bool = typer.Option(
-        False,
-        "--verify",
-        help=(
-            "Measure the FULL output file against the source "
-            "after each encode (ground truth beyond the 10s probes; "
-            "sub-sampled 1/10 for files > 2 GB). Slow for large libraries."
-        ),
-    ),
     replan: bool = typer.Option(
         False,
         "--replan",
@@ -393,7 +384,6 @@ def encode(
                 overwrite,
                 quality,
                 target_vmaf,
-                verify,
                 threads,
                 db_file,
                 replan,
@@ -417,6 +407,8 @@ def _swap_into_place(
     output: Path,
     encode_id: int | None = None,
     error: str | None = None,
+    input_size: int | None = None,
+    input_mtime: float | None = None,
 ) -> None:
     """Swaps a verified encode into the source's path, reporting it to the console.
 
@@ -433,10 +425,15 @@ def _swap_into_place(
         encode_id: The encode row the run just wrote (None: stateless).
         error: A verification finding from the encode (a swap on an unverified
             artifact would make the finding permanent; None: nothing to check).
+        input_size: The source's size in the run identity (issue #436), passed
+            through to the swap gate (issue #585).
+        input_mtime: The source's mtime in the run identity (issue #436).
     """
     from shrinkray import service
 
-    outcome = service.swap_encode_into_place(connection, source, output, encode_id, error)
+    outcome = service.swap_encode_into_place(
+        connection, source, output, encode_id, error, input_size, input_mtime
+    )
     if not outcome.replaced:
         return
     retained = outcome.retained_path
@@ -499,7 +496,6 @@ def _record_encodes(
     overwrite: bool,
     quality: bool,
     target_vmaf: float,
-    verify: bool,
     threads: int | None,
     db_file: Path | None,
     replan: bool = False,
@@ -523,7 +519,6 @@ def _record_encodes(
         overwrite (bool): Whether existing output files may be replaced.
         quality (bool): Accepted as a no-op alias (quality mode IS the only mode).
         target_vmaf (float): VMAF quality floor for quality mode.
-        verify (bool): Full-file VMAF verification after each encode.
         db_file (Path): The database file (failure-evidence logs location).
         replan (bool): Ignore stored plans and re-probe (quality mode).
         probe_encoder_preset (str): The PROBE's speed preset (measurement).
@@ -644,13 +639,11 @@ def _record_encodes(
                                     output_dir / movie.name,
                                     target_vmaf=target_vmaf,
                                     min_saving_percent=config.min_saving_percent,
-                                    encoder=config.handbrake_encoder,
                                     db_file=db_file,
                                     encoder_threads=cap_threads(
                                         threads or config.handbrake_max_threads
                                     ),
                                     progress=quality_progress,
-                                    verify=verify,
                                     force_reprobe=replan,
                                     probe_encoder_preset=probe_encoder_preset,
                                     encoder_preset=encoder_preset,
@@ -709,6 +702,8 @@ def _record_encodes(
                                             output_dir / movie.name,
                                             outcome.encode_id if outcome else None,
                                             error=result.error,
+                                            input_size=result.input_size,
+                                            input_mtime=getattr(result, "input_mtime", None),
                                         )
                                     # a verification finding is logged by the engine's
                                     # tracks check (its own error line) and rides
@@ -895,7 +890,6 @@ def plan(
                     movie,
                     target_vmaf=target_vmaf,
                     min_saving_percent=config.min_saving_percent,
-                    encoder=config.handbrake_encoder,
                     db_file=db_file,
                     encoder_threads=threads_cap,
                     probe_encoder_preset=probe_encoder_preset,

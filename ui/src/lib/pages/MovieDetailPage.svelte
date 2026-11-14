@@ -3,6 +3,7 @@
     api,
     fmtGb,
     fmtSeconds,
+    fmtVmaf,
     fmtWhen,
     humanizeError,
     jobPaths,
@@ -366,7 +367,7 @@
               {#if plan.achieved_vmaf != null && plan.crf != null}
                 <div class="fact">
                   <span class="legend">BEST FOUND</span>
-                  <span class="mono">CRF {plan.crf} · VMAF {plan.achieved_vmaf.toFixed(1)} (samples)</span>
+                  <span class="mono">CRF {plan.crf} · VMAF {fmtVmaf(plan.achieved_vmaf, plan.target_vmaf ?? targetVmaf)} (samples)</span>
                 </div>
               {/if}
             {:else}
@@ -388,7 +389,7 @@
               {#if plan.achieved_vmaf != null}
                 <div class="fact">
                   <span class="legend">VMAF</span>
-                  <span class="mono measured">{plan.achieved_vmaf.toFixed(1)}</span>
+                  <span class="mono measured">{fmtVmaf(plan.achieved_vmaf, plan.target_vmaf ?? targetVmaf)}</span>
                   <span class="dim">samples — encode will confirm</span>
                 </div>
               {/if}
@@ -416,11 +417,11 @@
           <div class="fact">
             <span class="legend">VMAF</span>
             {#if encode.vmaf != null}
-              <span class="gauge" role="img" aria-label="VMAF {encode.vmaf.toFixed(1)} of target {targetVmaf}">
+              <span class="gauge" role="img" aria-label="VMAF {fmtVmaf(encode.vmaf, targetVmaf)} of target {targetVmaf}">
                 <span class="gauge-fill" style="width: {Math.min(100, encode.vmaf)}%"></span>
                 <span class="gauge-target" style="left: {targetVmaf}%"></span>
               </span>
-              <span class="mono measured">{encode.vmaf.toFixed(1)}</span>
+              <span class="mono measured">{fmtVmaf(encode.vmaf, targetVmaf)}</span>
             {:else}
               <!-- no gauge for an unmeasured row: an empty instrument track
                    next to the dash read as a broken meter (round-5) -->
@@ -539,7 +540,6 @@
             <span class="num">BITRATE</span>
             <span class="num">SIZE</span>
             <span class="num">SAVED</span>
-            <span class="num">VERIFIED</span>
             <span class="num">TIME</span>
             <span class="delta"></span>
           </div>
@@ -555,7 +555,7 @@
               >{rec.generation ?? 1}</span>
               <span class="dim">{fmtWhen(rec.encoded_at)}{fromElsewhere ? ` · ${rec.file_name}` : ''}</span>
               <span class="num">{rec.crf ?? '—'}</span>
-              <span class="num" class:measured={rec.vmaf != null}>{rec.vmaf?.toFixed(1) ?? '—'}</span>
+              <span class="num" class:measured={rec.vmaf != null}>{fmtVmaf(rec.vmaf, targetVmaf)}</span>
               <!-- the drift signal: measured in→out MBit/s (v7); the derived
                    fallback keeps pre-v7 rows honest without pretending -->
               <span
@@ -573,14 +573,6 @@
               </span>
               <span class="num">{fmtGb(rec.output_size)}</span>
               <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
-              <!-- the full-file verification measurement (issue #235): the
-                   kept artifact measured against its source after the
-                   encode; '—' when the run had verify off -->
-              <span
-                class="num"
-                class:measured={rec.verified_vmaf != null}
-                title={rec.verified_vmaf != null ? 'full-file VMAF of the kept output, measured against the source after the encode' : 'not verified (the run had verification off or it failed)'}
-              >{rec.verified_vmaf?.toFixed(1) ?? '—'}</span>
               <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
               <span class="delta" title="delta vs the previous run (a comparison between consecutive encodes — siblings of one generation are two runs of the same source)">
                 {#if i < encodesDesc.length - 1}
@@ -605,6 +597,7 @@
       {:else}
         {#each jobs as job (job.id)}
           {@const outcome = job.id != null ? movieOutcome(job, movie.name) : null}
+          {@const jobTarget = typeof job.payload.target_vmaf === 'number' ? job.payload.target_vmaf : targetVmaf}
           {@const partial = failedOutcomeNote(job) !== ''}
           <div class="hist-row mono">
             <span class="dim">#{job.id}</span>
@@ -616,7 +609,9 @@
             <span class={partial ? 'partial' : job.state === 'done' ? 'ok' : job.state === 'failed' ? 'bad' : 'dim'}>
               {job.state}{#if partial} · partial{/if}
             </span>
-            <span class="dim">{fmtWhen(job.finished_at ?? job.started_at)}</span>
+            <span class="dim when">
+              {#if job.finished_at}finished {fmtWhen(job.finished_at)}{:else if job.started_at}started {fmtWhen(job.started_at)}{:else}—{/if}
+            </span>
             <!-- the movie's own outcome first (it names the real failure),
                  then the job-level error as fallback -->
             <span
@@ -636,7 +631,7 @@
                 {humanizeError(null, job.error)}
               {:else if job.kind === 'plan' && outcome}
                 {#if outcome.crf != null}
-                  CRF {outcome.crf}{#if outcome.vmaf != null} · VMAF {outcome.vmaf.toFixed(1)}{/if}
+                  CRF {outcome.crf}{#if outcome.vmaf != null} · VMAF {fmtVmaf(outcome.vmaf, jobTarget)}{/if}
                 {:else}
                   done
                 {/if}
@@ -829,7 +824,7 @@
   .drift-legend .sw-enc { background: var(--teal); opacity: 0.85; }
   .drift-legend .sw-vmaf { border-radius: 50%; background: var(--teal); }  .enc-row {
     display: grid;
-    grid-template-columns: 34px 90px 40px 50px 110px 80px 50px 70px 1fr;
+    grid-template-columns: 34px 90px 40px 50px 110px 80px 50px 1fr;
     gap: 10px;
     align-items: center;
     padding: 4px 0;

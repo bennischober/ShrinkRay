@@ -213,9 +213,10 @@ as measured, not as an aligned-pair score: the probe search measures probe encod
 this window's samples, the same shape whose alignment this section shows is not
 guaranteed on this source, and whether the probe path's alignment is affected here is
 unmeasured.) An operator who wants a whole-file VMAF number on this class runs the full
-file (not a window) - believed, not verified here: the pipeline's `--verify` measurement
-has no window head to dangle on a whole file, but whether it tolerates this source's
-structure is untested; treat it as the candidate, not a documented working route.
+file (not a window) by hand with `scripts/verify_fullmovie.py` - believed, not verified here:
+the product's post-encode `--verify` was removed in v0.8.0 (issue #605), and whether the manual
+script tolerates this source's structure is untested; treat it as the candidate, not a documented
+working route.
 
 ### 5. An HDR10 pair
 

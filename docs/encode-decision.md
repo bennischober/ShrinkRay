@@ -72,7 +72,7 @@ A skipped file is never recorded as decided: a later run, or the watcher once th
 
 - **A fully reserved (`fallocate`) download that stalls for more than 60 s.** Its unwritten parts are allocated, so `stat` cannot see them. Only a filesystem-specific query (FIEMAP) could, which is not portable and not reliable in a container. What happens when the download resumes depends on when:
   - **While the file is being measured (probes and CRF search):** the run identity (#436, `ensure_unchanged` in `engine/identity.py`) aborts the run before a decision is committed or the final encode starts.
-  - **During the final encode:** nothing rechecks the source after the encode starts (the last check is in `encode_with_quality`, `engine/pipeline.py`, just before HandBrake). The encode of the partly-empty file can be swapped into the source's path. The original is still kept as `<name>.shrinkray-original`, so it can be recovered with `shrinkray retained`. #585 tracks a recheck before the swap.
+  - **During the final encode:** the swap rechecks the source against the run identity before it replaces anything (`service.swap_encode_into_place` and the watcher's `_swap`, issue #585): a size or mtime change declines the swap, keeps the source in place and discards the encode, with the reason logged. What remains is a change that preserves BOTH size and mtime (#438's stat-identity boundary); nothing portable can see it, and the original is still kept as `<name>.shrinkray-original`, recoverable with `shrinkray retained`.
   - **After the swap:** where the downloader's writes land depends on how it writes. A writer that keeps the file open follows the renamed original; a writer that reopens the path writes into the encoded file.
 - **A sparse download that stalls with less than 10 % left to write.** It is at least 90 % allocated, so it passes the not-sparse check. The cutoff leaves this margin so that a finished file on a compressing filesystem does not fail; what happens if it is encoded is the same as for the stalled `fallocate` download above.
 - **A mount that reports no allocation** (Windows, or 0 blocks for a non-empty file). Only the age check applies there, so any stalled download is accepted after a minute. What Unraid's user share (`shfs`) reports is not yet measured.
@@ -268,11 +268,12 @@ the claim, because `--verify` arrived in v0.11.7.
   `--reference-vfilter crop=...` is the same mechanism (its help text exists for exactly this), and
   the #306 harness uses it. The deviation is narrower: ab-av1 has no BAR DETECTION — the operator
   supplies the rectangle, ShrinkRay measures it.
-- **A full-file VERIFICATION re-measures the VMAF after the encode** (`engine/pipeline.py`, optionally
-  sub-sampled with `n_subsample`): the samples are 10 s windows, so the decision deserves one
-  measurement of the complete artifact. ab-av1 v0.11.7 verifies too — but it verifies DECODEABILITY
-  (`--verify`/`--verify-decode`/`--verify-duration`: the artifact decodes and has the right duration),
-  while ShrinkRay re-MEASURES the quality. What is verified differs, not whether anything is.
+- **The post-encode verification is an ARTIFACT check, not a quality re-measurement** (`engine/pipeline.py`,
+  `tracks_survived` + `durations_match`): the samples are 10 s windows, and the quality evidence
+  is the probe search itself (the full-file VMAF re-measurement was removed in v0.8.0, issue #605). ab-av1
+  v0.11.7 verifies DECODEABILITY (`--verify`/`--verify-decode`/`--verify-duration`: the artifact decodes
+  and has the right duration); ShrinkRay checks the same artifact properties and no longer re-measures the
+  quality after the encode. What is verified is the artifact, and the sampling density is the quality lever.
 
 **Search-side differences outside this milestone** (the measurement is not the search): #313 (the round
 structure of the CRF search), #314 (the size estimate), #315 (the CRF range), #316 (the minimum saving),

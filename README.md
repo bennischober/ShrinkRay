@@ -280,7 +280,6 @@ removed it: an unmeasured encode can take a library file's path).
 | `--crop-samples N` | cropdetect windows for the sampled fallback detector (more samples can only shrink the crop) |
 | `--sample-count N` | the number of probe windows (default: unset — density from `quality.sample_every` applies; set `quality.sample_count` to pin a fixed number; plans stored under the old encode-mode fingerprint re-probe once) |
 | `--sample-every S` | seconds of runtime per probe window — the default (`quality.sample_every`, 600 s, i.e. one per 10 minutes); a configured `quality.sample_count` overrides it ([#526](https://github.com/bennischober/ShrinkRay/issues/526)) |
-| `--verify` | after each encode, measure VMAF on the FULL output against the source (slow; ground truth beyond the samples) |
 | `--replan` | ignore stored plans and re-probe every movie |
 | `--threads N` | per-encode thread cap; 0 or omitted uses `handbrake.max_threads`, whose 0 means all cores |
 | `--db PATH` | keep a database (scan cache, plans, history); omitted, the run is stateless |
@@ -365,9 +364,11 @@ SHRINKRAY_TOKEN='a-long-random-secret' uv run shrinkray serve --host 0.0.0.0
 ```
 
 The token lives in the environment, never in `config.json` (which is a tracked file).
-With it set, every route requires `Authorization: Bearer <token>`; the dashboard asks
-for it once and keeps it in the browser. The SSE stream (`/api/events`) also accepts
-`?token=` because an `EventSource` cannot send a header. With no token set the
+With it set, every `/api/*` route and `/metrics` require `Authorization: Bearer <token>`.
+The dashboard's document and its static assets (`GET /`, `/assets/*`, the favicon routes)
+load without the header, so the page can ask for the token once and keep it in the browser
+(issue #600). The SSE stream (`/api/events`) also accepts `?token=` because an `EventSource`
+cannot send a header. With no token set the
 loopback development flow is unchanged — no token, no prompt. TLS is deliberately
 left to a reverse proxy. Stop with Ctrl+C; the running job's state is recovered on
 the next start.

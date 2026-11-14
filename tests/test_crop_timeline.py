@@ -761,7 +761,7 @@ class TestCropBarsOrFallback(unittest.TestCase):
                 ),
                 patch("shrinkray.engine.plan.extract_samples", return_value=[]),
             ):
-                result = plan_quality(movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+                result = plan_quality(movie, target_vmaf=95.0, db_file=None)
             sampled.assert_not_called()
             self.assertIsNone(result.crop, "the measured veto must stand")
 
@@ -826,7 +826,7 @@ class TestCropBarsOrFallback(unittest.TestCase):
                 patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode),
             ):
                 result = engine_pipeline.encode_with_quality(
-                    src, out, target_vmaf=95.0, encoder="svt_av1", verify=False
+                    src, out, target_vmaf=95.0, encoder="svt_av1"
                 )
             sampled.assert_not_called()
             # the veto's observable effect: the encode runs UNCROPPED — the

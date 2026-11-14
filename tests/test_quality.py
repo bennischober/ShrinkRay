@@ -70,6 +70,35 @@ class TestQuality(unittest.TestCase):
             )
             self.assertIsNone(bundle)
 
+    def test_telemetry_without_a_db_file_writes_nothing(self):
+        """db_file=None is the stateless caller's shape (the probe path passes
+        it when no database is in play): telemetry has no home it may use, so
+        nothing is written - in particular never a logs/ directory in the
+        process's working directory (the old fallback that leaked into the repo
+        root)."""
+        from shrinkray.telemetry import save_failure
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp) / "work"
+            workdir.mkdir()
+            (workdir / "vmaf.json").write_text("{}", encoding="utf-8")
+            before = set(Path.cwd().glob("logs/*"))
+            bundle = save_failure(
+                db_file=None,
+                kind="vmaf-measure",
+                command=["ffmpeg", "-i", "x.mkv"],
+                stderr="boom",
+                workdir=workdir,
+                artifacts=["vmaf.json"],
+                context={"returncode": 1},
+            )
+            self.assertIsNone(bundle)
+            self.assertEqual(
+                set(Path.cwd().glob("logs/*")) - before,
+                set(),
+                "a stateless failure created a telemetry bundle in the working directory",
+            )
+
     def test_the_decided_vmaf_default_is_96(self):
         """Issue #103: VMAF 96 is the decided default, and nothing repeats it.
 
@@ -774,7 +803,6 @@ class TestPlanReuse(unittest.TestCase):
         result, _output = self._encode_growing(movie, factor=1.5)
         self.assertFalse(result.success)
         self.assertEqual(result.skipped_reason, "output not smaller")
-        self.assertIsNone(result.verified_vmaf)
 
     def test_a_grown_encode_names_both_sizes(self):
         """The reason must carry the numbers, so the operator can see how far
@@ -3779,7 +3807,7 @@ class TestHdrSkip(unittest.TestCase):
             patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
             patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
         ):
-            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+            result = plan_quality(self.movie, target_vmaf=95.0, db_file=None)
         return result, probed
 
     def test_a_pq_source_is_skipped_without_a_probe(self) -> None:
@@ -3883,6 +3911,6 @@ class TestHdrSkip(unittest.TestCase):
             patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
             patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
         ):
-            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+            result = plan_quality(self.movie, target_vmaf=95.0, db_file=None)
         self.assertEqual(result.skipped_reason, "hdr not supported")
         probed.assert_not_called()
