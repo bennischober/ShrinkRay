@@ -85,7 +85,9 @@ for (const scenario of SCENARIOS) {
       // an artifact too, and this one is the evidence for its page issue
       await page.screenshot({
         path: `test-results/screenshots/${name}-${scenario}-${testInfo.project.name}.png`,
-        fullPage: true,
+        // never `fullPage` for the scale scenarios: the busy library page is
+        // 68 000 px tall, and the screenshot alone outlasted the test budget
+        fullPage: scenario !== 'huge',
       })
 
       // The check runs whether or not the case is allowlisted: a case that
