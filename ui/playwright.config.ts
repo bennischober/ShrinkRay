@@ -29,6 +29,8 @@ export default defineConfig({
     // never reuse: a server left over from the previous run carries a stale
     // module graph, and the same commit then reported 14 and 28 failures
     reuseExistingServer: false,
-    timeout: 60_000,
+    // a cold `npm run dev` on a CI runner compiles every page on its first
+    // request and needs longer than the 60 s default
+    timeout: 180_000,
   },
 })
