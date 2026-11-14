@@ -248,8 +248,9 @@ class TestDb(unittest.TestCase):
     def test_migration_v20_to_v21_outcome(self):
         """Issue #625: the encodes table gains an explicit outcome; existing
         rows are backfilled from what they can still prove - a skip marker
-        says so in its preset, a row whose output_file was nulled (#232) was
-        a discarded attempt, everything else was applied."""
+        says so in its preset, a row with a chain source but a nulled
+        output_file was a discarded attempt (#232), and a pre-v7 row has no
+        chain columns and stays applied."""
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "v20.db"
