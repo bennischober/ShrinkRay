@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, savedPercent, span, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -106,5 +106,28 @@ describe('percent, vmaf, crf, bitrate, eta', () => {
     expect(eta(2100)).toBe('about 35 min left')
     expect(eta(null)).toBe('')
     expect(eta(0)).toBe('')
+  })
+})
+
+describe('span', () => {
+  it('renders the elapsed time between two stamps', () => {
+    expect(span('2026-11-14T10:00:00Z', '2026-11-14T12:14:00Z')).toBe('2 h 14 min')
+    expect(span('2026-11-14T10:00:00Z', '2026-11-14T10:00:30Z')).toBe('30 s')
+  })
+
+  it('is an em dash when either stamp is missing', () => {
+    expect(span(null, '2026-11-14T12:00:00Z')).toBe('—')
+    expect(span('2026-11-14T12:00:00Z', null)).toBe('—')
+  })
+})
+
+describe('savedPercent', () => {
+  it('renders a saving and a growth with its sign', () => {
+    expect(savedPercent(64.3)).toEqual({ text: '64.3%', grew: false })
+    expect(savedPercent(-5)).toEqual({ text: '+5.0% larger', grew: true })
+  })
+
+  it('is an em dash when there is no value', () => {
+    expect(savedPercent(null)).toEqual({ text: '—', grew: false })
   })
 })

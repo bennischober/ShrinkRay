@@ -122,6 +122,6 @@ export function savedPercent(value: number | null | undefined): {
   grew: boolean
 } {
   if (value == null || !Number.isFinite(value)) return { text: '—', grew: false }
-  if (value <= 0) return { text: `${Math.abs(value).toFixed(1)}% larger`, grew: true }
+  if (value <= 0) return { text: `+${Math.abs(value).toFixed(1)}% larger`, grew: true }
   return { text: `${value.toFixed(1)}%`, grew: false }
 }

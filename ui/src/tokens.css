@@ -99,9 +99,9 @@
   --font-ui: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', Consolas, ui-monospace, monospace;
 
-  --fs-data: 12px;
-  --fs-legend: 10.5px;
-  --fs-body: 13px;
+  --fs-data: 13px;
+  --fs-legend: 12px;
+  --fs-body: 14px;
   --fs-title: 15px;
   --fs-page: 19px;
 
