@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtVmaf, fmtWhen, humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { bytes, duration, kindWord, percent, relative, savedPercent, span, vmaf, verdictWord } from '../format'
+  import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
 
   /** Path equality that survives separator and case differences. */
@@ -143,11 +145,10 @@
     )
     // adaptive units: a 40 MB win must not read as "−0.0 GB"
     const savedLabel =
-      savedBytes >= 0.1 * 1024 ** 3
-        ? `−${(savedBytes / 1024 ** 3).toFixed(1)} GB`
-        : `−${(savedBytes / 1024 ** 2).toFixed(0)} MB`
+      `−${bytes(savedBytes)}`
     const vmafs = encoded.map((o) => o.vmaf).filter((v) => v != null) as number[]
-    const wall = fmtSpan(lastEncodeRun.started_at, lastEncodeRun.finished_at)
+    const wallSpan = span(lastEncodeRun.started_at, lastEncodeRun.finished_at)
+    const wall = wallSpan === '—' ? '' : wallSpan
     return {
       id: lastEncodeRun.id,
       state: lastEncodeRun.state,
@@ -170,9 +171,9 @@
    * 43 MB win must not print as "−0.0 GB (0%)". Sub-1 GB reads in MB,
    * and a percentage below 1 prints as "<1%" instead of a false zero. */
   function fmtReclaimed(reclaimedGb: number, sizeGb: number): string {
-    const size = reclaimedGb < 1 ? `−${(reclaimedGb * 1024).toFixed(0)} MB` : `−${reclaimedGb >= 10 ? reclaimedGb.toFixed(0) : reclaimedGb.toFixed(1)} GB`
+    const size = `−${bytes(reclaimedGb * 1024 ** 3)}`
     const pct = (reclaimedGb / sizeGb) * 100
-    return `${size} (${pct >= 1 ? pct.toFixed(0) : '<1'}%)`
+    return `${size} (${pct >= 1 ? percent(pct) : '<1%'})`
   }
   const catBars = $derived.by(() => {
     const map = new Map<string, CatBar>()
@@ -245,9 +246,9 @@
   /** Plan age in honest units — a stale plan must say so. */
   const planAge = $derived.by(() => {
     if (!lastPlan?.finished_at) return ''
-    const span = fmtSpan(lastPlan.finished_at, new Date().toISOString())
-    if (!span) return ''
-    return `finished ${span} ago`
+    const elapsed = span(lastPlan.finished_at, new Date().toISOString())
+    if (elapsed === '—') return ''
+    return `finished ${elapsed} ago`
   })
   /** Head summary in real terms: what happened SINCE the plan ran. */
   const planSummary = $derived.by(() => {
@@ -334,10 +335,7 @@
   let expandedErr = $state<number | null>(null)</script>
 
 <div class="page page-in">
-  <header class="page-head">
-    <h2>Overview</h2>
-    <p class="legend">THE LIBRARY AT A GLANCE · VMAF TARGET {targetVmaf}</p>
-  </header>
+  <PageHeader title="Overview" description={`The library at a glance · VMAF target ${targetVmaf}`} />
 
   <!-- system line: the console's own telemetry (only what's not already
        on the rail badges and the stat band — those carry the counts) -->
@@ -362,13 +360,13 @@
     </button>
     <button class="stat" onclick={() => ongoto('library')}>
       <span class="legend">RECLAIMED</span>
-      <span class="stat-v mono">{savedTotalGb.toFixed(1)} GB</span>
-      <span class="stat-sub mono dim">of {totalSizeGb.toFixed(0)} GB library</span>
+      <span class="stat-v mono">{bytes(savedTotalGb * 1024 ** 3)}</span>
+      <span class="stat-sub mono dim">of {bytes(totalSizeGb * 1024 ** 3)} library</span>
     </button>
     {#if reclaimable}
       <button class="stat" onclick={() => ongoto('library')} title="Plan-predicted savings on the {reclaimable.count} titles the last plan queued for encode — realized when they encode. Titles without a measured prediction are excluded, not estimated.">
         <span class="legend">RECLAIMABLE</span>
-        <span class="stat-v mono">{reclaimable.gb.toFixed(1)} GB</span>
+        <span class="stat-v mono">{bytes(reclaimable.gb * 1024 ** 3)}</span>
         <span class="stat-sub mono dim">{reclaimable.count} planned{reclaimable.unmeasured > 0 ? ` · ${reclaimable.unmeasured} unmeasured` : ''} · plan #{lastPlan?.id}</span>
       </button>
     {/if}
@@ -385,16 +383,16 @@
   {#if runningJob}
     <div class="running">
       <div class="running-head">
-        <span class="legend amber">IN WORK · {runningJob.kind.toUpperCase()}</span>
+        <span class="legend amber">Working · {kindWord(runningJob.kind)}</span>
         <span class="mono dim">{runningProgress?.done != null && runningProgress?.total != null ? `${runningProgress.done}/${runningProgress.total} · ` : ''}{runningProgress?.percent != null ? `${runningProgress.percent}%` : ''}</span>
       </div>
-      <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || runningJob.kind}</div>
+      <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || kindWord(runningJob.kind)}</div>
       <div class="trace" role="progressbar" aria-valuenow={runningProgress?.percent ?? undefined} aria-valuemin="0" aria-valuemax="100" aria-label="encode progress">
         <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
       </div>
       <div class="mono dim detail">
         {runningProgress?.detail ?? 'working…'}
-        · started {fmtWhen(runningJob.started_at)}
+        · started {relative(runningJob.started_at)}
         · {fmtEta(eta)}
       </div>
     </div>
@@ -403,7 +401,7 @@
       <div class="quiet-strip done-strip">
         <span class="mono">
           <span class="legend">LAST RUN #{runSummary.id}</span>
-          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${fmtVmaf(runSummary.minVmaf, targetVmaf)}` : ''}{runSummary.minVmaf != null && runSummary.minVmaf < targetVmaf ? ` (target ${targetVmaf})` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
+          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${vmaf(runSummary.minVmaf, targetVmaf)}` : ''}{runSummary.minVmaf != null && runSummary.minVmaf < targetVmaf ? ` (target ${targetVmaf})` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
           {#if runSummary.failed > 0}<span class="bad"> · {runSummary.failed} failed</span>{/if}
         </span>
         <button class="nav-link" onclick={() => ongoto('jobs')}>JOBS →</button>
@@ -435,7 +433,7 @@
           {@const errText = rawErr ? humanizeError(null, rawErr) : ''}
           {@const target = movies.find((m) => jobPaths(job).some((jp) => pathEq(m.path, jp)))}
           <div class="fail-row">
-            <span class="mono bad">#{job.id} {job.kind}</span>
+            <span class="mono bad">#{job.id} {kindWord(job.kind)}</span>
             <!-- the error is the diagnosis: a long one becomes a button that
                  expands inline, so keyboard users can actually read it -->
             {#if errText.length > 60}
@@ -525,20 +523,20 @@
       {:else}
         <div class="quality mono">
           <div class="q-head">
-            <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{fmtVmaf(meanVmaf, targetVmaf)}</span>
+            <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{vmaf(meanVmaf, targetVmaf)}</span>
             <span class="q-label legend">MEAN</span>
             {#if measured.length > 1}
               <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
                    the single row carrying exactly that) — the sub-line only
                    earns its place with a spread to summarize -->
-              <span class="q-sub mono dim">min {fmtVmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
+              <span class="q-sub mono dim">min {vmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
             {/if}
           </div>
           {#each measured.slice(0, 6) as m (m.path)}
-            <div class="q-row" title="{m.name}: VMAF {fmtVmaf(m.encode?.vmaf, targetVmaf)} (target {targetVmaf})">
+            <div class="q-row" title="{m.name}: VMAF {vmaf(m.encode?.vmaf, targetVmaf)} (target {targetVmaf})">
               <span class="q-name">{m.name}</span>
               <span class="q-bar"><span class="q-fill" style="width: {Math.min(100, ((m.encode?.vmaf ?? 0) / 100) * 100)}%"></span></span>
-              <span class="q-v mono" class:warn={(m.encode?.vmaf ?? 100) < targetVmaf}>{fmtVmaf(m.encode?.vmaf, targetVmaf)}</span>
+              <span class="q-v mono" class:warn={(m.encode?.vmaf ?? 100) < targetVmaf}>{vmaf(m.encode?.vmaf, targetVmaf)}</span>
             </div>
           {/each}
           {#if measured.length > 6}
@@ -563,7 +561,7 @@
           <button class="nav-link" onclick={() => ongoto('retained')}>RETAINED →</button>
         </div>
         <div class="dim pad mono">
-          {present.length} original{present.length === 1 ? '' : 's'} · {fmtGb(totalBytes)} held aside —
+          {present.length} original{present.length === 1 ? '' : 's'} · {bytes(totalBytes)} held aside —
           each has a verified encode in the library; delete them in your file manager when satisfied
         </div>
       </section>
@@ -583,7 +581,7 @@
       <!-- top-8 cap orders the chart; the expander reveals the rest IN
            PANEL — a "more →" jump left the graph cut off (round-6) -->
       {#each visibleCats as bar (bar.name)}
-        <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bar.sizeGb.toFixed(1)} GB · {bar.reclaimedGb.toFixed(1)} GB reclaimed">
+        <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bytes(bar.sizeGb * 1024 ** 3)} · {bytes(bar.reclaimedGb * 1024 ** 3)} reclaimed">
           <span class="bar-name">{bar.name}</span>
           <div class="bar-track">
             <div class="bar-size" style="width: {bar.sizeGb > 0 ? Math.max((bar.sizeGb / maxCatSize) * 100, 2) : 0}%"></div>
@@ -594,7 +592,7 @@
                  (exact figures live in the nums + row title). -->
             <div class="bar-reclaimed" style="width: {bar.reclaimedGb > 0 ? Math.max((bar.reclaimedGb / maxCatSize) * 100, 1.5) : 0}%"></div>
           </div>
-          <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · ${fmtReclaimed(bar.reclaimedGb, bar.sizeGb)}` : ''}</span>
+          <span class="bar-nums mono dim">{bar.titles} · {bytes(bar.sizeGb * 1024 ** 3)}{bar.reclaimedGb > 0 ? ` · ${fmtReclaimed(bar.reclaimedGb, bar.sizeGb)}` : ''}</span>
         </div>
       {:else}
         <div class="dim pad">no titles scanned yet</div>
@@ -644,34 +642,34 @@
                   ? plannedSaved != null && rec.saved_percent != null
                     ? // fixed-mode rows kept their measured truth dormant —
                       // the juxtaposition must fire for them too (round-6 P3)
-                      `plan ${plannedSaved.toFixed(0)}% → fixed-mode ${rec.saved_percent.toFixed(1)}% (unmeasured)`
+                      `plan ${percent(plannedSaved)} → fixed-mode ${percent(rec.saved_percent)} (unmeasured)`
                     : 'encoded (fixed mode — no VMAF measurement)'
                   : savedDelta != null && savedDelta < -2
-                    ? `plan ${plannedSaved?.toFixed(0)}% → measured ${rec.saved_percent?.toFixed(1)}%`
+                    ? `plan ${percent(plannedSaved)} → measured ${percent(rec.saved_percent)}`
                     : plannedSaved != null
-                      ? `plan ${plannedSaved.toFixed(0)}% · measured ${rec.saved_percent?.toFixed(1)}%`
+                      ? `plan ${percent(plannedSaved)} · measured ${percent(rec.saved_percent)}`
                       : 'measured'
           }
           <div class="plan-row mono" class:plan-done={done} title={done ? 'the prediction has been overtaken by a measurement — the row shows the measured values' : ''}>
             <span class="p-name">{entry.movie}</span>
             <span class="chip {done ? 'done' : entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
-              <span class="swatch"></span>{done ? 'ENCODED' : entry.state.toUpperCase()}
+              <span class="swatch"></span>{done ? 'Encoded' : verdictWord(entry.state)}
             </span>
             <span class="p-num" class:measured={done && rec?.crf != null} title={done && rec?.crf != null ? 'measured value — the plan predicted ' + (entry.crf ?? '—') : 'planned value'}>
               {#if done}{rec?.crf ?? '—'}{#if crfDelta != null && crfDelta !== 0}<span class="delta-mark"> ({crfDelta > 0 ? '+' : '−'}{Math.abs(crfDelta)})</span>{/if}{:else}{entry.crf ?? '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + fmtVmaf(entry.vmaf, planTargetVmaf) : 'planned value'}>
-              {#if done}{fmtVmaf(rec?.vmaf, planTargetVmaf)}{:else}{fmtVmaf(entry.vmaf, planTargetVmaf)}{/if}
+            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + vmaf(entry.vmaf, planTargetVmaf) : 'planned value'}>
+              {#if done}{vmaf(rec?.vmaf, planTargetVmaf)}{:else}{vmaf(entry.vmaf, planTargetVmaf)}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—') : 'planned value'}>
-              {#if done}{fmtGb(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}{/if}
+            <span class="p-num" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? bytes(entry.estimated_size) : '—') : 'planned value'}>
+              {#if done}{bytes(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? bytes(entry.estimated_size) : '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.saved_percent != null ? 'measured value — the plan predicted ' + (plannedSaved != null ? plannedSaved.toFixed(0) + '%' : '—') : 'planned value'}>
+            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.saved_percent != null ? 'measured value — the plan predicted ' + percent(plannedSaved) : 'planned value'}>
               {#if done}
-                {@const saved = fmtSavedHonest(rec?.saved_percent)}
+                {@const saved = savedPercent(rec?.saved_percent)}
                 {saved.text}
               {:else}
-                {plannedSaved != null ? `${plannedSaved.toFixed(0)}%` : '—'}
+                {percent(plannedSaved)}
               {/if}
             </span>
             <span class="dim p-reason">{verdict}</span>
@@ -684,8 +682,6 @@
 
 <style>
   .page { display: flex; flex-direction: column; gap: 14px; }
-  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
-  .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }
   .warn { color: var(--amber); }
   .bad { color: var(--red); }
