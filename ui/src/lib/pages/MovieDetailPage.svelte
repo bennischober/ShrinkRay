@@ -11,6 +11,7 @@
     type MoviePlan,
   } from '../api'
   import { bytes, duration, relative, vmaf } from '../format'
+  import { stateWord } from '../format'
   import FileName from '../components/FileName.svelte'
   import Time from '../components/Time.svelte'
 
@@ -634,7 +635,7 @@
                  watchdog case read as green 'done' here), a plan DONE
                  holds this movie's verdict -->
             <span class={partial ? 'partial' : job.state === 'done' ? 'ok' : job.state === 'failed' ? 'bad' : 'dim'}>
-              {job.state}{#if partial} · partial{/if}
+              {stateWord(job.state)}{#if partial} · Partial{/if}
             </span>
             <span class="dim when">
               {#if job.finished_at}finished {relative(job.finished_at)}{:else if job.started_at}started {relative(job.started_at)}{:else}—{/if}

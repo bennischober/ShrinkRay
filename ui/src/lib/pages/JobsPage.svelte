@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job } from '../api'
-  import { bytes, relative, span } from '../format'
+  import { bytes, relative, span, stateWord } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -178,7 +178,7 @@
               {/if}
             </span>
             <span class="state"><StatusBadge
-              label={`${job.state.toUpperCase()}${job.state === 'done' && failedOutcomeNote(job) !== '' ? ' · PARTIAL' : ''}${liveElapsed(job) ? ` · ${liveElapsed(job)}` : ''}`}
+              label={`${stateWord(job.state)}${job.state === 'done' && failedOutcomeNote(job) !== '' ? ' · Partial' : ''}${liveElapsed(job) ? ` · ${liveElapsed(job)}` : ''}`}
               tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{relative(job.started_at)}</span>

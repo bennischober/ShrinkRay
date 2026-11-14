@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, savedPercent, span, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, savedPercent, span, stateWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -129,5 +129,20 @@ describe('savedPercent', () => {
 
   it('is an em dash when there is no value', () => {
     expect(savedPercent(null)).toEqual({ text: '—', grew: false })
+  })
+})
+
+describe('stateWord', () => {
+  it('gives every job state its glossary word, in sentence case', () => {
+    expect(stateWord('running')).toBe('Running')
+    expect(stateWord('queued')).toBe('Queued')
+    expect(stateWord('done')).toBe('Done')
+    expect(stateWord('partial')).toBe('Partial')
+    expect(stateWord('failed')).toBe('Failed')
+    expect(stateWord('cancelled')).toBe('Cancelled')
+  })
+
+  it('keeps an unknown state visible instead of blanking it', () => {
+    expect(stateWord('reconciling')).toBe('reconciling')
   })
 })

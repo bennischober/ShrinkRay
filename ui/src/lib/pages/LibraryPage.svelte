@@ -210,7 +210,7 @@
       </span>
       <span class="leader-note mono">
         {#if selectedEstimate > 0}
-          → PLAN-PREDICTED −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {bytes(selectedBase)} BASE
+          → PLAN-PREDICTED −{bytes(selectedEstimate)} · {bytes(selectedBase)} BASE
         {:else}
           → no estimate (selection already encoded)
         {/if}
@@ -285,7 +285,7 @@
               <td class="mono num">{bytes(movie.size)}</td>
               <td>
                 {#if runningMovie != null && movie.path === runningMovie}
-                  <span class="chip progress"><span class="swatch"></span>IN WORK {runningPercent != null ? `${runningPercent}%` : ''}</span>
+                  <span class="chip progress"><span class="swatch"></span>Running {runningPercent != null ? `${runningPercent}%` : ''}</span>
                 {:else}
                   {#if decision.bare}
                     <!-- bare swatch: the state stays visible to sighted users via

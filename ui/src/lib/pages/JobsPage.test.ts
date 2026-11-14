@@ -53,7 +53,7 @@ describe('JobsPage render', () => {
     // the state span says DONE · PARTIAL (the amber state text is the
     // assertion); the dashboard renders no RETRY - the absence pin below
     const stateSpan = container.querySelector('.state')!
-    expect(stateSpan.textContent).toContain('PARTIAL')
+    expect(stateSpan.textContent).toContain('Partial')
     expect(screen.queryByText('RETRY')).toBeNull()
   })
 
@@ -114,10 +114,10 @@ describe('JobsPage render', () => {
         (el.querySelector('.state')?.textContent ?? '').trim().startsWith(state),
       )!
     // the enqueue time must not be presented as the moment work began
-    expect(text(rowFor('QUEUED').querySelector('.when')!)).toBe('—')
-    expect(rowFor('QUEUED').querySelector('.when')!.getAttribute('title')).toBe('not started yet')
-    expect(text(rowFor('RUNNING').querySelector('.when')!)).toMatch(/\d/)
-    expect(text(rowFor('DONE').querySelector('.when')!)).toMatch(/\d/)
+    expect(text(rowFor('Queued').querySelector('.when')!)).toBe('—')
+    expect(rowFor('Queued').querySelector('.when')!.getAttribute('title')).toBe('not started yet')
+    expect(text(rowFor('Running').querySelector('.when')!)).toMatch(/\d/)
+    expect(text(rowFor('Done').querySelector('.when')!)).toMatch(/\d/)
     // the expansion still shows all three timestamps, labeled - selected by
     // the row itself, not by fixture order
     const queuedRow = [...container.querySelectorAll('.entry')].find(

@@ -125,3 +125,19 @@ export function savedPercent(value: number | null | undefined): {
   if (value <= 0) return { text: `+${Math.abs(value).toFixed(1)}% larger`, grew: true }
   return { text: `${value.toFixed(1)}%`, grew: false }
 }
+
+const STATE_WORDS: Record<string, string> = {
+  queued: 'Queued',
+  running: 'Running',
+  done: 'Done',
+  partial: 'Partial',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+}
+
+/** The screen word for a job state (DESIGN.md Glossary): one vocabulary,
+ * sentence case, never the raw enum. An unknown state keeps its own word so
+ * a newly added state is visible rather than blank. */
+export function stateWord(state: string): string {
+  return STATE_WORDS[state] ?? state
+}
