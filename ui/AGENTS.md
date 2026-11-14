@@ -43,9 +43,10 @@ ui/
 - **Pages are dumb**: `src/lib/pages/*.svelte` take props and call `on*` handlers up to
   `App.svelte`, which owns all shared state. Pages never import another page; the
   shared vocabulary lives in `src/lib/components/` (issue #627).
-- **One formatter, one voice**: every number, state word, kind and reason comes from
-  `src/lib/format.ts` and the DESIGN.md Glossary; a page never calls `toFixed`,
-  `toLocale*` or `1024 **` itself.
+- **One formatter, one voice**: every displayed number, state word, kind and reason comes
+  from `src/lib/format.ts` and the DESIGN.md Glossary; a page never formats a value it
+  shows with a hand-rolled `toFixed`/`toLocale*`/`1024 **`. Values that feed geometry
+  rather than text — SVG coordinates, bar widths, axis positions — stay numbers.
 - **One network boundary**: every `fetch` lives in `api.ts`; `progress.svelte.ts` owns the
   only `EventSource` (token as `?token=` — it cannot set a header).
 - **Flow is not state**: SSE carries progress only; the snapshot poll is the state channel.
