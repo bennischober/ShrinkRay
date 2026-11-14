@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, vmaf } from './format'
 
-process.env.TZ = 'UTC'
-const UTC = undefined
-
 describe('duration', () => {
   it('renders the unit boundaries', () => {
     expect(duration(0)).toBe('0 s')
@@ -30,21 +27,21 @@ describe('duration', () => {
 })
 
 describe('relative', () => {
-  const now = new Date('2026-11-14T12:00:00Z')
+  const now = new Date(2026, 10, 14, 12, 0, 0)
 
   it('renders the recent past', () => {
-    expect(relative('2026-11-14T11:59:30Z', now)).toBe('just now')
-    expect(relative('2026-11-14T11:56:00Z', now)).toBe('4 min ago')
-    expect(relative('2026-11-14T09:00:00Z', now)).toBe('3 h ago')
+    expect(relative(new Date(2026, 10, 14, 11, 59, 30).toISOString(), now)).toBe('just now')
+    expect(relative(new Date(2026, 10, 14, 11, 56, 0).toISOString(), now)).toBe('4 min ago')
+    expect(relative(new Date(2026, 10, 14, 9, 0, 0).toISOString(), now)).toBe('3 h ago')
   })
 
   it('renders yesterday by calendar day, not by 24 hours', () => {
-    expect(relative('2026-11-13T21:12:00Z', now)).toBe('yesterday 21:12')
+    expect(relative(new Date(2026, 10, 13, 21, 12, 0).toISOString(), now)).toBe('yesterday 21:12')
   })
 
   it('renders the days of the last week and then a date', () => {
-    expect(relative('2026-11-11T12:00:00Z', now)).toBe('3 days ago')
-    expect(relative('2026-11-01T12:00:00Z', now)).toBe('1 Nov')
+    expect(relative(new Date(2026, 10, 11, 12, 0, 0).toISOString(), now)).toBe('3 days ago')
+    expect(relative(new Date(2026, 10, 1, 12, 0, 0).toISOString(), now)).toBe('1 Nov')
   })
 
   it('is an em dash for a missing or unparseable stamp', () => {
@@ -54,14 +51,14 @@ describe('relative', () => {
 })
 
 describe('absolute', () => {
-  const now = new Date('2026-11-14T12:00:00Z')
+  const now = new Date(2026, 10, 14, 12, 0, 0)
 
   it('omits the year inside the current year', () => {
-    expect(absolute('2026-11-13T19:40:00Z', now)).toBe('13 Nov, 19:40')
+    expect(absolute(new Date(2026, 10, 13, 19, 40).toISOString(), now)).toBe('13 Nov, 19:40')
   })
 
   it('keeps the year outside it', () => {
-    expect(absolute('2025-11-13T19:40:00Z', now)).toBe('13 Nov 2025, 19:40')
+    expect(absolute(new Date(2025, 10, 13, 19, 40).toISOString(), now)).toBe('13 Nov 2025, 19:40')
   })
 })
 
