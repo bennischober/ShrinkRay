@@ -960,6 +960,22 @@ def execute_plan(
             search_row = queue.stage(
                 JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "plan"}
             )
+            # the plan path's search row shows the same live progress as the
+            # folder job (issue #639): the search is usually the longest stage
+            plan_queue = queue
+            plan_row: list[Job | None] = [search_row]
+
+            def report_plan_search(
+                data: dict,
+                row_ref: list[Job | None] = plan_row,
+                job_queue: JobQueue = plan_queue,
+            ) -> None:
+                if progress is not None:
+                    progress(data)
+                row = row_ref[0]
+                if row is not None:
+                    job_queue.report_progress(row, data)
+
             try:
                 with file_scope(index + 1, total):
                     result = search_quality(
@@ -975,7 +991,7 @@ def execute_plan(
                         cancel=cancel,
                         db_file=_db_file_of(connection),
                         encoder_threads=cap_threads(config.handbrake_max_threads),
-                        progress=progress,
+                        progress=report_plan_search,
                         crop_sample_count=config.crop_sample_count,
                     )
             except Cancelled:
@@ -1226,6 +1242,20 @@ def _encode_measured(
         # file. A direct executor call (the one-shot CLI, tests) has no queue
         # and keeps the single-call shape below.
         encode_row: Job | None = None
+        # every stage row shows the same live progress as the folder job
+        # (issue #639): a row that receives no events reads "starting..." for
+        # the whole stage. The holder names the row that is running now; the
+        # default argument binds it per iteration (ruff's B rules reject a direct
+        # loop-variable capture in a closure).
+        active_row: list[Job | None] = [None]
+
+        def report_stage_progress(data: dict, row_ref: list[Job | None] = active_row) -> None:
+            if progress is not None:
+                progress(data)
+            row = row_ref[0]
+            if queue is not None and row is not None:
+                queue.report_progress(row, data)
+
         sample_every, sample_count, sample_seconds = config.probe_settings()
         if queue is not None:
             decision_row = queue.stage(
@@ -1269,6 +1299,7 @@ def _encode_measured(
             search_row = queue.stage(
                 JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "encode"}
             )
+            active_row[0] = search_row
             # a valid stored plan means the folder job's search already
             # measured these bytes and these settings (issue #602's
             # no-double-probe rule): the search stage reports the reuse
@@ -1309,7 +1340,7 @@ def _encode_measured(
                         cancel=cancel,
                         db_file=_db_file_of(connection),
                         encoder_threads=cap_threads(config.handbrake_max_threads),
-                        progress=progress,
+                        progress=report_stage_progress,
                         crop_sample_count=config.crop_sample_count,
                     )
                 except Cancelled:
@@ -1354,6 +1385,7 @@ def _encode_measured(
                     )
                     continue
             encode_row = queue.stage(JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"})
+            active_row[0] = encode_row
         if progress:
             progress(
                 {
@@ -1389,7 +1421,7 @@ def _encode_measured(
                         "probe_encoder_preset", config.handbrake_probe_encoder_preset
                     ),
                     encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    progress=progress,
+                    progress=report_stage_progress,
                     cancel=cancel,
                     db_file=_db_file_of(connection),
                     encoder_threads=cap_threads(config.handbrake_max_threads),
