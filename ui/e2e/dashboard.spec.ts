@@ -50,8 +50,8 @@ async function expectNothingEscapes(page: Page): Promise<void> {
 for (const scenario of SCENARIOS) {
   for (const { hash, name } of PAGES) {
     test(`${name} · ${scenario}`, async ({ page }, testInfo) => {
-      const known = KNOWN[`${name} · ${scenario} · ${testInfo.project.name}`]
-      test.skip(known != null, known)
+      const key = `${name} · ${scenario} · ${testInfo.project.name}`
+      const known = KNOWN[key]
       const errors: string[] = []
       page.on('console', (message) => {
         if (message.type() === 'error') errors.push(message.text())
@@ -61,15 +61,29 @@ for (const scenario of SCENARIOS) {
       await page.goto(`/?fixture=${scenario}${hash}`)
       await expect(page.locator('h1').first()).toBeVisible()
 
-      await expectNoHorizontalOverflow(page)
-      await expectNothingEscapes(page)
-      expect(errors, `console errors: ${errors.join(' | ')}`).toHaveLength(0)
+      // The check runs whether or not the case is allowlisted: a case that
+      // starts passing while it is still in the list is a stale entry and
+      // fails the run, so the list can only shrink.
+      let failure: string | null = null
+      try {
+        await expectNoHorizontalOverflow(page)
+        await expectNothingEscapes(page)
+        expect(errors, `console errors: ${errors.join(' | ')}`).toHaveLength(0)
+        const axe = await new AxeBuilder({ page })
+          .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+          .analyze()
+        const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+        expect(serious.map((v) => `${v.id}: ${v.help}`), 'serious axe violations').toHaveLength(0)
+      } catch (error) {
+        failure = error instanceof Error ? error.message.split('\n')[0] : String(error)
+      }
 
-      const axe = await new AxeBuilder({ page })
-        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
-        .analyze()
-      const serious = axe.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
-      expect(serious.map((v) => `${v.id}: ${v.help}`), 'serious axe violations').toHaveLength(0)
+      if (known != null) {
+        expect(failure, `allowlisted as "${known}" but the page now passes — remove it from known-failures.json`).not.toBeNull()
+        testInfo.annotations.push({ type: 'known failure', description: known })
+      } else {
+        expect(failure, `this case is not in known-failures.json: ${failure}`).toBeNull()
+      }
 
       await page.screenshot({
         path: `test-results/screenshots/${name}-${scenario}-${testInfo.project.name}.png`,
