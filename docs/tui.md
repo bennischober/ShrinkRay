@@ -77,7 +77,7 @@ window.
   clumsier headless tests).
 - **One screen, grouped:** Quality (required VMAF, the minimum saving, final and probe
   presets, probe
-  density), Resources (thread cap, stall watchdog, idle priority), Eligibility (height,
+  density, probe window length), Resources (thread cap, stall watchdog, idle priority), Eligibility (height,
   width, size floors, extra codecs), Library (extensions, backlog on start), the pause
   switch at the top when a data folder is known. Keys it does not show stay untouched.
 

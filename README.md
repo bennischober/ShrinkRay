@@ -331,7 +331,7 @@ backlog-on-start switch; and, where the resident app keeps its data (the contain
 `/data`, or `--db`), a pause/resume switch. Values go through the same schema as a config
 file loaded from disk, so a value the app would refuse is shown and never written (the 1080p
 floor, for example, can be raised but not lowered). A change to a setting that is part of
-every stored plan (the VMAF, the probe preset, the probe density) says that it re-measures
+every stored plan (the VMAF, the probe preset, the probe density, the probe window length) says that it re-measures
 the library before you save it. The resident app applies a save at its next file. The
 dashboard cannot do any of this: it only observes.
 
