@@ -521,6 +521,7 @@ class _FsWaiter:
         self._roots = roots
         self._wake: threading.Event | None = None
         self._fd: int | None = None
+        self._thread: threading.Thread | None = None
         self._wd_paths: dict[int, Path] = {}
         self._failed = False
         self._supported = sys.platform in ("linux", "win32")
@@ -634,6 +635,13 @@ class _FsWaiter:
         """Tears the watches down (the loop's finally)."""
         if self._wake is not None:
             self._wake.set()
+        # the drain must be out of select() before the descriptor closes
+        # (issue #642): its select is bounded at 0.5 s, so the join is too,
+        # and closing first raced the drain into EBADF - or onto a reused
+        # descriptor number under a still-running read. A drain that never
+        # started (a failed _start_linux) is not alive and needs no join.
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join()
         if self._fd is not None and self._fd >= 0:
             with contextlib.suppress(OSError):
                 os.close(self._fd)
