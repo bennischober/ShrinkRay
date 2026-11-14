@@ -24,7 +24,9 @@ export default defineConfig({
   ],
   webServer: {
     // the fixture mock is a dev-server plugin, so the checks run against `dev`
-    command: 'npm run dev -- --port 4173',
+    // bind to IPv4 explicitly: a runner's Vite listens on ::1 while the check
+    // polls 127.0.0.1, so the server never answers and the step times out
+    command: 'npm run dev -- --port 4173 --host 127.0.0.1',
     url: 'http://127.0.0.1:4173',
     // never reuse: a server left over from the previous run carries a stale
     // module graph, and the same commit then reported 14 and 28 failures
