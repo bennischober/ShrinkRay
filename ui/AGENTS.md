@@ -17,7 +17,7 @@ a product-rule violation. `npm run build` writes `ui/dist`, served by
 ui/
 ├── src/App.svelte              # shell: rail, hash routing, poll loop, all shared state
 ├── src/lib/api.ts              # the ONLY network client + hand-mirrored API types
-├── src/lib/format.ts           # the ONLY place numbers become text (issue #627)
+├── src/lib/format.ts           # the shared formatter layer (issue #627; #655 lists the rest)
 ├── src/lib/components/          # the shared vocabulary: PageHeader, StatusBadge,
 │                               # FileName, Time, ProgressBar, EmptyState, Panel
 ├── src/lib/progress.svelte.ts  # the ONLY EventSource (rune store, flow not state)
@@ -43,8 +43,8 @@ ui/
 - **Pages are dumb**: `src/lib/pages/*.svelte` take props and call `on*` handlers up to
   `App.svelte`, which owns all shared state. Pages never import another page; the
   shared vocabulary lives in `src/lib/components/` (issue #627).
-- **One formatter, one voice**: every displayed number, state word, kind and reason comes
-  from `src/lib/format.ts` and the DESIGN.md Glossary; a page never formats a value it
+- **One formatter, one voice**: a displayed number, state word, kind and reason comes
+  from `src/lib/format.ts` and the DESIGN.md Glossary (#655 tracks the sites still to move); a page never formats a value it
   shows with a hand-rolled `toFixed`/`toLocale*`/`1024 **`. Values that feed geometry
   rather than text — SVG coordinates, bar widths, axis positions — stay numbers.
 - **One network boundary**: every `fetch` lives in `api.ts`; `progress.svelte.ts` owns the
