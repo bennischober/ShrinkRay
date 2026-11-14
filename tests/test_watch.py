@@ -391,10 +391,11 @@ class TestWatch(unittest.TestCase):
                 side_effect=OSError("the lock path is not a regular file"),
             ):
                 watch_mod.watch([Path(tmp) / "in"], Path(tmp) / "out", once=True, db_file=None)
+            # the module state is reset even when an assertion fails (the
+            # registration must precede them for that to hold)
+            self.addCleanup(setattr, watch_mod, "WATCHER_ERROR", None)
             self.assertIn("the lock path is not a regular file", watch_mod.WATCHER_ERROR or "")
             self.assertNotIn("another watcher", watch_mod.WATCHER_ERROR or "")
-            # the module state is reset even when an assertion fails
-            self.addCleanup(setattr, watch_mod, "WATCHER_ERROR", None)
 
     def test_a_refused_start_names_the_reason(self):
         """Issue #648: a stopped watcher is not silent - watch() records the
@@ -409,6 +410,8 @@ class TestWatch(unittest.TestCase):
             try:
                 with mock.patch.object(watch_mod, "WATCH_LOCK_FILE", lock):
                     watch_mod.watch([Path(tmp) / "in"], Path(tmp) / "out", once=True, db_file=None)
+                # the module state is reset even when an assertion fails
+                self.addCleanup(setattr, watch_mod, "WATCHER_ERROR", None)
                 self.assertEqual(
                     watch_mod.WATCHER_ERROR,
                     "another watcher holds the single-instance lock",
