@@ -67,6 +67,13 @@ def cropdetect_limit(bit_depth: int | None) -> int:
     (issue #637). Scaling by the depth keeps the 8-bit filter string
     byte-identical, so every 8-bit measurement already cached stays valid.
 
+    Every ffmpeg ShrinkRay accepts reads the limit this way: cropdetect became
+    bit-depth aware in FFmpeg 2.6 (commit a288d08, December 2014: float limit,
+    native-range scaling), and the libvmaf filter that `doctor` requires
+    (`detect_vmaf_style`) arrived in the release after 3.3 (July 2017). An older
+    cropdetect would read 96 on an 8-bit scale and over-crop; none can pass the
+    toolchain check.
+
     Args:
         bit_depth (int | None): The source's bit depth. None reads as 8. The
             plan/encode passes resolve a caller's unknown depth from the
