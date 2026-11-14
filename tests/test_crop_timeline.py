@@ -723,7 +723,51 @@ class TestCropLimitFollowsBitDepth(unittest.TestCase):
 
     def test_the_timeline_pass_keeps_the_8_bit_filter_unchanged(self) -> None:
         self.assertEqual(self._timeline_filter(8), "cropdetect=limit=24:round=2:reset=1")
-        self.assertEqual(self._timeline_filter(None), "cropdetect=limit=24:round=2:reset=1")
+        # a plain yuv420p stream names no depth: None after the re-read is 8-bit
+        with patch(
+            "shrinkray.tools.ffprobe.run_ffprobe",
+            return_value={"streams": [{"codec_type": "video", "pix_fmt": "yuv420p"}]},
+        ):
+            self.assertEqual(self._timeline_filter(None), "cropdetect=limit=24:round=2:reset=1")
+
+    def test_an_unknown_depth_is_read_from_the_stream(self) -> None:
+        """Review round 1: a caller's None can be a failed probe, not 8-bit.
+        The pass reads the stream itself, so a 10-bit film whose upstream
+        probe timed out still gets the 10-bit threshold."""
+        with patch(
+            "shrinkray.tools.ffprobe.run_ffprobe",
+            return_value={"streams": [{"codec_type": "video", "pix_fmt": "yuv420p10le"}]},
+        ):
+            self.assertEqual(self._timeline_filter(None), "cropdetect=limit=96:round=2:reset=1")
+
+    def test_an_unreadable_depth_is_logged_not_silent(self) -> None:
+        with (
+            patch(
+                "shrinkray.tools.ffprobe.run_ffprobe",
+                side_effect=RuntimeError("ffprobe failed: timed out"),
+            ),
+            patch("shrinkray.engine.crop.log") as log,
+        ):
+            self.assertEqual(self._timeline_filter(None), "cropdetect=limit=24:round=2:reset=1")
+        logged = " ".join(str(call.args[0]) for call in log.call_args_list)
+        self.assertIn("could not be read", logged)
+        self.assertIn("8-bit black threshold", logged)
+
+    def test_the_sampled_fallback_reads_an_unknown_depth_too(self) -> None:
+        from shrinkray.engine.crop import detect_crop_rect
+
+        with (
+            patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
+            patch("shrinkray.engine.crop.source_frame", return_value=(1920, 1080)),
+            patch(
+                "shrinkray.tools.ffprobe.run_ffprobe",
+                return_value={"streams": [{"codec_type": "video", "pix_fmt": "yuv420p10le"}]},
+            ),
+            patch("shrinkray.engine.crop._run", return_value=(0, "crop=1920:800:0:140")) as run,
+        ):
+            detect_crop_rect(self.movie, self.root, count=1, bit_depth=None)
+        args = run.call_args.args[0]
+        self.assertEqual(args[args.index("-vf") + 1], "cropdetect=limit=96:round=2:reset=0")
 
     def test_the_sampled_fallback_measures_10_bit_at_its_native_black(self) -> None:
         from shrinkray.engine.crop import detect_crop_rect

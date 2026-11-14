@@ -357,10 +357,6 @@ class TestSmokeColourRetag(unittest.TestCase):
             )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @unittest.skipUnless(os.environ.get("SHRINKRAY_SMOKE"), "smoke: opt-in (SHRINKRAY_SMOKE=1)")
 @unittest.skipUnless(BINARIES_OK, "real ffmpeg + HandBrakeCLI + ffprobe required on PATH")
 class TestSmokeBarsAtEveryBitDepth(unittest.TestCase):
@@ -380,11 +376,12 @@ class TestSmokeBarsAtEveryBitDepth(unittest.TestCase):
         self.tmp.cleanup()
 
     def _letterboxed_clip(self, pix_fmt: str) -> Path:
-        """A 1920x800 picture padded with black to 1920x1080 (140 px bars).
+        """A 640x264 picture padded with black to 640x360 (48 px bars).
 
-        libx265 encodes both depths in limited range, where black is code 16
-        (8-bit) or 64 (10-bit). A keyframe every second for 45 s gives the
-        timeline pass a sustained run past MIN_RUN_SECONDS (30 s).
+        ffv1 is built into every ffmpeg and stores both depths losslessly in
+        limited range, where black is code 16 (8-bit) or 64 (10-bit). It is
+        intra-only, so one frame per second for 45 s gives the keyframe pass
+        45 readings, a sustained run past MIN_RUN_SECONDS (30 s).
         """
         clip = self.root / f"bars-{pix_fmt}.mkv"
         subprocess.run(
@@ -396,15 +393,11 @@ class TestSmokeBarsAtEveryBitDepth(unittest.TestCase):
                 "-f",
                 "lavfi",
                 "-i",
-                "testsrc2=size=1920x800:rate=4:duration=45",
+                "testsrc2=size=640x264:rate=1:duration=45",
                 "-vf",
-                f"pad=1920:1080:0:140:black,format={pix_fmt}",
+                f"pad=640:360:0:48:black,format={pix_fmt}",
                 "-c:v",
-                "libx265",
-                "-preset",
-                "ultrafast",
-                "-x265-params",
-                "keyint=4:min-keyint=4:log-level=error",
+                "ffv1",
                 str(clip),
             ],
             check=True,
@@ -421,7 +414,11 @@ class TestSmokeBarsAtEveryBitDepth(unittest.TestCase):
         return summary.bars if summary is not None else None
 
     def test_8_bit_bars_are_found(self):
-        self.assertEqual(self._bars(self._letterboxed_clip("yuv420p")), (140, 140, 0, 0))
+        self.assertEqual(self._bars(self._letterboxed_clip("yuv420p")), (48, 48, 0, 0))
 
     def test_10_bit_bars_are_found(self):
-        self.assertEqual(self._bars(self._letterboxed_clip("yuv420p10le")), (140, 140, 0, 0))
+        self.assertEqual(self._bars(self._letterboxed_clip("yuv420p10le")), (48, 48, 0, 0))
+
+
+if __name__ == "__main__":
+    unittest.main()

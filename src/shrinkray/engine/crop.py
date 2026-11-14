@@ -10,8 +10,9 @@ the SAFE union rule: crop only the bars common to every sustained reading
 (docs/black-bar-spike.md Q4 - the naive "largest bars" combine measured at
 keeping 0% of the frame; it must never ship).
 
-The summary is cached in the database (the `crops` table, keyed by size and
-mtime), so the expensive pass runs once per file version: plan/encode read
+The summary is cached in the database (the `crops` table, keyed by size,
+mtime and the cropdetect threshold it was measured at - issue #637), so the
+expensive pass runs once per file version: plan/encode read
 the cache, and the scan's coarse flag stays a separate cheap measurement
 (scan never runs the timeline pass itself).
 """
@@ -66,10 +67,11 @@ def cropdetect_limit(bit_depth: int | None) -> int:
     byte-identical, so every 8-bit measurement already cached stays valid.
 
     Args:
-        bit_depth (int | None): The source's bit depth. None reads as 8:
-            `tools.ffprobe.bit_depth` returns None for a plain 8-bit pix_fmt
-            (`yuv420p`, no depth suffix) whose stream carries no
-            bits_per_raw_sample, while every deeper format names its depth.
+        bit_depth (int | None): The source's bit depth. None reads as 8. The
+            plan/encode passes resolve a caller's unknown depth from the
+            stream first (`_resolved_bit_depth`), after which None is left
+            only for a plain 8-bit pix_fmt (`yuv420p`, no depth suffix,
+            no bits_per_raw_sample) or an unreadable stream, which is logged.
 
     Returns:
         int: The threshold in the source's native range (24, 96, 384...).
@@ -77,6 +79,38 @@ def cropdetect_limit(bit_depth: int | None) -> int:
     if bit_depth is None or bit_depth <= 8:
         return CROP_DETECT_LIMIT
     return CROP_DETECT_LIMIT << (bit_depth - 8)
+
+
+def _resolved_bit_depth(movie: Path, bit_depth: int | None) -> int | None:
+    """Returns the caller's depth, or the stream's own when the caller has none.
+
+    A caller's None can mean its probe failed (a stale mount, the ffprobe
+    timeout) rather than an 8-bit source; measuring a 10-bit film at the 8-bit
+    threshold would silently keep its bars (issue #637, review round 1). So the
+    pass reads the depth itself, and says so when it cannot.
+
+    Args:
+        movie (Path): The source movie file.
+        bit_depth (int | None): The depth the caller probed (None: unknown).
+
+    Returns:
+        int | None: The depth; None for a plain 8-bit format that names no
+            depth, or when the stream cannot be read (logged).
+    """
+    if bit_depth is not None:
+        return bit_depth
+    from shrinkray.tools.ffprobe import bit_depth as stream_bit_depth
+    from shrinkray.tools.ffprobe import get_video_stream, run_ffprobe
+
+    try:
+        video = get_video_stream(run_ffprobe(movie).get("streams", []))
+    except RuntimeError as e:
+        log(
+            f"The bit depth of '{movie.name}' could not be read ({e}): its bars are "
+            "measured at the 8-bit black threshold, which finds none in deeper video."
+        )
+        return None
+    return None if video is None else stream_bit_depth(video)
 
 
 def parse_crop_line(text: str) -> tuple[int, int, int, int] | None:
@@ -553,6 +587,7 @@ def detect_crop_summary_cached(
     """
     if not movie.is_file():
         return None
+    bit_depth = _resolved_bit_depth(movie, bit_depth)
     limit = cropdetect_limit(bit_depth)
     connection: sqlite3.Connection | None = None
     # one finally owns the connection on every exit, the cache hit included
@@ -666,6 +701,7 @@ def detect_crop_rect(
     frame = source_frame(movie)
     if frame is None:
         return None
+    limit = cropdetect_limit(_resolved_bit_depth(movie, bit_depth))
 
     from shrinkray.engine.samples import sample_offsets
 
@@ -687,7 +723,7 @@ def detect_crop_rect(
                     "-i",
                     str(movie),
                     "-vf",
-                    f"cropdetect=limit={cropdetect_limit(bit_depth)}:round=2:reset=0",
+                    f"cropdetect=limit={limit}:round=2:reset=0",
                     "-f",
                     "null",
                     "-",
