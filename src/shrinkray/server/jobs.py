@@ -1226,6 +1226,18 @@ def _encode_measured(
         # file. A direct executor call (the one-shot CLI, tests) has no queue
         # and keeps the single-call shape below.
         encode_row: Job | None = None
+        # the stage row must show the same live progress as the folder job
+        # (issue #637): a row that receives no events reads "starting..." for
+        # the whole encode. The holder lets the closure see the row once it exists.
+        stage_row: list[Job | None] = [None]
+
+        def report_encode_progress(data: dict, row_ref: list[Job | None] = stage_row) -> None:
+            if progress is not None:
+                progress(data)
+            row = row_ref[0]
+            if queue is not None and row is not None:
+                queue.report_progress(row, data)
+
         sample_every, sample_count, sample_seconds = config.probe_settings()
         if queue is not None:
             decision_row = queue.stage(
@@ -1354,6 +1366,7 @@ def _encode_measured(
                     )
                     continue
             encode_row = queue.stage(JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"})
+            stage_row[0] = encode_row
         if progress:
             progress(
                 {
@@ -1389,7 +1402,7 @@ def _encode_measured(
                         "probe_encoder_preset", config.handbrake_probe_encoder_preset
                     ),
                     encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    progress=progress,
+                    progress=report_encode_progress,
                     cancel=cancel,
                     db_file=_db_file_of(connection),
                     encoder_threads=cap_threads(config.handbrake_max_threads),
