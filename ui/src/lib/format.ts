@@ -169,3 +169,15 @@ const VERDICT_WORDS: Record<string, string> = {
 export function verdictWord(verdict: string): string {
   return VERDICT_WORDS[verdict] ?? verdict
 }
+
+/** How old a rendered value is (issue #629): `unknown` when the dashboard
+ * has never loaded, `stale` when the last successful load is older than three
+ * poll intervals (a frozen page must stop looking live), `fresh` otherwise. */
+export function freshness(
+  loadedAtMs: number | null,
+  nowMs: number,
+  pollIntervalMs: number,
+): 'fresh' | 'stale' | 'unknown' {
+  if (loadedAtMs == null) return 'unknown'
+  return nowMs - loadedAtMs > pollIntervalMs * 3 ? 'stale' : 'fresh'
+}

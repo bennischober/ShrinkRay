@@ -196,6 +196,7 @@
   // Accumulated in the poll path, never in an $effect: an effect that
   // read AND wrote its buffer looped itself to death (round-6.6). Pure
   // write-on-new-sample; capped at 40 (the sparkline's window).
+  let lastLoadedAt = $state<number | null>(null)
   let rssSamples = $state<number[]>([])
   function rememberRss(v: number | null | undefined) {
     if (v == null) return
@@ -210,6 +211,7 @@
       if (snap.jobs !== null) history = snap.jobs // unchanged: keep the current array
       if (snap.library !== null) movies = snap.library // unchanged: keep the current array
       rememberRss(snap.status?.rss_mib)
+      lastLoadedAt = Date.now()
       error = null
       needsToken = false
     } catch (e) {
