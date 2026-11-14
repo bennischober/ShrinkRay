@@ -404,6 +404,10 @@
         title={status?.watcher === 'running' ? 'The background watcher is running' : (status?.watcher_error ?? 'The background watcher is stopped')}>
         {status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER'}
       </span>
+      <span class="legend watcher" class:on={status?.worker === 'running'}
+        title={status?.worker === 'running' ? 'The job worker is running' : (status?.worker_error ?? 'The job worker is stopped')}>
+        {status?.worker === 'running' ? '● WORKER' : '○ WORKER'}
+      </span>
       <span class="legend shortcut-hint mono">{SHORTCUT_LEGEND}</span>
     </div>
   </aside>
@@ -436,6 +440,11 @@
     {#if status?.watcher_error}
       <!-- not dismissible: it clears when the watcher starts (issue #648) -->
       <div class="api-error mono" role="alert">{status.watcher_error}</div>
+    {/if}
+    {#if status?.worker_error}
+      <!-- not dismissible: it clears on the worker's next app restart (issue
+        #649): a dead worker is the dashboard's top-priority attention item -->
+      <div class="api-error mono" role="alert">{status.worker_error}</div>
     {/if}
     {#if status?.encode_window === 'closed'}
       <!-- read-only: the window is set in config.json (issue #434) -->

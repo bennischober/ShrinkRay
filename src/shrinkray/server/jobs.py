@@ -18,14 +18,14 @@ import sqlite3
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
 from shrinkray.config import Conf, encode_window_open, refresh_config
 from shrinkray.engine.pipeline import cap_threads
-from shrinkray.logger import file_scope, log
+from shrinkray.logger import file_scope, log, log_error
 from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
 
@@ -240,21 +240,55 @@ class JobQueue:
     the UI and the CLI). The worker thread consumes one job at a time.
     """
 
-    def __init__(self, connection: sqlite3.Connection, bus: "ProgressBus | None" = None) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        bus: "ProgressBus | None" = None,
+        connection_lock: "threading.RLock | None" = None,
+    ) -> None:
         """Initializes the queue on an open database connection.
 
         Args:
             connection (sqlite3.Connection): The database connection.
             bus (ProgressBus | None): The live-progress bus (None in
                 CLI/tests without a resident app — progress is dropped).
+            connection_lock (threading.RLock | None): The lock every OTHER
+                user of this connection holds (the resident app's database
+                lock). Every queue method takes it around its connection
+                use: one shared connection used from two threads under two
+                different locks is the unsynchronized-access shape behind
+                the observed ``SystemError: commit returned NULL`` (issue
+                #649). Re-entrant, so a route that already holds it and
+                calls into the queue nests safely. None (CLI/tests) uses
+                the connection bare.
         """
         self._connection = connection
         self._bus = bus
+        self._connection_lock = connection_lock
         self._lock = threading.Lock()
         self._pending: list[Job] = []
         self._cancel_events: dict[int, threading.Event] = {}
         self._wake = threading.Event()
         self._load_pending()
+
+    def _conn_gate(self) -> "contextlib.AbstractContextManager[None]":
+        """Serializes this queue's connection use with its other users.
+
+        See __init__'s connection_lock: one shared connection used from two
+        threads under two different locks produced the observed
+        ``SystemError: commit returned NULL without setting an exception``
+        (issue #649). The lock is re-entrant, so nesting is safe.
+        """
+        lock = self._connection_lock
+        if lock is None:
+            return contextlib.nullcontext()
+
+        @contextlib.contextmanager
+        def _held() -> Iterator[None]:
+            with lock:
+                yield
+
+        return _held()
 
     def _load_pending(self) -> None:
         """Loads queued jobs from the database (after a restart).
@@ -264,24 +298,25 @@ class JobQueue:
         being executed: the operator sees why it never ran rather than a
         queue that silently cannot drain.
         """
-        rows = self._connection.execute(
-            "SELECT * FROM jobs WHERE state = ? ORDER BY id", (JobState.QUEUED.value,)
-        ).fetchall()
-        pending: list[Job] = []
-        retired = 0
-        for row in rows:
-            job = _row_to_job(row)
-            if job.kind is JobKind.LEGACY:
-                self._connection.execute(
-                    "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') "
-                    "WHERE id = ?",
-                    (JobState.FAILED.value, "job kind removed in this version", job.id),
-                )
-                retired += 1
-            else:
-                pending.append(job)
-        if retired:
-            self._connection.commit()
+        with self._conn_gate():
+            rows = self._connection.execute(
+                "SELECT * FROM jobs WHERE state = ? ORDER BY id", (JobState.QUEUED.value,)
+            ).fetchall()
+            pending: list[Job] = []
+            retired = 0
+            for row in rows:
+                job = _row_to_job(row)
+                if job.kind is JobKind.LEGACY:
+                    self._connection.execute(
+                        "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') "
+                        "WHERE id = ?",
+                        (JobState.FAILED.value, "job kind removed in this version", job.id),
+                    )
+                    retired += 1
+                else:
+                    pending.append(job)
+            if retired:
+                self._connection.commit()
         with self._lock:
             self._pending = pending
 
@@ -294,11 +329,12 @@ class JobQueue:
         Returns:
             Job: The job with its database id set.
         """
-        cursor = self._connection.execute(
-            "INSERT INTO jobs (kind, payload, state) VALUES (?, ?, ?)",
-            (job.kind.value, json.dumps(job.payload), JobState.QUEUED.value),
-        )
-        self._connection.commit()
+        with self._conn_gate():
+            cursor = self._connection.execute(
+                "INSERT INTO jobs (kind, payload, state) VALUES (?, ?, ?)",
+                (job.kind.value, json.dumps(job.payload), JobState.QUEUED.value),
+            )
+            self._connection.commit()
         job.id = int(cursor.lastrowid or 0)
         with self._lock:
             self._pending.append(job)
@@ -322,11 +358,12 @@ class JobQueue:
             Job: The stage row, with its database id set.
         """
         job = Job(kind=kind, payload=payload, state=JobState.RUNNING)
-        cursor = self._connection.execute(
-            "INSERT INTO jobs (kind, payload, state, started_at) VALUES (?, ?, ?, datetime('now'))",
-            (kind.value, json.dumps(payload), JobState.RUNNING.value),
-        )
-        self._connection.commit()
+        with self._conn_gate():
+            cursor = self._connection.execute(
+                "INSERT INTO jobs (kind, payload, state, started_at) VALUES (?, ?, ?, datetime('now'))",
+                (kind.value, json.dumps(payload), JobState.RUNNING.value),
+            )
+            self._connection.commit()
         job.id = int(cursor.lastrowid or 0)
         return job
 
@@ -372,11 +409,12 @@ class JobQueue:
                 return None
             job = self._pending.pop(index)
             job.state = JobState.RUNNING
-        self._connection.execute(
-            "UPDATE jobs SET state = ?, started_at = datetime('now') WHERE id = ?",
-            (JobState.RUNNING.value, job.id),
-        )
-        self._connection.commit()
+        with self._conn_gate():
+            self._connection.execute(
+                "UPDATE jobs SET state = ?, started_at = datetime('now') WHERE id = ?",
+                (JobState.RUNNING.value, job.id),
+            )
+            self._connection.commit()
         return job
 
     def report_progress(self, job: Job, progress: dict) -> None:
@@ -404,14 +442,15 @@ class JobQueue:
         """
         job.state = JobState.DONE
         job.result = result
-        self._connection.execute(
-            "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
-            (JobState.DONE.value, json.dumps(result), job.id),
-        )
-        self._prune_history()
-        if self._bus is not None and job.id is not None:
-            self._bus.forget(job.id)
-        self._connection.commit()
+        with self._conn_gate():
+            self._connection.execute(
+                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                (JobState.DONE.value, json.dumps(result), job.id),
+            )
+            self._prune_history()
+            if self._bus is not None and job.id is not None:
+                self._bus.forget(job.id)
+            self._connection.commit()
 
     def _prune_history(self) -> None:
         """Hard-deletes terminated jobs beyond the retention cap.
@@ -423,19 +462,20 @@ class JobQueue:
         — nothing outside the app reads it, and the library's own history
         lives in ``encodes``/``files``, not here.
         """
-        self._connection.execute(
-            """
-            DELETE FROM jobs
-             WHERE state IN ('done', 'failed', 'cancelled')
-               AND id NOT IN (
-                   SELECT id FROM jobs
-                    WHERE state IN ('done', 'failed', 'cancelled')
-                    ORDER BY id DESC
-                    LIMIT ?
-               )
-            """,
-            (JOB_RETENTION,),
-        )
+        with self._conn_gate():
+            self._connection.execute(
+                """
+                DELETE FROM jobs
+                 WHERE state IN ('done', 'failed', 'cancelled')
+                   AND id NOT IN (
+                       SELECT id FROM jobs
+                        WHERE state IN ('done', 'failed', 'cancelled')
+                        ORDER BY id DESC
+                        LIMIT ?
+                   )
+                """,
+                (JOB_RETENTION,),
+            )
 
     def fail(self, job: Job, error: str) -> None:
         """Marks a job as failed and stores the error.
@@ -450,15 +490,16 @@ class JobQueue:
         """
         job.state = JobState.FAILED
         job.error = error
-        self._connection.execute(
-            "UPDATE jobs SET state = ?, error = ?, result = NULL, "
-            "finished_at = datetime('now') WHERE id = ?",
-            (JobState.FAILED.value, error, job.id),
-        )
-        self._prune_history()
-        if self._bus is not None and job.id is not None:
-            self._bus.forget(job.id)
-        self._connection.commit()
+        with self._conn_gate():
+            self._connection.execute(
+                "UPDATE jobs SET state = ?, error = ?, result = NULL, "
+                "finished_at = datetime('now') WHERE id = ?",
+                (JobState.FAILED.value, error, job.id),
+            )
+            self._prune_history()
+            if self._bus is not None and job.id is not None:
+                self._bus.forget(job.id)
+            self._connection.commit()
 
     def mark_cancelled(self, job: Job, result: dict | None = None) -> None:
         """Marks a job as cancelled (user request, not a failure).
@@ -473,14 +514,19 @@ class JobQueue:
             result (dict | None): The engine's partial result, if any.
         """
         job.state = JobState.CANCELLED
-        self._connection.execute(
-            "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
-            (JobState.CANCELLED.value, json.dumps(result) if result is not None else None, job.id),
-        )
-        self._prune_history()
-        if self._bus is not None and job.id is not None:
-            self._bus.forget(job.id)
-        self._connection.commit()
+        with self._conn_gate():
+            self._connection.execute(
+                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                (
+                    JobState.CANCELLED.value,
+                    json.dumps(result) if result is not None else None,
+                    job.id,
+                ),
+            )
+            self._prune_history()
+            if self._bus is not None and job.id is not None:
+                self._bus.forget(job.id)
+            self._connection.commit()
 
     def cancel(self, job_id: int) -> bool:
         """Requests cancellation of a queued job (or signals a running one).
@@ -499,11 +545,12 @@ class JobQueue:
                 if job.id == job_id:
                     job.state = JobState.CANCELLED
                     self._pending.pop(index)
-                    self._connection.execute(
-                        "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
-                        (JobState.CANCELLED.value, job_id),
-                    )
-                    self._connection.commit()
+                    with self._conn_gate():
+                        self._connection.execute(
+                            "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
+                            (JobState.CANCELLED.value, job_id),
+                        )
+                        self._connection.commit()
                     return True
             event = self._cancel_events.get(job_id)
         if event is not None:
@@ -564,9 +611,10 @@ class JobQueue:
         Returns:
             list[Job]: The recent jobs.
         """
-        rows = self._connection.execute(
-            "SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
+        with self._conn_gate():
+            rows = self._connection.execute(
+                "SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
         return [_row_to_job(row) for row in rows]
 
     def get(self, job_id: int) -> Job | None:
@@ -578,7 +626,8 @@ class JobQueue:
         Returns:
             Job | None: The job, or None if not found.
         """
-        row = self._connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        with self._conn_gate():
+            row = self._connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return _row_to_job(row) if row is not None else None
 
 
@@ -1533,6 +1582,13 @@ def _encode_measured(
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 
 
+# a failed iteration is survived (logged, backed off, retried); only this
+# many CONSECUTIVE failures end the worker, with the reason recorded for
+# /api/status (issue #649: an unattended server must never stop working
+# silently - and must not keep serving as if healthy either)
+WORKER_MAX_CONSECUTIVE_FAILURES = 5
+
+
 class JobWorker:
     """The background worker executing jobs from the queue, one at a time.
 
@@ -1558,6 +1614,10 @@ class JobWorker:
         # review, round 2 finding 1 - the measurement path has opted out of
         # the stall watchdog, so the cancel event is its only kill path)
         self._running_cancel: threading.Event | None = None
+        # why the worker gave up (issue #649): None while it runs; the
+        # reason after it ended itself on repeated failed iterations -
+        # /api/status carries it so a dead worker is never a silent one
+        self.fatal_error: str | None = None
 
     def start(self) -> None:
         """Starts the worker thread."""
@@ -1611,28 +1671,57 @@ class JobWorker:
         self.queue._wake.set()
 
     def _run(self) -> None:
-        """Consumes jobs until stopped."""
+        """Consumes jobs until stopped.
+
+        A failed iteration is survived: it is logged and backed off, and
+        the next iteration still runs (issue #649's observed
+        ``SystemError`` from sqlite3's commit killed the whole worker -
+        the web server kept serving a queue nothing drained). Only
+        WORKER_MAX_CONSECUTIVE_FAILURES consecutive failures end the
+        loop, and the reason is recorded on fatal_error for /api/status:
+        the server keeps serving, and the dashboard says the worker is
+        dead and why.
+        """
+        consecutive_failures = 0
         while not self._stop.is_set():
-            # the cancel event exists before the job is taken (review round 3,
-            # finding 3): a stop landing between take_next and _execute's
-            # publish would otherwise miss a multi-hour job entirely
-            cancel = threading.Event()
-            self._running_cancel = cancel
-            # the daily encode window (issue #434): plan and encode jobs are
-            # held back while outside it - scan jobs (cheap cataloging)
-            # proceed, and an in-flight job always runs to completion. The
-            # config is re-read each tick, so the queue resumes when the
-            # window opens.
-            conf = refresh_config()
-            if not encode_window_open(conf.encode_window_start, conf.encode_window_end):
-                job = self.queue.take_next(only_kinds={JobKind.SCAN})
-            else:
-                job = self.queue.take_next()
-            if job is None:
-                self._running_cancel = None
+            try:
+                self._run_one()
+            except Exception as e:
+                consecutive_failures += 1
+                if consecutive_failures >= WORKER_MAX_CONSECUTIVE_FAILURES:
+                    self.fatal_error = (
+                        f"the worker gave up after {consecutive_failures} consecutive "
+                        f"failed iterations; the last: {e}"
+                    )
+                    log_error(f"Job worker: {self.fatal_error}")
+                    return
+                log_error(f"Job worker iteration failed ({consecutive_failures} consecutive): {e}")
                 self.queue.wait_for_work(timeout=1.0)
-                continue
-            self._execute(job, cancel)
+            else:
+                consecutive_failures = 0
+
+    def _run_one(self) -> None:
+        """Runs one consume iteration (take a job, or wait for work)."""
+        # the cancel event exists before the job is taken (review round 3,
+        # finding 3): a stop landing between take_next and _execute's
+        # publish would otherwise miss a multi-hour job entirely
+        cancel = threading.Event()
+        self._running_cancel = cancel
+        # the daily encode window (issue #434): plan and encode jobs are
+        # held back while outside it - scan jobs (cheap cataloging)
+        # proceed, and an in-flight job always runs to completion. The
+        # config is re-read each tick, so the queue resumes when the
+        # window opens.
+        conf = refresh_config()
+        if not encode_window_open(conf.encode_window_start, conf.encode_window_end):
+            job = self.queue.take_next(only_kinds={JobKind.SCAN})
+        else:
+            job = self.queue.take_next()
+        if job is None:
+            self._running_cancel = None
+            self.queue.wait_for_work(timeout=1.0)
+            return
+        self._execute(job, cancel)
 
     def _execute(self, job: Job, cancel: threading.Event | None = None) -> None:
         """Runs one job and records its outcome.

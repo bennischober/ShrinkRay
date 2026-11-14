@@ -1313,6 +1313,51 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(reloaded.state, jobs.JobState.FAILED)
         self.assertIn("RuntimeError: engine exploded", reloaded.error)
 
+    def test_a_failed_take_next_does_not_kill_the_worker(self):
+        """Issue #649: one failed iteration - ANY exception from take_next -
+        is logged and survived: the worker keeps running and executes the
+        next job. On main the exception kills the thread and nothing says
+        the worker is gone."""
+        import time as time_mod
+
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)})
+        )
+
+        real_take_next = self.queue.take_next
+        calls = {"n": 0}
+
+        def flaky(only_kinds=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("the db blinked")
+            return real_take_next(only_kinds)
+
+        worker = jobs.JobWorker(self.connection, self.queue)
+        with mock.patch.object(self.queue, "take_next", side_effect=flaky):
+            worker.start()
+            try:
+                # await the job's DONE state with bounded fragments: the
+                # signal is the queue row, the bound keeps a hang visible
+                deadline = time_mod.monotonic() + 10.0
+                done = False
+                while time_mod.monotonic() < deadline:
+                    if self.queue.get(job.id).state == jobs.JobState.DONE:
+                        done = True
+                        break
+                    self.assertTrue(
+                        worker._thread.is_alive(),
+                        "the worker died on a failed take_next",
+                    )
+                    threading.Event().wait(0.05)
+                self.assertTrue(done, "the worker never ran the job after the failure")
+                self.assertTrue(worker._thread.is_alive())
+            finally:
+                worker.stop()
+
     def test_worker_stop_terminates_the_running_job_s_child(self):
         """Issue #431 (review round 2, finding 1): the measurement children run
         with the stall watchdog opted out, so a shutdown must set the running
