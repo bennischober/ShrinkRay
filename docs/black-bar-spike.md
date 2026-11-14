@@ -65,7 +65,7 @@ runs of consecutive identical picture heights:
 
 | file | runs | longest run |
 |---|---|---|
-| Media01 (4K HDR) | 1 | 599 s (100%) |
+| Media01 (4K HDR) | 1 | 599 s (100%) - void, see below |
 | Media02 (1080p) | 85 | 137 s (23%) |
 | Media03 (1080p) | 153 | 84 s (14%) |
 
@@ -73,9 +73,14 @@ Then the two candidate combine rules, over the whole reading set:
 
 | file | safe crop (union of picture areas) | naive "largest bars" crop |
 |---|---|---|
-| Media01 | 3840x2160, keeps 100% | 3840x2160, keeps 100% |
+| Media01 | 3840x2160, keeps 100% - void, see below | 3840x2160, keeps 100% - void |
 | Media02 | 1920x804, keeps **85%** | 2x28, keeps **0%** |
 | Media03 | 1920x800, keeps **85%** | 14x8, keeps **0%** |
+
+The Media01 rows are void (issue #637): Media01 is 10-bit and was measured at the
+absolute limit 24, which lies below 10-bit black, so every reading was full frame
+whatever the picture held. They say nothing about its bars or its run structure; the
+conclusion below rests on the two SDR films only.
 
 The naive rule destroys the whole picture on both SDR films, because a single
 reading with a dark or logo-heavy frame reports enormous bars. The safe rule crops
@@ -205,7 +210,7 @@ mysterious. That is tracked as the reconcile-the-report work in the follow-up is
 - The HDR black level (Q5): no 10-bit result was obtained here, because the range 8-48 cannot classify 10-bit black (the Q5 correction, issue #637). The shipped rule scales the limit with the bit depth. One 3 s window of a different 10-bit HDR film with real bars read full frame at `limit=24` and `3840x1608` at the depth-relative `limit=0.094` (issue #637): a spot check, not a calibration.
 - Burned-in subtitles in the bars (Q7): no such film here.
 - Credits (Q3): no film here whose credits differ in aspect ratio.
-- A genuinely variable-aspect-ratio film: **none of the three changes aspect ratio.**
+- A genuinely variable-aspect-ratio film: **neither SDR film changes aspect ratio**; Media01's readings are void at the limit used (the Q5 correction, issue #637), so whether it does is unknown.
   The runs on Media02/03 are dark-scene noise, not real segments. So the
   "IMAX alternating with scope" case the issue is really about is untested.
 - 4K HEVC with long keyframe intervals: Media01's intervals are 1 s.
