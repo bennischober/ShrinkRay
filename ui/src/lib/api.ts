@@ -173,6 +173,9 @@ export interface RetainedFile {
 export interface Status {
   queue: Job[]
   watcher: 'running' | 'stopped'
+  /** why the watcher did not start (issue #648): the refusal reason, null
+   * while it runs — a stopped watcher is never a silent one */
+  watcher_error?: string | null
   database: string
   /** the resident app's own memory (MiB), self-measured every 5 min —
    * staying lean is a measured fact (4534e07); null when unmeasurable */

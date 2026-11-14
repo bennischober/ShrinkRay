@@ -340,6 +340,44 @@ class TestWatch(unittest.TestCase):
             self.assertTrue(acquire_lock(lock))
             release_lock(lock)
 
+    def test_the_own_pid_in_a_stale_lock_does_not_block(self):
+        """Issue #648: a container restart reuses PID 1 by design - the lock
+        file's text naming the current process must not make the watcher
+        refuse to start. The lock's authority is the OS file lock, not the
+        file's contents."""
+
+        from shrinkray.engine.watch import acquire_lock, release_lock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "watch.lock"
+            lock.write_text(str(os.getpid()), encoding="utf-8")
+            self.assertTrue(acquire_lock(lock))
+            release_lock(lock)
+
+    def test_a_refused_start_names_the_reason(self):
+        """Issue #648: a stopped watcher is not silent - watch() records the
+        refusal reason and /api/status carries it (watcher_error), so the
+        dashboard can show why the WATCHER chip is dark."""
+
+        from shrinkray.engine import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "watch.lock"
+            self.assertTrue(watch_mod.acquire_lock(lock))  # the "other" watcher
+            try:
+                with mock.patch.object(watch_mod, "WATCH_LOCK_FILE", lock):
+                    watch_mod.watch([Path(tmp) / "in"], Path(tmp) / "out", once=True, db_file=None)
+                self.assertEqual(
+                    watch_mod.WATCHER_ERROR,
+                    "another watcher holds the single-instance lock",
+                )
+            finally:
+                watch_mod.release_lock(lock)
+            # a clean start clears the reason
+            with mock.patch.object(watch_mod, "WATCH_LOCK_FILE", lock):
+                watch_mod.watch([Path(tmp) / "in"], Path(tmp) / "out", once=True, db_file=None)
+            self.assertIsNone(watch_mod.WATCHER_ERROR)
+
     def test_check_stability_min_age(self):
 
         from shrinkray.engine.watch import check_stability
