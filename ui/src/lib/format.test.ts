@@ -177,4 +177,9 @@ describe('freshness', () => {
     expect(freshness(1_000, 1_500, 3_000, true)).toBe('failed')
     expect(freshness(null, 1_500, 3_000, true)).toBe('failed')
   })
+
+  it('asks for a token before it says anything about the data', () => {
+    expect(freshness(null, 1_500, 3_000, false, true)).toBe('unauthorised')
+    expect(freshness(1_000, 1_500, 3_000, false, true)).toBe('unauthorised')
+  })
 })

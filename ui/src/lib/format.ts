@@ -178,7 +178,9 @@ export function freshness(
   nowMs: number,
   pollIntervalMs: number,
   failed = false,
-): 'fresh' | 'stale' | 'unknown' | 'failed' {
+  needsToken = false,
+): 'fresh' | 'stale' | 'unknown' | 'failed' | 'unauthorised' {
+  if (needsToken) return 'unauthorised'
   if (failed) return 'failed'
   if (loadedAtMs == null) return 'unknown'
   return nowMs - loadedAtMs > pollIntervalMs * 3 ? 'stale' : 'fresh'
