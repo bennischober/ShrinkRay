@@ -133,14 +133,19 @@
     return sum
   })
 
-  function decisionOf(movie: Movie): { label: string; cls: string; bare?: boolean } {
+  function decisionOf(movie: Movie): { label: string; cls: string; bare?: boolean; title?: string } {
     const preset = movie.encode?.preset
     if (movie.missing) return { label: 'MISSING', cls: 'missing' }
     if (preset?.startsWith('skipped')) return { label: 'SKIPPED', cls: 'skip' }
     // a declined swap is a measured attempt whose artifact was discarded
-    // (issue #625): it must not read as ENCODED
+    // (issue #625): it must not read as ENCODED, and the reason is the
+    // operator's information
     if (preset && movie.encode?.outcome === 'discarded')
-      return { label: 'DISCARDED', cls: 'skip' }
+      return {
+        label: 'DISCARDED',
+        cls: 'skip',
+        title: `${movie.encode.outcome_reason ?? 'the swap was declined'} (original untouched)`,
+      }
     if (preset) return { label: 'ENCODED', cls: 'done' }
     if (plannedPaths.includes(movie.path)) return { label: 'PLANNED', cls: 'planned' }
     // the default state renders as a bare swatch: 354 identical bordered
@@ -282,14 +287,17 @@
                       title="Untouched"
                     ></span>
                   {:else}
-                    <span class="chip {decision.cls}"><span class="swatch"></span>{decision.label}</span>
+                    <span class="chip {decision.cls}" title={decision.title}><span class="swatch"></span>{decision.label}</span>
                   {/if}
                 {/if}
               </td>
               <td class="mono num">{movie.encode?.crf ?? '—'}</td>
               <td class="mono num measured">{fmtVmaf(movie.encode?.vmaf, targetVmaf)}</td>
               <td class="mono num" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
-                {#if movie.encode}
+                {#if movie.encode?.outcome === 'discarded'}
+                  {@const reason = movie.encode.outcome_reason ?? 'the swap was declined'}
+                  <span class="bad" title={`${reason} (original untouched)`}>discarded</span>
+                {:else if movie.encode}
                   {@const saved = fmtSavedHonest(movie.encode.saved_percent)}
                   <span title={saved.grew ? 'the re-encode is larger than the source' : ''}>{saved.text}</span>
                 {:else}

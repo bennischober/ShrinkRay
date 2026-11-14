@@ -946,7 +946,11 @@ def snapshot(
             SELECT COUNT(*), COALESCE(MAX(f.rowid), 0),
                    COALESCE((SELECT MAX(id) FROM encodes), 0),
                    COALESCE((SELECT MAX(mtime) FROM files), 0),
-                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0)
+                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0),
+                   -- an encode's outcome is written by an UPDATE (issue #625):
+                   -- MAX(id) does not move, so the count of non-applied rows is
+                   -- the change signal the library ETag needs
+                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0)
             FROM files f
             """
         ).fetchone()
@@ -1166,7 +1170,8 @@ def library(
             SELECT COUNT(*), COALESCE(MAX(f.rowid), 0),
                    COALESCE((SELECT MAX(id) FROM encodes), 0),
                    COALESCE((SELECT MAX(mtime) FROM files), 0),
-                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0)
+                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0),
+                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0)
             FROM files f
             """
         ).fetchone()
@@ -1181,7 +1186,7 @@ def library(
                    f.size, f.hdr, f.missing_scans, f.missing_since,
                    e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                    e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
-                   e.encode_seconds,
+                   e.encode_seconds, e.outcome, e.outcome_reason,
                    e.probe_count, e.probe_seconds, e.tool_versions
             FROM files f
             LEFT JOIN encodes e ON e.id = (
@@ -1216,6 +1221,10 @@ def library(
                 "probe_count": r["probe_count"],
                 "probe_seconds": r["probe_seconds"],
                 "tool_versions": r["tool_versions"],
+                # the attempt's outcome (issue #625): the same contract the
+                # snapshot's library and /api/movie's history carry
+                "outcome": r["outcome"],
+                "outcome_reason": r["outcome_reason"],
             }
             if r["preset"]
             else None,

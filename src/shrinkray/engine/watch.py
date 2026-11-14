@@ -1229,17 +1229,21 @@ def _swap(
     """
     from shrinkray import db, replace
 
-    def _discard_row() -> None:
+    def _discard_row(reason: str | None = None) -> None:
         if db_file is not None and encode_id is not None:
             connection = db.connect(db_file)
             try:
                 db.set_encode_output(connection, encode_id, None)
+                # the decline's reason rides the row's outcome (issue #625): a
+                # discarded encode is a measured attempt whose result was
+                # thrown away, and every surface must say so
+                db.set_encode_outcome(connection, encode_id, "discarded", reason)
             finally:
                 connection.close()
 
     if error is not None:
         log_error(f"Not replacing '{source.name}': {error} => the original is kept.")
-        _discard_row()
+        _discard_row(error)
         return False
     if input_size is not None and input_mtime is not None:
         # the swap is the most consequential write (issue #585): a source that
@@ -1258,23 +1262,21 @@ def _swap(
                 f"Not replacing '{source.name}': the source changed during the "
                 "encode => the original is kept, the encode is discarded."
             )
-            _discard_row()
+            _discard_row("the source changed during the encode")
             return False
     size_before = source.stat().st_size
     size_after = output.stat().st_size
     if size_after >= size_before:
-        log_error(
-            f"Not replacing '{source.name}': the output is not smaller "
-            f"({size_before} -> {size_after} bytes)"
-        )
-        _discard_row()
+        reason = f"the output is not smaller ({size_before} -> {size_after} bytes)"
+        log_error(f"Not replacing '{source.name}': {reason}")
+        _discard_row(reason)
         return False
     try:
         staged = replace.stage(output, source)
         retained = replace.swap(source, staged)
     except replace.SwapError as swap_error:
         log_error(f"Not replacing '{source.name}': {swap_error}")
-        _discard_row()
+        _discard_row(str(swap_error))
         return False
     if db_file is not None:
         connection = db.connect(db_file)

@@ -123,7 +123,11 @@
     encode?.outcome === 'discarded'
       ? // a declined swap discarded the artifact (issue #625): nothing was
         // reclaimed, and the reason is what the operator needs
-        { text: 'Discarded', grew: true }
+        {
+          text: 'Discarded',
+          grew: true,
+          title: `${encode.outcome_reason ?? 'the swap was declined'} (original untouched)`,
+        }
       : encode?.saved_percent != null
         ? encode.saved_percent <= 0
           ? { text: `+${Math.abs(encode.saved_percent).toFixed(1)}% larger`, grew: true }
@@ -417,7 +421,11 @@
             <span class="legend">RESULT</span>
             <span class="mono result" class:bad={est?.grew}>{est?.text ?? '—'}</span>
           </div>
-          <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(encode.input_size)} → {fmtGb(encode.output_size)}</span></div>
+          {#if encode.outcome === 'discarded'}
+            <div class="fact"><span class="legend">SIZE</span><span class="mono" title={encode.outcome_reason ?? 'the swap was declined'}>{fmtGb(movie.size)} (original untouched)</span></div>
+          {:else}
+            <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(encode.input_size)} → {fmtGb(encode.output_size)}</span></div>
+          {/if}
           <div class="fact">
             <span class="legend">VMAF</span>
             {#if encode.vmaf != null}

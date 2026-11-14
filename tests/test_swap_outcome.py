@@ -128,6 +128,93 @@ class TestDeclinedSwapIsNotAnEncode(unittest.TestCase):
         self.assertEqual(encode["outcome"], "discarded")
         self.assertIn("not smaller", encode["outcome_reason"])
 
+    def test_the_changed_source_path_records_the_outcome(self) -> None:
+        """The identity gate (#585): a source that changed during the encode
+        declines, and the row records the decline."""
+        outcome = swap_encode_into_place(
+            self.connection,
+            self.source,
+            self.output,
+            encode_id=self.encode_id,
+            input_size=999,
+            input_mtime=12345.0,
+        )
+        self.assertFalse(outcome.replaced)
+        encode = self._snapshot_library_encode()
+        self.assertEqual(encode["outcome"], "discarded")
+        self.assertIn("changed", encode["outcome_reason"])
+
+    def test_the_swap_error_path_records_the_outcome(self) -> None:
+        """A refused rename (SwapError) declines, and the row records it."""
+        from unittest.mock import patch
+
+        from shrinkray.replace import SwapError
+
+        with patch(
+            "shrinkray.service.swap_into_library",
+            side_effect=SwapError("the rename was refused"),
+        ):
+            outcome = swap_encode_into_place(
+                self.connection, self.source, self.output, encode_id=self.encode_id
+            )
+        self.assertFalse(outcome.replaced)
+        encode = self._snapshot_library_encode()
+        self.assertEqual(encode["outcome"], "discarded")
+        self.assertIn("refused", encode["outcome_reason"])
+
+    def test_the_watchers_declines_record_the_outcome(self) -> None:
+        """The watcher's own swap implementation (engine/watch.py::_swap) has
+        the same four declines (issue #625 round 1): the resident path must
+        record the outcome too, not only the service's swap."""
+        from shrinkray.engine.watch import _swap
+
+        outcome = _swap(
+            Path(self.tmp.name) / "test.db",
+            self.source,
+            self.output,
+            encode_id=self.encode_id,
+            error="output lost 2 subtitle track(s)",
+        )
+        self.assertFalse(outcome)
+        encode = self._snapshot_library_encode()
+        self.assertEqual(encode["outcome"], "discarded")
+        self.assertIn("subtitle track", encode["outcome_reason"])
+
+        outcome = _swap(
+            Path(self.tmp.name) / "test.db",
+            self.source,
+            self.output,
+            encode_id=self.encode_id,
+            input_size=999,
+            input_mtime=12345.0,
+        )
+        self.assertFalse(outcome)
+        encode = self._snapshot_library_encode()
+        self.assertEqual(encode["outcome"], "discarded")
+        self.assertIn("changed", encode["outcome_reason"])
+
+        with patch_shrinkray_replace_swap():
+            outcome = _swap(
+                Path(self.tmp.name) / "test.db",
+                self.source,
+                self.output,
+                encode_id=self.encode_id,
+            )
+        self.assertFalse(outcome)
+        encode = self._snapshot_library_encode()
+        self.assertEqual(encode["outcome"], "discarded")
+        self.assertTrue(encode["outcome_reason"])
+
+
+def patch_shrinkray_replace_swap():
+    """replace.swap is imported INSIDE _swap (`from shrinkray import db, replace`),
+    so the patch seam is the replace module's own attribute."""
+    from unittest.mock import patch
+
+    from shrinkray.replace import SwapError
+
+    return patch("shrinkray.replace.swap", side_effect=SwapError("the rename was refused"))
+
     def test_metrics_exclude_discarded_encodes(self) -> None:
         """The encode counter and the reclaimed-bytes gauge must not count a
         discarded attempt (the dashboard's RECLAIMED 16.0 GB came from here)."""

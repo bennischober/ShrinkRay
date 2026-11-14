@@ -56,6 +56,9 @@
         m.encode.outcome !== 'discarded',
     ).length,
   )
+  const discardedCount = $derived(
+    movies.filter((m) => m.encode?.outcome === 'discarded').length,
+  )
   const untouchedCount = $derived(movies.filter((m) => !m.encode).length)
   const totalSizeGb = $derived(movies.reduce((sum, m) => sum + (m.size ?? 0), 0) / 1024 ** 3)
 
@@ -227,7 +230,10 @@
     movies.some(
       (m) =>
         m.path.replace(/[\\/]/g, '').toLowerCase().endsWith(movie.replace(/[\\/]/g, '').toLowerCase()) &&
-        m.encode != null
+        m.encode != null &&
+        // a discarded attempt is not an encode (issue #625): the title is
+        // still open, the prediction was never realised
+        m.encode.outcome !== 'discarded'
     )
   /** The library record for a plan entry (path-suffix join, plan entries
    * store bare filenames) — the measured truth an ENCODED row shows. */
@@ -348,7 +354,11 @@
     <button class="stat" onclick={() => ongoto('library')}>
       <span class="legend">TITLES</span>
       <span class="stat-v mono">{movies.length}</span>
-      <span class="stat-sub mono dim">{encodedCount} encoded · {untouchedCount} untouched</span>
+      <span class="stat-sub mono dim"
+        >{encodedCount} encoded · {untouchedCount} untouched{discardedCount > 0
+          ? ` · ${discardedCount} discarded`
+          : ''}</span
+      >
     </button>
     <button class="stat" onclick={() => ongoto('library')}>
       <span class="legend">RECLAIMED</span>
