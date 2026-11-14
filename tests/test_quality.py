@@ -3633,7 +3633,7 @@ class TestHdrSkip(unittest.TestCase):
             patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
             patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
         ):
-            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+            result = plan_quality(self.movie, target_vmaf=95.0, db_file=None)
         return result, probed
 
     def test_a_pq_source_is_skipped_without_a_probe(self) -> None:
@@ -3737,6 +3737,6 @@ class TestHdrSkip(unittest.TestCase):
             patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
             patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
         ):
-            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+            result = plan_quality(self.movie, target_vmaf=95.0, db_file=None)
         self.assertEqual(result.skipped_reason, "hdr not supported")
         probed.assert_not_called()

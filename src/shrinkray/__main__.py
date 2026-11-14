@@ -639,7 +639,6 @@ def _record_encodes(
                                     output_dir / movie.name,
                                     target_vmaf=target_vmaf,
                                     min_saving_percent=config.min_saving_percent,
-                                    encoder=config.handbrake_encoder,
                                     db_file=db_file,
                                     encoder_threads=cap_threads(
                                         threads or config.handbrake_max_threads
@@ -891,7 +890,6 @@ def plan(
                     movie,
                     target_vmaf=target_vmaf,
                     min_saving_percent=config.min_saving_percent,
-                    encoder=config.handbrake_encoder,
                     db_file=db_file,
                     encoder_threads=threads_cap,
                     probe_encoder_preset=probe_encoder_preset,

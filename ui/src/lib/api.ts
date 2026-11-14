@@ -1,7 +1,7 @@
 /** Typed client for the resident app's API. */
 
 export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-export type JobKind = 'scan' | 'plan' | 'encode' | 'legacy'
+export type JobKind = 'scan' | 'plan' | 'decision' | 'crf-search' | 'encode' | 'legacy'
 
 export interface Job {
   id: number | null

@@ -67,6 +67,8 @@ class JobKind(str, Enum):
 
     SCAN = "scan"
     PLAN = "plan"
+    DECISION = "decision"
+    CRF_SEARCH = "crf-search"
     ENCODE = "encode"
     LEGACY = "legacy"
 
@@ -302,6 +304,49 @@ class JobQueue:
             self._pending.append(job)
         self._wake.set()
         return job
+
+    def stage(self, kind: JobKind, payload: dict) -> Job:
+        """Records one per-file stage row a running folder job executes.
+
+        The folder job stays the runner (issue #602): the decision, the CRF
+        search and the encode of one file are rows of their own so the Jobs
+        page can follow each stage, but the worker already holds the folder
+        job - the row is written RUNNING directly instead of being queued
+        and picked up a second time.
+
+        Args:
+            kind (JobKind): The stage's kind (decision, crf-search, encode).
+            payload (dict): The stage's payload (the file it is about).
+
+        Returns:
+            Job: The stage row, with its database id set.
+        """
+        job = Job(kind=kind, payload=payload, state=JobState.RUNNING)
+        cursor = self._connection.execute(
+            "INSERT INTO jobs (kind, payload, state, started_at) VALUES (?, ?, ?, datetime('now'))",
+            (kind.value, json.dumps(payload), JobState.RUNNING.value),
+        )
+        self._connection.commit()
+        job.id = int(cursor.lastrowid or 0)
+        return job
+
+    def finish_stage(self, job: Job, result: dict) -> None:
+        """Marks a per-file stage row done with its outcome.
+
+        Args:
+            job (Job): The stage row from stage().
+            result (dict): The stage's outcome (JSON-able).
+        """
+        self.finish(job, result)
+
+    def fail_stage(self, job: Job, error: str) -> None:
+        """Marks a per-file stage row failed with its reason.
+
+        Args:
+            job (Job): The stage row from stage().
+            error (str): The failure message.
+        """
+        self.fail(job, error)
 
     def take_next(self, only_kinds: set[JobKind] | None = None) -> Job | None:
         """Returns the next queued job and marks it running.
@@ -792,6 +837,7 @@ def execute_plan(
     connection: sqlite3.Connection,
     cancel: threading.Event,
     progress: ProgressCallback | None = None,
+    queue: "JobQueue | None" = None,
 ) -> dict:
     """Executes a plan job (probing only, no encodes).
 
@@ -800,12 +846,19 @@ def execute_plan(
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
         progress (callable | None): Callback progress(dict) for live updates.
+        queue (JobQueue | None): The queue that records the per-file stage
+            rows (issue #602); None for a direct executor call.
 
     Returns:
         dict: The per-movie plan summary.
     """
     from shrinkray.config import load_config, refresh_config
-    from shrinkray.engine.plan import plan_quality
+    from shrinkray.engine.plan import (
+        decide_quality,
+        plan_quality,
+        search_quality,
+        skipped_result,
+    )
 
     payload = job.payload
     config = load_config()
@@ -840,38 +893,137 @@ def execute_plan(
         # job reads the same keys as the CLI - an unset count leaves density
         # (sample_every) in charge instead of the old fixed default of 3
         sample_every, sample_count, sample_seconds = config.probe_settings()
-        try:
-            # the [i/N] prefix on this file's decision lines (issue #471)
-            with file_scope(index + 1, total):
-                result = plan_quality(
-                    movie,
-                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
-                    min_saving_percent=config.min_saving_percent,
-                    encoder=config.handbrake_encoder,
-                    probe_encoder_preset=payload.get(
-                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
-                    ),
-                    encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    cancel=cancel,
-                    db_file=_db_file_of(connection),
-                    encoder_threads=cap_threads(config.handbrake_max_threads),
-                    progress=progress,
-                    min_source_height=config.min_source_height,
-                    min_source_width=config.min_source_width,
-                    min_source_size_gb=config.min_source_size_gb,
-                    candidate_codecs=tuple(config.candidate_codecs),
-                    crop_sample_count=config.crop_sample_count,
-                    # one precedence for every entry point (issue #526): the
-                    # resident job reads the same keys as the CLI, so a
-                    # configured count overrides density and an unset count
-                    # leaves density (sample_every) in charge
-                    sample_every=sample_every,
-                    sample_count=sample_count,
-                    sample_seconds=sample_seconds,
+        # the per-file pipeline is its own job rows (issue #602): the
+        # decision (the gates) and the CRF search are separate kinds, so the
+        # Jobs page can follow each file stage by stage. This folder job stays
+        # their runner; a direct executor call (the CLI, tests) has no queue
+        # and keeps the single-call shape.
+        if queue is not None:
+            decision_row = queue.stage(
+                JobKind.DECISION, {"paths": [str(movie)], "pipeline": "plan"}
+            )
+            try:
+                # the [i/N] prefix on this file's decision lines (issue #471)
+                with file_scope(index + 1, total):
+                    decision = decide_quality(
+                        movie,
+                        min_source_height=config.min_source_height,
+                        min_source_width=config.min_source_width,
+                        min_source_size_gb=config.min_source_size_gb,
+                        candidate_codecs=tuple(config.candidate_codecs),
+                        # one precedence for every entry point (issue #526):
+                        # the resident job reads the same keys as the CLI
+                        sample_every=sample_every,
+                        sample_count=sample_count,
+                        sample_seconds=sample_seconds,
+                    )
+            except (RuntimeError, FileNotFoundError) as e:
+                queue.fail_stage(decision_row, str(e))
+                plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+                continue
+            queue.finish_stage(
+                decision_row,
+                {
+                    "eligible": decision.eligible,
+                    "reason": decision.skipped_reason,
+                    "duration": decision.duration,
+                },
+            )
+            if not decision.eligible:
+                # a gate skip is still recorded (issue #602): the skip verdict
+                # rides the plans row so a later encode reuses it instead of
+                # re-probing the file. Best-effort, exactly as before.
+                from shrinkray.service import record_plan
+
+                try:
+                    record_plan(
+                        connection,
+                        movie,
+                        skipped_result(decision, payload.get("target_vmaf", config.target_vmaf)),
+                        config,
+                    )
+                except (RuntimeError, FileNotFoundError) as e:
+                    plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+                    continue
+                plans.append(
+                    {
+                        "movie": movie.name,
+                        "state": "skip",
+                        "crf": None,
+                        "vmaf": None,
+                        "estimated_size": 0,
+                        "saved_percent": 0.0,
+                        "reason": decision.skipped_reason,
+                    }
                 )
-        except (RuntimeError, FileNotFoundError) as e:
-            plans.append({"movie": movie.name, "state": "error", "error": str(e)})
-            continue
+                continue
+            search_row = queue.stage(
+                JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "plan"}
+            )
+            try:
+                with file_scope(index + 1, total):
+                    result = search_quality(
+                        decision,
+                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                        min_saving_percent=config.min_saving_percent,
+                        probe_encoder_preset=payload.get(
+                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                        ),
+                        encoder_preset=payload.get(
+                            "encoder_preset", config.handbrake_encoder_preset
+                        ),
+                        cancel=cancel,
+                        db_file=_db_file_of(connection),
+                        encoder_threads=cap_threads(config.handbrake_max_threads),
+                        progress=progress,
+                        crop_sample_count=config.crop_sample_count,
+                    )
+            except Cancelled:
+                queue.mark_cancelled(search_row)
+                raise
+            except (RuntimeError, FileNotFoundError) as e:
+                queue.fail_stage(search_row, str(e))
+                plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+                continue
+            queue.finish_stage(
+                search_row,
+                {
+                    "crf": result.chosen_crf,
+                    "vmaf": result.achieved_vmaf,
+                    "reason": result.skipped_reason,
+                },
+            )
+        else:
+            # a direct executor call (the one-shot CLI, tests): no queue, so
+            # the single-call engine path keeps the old shape
+            try:
+                with file_scope(index + 1, total):
+                    result = plan_quality(
+                        movie,
+                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                        min_saving_percent=config.min_saving_percent,
+                        probe_encoder_preset=payload.get(
+                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                        ),
+                        encoder_preset=payload.get(
+                            "encoder_preset", config.handbrake_encoder_preset
+                        ),
+                        cancel=cancel,
+                        db_file=_db_file_of(connection),
+                        encoder_threads=cap_threads(config.handbrake_max_threads),
+                        progress=progress,
+                        min_source_height=config.min_source_height,
+                        min_source_width=config.min_source_width,
+                        min_source_size_gb=config.min_source_size_gb,
+                        candidate_codecs=tuple(config.candidate_codecs),
+                        crop_sample_count=config.crop_sample_count,
+                        sample_every=sample_every,
+                        sample_count=sample_count,
+                        sample_seconds=sample_seconds,
+                    )
+            except (RuntimeError, FileNotFoundError) as e:
+                plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+                continue
         # persist the decision for later encodes ("quicksave"): chosen CRF
         # AND skip verdicts short-circuit a future encode's probing when
         # the fingerprint matches. Best-effort: an unscanned movie has no
@@ -906,6 +1058,7 @@ def execute_encode(
     connection: sqlite3.Connection,
     cancel: threading.Event,
     progress: ProgressCallback | None = None,
+    queue: "JobQueue | None" = None,
 ) -> dict:
     """Executes an encode job (the measured quality path - the only mode).
 
@@ -915,6 +1068,8 @@ def execute_encode(
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
         progress (callable | None): Callback progress(dict) for live updates.
+        queue (JobQueue | None): The queue that records the per-file stage
+            rows (issue #602); None for a direct executor call.
 
     Returns:
         dict: The per-movie outcome summary.
@@ -973,6 +1128,7 @@ def execute_encode(
         # job writes into - the user's output_dir in two-directory mode,
         # the per-run staging directory in place.
         outcomes = _encode_measured(
+            job,
             connection,
             cancel,
             progress,
@@ -980,11 +1136,13 @@ def execute_encode(
             payload,
             output_dir=write_dir,
             in_place=output_dir is None,
+            queue=queue,
         )
     return outcomes
 
 
 def _encode_measured(
+    job: Job,
     connection: sqlite3.Connection,
     cancel: threading.Event,
     progress: ProgressCallback | None,
@@ -992,6 +1150,7 @@ def _encode_measured(
     payload: dict,
     output_dir: Path,
     in_place: bool,
+    queue: "JobQueue | None" = None,
 ) -> dict:
     """Runs one encode job's body (the measured quality path) against write_dir.
 
@@ -999,6 +1158,7 @@ def _encode_measured(
     job, excluding the directory the job writes into.
 
     Args:
+        job (Job): The folder job that runs the per-file stages.
         connection: The worker's database connection.
         cancel: Cooperative cancellation signal.
         progress: Callback progress(dict) for live updates.
@@ -1015,8 +1175,15 @@ def _encode_measured(
     from shrinkray.config import refresh_config
     from shrinkray.engine.lock import EncodeBusyError, guard_encodes
     from shrinkray.engine.pipeline import encode_with_quality
+    from shrinkray.engine.plan import (
+        decide_quality,
+        search_quality,
+        skipped_result,
+        stored_plan_row,
+    )
     from shrinkray.service import (
         finished_movies,
+        record_plan,
         record_quality_results,
         swap_encode_into_place,
     )
@@ -1054,6 +1221,139 @@ def _encode_measured(
         if str(movie) in encoded_paths:
             outcomes.append({"movie": movie.name, "state": "already_encoded"})
             continue
+        # the per-file stages exist for the RESIDENT pipeline (issue #602): the
+        # Jobs page shows a decision row, a CRF-search row and an encode row per
+        # file. A direct executor call (the one-shot CLI, tests) has no queue
+        # and keeps the single-call shape below.
+        encode_row: Job | None = None
+        sample_every, sample_count, sample_seconds = config.probe_settings()
+        if queue is not None:
+            decision_row = queue.stage(
+                JobKind.DECISION, {"paths": [str(movie)], "pipeline": "encode"}
+            )
+            try:
+                decision = decide_quality(
+                    movie,
+                    min_source_height=config.min_source_height,
+                    min_source_width=config.min_source_width,
+                    min_source_size_gb=config.min_source_size_gb,
+                    candidate_codecs=tuple(config.candidate_codecs),
+                    sample_every=sample_every,
+                    sample_count=sample_count,
+                    sample_seconds=sample_seconds,
+                )
+            except (RuntimeError, FileNotFoundError) as e:
+                queue.fail_stage(decision_row, str(e))
+                outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
+                continue
+            queue.finish_stage(
+                decision_row,
+                {
+                    "eligible": decision.eligible,
+                    "reason": decision.skipped_reason,
+                    "duration": decision.duration,
+                },
+            )
+            if not decision.eligible:
+                # a gate skip is recorded exactly as before the split: the skip
+                # verdict rides the encodes row through the same recorder
+                skipped = record_quality_results(
+                    connection,
+                    movie,
+                    skipped_result(decision, payload.get("target_vmaf", config.target_vmaf)),
+                    config,
+                    final_output=movie if in_place else None,
+                )
+                outcomes.append({"movie": movie.name, "state": "skipped", "error": skipped.error})
+                continue
+            search_row = queue.stage(
+                JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "encode"}
+            )
+            # a valid stored plan means the folder job's search already
+            # measured these bytes and these settings (issue #602's
+            # no-double-probe rule): the search stage reports the reuse
+            # and the encode boundary below reuses the same plan.
+            stored = stored_plan_row(
+                movie,
+                decision,
+                target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                min_saving_percent=config.min_saving_percent,
+                probe_encoder_preset=payload.get(
+                    "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                ),
+                crop_sample_count=config.crop_sample_count,
+                db_file=_db_file_of(connection),
+            )
+            if stored is not None:
+                queue.finish_stage(
+                    search_row,
+                    {
+                        "crf": stored["chosen_crf"],
+                        "vmaf": stored["achieved_vmaf"],
+                        "reason": stored["skipped_reason"],
+                        "source": "plan",
+                    },
+                )
+            else:
+                try:
+                    prediction = search_quality(
+                        decision,
+                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                        min_saving_percent=config.min_saving_percent,
+                        probe_encoder_preset=payload.get(
+                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                        ),
+                        encoder_preset=payload.get(
+                            "encoder_preset", config.handbrake_encoder_preset
+                        ),
+                        cancel=cancel,
+                        db_file=_db_file_of(connection),
+                        encoder_threads=cap_threads(config.handbrake_max_threads),
+                        progress=progress,
+                        crop_sample_count=config.crop_sample_count,
+                    )
+                except Cancelled:
+                    queue.mark_cancelled(search_row)
+                    raise
+                except (RuntimeError, FileNotFoundError) as e:
+                    queue.fail_stage(search_row, str(e))
+                    outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
+                    continue
+                queue.finish_stage(
+                    search_row,
+                    {
+                        "crf": prediction.chosen_crf,
+                        "vmaf": prediction.achieved_vmaf,
+                        "reason": prediction.skipped_reason,
+                    },
+                )
+                # the prediction is recorded so the encode below REUSES it instead of
+                # measuring again (issue #602); the encode boundary still
+                # re-validates the gates and the fingerprint, so a stale search never
+                # encodes. Best-effort like the plan job's write.
+                try:
+                    record_plan(connection, movie, prediction, config)
+                except (RuntimeError, FileNotFoundError) as e:
+                    # best-effort exactly as before the split: a failed plan write
+                    # must never stop the encode (the boundary re-plans when no
+                    # plan is stored), so the search row stays done and the
+                    # failure is only reported
+                    log(f"could not record the plan for '{movie.name}': {e}")
+                if prediction.skipped_reason is not None:
+                    # the search's own skip (no size gain, target unreachable,
+                    # saving below the threshold) is recorded as before the split
+                    skipped = record_quality_results(
+                        connection,
+                        movie,
+                        prediction,
+                        config,
+                        final_output=movie if in_place else None,
+                    )
+                    outcomes.append(
+                        {"movie": movie.name, "state": "skipped", "error": skipped.error}
+                    )
+                    continue
+            encode_row = queue.stage(JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"})
         if progress:
             progress(
                 {
@@ -1073,9 +1373,6 @@ def _encode_measured(
             # Two-directory mode keys on the output directory it writes into.
             # Per movie, never nested.
             lock_target = movie.parent if in_place else output_dir
-            # one precedence for every entry point (issue #526): the resident
-            # encode reads the same keys as the CLI and the plan job
-            sample_every, sample_count, sample_seconds = config.probe_settings()
             # the [i/N] prefix covers the record and swap lines too (issue
             # #471 round 1, finding 4): they are per-file lines
             with (
@@ -1142,8 +1439,33 @@ def _encode_measured(
                 else:
                     declined = False
         except EncodeBusyError as e:
+            # a busy slot is routine contention, not a failure (issue #602):
+            # the row reads done with the skip, like the folder outcome
+            if queue is not None and encode_row is not None:
+                queue.finish_stage(encode_row, {"skipped": True, "error": str(e)})
             outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
             continue
+        except Cancelled:
+            # a stop must not leave the stage row running (issue #602): the
+            # worker marks the folder job cancelled, this row too
+            if queue is not None and encode_row is not None:
+                queue.mark_cancelled(encode_row)
+            raise
+        except Exception as e:
+            # an unexpected failure must not leave the stage row RUNNING: the
+            # folder job fails too, and the row carries the same reason
+            if queue is not None and encode_row is not None:
+                queue.fail_stage(encode_row, str(e))
+            raise
+        if queue is not None and encode_row is not None:
+            queue.finish_stage(
+                encode_row,
+                {
+                    "encoded": outcome.encoded,
+                    "declined": declined,
+                    "error": outcome.error,
+                },
+            )
         entry = {
             "movie": movie.name,
             "state": (
@@ -1314,9 +1636,13 @@ class JobWorker:
             if job.kind == JobKind.SCAN:
                 result = execute_scan(job, self.connection, cancel, progress=progress)
             elif job.kind == JobKind.PLAN:
-                result = execute_plan(job, self.connection, cancel, progress=progress)
+                result = execute_plan(
+                    job, self.connection, cancel, progress=progress, queue=self.queue
+                )
             elif job.kind == JobKind.ENCODE:
-                result = execute_encode(job, self.connection, cancel, progress=progress)
+                result = execute_encode(
+                    job, self.connection, cancel, progress=progress, queue=self.queue
+                )
             else:
                 self.queue.fail(job, f"unknown job kind: {job.kind}")
                 return

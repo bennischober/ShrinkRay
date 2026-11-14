@@ -13,7 +13,7 @@ product-rule violation, not a feature.
 | Question | Module | Notes |
 |---|---|---|
 | Routes, auth, containment, boot | `app.py` | 13 routes (12 GET + 1 POST `/api/reveal`); `require_token`, `validate_path`, `AppState`, `db_access`, `run_app`, `start_watch`, `auto_backlog` |
-| Job queue, worker, live progress | `jobs.py` | `JobState`/`JobKind`, `ProgressBus`, `JobQueue`, `execute_scan`/`_plan`/`_encode`, `JobWorker` |
+| Job queue, worker, live progress | `jobs.py` | `JobState`/`JobKind` (scan, plan, decision, crf-search, encode), `ProgressBus`, `JobQueue`, `execute_scan`/`execute_plan`/`execute_encode`, `JobWorker` |
 | Prometheus text exposition | `metrics.py` | `render_metrics`; hand-rolled, no `prometheus-client` dependency |
 
 ## THE TWO CHANNELS (do not mix them)
