@@ -588,7 +588,8 @@ class _FsWaiter:
                 continue
             n = libc.read(fd, buf, len(buf))
             if n <= 0:
-                # EINTR or the fd closed by stop(): both mean "no events"
+                # EINTR (stop() no longer closes under a running read: it
+                # joins this thread first, issue #642) means "no events"
                 continue
             offset = 0
             while offset + 16 <= n:
