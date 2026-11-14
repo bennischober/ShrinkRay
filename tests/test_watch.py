@@ -364,14 +364,10 @@ class TestWatch(unittest.TestCase):
         path must not make the watcher truncate someone else's file - the
         open refuses it (O_NOFOLLOW) and the failure is raised, not
         mistaken for 'another watcher'."""
-        import shutil
-
         from shrinkray.engine.watch import acquire_lock
 
         if sys.platform == "win32":
             self.skipTest("O_NOFOLLOW is POSIX-only")
-        if not hasattr(shutil, "OS_DirEntry") and not hasattr(os, "symlink"):
-            self.skipTest("no symlink support")
         with tempfile.TemporaryDirectory() as tmp:
             victim = Path(tmp) / "victim.txt"
             victim.write_text("do not truncate", encoding="utf-8")

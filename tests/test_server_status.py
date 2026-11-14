@@ -46,6 +46,33 @@ class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
         )
 
     def test_a_running_watcher_reports_no_reason(self) -> None:
+        import threading
+
         client = TestClient(fast_app)
+        # a target that STAYS alive for the request (a trivial target would
+        # finish before is_alive() is checked)
+        stay = threading.Event()
+        live = threading.Thread(target=stay.wait, args=(10,), daemon=True)
+        live.start()
+        self.addCleanup(stay.set)
+        self.addCleanup(live.join)
+        app_module.state.watch_thread = live
         body = client.get("/api/status").json()
+        self.assertEqual(body["watcher"], "running")
         self.assertIsNone(body["watcher_error"])
+
+    def test_the_snapshot_status_carries_the_reason_too(self) -> None:
+        """The dashboard reads /api/snapshot's status dict (App.svelte's
+        strip and WATCHER chip), not /api/status - the field must survive
+        there as well (issue #648 round 2)."""
+        client = TestClient(fast_app)
+        with mock.patch.object(
+            watch_mod,
+            "WATCHER_ERROR",
+            "another watcher holds the single-instance lock",
+        ):
+            body = client.get("/api/snapshot").json()
+        self.assertEqual(
+            body["status"]["watcher_error"],
+            "another watcher holds the single-instance lock",
+        )
