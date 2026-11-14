@@ -71,9 +71,14 @@ export function fixtureMock(dir = resolve(process.cwd(), 'fixtures')): Plugin {
           return
         }
         if (url.pathname === '/api/events') {
+          // An event stream stays open, like the real one: ending it makes the
+          // client reconnect, and whether that reconnect logs an error depends
+          // on timing — which made one case's verdict change between runs.
           res.setHeader('Content-Type', 'text/event-stream')
           res.setHeader('Cache-Control', 'no-store')
-          res.end(fixture.events.map((event: unknown) => `data: ${JSON.stringify(event)}\n\n`).join(''))
+          res.setHeader('Connection', 'keep-alive')
+          res.write(fixture.events.map((event: unknown) => `data: ${JSON.stringify(event)}\n\n`).join(''))
+          req.on('close', () => res.end())
           return
         }
         const key = ROUTES[url.pathname]
