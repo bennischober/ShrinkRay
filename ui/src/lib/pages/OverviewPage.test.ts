@@ -66,7 +66,7 @@ function renderOverview(runningJobs: Job[] = [], movies: Movie[] = [movie()], hi
 describe('OverviewPage render (issue #239)', () => {
   it('a running job shows progress but no cancel affordance', () => {
     renderOverview([job()])
-    expect(screen.getByText(/IN WORK/)).toBeTruthy()
+    expect(screen.getByText(/Working · /)).toBeTruthy()
     // the control that did nothing: gone (the dashboard observes, it does
     // not steer — PRODUCT.md; the routes behind cancel were removed with
     // issue #134 and the button outlived them)

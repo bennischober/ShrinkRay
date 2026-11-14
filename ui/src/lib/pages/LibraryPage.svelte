@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, fmtVmaf, type Movie } from '../api'
+  import { type Movie } from '../api'
+  import { bytes, savedPercent, vmaf } from '../format'
+  import EmptyState from '../components/EmptyState.svelte'
+  import PageHeader from '../components/PageHeader.svelte'
 
   let {
     movies,
@@ -164,10 +167,7 @@
 </script>
 
 <div class="page page-in">
-  <header class="page-head">
-    <h2>Library</h2>
-    <p class="legend">{filtered.length} OF {movies.length} TITLES · TARGET VMAF {targetVmaf}</p>
-  </header>
+  <PageHeader title="Library" description={`${filtered.length} of ${movies.length} titles · target VMAF ${targetVmaf}`} />
 
   <!-- ══ toolbar: search + category + decision-state (the #539 demotion: no view toggle, no scan control) ══ -->
   <div class="toolbar">
@@ -210,7 +210,7 @@
       </span>
       <span class="leader-note mono">
         {#if selectedEstimate > 0}
-          → PLAN-PREDICTED −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE
+          → PLAN-PREDICTED −{bytes(selectedEstimate)} · {bytes(selectedBase)} BASE
         {:else}
           → no estimate (selection already encoded)
         {/if}
@@ -282,10 +282,10 @@
                 </button>
               </td>
               <td class="dim">{movie.category}</td>
-              <td class="mono num">{fmtGb(movie.size)}</td>
+              <td class="mono num">{bytes(movie.size)}</td>
               <td>
                 {#if runningMovie != null && movie.path === runningMovie}
-                  <span class="chip progress"><span class="swatch"></span>IN WORK {runningPercent != null ? `${runningPercent}%` : ''}</span>
+                  <span class="chip progress"><span class="swatch"></span>Running {runningPercent != null ? `${runningPercent}%` : ''}</span>
                 {:else}
                   {#if decision.bare}
                     <!-- bare swatch: the state stays visible to sighted users via
@@ -302,13 +302,13 @@
                 {/if}
               </td>
               <td class="mono num">{movie.encode?.crf ?? '—'}</td>
-              <td class="mono num measured">{fmtVmaf(movie.encode?.vmaf, targetVmaf)}</td>
+              <td class="mono num measured">{vmaf(movie.encode?.vmaf, targetVmaf)}</td>
               <td class="mono num" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
                 {#if movie.encode?.outcome === 'discarded'}
                   {@const reason = movie.encode.outcome_reason ?? 'the swap was declined'}
                   <span class="bad" title={`${reason} (original untouched)`}>discarded</span>
                 {:else if movie.encode}
-                  {@const saved = fmtSavedHonest(movie.encode.saved_percent)}
+                  {@const saved = savedPercent(movie.encode.saved_percent)}
                   <span title={saved.grew ? 'the re-encode is larger than the source' : ''}>{saved.text}</span>
                 {:else}
                   —
@@ -317,9 +317,9 @@
             </tr>
           {:else}
             {#if movies.length === 0}
-              <tr><td colspan="8" class="empty dim">nothing scanned yet — the resident app's scan fills this library on its own</td></tr>
+              <tr><td colspan="8"><EmptyState title="Nothing scanned yet" hint="the resident app's scan fills this library on its own" /></td></tr>
             {:else}
-              <tr><td colspan="8" class="empty dim">no titles match — adjust the search</td></tr>
+              <tr><td colspan="8"><EmptyState title="No titles match" hint="adjust the search or clear a filter" /></td></tr>
             {/if}
           {/each}
         </tbody>
@@ -329,8 +329,6 @@
 
 <style>
   .page { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
-  .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }
   .warn { color: var(--amber); }
   .bad { color: var(--red); }

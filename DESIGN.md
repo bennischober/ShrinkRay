@@ -194,6 +194,40 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 
 **The One Structure, Two Grounds Rule.** Themes switch token values and nothing else. A component must never branch on theme, hardcode a theme's hex, or change layout between `[data-theme='dark']` and `[data-theme='light']`.
 
+## Glossary
+
+The one vocabulary every page uses (issue #627). A term below has exactly one user-facing word, one colour role and one shape; the code's internal names never reach the screen.
+
+| Concept | Screen word | Colour | Shape |
+|---|---|---|---|
+| Job kind: scan | Library scan | dim | dot |
+| Job kind: plan | Plan | dim | dot |
+| Job kind: decision | Decision | dim | dot |
+| Job kind: CRF search | CRF search | amber | hatch |
+| Job kind: encode | Encode | amber | hatch |
+| State: queued | Queued | dim | empty dot |
+| State: running | Running | amber | hatched dot |
+| State: done | Done | ok | filled dot |
+| State: failed | Failed | red | dot with bar |
+| State: partial | Partial | amber | dot with bar |
+| Plan verdict: encode | Encode | amber | hatch |
+| Plan verdict: skip | Skip | dim | empty dot |
+| Plan verdict: failed | Failed | red | dot with bar |
+| State: cancelled | Cancelled | dim | empty dot |
+| State: interrupted | Interrupted | amber | half dot |
+| Outcome: encoded | Encoded | ok | filled dot |
+| Outcome: skipped | Skipped — {reason} | dim | empty dot |
+| Outcome: discarded | Discarded — {reason} | red | bar |
+| Outcome: kept original | Kept original (no saving) | dim | empty dot |
+| Library: undecided | Not yet decided | dim | empty dot |
+| Library: queued | Queued | dim | empty dot |
+| Library: in progress | In progress — {stage} | amber | hatched dot |
+| Library: planned | Planned — ~{x} saved | teal | filled dot |
+| Library: encoded | Encoded | ok | filled dot |
+| Library: missing | Missing | red | bar |
+
+Skip and failure reasons are mapped from the engine's strings in one table (`ui/src/lib/format.ts` or its successor): `hdr not supported` -> "HDR — not supported yet", `too short` -> "Too short to be worth it", `resolution too low` -> "Resolution below 1080p class", `below min size` -> "Below the size floor", `source codec not a candidate` -> "Source codec not a candidate", `no size gain` -> "No size gain", `target unreachable` -> "Quality target unreachable", `saving below minimum` -> "Predicted saving below the minimum". Never show an engine string to the operator.
+
 ## Typography
 
 **Display Font:** IBM Plex Sans (self-hosted woff2, weights 400–700; fallbacks `Segoe UI, system-ui, sans-serif`)
@@ -208,9 +242,9 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 - **Stat** (600, 22px, mono, tabular): The big number in overview stat cards — counts and GB (`OverviewPage.svelte`'s four cards: TITLES, RECLAIMED, RECLAIMABLE, MISSING). Mean VMAF and hours are NOT stat-card figures (VMAF lives in the Measured Quality panel, hours in the provenance page).
 - **Brand** (700, 16px, 3px letter-spacing, uppercase by content): `SHRINKRAY` in the rail, over the `LIBRARY CONSOLE` legend line.
 - **Poster Title** (700, 17px, 0.3px tracking, 1.3 line-height, dim ink): RESERVED with the poster spec — the movie name set large and centered on the card's 2:3 field, clamped to 4 lines (no poster component renders today).
-- **Body** (400, 13px, 1.45): General UI text, empty-state sentences, rail labels (13px/500).
-- **Label** (400, 10.5px, 1.4px letter-spacing, uppercase — `.legend`): The annotation voice: figure headings, column headers, button text, key/value keys, badge counts' neighbors, the page-head annotation. Always dim or body ink; accent-colored only where meaning applies.
-- **Data** (400, 12px, `.mono`, `font-variant-numeric: tabular-nums`): All measurements — sizes in GB, percents, resolutions, CRF/VMAF, job IDs, elapsed times. **Data Strong** at 600 for names, selected counts, and emphasized values.
+- **Body** (400, 14px, 1.45): General UI text, empty-state sentences, rail labels (13px/500).
+- **Label** (400, 12px, 0.6px letter-spacing, uppercase only for a two-word eyebrow — never for column headers or buttons): The annotation voice: figure eyebrows, key/value keys. Always dim or body ink; accent-colored only where meaning applies.
+- **Data** (400, 13px, `.mono`, `font-variant-numeric: tabular-nums`): All measurements — sizes in GB, percents, resolutions, CRF/VMAF, job IDs, elapsed times. **Data Strong** at 600 for names, selected counts, and emphasized values.
 - **Micro** (10px): the in-table HDR tag (`LibraryPage.svelte:467`'s 10px) and the poster corner tag (9.5px, 1px tracking — reserved). Job action buttons read at the data size (`var(--fs-data)` = 12px, `tokens.css:102`, applied at `JobsPage.svelte:306`) — interactive text sits at data size by the a11y pass, not at micro.(The poster corner tag was 9.5px with 1px tracking — no poster component renders today; the size is reserved with the poster tokens.)
 
 ### Named Rules
@@ -218,7 +252,9 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 
 **The Every Number Carries Its Unit Rule.** Data is rendered with explicit units and fixed precision ("4.12 GB", "95.25", "2h 14m"), and an absent value is an em-dash (`—`), never blank or zero. Growth is reported honestly: an encode that enlarged the file prints "+X.X% larger" in red, not a masked percentage.
 
-**The One Spelling Rule.** A unit has exactly one spelling across the whole UI — bitrate is `Mbps` (never `MBit/s`), VMAF carries one decimal (never two in one panel and one in another). Two spellings for one quantity read as two quantities.
+**The One Voice Rule.** Every state, kind, outcome and reason word comes from the Glossary above and from `ui/src/lib/format.ts`; a page never invents its own word or its own number format.
+
+**The One Spelling Rule.** A unit has exactly one spelling across the whole UI — bitrate is `Mbps` (never `Mb/s`), VMAF carries one decimal (never two in one panel and one in another). Two spellings for one quantity read as two quantities.
 
 **The Signed Delta Rule.** Comparisons print signed and colored (`−41.2% size · +3.8 VMAF`), never parenthesized prose — polarity must be readable without parsing: teal when the change is good (smaller, better quality), red when it is not. Matches the battle-proven diff-view convention (size-report bots, codec dashboards).
 
@@ -318,7 +354,7 @@ The console's action strip, always above the list (resident app: the library wor
 The full record for one title, opened from the table (a `name-btn` row click; replaces round 1's drawer) and closed with `← LIBRARY` / `← OVERVIEW` / `← JOBS` (returns to where it was opened from, `MovieDetailPage.svelte:298`) or Escape; deep-linkable via `#/movie` (path in sessionStorage, F5 restores). **Hero**: the title at 22px, the full path in break-all mono, chips (category, HDR as `neutral`; `GENERATION {n}` as `progress` when the file is itself an encode of an encode; `MISSING SINCE {date}` when absent), and actions right — FOLDER (opens the containing folder via `POST /api/reveal` in the system explorer; the dashboard renders no PLAN or ENCODE control — job control is the resident process's, issue #134). **Two fact panels** side by side (stacking below 820px):
 - **SOURCE** — RESOLUTION (`1920×1080`), DURATION, CODEC, SIZE, SOURCE BITRATE (Mbps, derived from size/duration), GENERATION when > 1; legend keys over mono values, em-dash for absent.
 - **LATEST ENCODE — MEASURED** — every recorded schema-v5 metric: RESULT (15px/600, "{n}% saved" in teal-ink or "+{n}% larger" in red), SIZE (`5.55 GB → 2.04 GB`), VMAF (teal-ink 600) with the gauge (teal fill, amber target mark at the configured floor), CRF, PRESET, ENCODER PRESET, ENCODE TIME (`fmtSeconds`), OUTPUT BITRATE, PROBES, TOOLCHAIN. Not-encoded state: "not encoded yet — plan predicts, encode measures".
-- **PROVENANCE CHAIN** (full-width, schema v7) — one row per encode touching the title, ordered newest first: the chain query matches the CLI `compare` command (the title's own rows plus rows whose output produced it or whose input it produced), so a re-encoded file's page shows its parent row too (`{when} · {parent file name}`). GEN badge (the generation number; teal-bordered only when that row *produced the file being viewed* — the chain link, never a generation-number comparison), WHEN, CRF, VMAF, BITRATE (`in → out` MBit/s — measured from ffprobe on v7 rows, `~`-prefixed size/duration derivation on pre-v7 rows, tooltip says which), SIZE, SAVED, TIME, and per-run deltas vs the predecessor (the delta line states it compares consecutive runs — siblings of one generation are two runs of the same source, not lineage). Head counts distinct GENERATIONS, not rows ("2 ENCODES · 1 GENERATION" for two encodes of one original); rows key on the encodes-row id, never the timestamp (same-second runs collide). The drift signal (rip 5.0 MBit/s → encode 1.0) is the point of the panel — and, from ≥2 rows, it renders as the **drift chart**: a descending **bitrate staircase**, one bar per step of the chain — SOURCE (the first measurable input bitrate) → GEN 1 → GEN 2 …, bar height = that step's OUTPUT bitrate on one shared scale, value labeled on top of each bar (`~` marks a derived value), steps labeled by generation (the table's own vocabulary). Round-6.8 finding (user review): per-encode IN/OUT bar *pairs* duplicated every data point — along a chain out(k) IS in(k+1) — and read as "bitrate went up"; one descending staircase tells the story unambiguously, and a rising step is the anomaly the chart exists to expose. Runs without numbers (failed encodes) stay in the table below — the chart is the measured summary, the table the complete record; slots in the VMAF lane only for encodes that produced numbers. VMAF lane sits BELOW the staircase on a fixed 85–100 domain (clamped below 85; the table carries exact numbers — a 70–100 domain gave distance-to-target 0.47px per point, unreadable), labeled bounds (VMAF 100 / 85), amber target mark inside the track, under-target dots teal-filled with an amber ring (an amber dot on the amber target line disappears). A min-max axis would let one bad encode stretch it silently. Pre-v7 values draw dashed (legend: DASHED = DERIVED); the summary sentence uses the first AVAILABLE in/out pair (`bitrate ~1.2 → 0.6 MBit/s across 3 encodes`). Chart width is measured from the container and capped at ~220px per step (left-aligned via `preserveAspectRatio="xMinYMid"` — a full-panel stretch left three pillars ~480px apart, a centered cap floated the chart mid-panel; the label of the tallest bar must keep headroom inside the viewBox, and a thin connector across step tops draws the descent as one falling line). Hand-rolled SVG, token-colored, no chart library. The sim data feeding this chart in review copies must be numerically coherent (bitrates computed from the row's own sizes) — the chart's job is to expose exactly that contradiction.
+- **PROVENANCE CHAIN** (full-width, schema v7) — one row per encode touching the title, ordered newest first: the chain query matches the CLI `compare` command (the title's own rows plus rows whose output produced it or whose input it produced), so a re-encoded file's page shows its parent row too (`{when} · {parent file name}`). GEN badge (the generation number; teal-bordered only when that row *produced the file being viewed* — the chain link, never a generation-number comparison), WHEN, CRF, VMAF, BITRATE (`in → out` Mbps — measured from ffprobe on v7 rows, `~`-prefixed size/duration derivation on pre-v7 rows, tooltip says which), SIZE, SAVED, TIME, and per-run deltas vs the predecessor (the delta line states it compares consecutive runs — siblings of one generation are two runs of the same source, not lineage). Head counts distinct GENERATIONS, not rows ("2 ENCODES · 1 GENERATION" for two encodes of one original); rows key on the encodes-row id, never the timestamp (same-second runs collide). The drift signal (rip 5.0 Mbps → encode 1.0) is the point of the panel — and, from ≥2 rows, it renders as the **drift chart**: a descending **bitrate staircase**, one bar per step of the chain — SOURCE (the first measurable input bitrate) → GEN 1 → GEN 2 …, bar height = that step's OUTPUT bitrate on one shared scale, value labeled on top of each bar (`~` marks a derived value), steps labeled by generation (the table's own vocabulary). Round-6.8 finding (user review): per-encode IN/OUT bar *pairs* duplicated every data point — along a chain out(k) IS in(k+1) — and read as "bitrate went up"; one descending staircase tells the story unambiguously, and a rising step is the anomaly the chart exists to expose. Runs without numbers (failed encodes) stay in the table below — the chart is the measured summary, the table the complete record; slots in the VMAF lane only for encodes that produced numbers. VMAF lane sits BELOW the staircase on a fixed 85–100 domain (clamped below 85; the table carries exact numbers — a 70–100 domain gave distance-to-target 0.47px per point, unreadable), labeled bounds (VMAF 100 / 85), amber target mark inside the track, under-target dots teal-filled with an amber ring (an amber dot on the amber target line disappears). A min-max axis would let one bad encode stretch it silently. Pre-v7 values draw dashed (legend: DASHED = DERIVED); the summary sentence uses the first AVAILABLE in/out pair (`bitrate ~1.2 → 0.6 Mbps across 3 encodes`). Chart width is measured from the container and capped at ~220px per step (left-aligned via `preserveAspectRatio="xMinYMid"` — a full-panel stretch left three pillars ~480px apart, a centered cap floated the chart mid-panel; the label of the tallest bar must keep headroom inside the viewBox, and a thin connector across step tops draws the descent as one falling line). Hand-rolled SVG, token-colored, no chart library. The sim data feeding this chart in review copies must be numerically coherent (bitrates computed from the row's own sizes) — the chart's job is to expose exactly that contradiction.
 - **JOB TRAIL** (full-width) — mono rows `#{id} {kind} {state}` with states colored and ellipsized errors.
 
 ### Jobs Log
