@@ -70,6 +70,9 @@ class TestSetupApp(unittest.TestCase):
             self.assertEqual(app.query_one("#f-handbrake-max_threads", Input).value, "4")
             self.assertEqual(app.query_one("#f-quality-target_vmaf", Input).value, "96.0")
             self.assertEqual(app.query_one("#f-eligibility-min_source_height", Input).value, "1080")
+            # issue #651: the window length is the second sampling default the
+            # screen shows, at the shipped 4 s
+            self.assertEqual(app.query_one("#f-quality-sample_seconds", Input).value, "4.0")
 
         run(app, steps)
 

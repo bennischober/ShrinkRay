@@ -2,8 +2,8 @@
 
 This is the evidence script for the question the 2026-10-21 plan could not
 answer: does a full encode actually sit at the target VMAF? It measures the
-COMPLETE encode against the COMPLETE source (not the 10s probes the CRF
-search used) and appends every result to test_media/scratch/verify_results.md
+COMPLETE encode against the COMPLETE source (not the 4 s probe windows the CRF
+search uses) and appends every result to test_media/scratch/verify_results.md
 so partial runs lose nothing.
 
 Usage (from anywhere uv exists — PEP 723, issue #179):

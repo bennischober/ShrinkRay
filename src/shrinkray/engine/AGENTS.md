@@ -13,7 +13,7 @@ answers — is this file bigger than its quality requires, and does it carry bar
 | The plan: gates, reuse | `plan.py` | `plan_quality`, `_lookup_plan`, `SOURCE_CODECS` whitelist, `is_1080p_class`, `MIN_ENCODE_SECONDS = 90.0` |
 | Encode + batch loop | `pipeline.py` | `encode_with_quality`, `_encode_with_command`, `check_disk_space` |
 | Black bars, one detector | `crop.py` | keyframe timeline pass + `sustained_runs` + `intersect_crop_rects`; DB-cached; `detect_crop_rect` is the fallback for a pass that learned nothing (issue #525) |
-| Sample windows | `samples.py` | `sample_offsets`, `extract_samples`, `DEFAULT_SAMPLE_EVERY = 600.0` |
+| Sample windows | `samples.py` | `sample_offsets`, `extract_samples`; the sampling defaults live in `config.py` (`DEFAULT_SAMPLE_EVERY = 240.0`, `DEFAULT_SAMPLE_SECONDS = 4.0`) and `samples.py` imports them |
 | Encoder by bit depth | `encoders.py` | `encoder_for` (>8 bit: `HDR_ENCODER`), `DEFAULT_ENCODER` |
 | Scan -> DB rows | `scan.py` | `scan_movies`, `process_movie`, `resolve_input_paths`; pool `min(8, cpu)` |
 | Inbox watchdog | `watch.py` | `watch`, `_FsWaiter`, `decide`, `next_poll_interval`; `check_stability` (the is-it-complete witness: age + not sparse, one stat, no sleep, #479) and `wait_until_settled` (the CLI's bounded wait on it) |

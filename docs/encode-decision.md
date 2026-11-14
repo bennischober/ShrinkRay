@@ -245,13 +245,15 @@ the claim, because `--verify` arrived in v0.11.7.
 
 **Deliberate deviations, each with its reason:**
 
-- **Sample windows sit between 10% and 90% of the runtime** (`engine/samples.py:56-57`): lead-in and
+- **Sample windows sit between 10% and 90% of the runtime** (`engine/samples.py:61-62`): lead-in and
   credits are not representative of the movie's encode difficulty. ab-av1 spaces its windows over the
   whole file.
-- **Windows are 10 s, cut by duration** (`DEFAULT_SAMPLE_SECONDS = 10.0`, `-t` at
-  `engine/samples.py:152`); ab-av1 cuts 20 s by frame count (`-frames:v`). A duration cut can end a
-  frame early at most; a frame-count cut on variable-frame-rate content varies in wall time. 10 s keeps
-  a probe cheap; whether 20 s would move the score is unmeasured (#306's baseline covers it).
+- **Windows are 4 s every 240 s, cut by duration** (`DEFAULT_SAMPLE_SECONDS = 4.0`,
+  `DEFAULT_SAMPLE_EVERY = 240.0`; the maintainer's 2026-11-14 decision, issue #651); ab-av1 cuts 20 s by
+  frame count (`-frames:v`). A duration cut can end a frame early at most; a frame-count cut on
+  variable-frame-rate content varies in wall time. The probed fraction is unchanged (4/240 = 10/600 =
+  1.67%) — the same footage spread 2.5x more evenly, so a scene the search would miss is less likely
+  to be missed; since #605 these windows are the only quality evidence before the swap.
 - **HDR is skipped, not scored** (issue #518, the maintainer's #340 decision of 2026-10-31): a source
   whose transfer characteristic is HDR (PQ or HLG, `tools/ffprobe.py:is_hdr` — the fixed set in code) is
   refused at the gates (`hdr not supported`) before any sample is extracted. The v0.6.1 model is SDR-trained
@@ -269,7 +271,7 @@ the claim, because `--verify` arrived in v0.11.7.
   the #306 harness uses it. The deviation is narrower: ab-av1 has no BAR DETECTION — the operator
   supplies the rectangle, ShrinkRay measures it.
 - **The post-encode verification is an ARTIFACT check, not a quality re-measurement** (`engine/pipeline.py`,
-  `tracks_survived` + `durations_match`): the samples are 10 s windows, and the quality evidence
+  `tracks_survived` + `durations_match`): the samples are 4 s windows, and the quality evidence
   is the probe search itself (the full-file VMAF re-measurement was removed in v0.8.0, issue #605). ab-av1
   v0.11.7 verifies DECODEABILITY (`--verify`/`--verify-decode`/`--verify-duration`: the artifact decodes
   and has the right duration); ShrinkRay checks the same artifact properties and no longer re-measures the

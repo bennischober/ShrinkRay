@@ -96,7 +96,7 @@ class TestPlanNoTable(unittest.TestCase):
             patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
         ):
             self._run("plan", str(self.movie), "--no-table")
-        self.assertEqual(captured["sample_every"], 600.0)
+        self.assertEqual(captured["sample_every"], 240.0)
         self.assertIsNone(captured["sample_count"])
         with (
             _toolchain_present(),

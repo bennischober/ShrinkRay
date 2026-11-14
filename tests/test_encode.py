@@ -1394,7 +1394,7 @@ class TestEncodeLock(unittest.TestCase):
 
                 # density by default: the count is unset and sample_every decides
                 run(Conf())
-                self.assertEqual(captured["sample_every"], 600.0)
+                self.assertEqual(captured["sample_every"], 240.0)
                 self.assertIsNone(captured["sample_count"])
                 # a configured count overrides density
                 run(Conf({"quality": {"sample_count": 5}}))
