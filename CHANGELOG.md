@@ -36,6 +36,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **A browser check for the dashboard** ([#628](https://github.com/bennischober/ShrinkRay/issues/628)): `npm run test:e2e` renders every page at 1440 and 390 px against one of four fixtures (`empty`, `busy`, `huge`, `nasty-names`) with no resident app, and fails on a page that scrolls sideways, an element that draws outside the viewport, a console error, or a serious accessibility violation. The cases that fail today are listed in `ui/e2e/known-failures.json`, each naming the page issue that fixes it, and the list fails when one of them starts passing.
 
+- **The dashboard says when it does not know** ([#629](https://github.com/bennischober/ShrinkRay/issues/629)): the Overview's system line reports `NOT LOADED` before the first successful load and `STALE` once the last load is older than three poll intervals, with the reason on hover, instead of drawing a value it does not have as a zero.
+
 ## [0.6.1] - 2026-11-06
 
 ### Fixed
