@@ -401,7 +401,7 @@
         {theme === 'dark' ? '◐ DARK' : '◑ LIGHT'}
       </button>
       <span class="legend watcher" class:on={status?.watcher === 'running'}
-        title={status?.watcher === 'running' ? 'The background watcher is running' : 'The background watcher is stopped'}>
+        title={status?.watcher === 'running' ? 'The background watcher is running' : (status?.watcher_error ?? 'The background watcher is stopped')}>
         {status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER'}
       </span>
       <span class="legend shortcut-hint mono">{SHORTCUT_LEGEND}</span>
@@ -432,6 +432,10 @@
     {#if status?.config_error}
       <!-- not dismissible: it clears once the file is fixed (issue #247) -->
       <div class="api-error mono" role="alert">{status.config_error}</div>
+    {/if}
+    {#if status?.watcher_error}
+      <!-- not dismissible: it clears when the watcher starts (issue #648) -->
+      <div class="api-error mono" role="alert">{status.watcher_error}</div>
     {/if}
     {#if status?.encode_window === 'closed'}
       <!-- read-only: the window is set in config.json (issue #434) -->

@@ -8,6 +8,7 @@ logic as the encode/plan commands and encodes them (source stays untouched
 
 import contextlib
 import ctypes
+import errno
 import math
 import os
 import sqlite3
@@ -473,26 +474,79 @@ def decide(movie: Path, target_vmaf: float, encoder: str) -> str:
 def acquire_lock(lock_file: Path) -> bool:
     """Tries to acquire the single-instance lock.
 
+    The lock's authority is the OS, not the file's text: an exclusive
+    non-blocking file lock (fcntl.flock on POSIX, msvcrt.locking on
+    Windows) held on an open descriptor for the process lifetime. The OS
+    releases it when the process dies, so a stale file - a container
+    restart that reuses PID 1, a crashed run - can never make the watcher
+    refuse to start (issue #648; the PID heuristic it replaces read its
+    own PID from the leftover file and saw a live process). A genuinely
+    live second watcher holds its own descriptor's lock and still blocks.
+    The file is never unlinked while or after holding the lock: a stable
+    inode is what makes "the lock" one object - unlinking it after release
+    let a third process create a fresh inode and run alongside the second
+    (the classic unlink race).
+
     Args:
-        lock_file (Path): The lock file path.
+        lock_file (Path): The lock file path (the owner PID in it is
+            diagnostics only).
 
     Returns:
-        bool: True if the lock was acquired (this is the only watcher).
+        bool: True if the lock was acquired (this is the only watcher);
+            False only when the OS lock is held by someone else.
+
+    Raises:
+        OSError: An infrastructure failure (the directory cannot be
+            created, the path is not a regular file, the lock call failed
+            for a reason other than "held") - the caller records the real
+            cause instead of mistaking it for "another watcher".
     """
+    global _LOCK_FD
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    # O_NOFOLLOW (POSIX): a symlink planted at the fixed lock path must not
+    # make us truncate someone else's file (issue #648 review); %TEMP% is
+    # per-user on Windows, where the flag does not exist
+    fd = os.open(
+        lock_file,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
     try:
-        if lock_file.exists():
-            # stale lock from a crashed run? a pid that does not exist anymore
-            # frees the lock
-            pid = int(lock_file.read_text(encoding="utf-8").strip() or 0)
-            try:
-                os.kill(pid, 0)
-                return False  # process exists => another watcher is running
-            except (OSError, ValueError):
-                pass  # dead process or unparsable => take over
-        lock_file.write_text(str(os.getpid()), encoding="utf-8")
-        return True
-    except OSError:
+        import stat
+
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"the lock path is not a regular file: {lock_file}")
+        if sys.platform == "win32":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        # POSIX: the lock is held by another watcher - the one legitimate
+        # refusal
+        os.close(fd)
         return False
+    except OSError as e:
+        os.close(fd)
+        if e.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+            # Windows: msvcrt.locking reports a held lock as EACCES/EDEADLK
+            return False
+        raise
+    # acquired: keep the descriptor open (the lock lives on it) and record
+    # the owner for diagnostics - a reader can see who holds the file even
+    # though the text decides nothing
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
+    except OSError as e:
+        # the lock is held regardless; the PID text is diagnostics only, but
+        # a reader counting on it should know it may be stale
+        log_error(f"The lock file's owner-PID note could not be written: {e}")
+    _LOCK_FD = fd
+    return True
 
 
 class _FsWaiter:
@@ -682,22 +736,53 @@ def _wait_or_stop(
 def release_lock(lock_file: Path) -> None:
     """Releases the single-instance lock if this process holds it.
 
+    The file is left in place on purpose: a stable inode is what makes
+    "the lock" one object (unlinking it after release lets a third process
+    create a fresh inode and run alongside the second), and a leftover
+    file decides nothing - the OS lock does.
+
     Args:
-        lock_file (Path): The lock file path.
+        lock_file (Path): The lock file path (unused by the unlock, which
+            works on the held descriptor; kept for signature stability).
     """
+    global _LOCK_FD
+    fd = _LOCK_FD
+    _LOCK_FD = None
+    if fd is None:
+        return
     try:
-        if lock_file.exists() and lock_file.read_text(encoding="utf-8").strip() == str(os.getpid()):
-            lock_file.unlink()
+        if sys.platform == "win32":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
     except OSError:
-        pass
+        pass  # the close below releases the lock regardless
+    finally:
+        os.close(fd)
 
 
-# the single-instance lock's path: one watcher per machine. A module-level
-# constant so tests can point it at a per-test temp file - a shared /tmp
-# path plus pid reuse made watch() refuse to run in a test run (issue #176
-# follow-up: six watch tests failed with empty results because a leftover
-# lock's pid happened to be alive again).
+# the single-instance lock's path: one watcher per process (per container -
+# the path is the container's own temp dir). A module-level
+# constant so tests can point it at a per-test temp file (issue #176: a
+# shared /tmp path made one test run's lock block another's). The file's
+# text is diagnostics; the OS lock on it decides (issue #648).
 WATCH_LOCK_FILE = Path(tempfile.gettempdir()) / "shrinkray_watch.lock"
+
+# why the last watch() did not run (issue #648): None while the watcher is
+# running; the lock refusal sets it here, and a watch-loop crash is recorded
+# by the server's run_watch wrapper - /api/status carries it so a stopped
+# watcher is never a silent one
+WATCHER_ERROR: str | None = None
+
+# the descriptor the OS lock is held on (issue #648): the lock lives on the
+# open file description, so the descriptor stays open for the process
+# lifetime and the OS releases the lock when the process dies
+_LOCK_FD: int | None = None
 
 
 @dataclass(frozen=True)
@@ -872,35 +957,48 @@ def watch(
                 f"must not live inside the inbox): inbox='{roots[0]}', output='{output_dir}'"
             )
 
-    if not acquire_lock(lock_file):
-        log_error("Another watcher seems to be running (lock file exists).")
-        return
-
-    for root in roots:
-        root.mkdir(parents=True, exist_ok=True)
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-    # the watches need the roots to EXIST: _add_recursive walks each root, so
-    # a root created here would otherwise be watched never (os.walk of a
-    # missing directory yields nothing, silently - no events, _failed stays
-    # False, the poll still works but the wake never fires)
-    waiter = _FsWaiter(roots)
-    waiter.start()
-
-    # in place: the encode still needs a real path to write to, so it lands in
-    # a working directory INSIDE the inbox - the same filesystem, so the swap's
-    # two renames stay atomic and cheap. The output directory only says where
-    # the bytes are written; the swap target is always the source.
-    staging: contextlib.AbstractContextManager[str] = (
-        contextlib.nullcontext(str(output_dir))
-        if output_dir is not None
-        else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=roots[0])
-    )
-    disk_target = output_dir if output_dir is not None else roots[0]
-    in_place_mode = output_dir is None
-
+    global WATCHER_ERROR
     try:
+        acquired = acquire_lock(lock_file)
+    except OSError as e:
+        WATCHER_ERROR = f"the single-instance lock could not be acquired: {e}"
+        log_error(f"The watcher did not start: {WATCHER_ERROR}.")
+        return
+    if not acquired:
+        WATCHER_ERROR = "another watcher holds the single-instance lock"
+        log_error(f"The watcher did not start: {WATCHER_ERROR}.")
+        return
+    WATCHER_ERROR = None
+    # the setup below can fail (an unwritable root, a watcher budget): the
+    # try/finally covers it too, so a failure releases the lock instead of
+    # leaving _LOCK_FD set for a later watch() to false-refuse on (issue
+    # #648 round 3)
+    waiter: _FsWaiter | None = None
+    try:
+        for root in roots:
+            root.mkdir(parents=True, exist_ok=True)
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        # the watches need the roots to EXIST: _add_recursive walks each root, so
+        # a root created here would otherwise be watched never (os.walk of a
+        # missing directory yields nothing, silently - no events, _failed stays
+        # False, the poll still works but the wake never fires)
+        waiter = _FsWaiter(roots)
+        waiter.start()
+
+        # in place: the encode still needs a real path to write to, so it lands in
+        # a working directory INSIDE the inbox - the same filesystem, so the swap's
+        # two renames stay atomic and cheap. The output directory only says where
+        # the bytes are written; the swap target is always the source.
+        staging: contextlib.AbstractContextManager[str] = (
+            contextlib.nullcontext(str(output_dir))
+            if output_dir is not None
+            else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=roots[0])
+        )
+        disk_target = output_dir if output_dir is not None else roots[0]
+        in_place_mode = output_dir is None
+
         with staging as work_dir:
             target_dir = Path(work_dir)
             while True:
@@ -1191,7 +1289,8 @@ def watch(
     except KeyboardInterrupt:
         log("Watch stopped (current state is kept).")
     finally:
-        waiter.stop()
+        if waiter is not None:
+            waiter.stop()
         release_lock(lock_file)
 
 

@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
 from shrinkray.config import Conf, encode_window_open, load_config, refresh_config
+from shrinkray.engine import watch as watch_mod
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import cap_threads
@@ -843,6 +844,9 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     return {
         "queue": [j.to_dict() for j in running],
         "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
+        # a stopped watcher says why (issue #648): the refusal reason, null
+        # while it runs
+        "watcher_error": watch_mod.WATCHER_ERROR,
         "database": str(s.db_file),
         "rss_mib": round(rss, 1) if rss is not None else None,
         # an edited config.json that was NOT applied (issue #247): the app
@@ -1040,6 +1044,9 @@ def snapshot(
         "status": {
             "queue": [j.to_dict() for j in data["running"]],
             "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
+            # a stopped watcher says why (issue #648): the refusal reason, null
+            # while it runs
+            "watcher_error": watch_mod.WATCHER_ERROR,
             "database": str(s.db_file),
             "rss_mib": round(data["rss_mib"], 1) if data["rss_mib"] is not None else None,
             # the snapshot is the UI's one state channel (App.svelte reads
@@ -1743,6 +1750,9 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 extensions=list(refresh_config().extensions),
             )
         except Exception as e:
+            # a stopped watcher says why (issue #648): the crash reaches
+            # /api/status instead of dying in the log alone
+            watch_mod.WATCHER_ERROR = f"the watch loop crashed: {e}"
             log_error(f"watch loop crashed: {e}")
 
     state.watch_stop.clear()
