@@ -58,8 +58,14 @@ for (const scenario of SCENARIOS) {
       })
       page.on('pageerror', (error) => errors.push(String(error)))
 
-      await page.goto(`/?fixture=${scenario}${hash}`)
+      // `networkidle` waits for the page's own snapshot request: on a cold dev
+      // server the first paint races the module compile, which made two runs of
+      // the same commit disagree about the same page
+      await page.goto(`/?fixture=${scenario}${hash}`, { waitUntil: 'networkidle' })
       await expect(page.locator('h1').first()).toBeVisible()
+      // measure after the fonts settle: a swap changes text widths, which is
+      // what made two runs of the same commit disagree about the same page
+      await page.evaluate(() => document.fonts.ready)
 
       // The check runs whether or not the case is allowlisted: a case that
       // starts passing while it is still in the list is a stale entry and
