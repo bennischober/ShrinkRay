@@ -966,32 +966,36 @@ def watch(
         log_error(f"The watcher did not start: {WATCHER_ERROR}.")
         return
     WATCHER_ERROR = None
-
-    for root in roots:
-        root.mkdir(parents=True, exist_ok=True)
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-    # the watches need the roots to EXIST: _add_recursive walks each root, so
-    # a root created here would otherwise be watched never (os.walk of a
-    # missing directory yields nothing, silently - no events, _failed stays
-    # False, the poll still works but the wake never fires)
-    waiter = _FsWaiter(roots)
-    waiter.start()
-
-    # in place: the encode still needs a real path to write to, so it lands in
-    # a working directory INSIDE the inbox - the same filesystem, so the swap's
-    # two renames stay atomic and cheap. The output directory only says where
-    # the bytes are written; the swap target is always the source.
-    staging: contextlib.AbstractContextManager[str] = (
-        contextlib.nullcontext(str(output_dir))
-        if output_dir is not None
-        else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=roots[0])
-    )
-    disk_target = output_dir if output_dir is not None else roots[0]
-    in_place_mode = output_dir is None
-
+    # the setup below can fail (an unwritable root, a watcher budget): the
+    # try/finally covers it too, so a failure releases the lock instead of
+    # leaving _LOCK_FD set for a later watch() to false-refuse on (issue
+    # #648 round 3)
+    waiter: _FsWaiter | None = None
     try:
+        for root in roots:
+            root.mkdir(parents=True, exist_ok=True)
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        # the watches need the roots to EXIST: _add_recursive walks each root, so
+        # a root created here would otherwise be watched never (os.walk of a
+        # missing directory yields nothing, silently - no events, _failed stays
+        # False, the poll still works but the wake never fires)
+        waiter = _FsWaiter(roots)
+        waiter.start()
+
+        # in place: the encode still needs a real path to write to, so it lands in
+        # a working directory INSIDE the inbox - the same filesystem, so the swap's
+        # two renames stay atomic and cheap. The output directory only says where
+        # the bytes are written; the swap target is always the source.
+        staging: contextlib.AbstractContextManager[str] = (
+            contextlib.nullcontext(str(output_dir))
+            if output_dir is not None
+            else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=roots[0])
+        )
+        disk_target = output_dir if output_dir is not None else roots[0]
+        in_place_mode = output_dir is None
+
         with staging as work_dir:
             target_dir = Path(work_dir)
             while True:
@@ -1282,7 +1286,8 @@ def watch(
     except KeyboardInterrupt:
         log("Watch stopped (current state is kept).")
     finally:
-        waiter.stop()
+        if waiter is not None:
+            waiter.stop()
         release_lock(lock_file)
 
 

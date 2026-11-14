@@ -20,6 +20,38 @@ from shrinkray.server.app import AppState
 from shrinkray.server.app import app as fast_app
 
 
+class TestTheWatchLoopCrashIsRecorded(unittest.TestCase):
+    """A watch-loop crash reaches /api/status (issue #648 round 2): the
+    server's run_watch wrapper records the reason, so deleting that line
+    fails this test."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+
+    def tearDown(self) -> None:
+        if app_module.state is not None:
+            app_module.state.shutdown()
+        app_module.state = None
+        self.tmp.cleanup()
+
+    def test_a_crashing_watch_loop_names_the_reason(self) -> None:
+        import threading
+
+        watch_stop = threading.Event()
+        app_module.state.watch_stop = watch_stop
+        with mock.patch.object(watch_mod, "watch", side_effect=OSError("the inbox vanished")):
+            app_module.start_watch(app_module.state, [Path(self.tmp.name)], None)
+        thread = app_module.state.watch_thread
+        assert thread is not None
+        thread.join(timeout=10.0)
+        self.assertFalse(thread.is_alive())
+        self.assertIsNotNone(watch_mod.WATCHER_ERROR)
+        self.assertIn("the inbox vanished", watch_mod.WATCHER_ERROR or "")
+        # the module state is reset for the other tests
+        watch_mod.WATCHER_ERROR = None
+
+
 class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -46,17 +78,11 @@ class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
         )
 
     def test_a_running_watcher_reports_no_reason(self) -> None:
-        import threading
-
         client = TestClient(fast_app)
-        # a target that STAYS alive for the request (a trivial target would
-        # finish before is_alive() is checked)
-        stay = threading.Event()
-        live = threading.Thread(target=stay.wait, args=(10,), daemon=True)
-        live.start()
-        self.addCleanup(stay.set)
-        self.addCleanup(live.join)
-        app_module.state.watch_thread = live
+        # a live THREAD would make shutdown's join (timeout=10) wait out a
+        # dummy target's lifetime - a fixed wait a unit test must not pay;
+        # the route reads watch_thread.is_alive(), which a mock states
+        app_module.state.watch_thread = mock.Mock(is_alive=lambda: True)
         body = client.get("/api/status").json()
         self.assertEqual(body["watcher"], "running")
         self.assertIsNone(body["watcher_error"])
