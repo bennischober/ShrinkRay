@@ -30,6 +30,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **A per-file stage row shows its live progress instead of `starting…`** ([#639](https://github.com/bennischober/ShrinkRay/issues/639)): the `crf-search` and `encode` rows added in #602 were recorded but never fed the engine's progress events, so the Jobs page rendered `starting…` for the whole stage - a 4K encode read that way for over 50 minutes. Both rows now receive the same event the folder job does.
 
+- **The dashboard speaks one vocabulary and formats every number in one place** ([#627](https://github.com/bennischober/ShrinkRay/issues/627)): durations came in four formats, sizes were labelled GB while the math divided by 1024, and the same state read differently on every page. `ui/src/lib/format.ts` is now the only place a number becomes text (durations, relative and absolute times, binary sizes as GiB/MiB, percentages, VMAF with its target rule, CRF, bitrate, an estimate only when it is known), a shared component layer (`PageHeader`, `StatusBadge`, `FileName`, `Time`, `ProgressBar`, `EmptyState`, `Panel`) renders the facts every page repeats, and `DESIGN.md` carries the glossary both follow.
+
 ## [0.6.1] - 2026-11-06
 
 ### Fixed

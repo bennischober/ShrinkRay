@@ -17,6 +17,9 @@ a product-rule violation. `npm run build` writes `ui/dist`, served by
 ui/
 ├── src/App.svelte              # shell: rail, hash routing, poll loop, all shared state
 ├── src/lib/api.ts              # the ONLY network client + hand-mirrored API types
+├── src/lib/format.ts           # the ONLY place numbers become text (issue #627)
+├── src/lib/components/          # the shared vocabulary: PageHeader, StatusBadge,
+│                               # FileName, Time, ProgressBar, EmptyState, Panel
 ├── src/lib/progress.svelte.ts  # the ONLY EventSource (rune store, flow not state)
 ├── src/lib/pages/              # Overview, Library, Jobs, Retained, Config, MovieDetail
 │                               # + HintButton/HintMark (the shared hint glyphs)
@@ -38,8 +41,11 @@ ui/
 - **Svelte 5 runes only**: `$state`, `$derived`, `$props`, `$effect`. No stores, no
   SvelteKit, no router package — pages are a hash (`#/library`, `#/movie`).
 - **Pages are dumb**: `src/lib/pages/*.svelte` take props and call `on*` handlers up to
-  `App.svelte`, which owns all shared state. Pages never import another page; only the
-  hint glyphs (`HintButton`, `HintMark`) are shared inside that directory.
+  `App.svelte`, which owns all shared state. Pages never import another page; the
+  shared vocabulary lives in `src/lib/components/` (issue #627).
+- **One formatter, one voice**: every number, state word, kind and reason comes from
+  `src/lib/format.ts` and the DESIGN.md Glossary; a page never calls `toFixed`,
+  `toLocale*` or `1024 **` itself.
 - **One network boundary**: every `fetch` lives in `api.ts`; `progress.svelte.ts` owns the
   only `EventSource` (token as `?token=` — it cannot set a header).
 - **Flow is not state**: SSE carries progress only; the snapshot poll is the state channel.

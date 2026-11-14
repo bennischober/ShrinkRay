@@ -194,6 +194,36 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 
 **The One Structure, Two Grounds Rule.** Themes switch token values and nothing else. A component must never branch on theme, hardcode a theme's hex, or change layout between `[data-theme='dark']` and `[data-theme='light']`.
 
+## Glossary
+
+The one vocabulary every page uses (issue #627). A term below has exactly one user-facing word, one colour role and one shape; the code's internal names never reach the screen.
+
+| Concept | Screen word | Colour | Shape |
+|---|---|---|---|
+| Job kind: scan | Library scan | dim | dot |
+| Job kind: plan | Plan | dim | dot |
+| Job kind: decision | Decision | dim | dot |
+| Job kind: CRF search | CRF search | amber | hatch |
+| Job kind: encode | Encode | amber | hatch |
+| State: queued | Queued | dim | empty dot |
+| State: running | Running | amber | hatched dot |
+| State: done | Done | ok | filled dot |
+| State: failed | Failed | red | dot with bar |
+| State: cancelled | Cancelled | dim | empty dot |
+| State: interrupted | Interrupted | amber | half dot |
+| Outcome: encoded | Encoded | ok | filled dot |
+| Outcome: skipped | Skipped — {reason} | dim | empty dot |
+| Outcome: discarded | Discarded — {reason} | red | bar |
+| Outcome: kept original | Kept original (no saving) | dim | empty dot |
+| Library: undecided | Not yet decided | dim | empty dot |
+| Library: queued | Queued | dim | empty dot |
+| Library: in progress | In progress — {stage} | amber | hatched dot |
+| Library: planned | Planned — ~{x} saved | teal | filled dot |
+| Library: encoded | Encoded | ok | filled dot |
+| Library: missing | Missing | red | bar |
+
+Skip and failure reasons are mapped from the engine's strings in one table (`ui/src/lib/format.ts` or its successor): `hdr not supported` -> "HDR — not supported yet", `too short` -> "Too short to be worth it", `resolution too low` -> "Resolution below 1080p class", `below min size` -> "Below the size floor", `source codec not a candidate` -> "Source codec not a candidate", `no size gain` -> "No size gain", `target unreachable` -> "Quality target unreachable", `saving below minimum` -> "Predicted saving below the minimum". Never show an engine string to the operator.
+
 ## Typography
 
 **Display Font:** IBM Plex Sans (self-hosted woff2, weights 400–700; fallbacks `Segoe UI, system-ui, sans-serif`)
@@ -208,15 +238,17 @@ A two-ground palette where nearly everything is ink-on-console and four accent h
 - **Stat** (600, 22px, mono, tabular): The big number in overview stat cards — counts and GB (`OverviewPage.svelte`'s four cards: TITLES, RECLAIMED, RECLAIMABLE, MISSING). Mean VMAF and hours are NOT stat-card figures (VMAF lives in the Measured Quality panel, hours in the provenance page).
 - **Brand** (700, 16px, 3px letter-spacing, uppercase by content): `SHRINKRAY` in the rail, over the `LIBRARY CONSOLE` legend line.
 - **Poster Title** (700, 17px, 0.3px tracking, 1.3 line-height, dim ink): RESERVED with the poster spec — the movie name set large and centered on the card's 2:3 field, clamped to 4 lines (no poster component renders today).
-- **Body** (400, 13px, 1.45): General UI text, empty-state sentences, rail labels (13px/500).
-- **Label** (400, 10.5px, 1.4px letter-spacing, uppercase — `.legend`): The annotation voice: figure headings, column headers, button text, key/value keys, badge counts' neighbors, the page-head annotation. Always dim or body ink; accent-colored only where meaning applies.
-- **Data** (400, 12px, `.mono`, `font-variant-numeric: tabular-nums`): All measurements — sizes in GB, percents, resolutions, CRF/VMAF, job IDs, elapsed times. **Data Strong** at 600 for names, selected counts, and emphasized values.
+- **Body** (400, 14px, 1.45): General UI text, empty-state sentences, rail labels (13px/500).
+- **Label** (400, 12px, 0.6px letter-spacing, uppercase only for a two-word eyebrow — never for column headers or buttons): The annotation voice: figure eyebrows, key/value keys. Always dim or body ink; accent-colored only where meaning applies.
+- **Data** (400, 13px, `.mono`, `font-variant-numeric: tabular-nums`): All measurements — sizes in GB, percents, resolutions, CRF/VMAF, job IDs, elapsed times. **Data Strong** at 600 for names, selected counts, and emphasized values.
 - **Micro** (10px): the in-table HDR tag (`LibraryPage.svelte:467`'s 10px) and the poster corner tag (9.5px, 1px tracking — reserved). Job action buttons read at the data size (`var(--fs-data)` = 12px, `tokens.css:102`, applied at `JobsPage.svelte:306`) — interactive text sits at data size by the a11y pass, not at micro.(The poster corner tag was 9.5px with 1px tracking — no poster component renders today; the size is reserved with the poster tokens.)
 
 ### Named Rules
 **The Two Voices Rule.** IBM Plex Sans talks, IBM Plex Mono measures. Anything that is a number, path, or machine value is mono tabular; anything addressed to the human is IBM Plex Sans. Never set measurements in the sans.
 
 **The Every Number Carries Its Unit Rule.** Data is rendered with explicit units and fixed precision ("4.12 GB", "95.25", "2h 14m"), and an absent value is an em-dash (`—`), never blank or zero. Growth is reported honestly: an encode that enlarged the file prints "+X.X% larger" in red, not a masked percentage.
+
+**The One Voice Rule.** Every state, kind, outcome and reason word comes from the Glossary above and from `ui/src/lib/format.ts`; a page never invents its own word or its own number format.
 
 **The One Spelling Rule.** A unit has exactly one spelling across the whole UI — bitrate is `Mbps` (never `MBit/s`), VMAF carries one decimal (never two in one panel and one in another). Two spellings for one quantity read as two quantities.
 
