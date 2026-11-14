@@ -46,7 +46,10 @@ approximation.
    pixel format and the tone-map. The plan lookup runs BEFORE bar detection,
    so it cannot know the post-crop dimensions the model and scale follow —
    those are already pinned by the file's identity plus `crop_sample_count`
-   (a different file or a different crop window count re-measures the crop).
+   (a different file or a different crop window count re-measures the crop)
+   for ONE bar detector. A change to the detector itself moves the crop
+   without moving the fingerprint, so it must drop the affected plans by
+   migration (v15, v21 - see Pitfalls).
    A recipe bump therefore re-probes every file; the probe cache carries the
    full recipe (`VmafRecipe.identifier`), so its rows miss too.
 4. **Provenance** — a plan-driven encode records `crf_source='plan'` +
@@ -78,6 +81,13 @@ approximation.
   `crop` would be wrong. Migration 15 dropped every plan stored while the
   `remove_bars` flag existed, because those were probed without a crop when
   the flag was off - reusing one would have kept the bars.
+- A stored plan's `crop` is only as right as the detector that measured it.
+  Migration 21 (issue #637) dropped every measured plan of a deeper-than-8-bit
+  source (recipe `fmt=yuv420p10le`): cropdetect had measured those at the
+  8-bit black threshold, which finds no bars in 10-bit video, so each plan
+  carried "no bars" and a reuse would have kept them. The `crops` cache keys
+  on the threshold (`detect_limit`), so those files are measured again; 8-bit
+  plans and crop rows are untouched.
 - Plans for soft-missing files are ignored (mtime+size guard covers a
   rescanned file; no lookup when the file no longer exists).
 - A database the lookup cannot open or read (damaged, foreign, out of file

@@ -1021,12 +1021,20 @@ def _probe_movie(
         # file with no bars simply proceeds uncropped. The timeline detector
         # is the one bar measurement (issue #181), cached per file version;
         # the sampled detector is the fallback for a pass that learned nothing (issue #525).
-        summary = detect_crop_summary_cached(input_file, db_file, cancel=cancel)
+        summary = detect_crop_summary_cached(
+            input_file, db_file, cancel=cancel, bit_depth=source_bit_depth
+        )
         # the measured "no common bars" verdict stands (issue #525): the
         # sampled detector runs only for a pass that learned nothing
         crop = crop_bars_or_fallback(
             summary,
-            lambda: detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel),
+            lambda: detect_crop_rect(
+                input_file,
+                workdir,
+                count=crop_sample_count,
+                cancel=cancel,
+                bit_depth=source_bit_depth,
+            ),
         )
         if crop is not None:
             log(

@@ -407,7 +407,7 @@ def process_movie(
         try:
             connection = db.connect(db_file)
             try:
-                summary = get_crop_summary(connection, filename)
+                summary = get_crop_summary(connection, filename, bit_depth=ret.get("bit_depth"))
             finally:
                 connection.close()
         except (OSError, RuntimeError, sqlite3.Error):
@@ -422,6 +422,7 @@ def process_movie(
             ret["dimensions"],
             min_width=config.black_bar_min_width,
             min_height=config.black_bar_min_height,
+            bit_depth=ret.get("bit_depth"),
         )
 
     # add additional data to dictionary

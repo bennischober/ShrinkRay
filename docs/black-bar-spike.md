@@ -65,7 +65,7 @@ runs of consecutive identical picture heights:
 
 | file | runs | longest run |
 |---|---|---|
-| Media01 (4K HDR) | 1 | 599 s (100%) |
+| Media01 (4K HDR) | 1 | 599 s (100%) - void, see below |
 | Media02 (1080p) | 85 | 137 s (23%) |
 | Media03 (1080p) | 153 | 84 s (14%) |
 
@@ -73,9 +73,14 @@ Then the two candidate combine rules, over the whole reading set:
 
 | file | safe crop (union of picture areas) | naive "largest bars" crop |
 |---|---|---|
-| Media01 | 3840x2160, keeps 100% | 3840x2160, keeps 100% |
+| Media01 | 3840x2160, keeps 100% - void, see below | 3840x2160, keeps 100% - void |
 | Media02 | 1920x804, keeps **85%** | 2x28, keeps **0%** |
 | Media03 | 1920x800, keeps **85%** | 14x8, keeps **0%** |
+
+The Media01 rows are void (issue #637): Media01 is 10-bit and was measured at the
+absolute limit 24, which lies below 10-bit black, so every reading was full frame
+whatever the picture held. They say nothing about its bars or its run structure; the
+conclusion below rests on the two SDR films only.
 
 The naive rule destroys the whole picture on both SDR films, because a single
 reading with a dark or logo-heavy frame reports enormous bars. The safe rule crops
@@ -104,6 +109,16 @@ at full frame is consistent with that. It does **not** prove that the current li
 of 24 is correct for PQ sources generally: a file that genuinely has bars would be
 needed to test that, and this corpus has none. **The issue's Q5 is therefore
 unanswered, not answered** — one HDR film with no bars cannot calibrate a limit.
+
+> **Correction (issue #637, 2026-11-14).** The table above cannot show whether
+> Media01 has bars: every limit tried (8-48) lies below limited-range 10-bit black,
+> which is code 64. cropdetect reads an absolute `limit` in the stream's *native*
+> range (0-1023 for 10-bit), so no limit in that range classifies any 10-bit pixel
+> as black and every reading is full frame, bars or not. The shipped constant of 24
+> had the same flaw: a real 10-bit SDR film with ~140 px bars read as `1920x1080`
+> at 24 and as `1920x800` at 96. The detector now scales the limit with the source's
+> bit depth (`cropdetect_limit`, `engine/crop.py`: 24 at 8-bit, 96 at 10-bit, 384
+> at 12-bit), and the 8-bit filter string is unchanged.
 
 ## Q6: Dark segments
 
@@ -188,14 +203,14 @@ mysterious. That is tracked as the reconcile-the-report work in the follow-up is
 4. Dark segments are the dominant noise source, at 18-26% of readings on the two SDR
    films, and the safe rule handles them correctly by giving up the crop opportunity
    instead of the picture.
-5. One HDR film with no bars reads as full frame at every limit from 8 to 48.
+5. ~~One HDR film with no bars reads as full frame at every limit from 8 to 48.~~ Void (issue #637): every limit from 8 to 48 lies below limited-range 10-bit black (code 64), so this measured nothing about the film's bars - see the Q5 correction.
 
 **Not established (needs more media):**
 
-- The HDR black level (Q5): one film with no bars cannot calibrate a limit.
+- The HDR black level (Q5): no 10-bit result was obtained here, because the range 8-48 cannot classify 10-bit black (the Q5 correction, issue #637). The shipped rule scales the limit with the bit depth. One 3 s window of a different 10-bit HDR film with real bars read full frame at `limit=24` and `3840x1608` at the depth-relative `limit=0.094` (issue #637): a spot check, not a calibration.
 - Burned-in subtitles in the bars (Q7): no such film here.
 - Credits (Q3): no film here whose credits differ in aspect ratio.
-- A genuinely variable-aspect-ratio film: **none of the three changes aspect ratio.**
+- A genuinely variable-aspect-ratio film: **neither SDR film changes aspect ratio**; Media01's readings are void at the limit used (the Q5 correction, issue #637), so whether it does is unknown.
   The runs on Media02/03 are dark-scene noise, not real segments. So the
   "IMAX alternating with scope" case the issue is really about is untested.
 - 4K HEVC with long keyframe intervals: Media01's intervals are 1 s.

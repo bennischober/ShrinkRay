@@ -245,6 +245,104 @@ class TestDb(unittest.TestCase):
             self.assertEqual(row["min_saving_percent"], 0)
             migrated.close()
 
+    def test_migration_v20_to_v21_remeasures_deeper_than_8_bit_sources(self):
+        """Issue #637: the crop cache and the 10-bit plans were measured with
+        the 8-bit cropdetect threshold, which finds no bars in 10-bit video.
+
+        The crop rows learn the threshold they were measured at (24, the only
+        value the constant ever had), so an 8-bit row stays a hit and a
+        10-bit row misses. Every measured plan of a deeper-than-8-bit source
+        (analysis format yuv420p10le) is dropped: its stored crop is the
+        'no bars' the encode would reuse. 8-bit and gate-skip plans stay.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v20.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (20);
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    mtime REAL NOT NULL,
+                    size INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL
+                );
+                CREATE TABLE plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    chosen_crf INTEGER,
+                    achieved_vmaf REAL,
+                    crop TEXT,
+                    probes TEXT,
+                    skipped_reason TEXT,
+                    estimated_size INTEGER,
+                    input_mtime REAL NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    encoder TEXT NOT NULL,
+                    encoder_preset TEXT NOT NULL,
+                    target_vmaf REAL NOT NULL,
+                    crf_low INTEGER NOT NULL,
+                    crf_high INTEGER NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    sample_seconds REAL NOT NULL,
+                    crop_sample_count INTEGER NOT NULL DEFAULT 3,
+                    vmaf_statistic TEXT NOT NULL DEFAULT 'min',
+                    vmaf_recipe TEXT NOT NULL DEFAULT '',
+                    min_saving_percent INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE crops (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    bars TEXT,
+                    frame_width INTEGER NOT NULL,
+                    frame_height INTEGER NOT NULL,
+                    readings INTEGER NOT NULL,
+                    sustained_readings INTEGER NOT NULL,
+                    ratios TEXT NOT NULL DEFAULT '{}',
+                    input_mtime REAL NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                INSERT INTO files (path, mtime, size, name, category) VALUES
+                    ('/tmp/ten.mkv', 1.0, 100, 'ten', 'cat'),
+                    ('/tmp/eight.mkv', 1.0, 100, 'eight', 'cat'),
+                    ('/tmp/hdr.mkv', 1.0, 100, 'hdr', 'cat');
+                INSERT INTO plans (file_id, chosen_crf, achieved_vmaf, skipped_reason,
+                    input_mtime, input_size, encoder, encoder_preset, target_vmaf,
+                    crf_low, crf_high, sample_count, sample_seconds, vmaf_recipe)
+                VALUES
+                    (1, 36, 96.2, NULL, 1.0, 100, 'svt_av1_10bit', '5', 96.0, 14, 70, 4,
+                        10.0, 'vmaf=2;fmt=yuv420p10le;hdr=no'),
+                    (2, 22, 96.0, NULL, 1.0, 100, 'svt_av1', '5', 96.0, 14, 70, 4,
+                        10.0, 'vmaf=2;fmt=yuv420p;hdr=no'),
+                    (3, NULL, NULL, 'hdr not supported', 1.0, 100, 'svt_av1_10bit', '5',
+                        96.0, 14, 70, 4, 10.0, '');
+                INSERT INTO crops (file_id, bars, frame_width, frame_height, readings,
+                    sustained_readings, input_mtime, input_size)
+                VALUES (1, NULL, 1920, 1080, 1335, 1335, 1.0, 100);
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = db.connect(db_path)
+            version = migrated.execute("SELECT version FROM schema_version").fetchone()
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
+            limit = migrated.execute("SELECT detect_limit FROM crops").fetchone()
+            self.assertEqual(limit["detect_limit"], 24)
+            kept = [
+                row["name"]
+                for row in migrated.execute(
+                    "SELECT f.name FROM plans p JOIN files f ON f.id = p.file_id ORDER BY f.id"
+                ).fetchall()
+            ]
+            self.assertEqual(kept, ["eight", "hdr"])
+            migrated.close()
+
     def test_set_encode_output_clearing_is_the_discard(self):
         """Issue #625: clearing an encode's output path IS the discard - the
         outcome and its reason are written in the SAME statement. The contract
@@ -291,7 +389,7 @@ class TestDb(unittest.TestCase):
             self.assertEqual(row["outcome"], "discarded")
             connection.close()
 
-    def test_migration_v20_to_v21_outcome(self):
+    def test_migration_v20_to_v22_outcome(self):
         """Issue #625: the encodes table gains an explicit outcome; existing
         rows are backfilled from what they can still prove - a skip marker
         says so in its preset, a row with a chain source but a nulled
@@ -312,6 +410,11 @@ class TestDb(unittest.TestCase):
                     size INTEGER NOT NULL,
                     name TEXT NOT NULL,
                     category TEXT NOT NULL
+                );
+                CREATE TABLE crops (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    crop TEXT
                 );
                 CREATE TABLE encodes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
