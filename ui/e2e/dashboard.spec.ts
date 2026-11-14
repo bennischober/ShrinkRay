@@ -1,11 +1,13 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
-import knownFailures from './known-failures.json' with { type: 'json' }
+import { readFileSync } from 'node:fs'
 
 /** Cases that fail today and belong to a page issue (#632-#635). The list is
  * in the repository, not in CI settings, so it is reviewable and can only
  * shrink: a case that starts passing fails the run and must be removed. */
-const KNOWN: Record<string, string> = knownFailures
+const KNOWN = JSON.parse(
+  readFileSync(new URL('./known-failures.json', import.meta.url), 'utf8'),
+) as Record<string, string>
 
 /** Every page, against every scenario, at both configured widths (issue #628).
  * A page that scrolls sideways on a phone, that draws text over other text, or
