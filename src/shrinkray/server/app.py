@@ -946,7 +946,11 @@ def snapshot(
             SELECT COUNT(*), COALESCE(MAX(f.rowid), 0),
                    COALESCE((SELECT MAX(id) FROM encodes), 0),
                    COALESCE((SELECT MAX(mtime) FROM files), 0),
-                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0)
+                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0),
+                   -- an encode's outcome is written by an UPDATE (issue #625):
+                   -- MAX(id) does not move, so the count of non-applied rows is
+                   -- the change signal the library ETag needs
+                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0)
             FROM files f
             """
         ).fetchone()
@@ -1004,6 +1008,11 @@ def snapshot(
                         "generation": r["generation"],
                         "input_bitrate": r["input_bitrate"],
                         "output_bitrate": r["output_bitrate"],
+                        # what the artifact became (issue #625): a discarded
+                        # attempt stays visible as an attempt, with its reason,
+                        # but no surface may count it as an applied encode
+                        "outcome": r["outcome"],
+                        "outcome_reason": r["outcome_reason"],
                     }
                     if r["preset"]
                     else None,
@@ -1016,7 +1025,8 @@ def snapshot(
                            e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
                            e.encode_seconds,
                            e.probe_count, e.probe_seconds, e.tool_versions,
-                           e.generation, e.input_bitrate, e.output_bitrate
+                           e.generation, e.input_bitrate, e.output_bitrate,
+                           e.outcome, e.outcome_reason
                     FROM files f
                     LEFT JOIN encodes e ON e.id = (
                         SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
@@ -1160,7 +1170,8 @@ def library(
             SELECT COUNT(*), COALESCE(MAX(f.rowid), 0),
                    COALESCE((SELECT MAX(id) FROM encodes), 0),
                    COALESCE((SELECT MAX(mtime) FROM files), 0),
-                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0)
+                   COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0),
+                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0)
             FROM files f
             """
         ).fetchone()
@@ -1175,7 +1186,7 @@ def library(
                    f.size, f.hdr, f.missing_scans, f.missing_since,
                    e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                    e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
-                   e.encode_seconds,
+                   e.encode_seconds, e.outcome, e.outcome_reason,
                    e.probe_count, e.probe_seconds, e.tool_versions
             FROM files f
             LEFT JOIN encodes e ON e.id = (
@@ -1210,6 +1221,10 @@ def library(
                 "probe_count": r["probe_count"],
                 "probe_seconds": r["probe_seconds"],
                 "tool_versions": r["tool_versions"],
+                # the attempt's outcome (issue #625): the same contract the
+                # snapshot's library and /api/movie's history carry
+                "outcome": r["outcome"],
+                "outcome_reason": r["outcome_reason"],
             }
             if r["preset"]
             else None,
@@ -1285,6 +1300,10 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "source_file": r["source_file"],
                 "output_file": r["output_file"],
                 "encoded_at": r["encoded_at"],
+                # the attempt's outcome (issue #625): discarded rows keep their
+                # measurements and name why nothing was reclaimed
+                "outcome": r["outcome"],
+                "outcome_reason": r["outcome_reason"],
             }
             for r in s.connection.execute(
                 """

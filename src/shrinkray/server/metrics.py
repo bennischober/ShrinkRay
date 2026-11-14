@@ -77,21 +77,37 @@ def render_metrics(connection: sqlite3.Connection, library_root: Path | None = N
         [f"shrinkray_job_running {1 if by_state.get('running', 0) else 0}"],
     )
 
-    encodes = connection.execute("SELECT COUNT(*) AS n FROM encodes").fetchone()["n"]
+    encodes = connection.execute(
+        "SELECT COUNT(*) AS n FROM encodes WHERE outcome = 'applied'"
+    ).fetchone()["n"]
     out += _family(
         "shrinkray_encodes_total",
-        "counter",
-        "Encodes recorded (encode rows are never pruned).",
+        "gauge",
+        "Encodes applied to the library (encode rows are never pruned; a"
+        " discarded attempt is not an encode - issue #625). The value can"
+        " FALL when a recorded encode's swap is declined.",
         [f"shrinkray_encodes_total {encodes}"],
+    )
+
+    discarded = connection.execute(
+        "SELECT COUNT(*) AS n FROM encodes WHERE outcome = 'discarded'"
+    ).fetchone()["n"]
+    out += _family(
+        "shrinkray_encodes_discarded_total",
+        "counter",
+        "Measured encodes whose swap was declined (issue #625).",
+        [f"shrinkray_encodes_discarded_total {discarded}"],
     )
 
     reclaimed = connection.execute(
         "SELECT COALESCE(SUM(input_size - output_size), 0) AS b FROM encodes"
+        " WHERE outcome = 'applied'"
     ).fetchone()["b"]
     out += _family(
         "shrinkray_bytes_reclaimed_total",
-        "counter",
-        "Bytes the recorded encodes saved in total.",
+        "gauge",
+        "Bytes the applied encodes saved in total (issue #625: a discarded"
+        " attempt reclaimed nothing). The value can FALL on a decline.",
         [f"shrinkray_bytes_reclaimed_total {int(reclaimed)}"],
     )
 

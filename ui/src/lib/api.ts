@@ -93,6 +93,10 @@ export interface EncodeInfo {
   generation?: number | null
   input_bitrate?: number | null
   output_bitrate?: number | null
+  /** what the artifact became (issue #625): 'applied' | 'discarded' | 'skipped'.
+   * A discarded attempt keeps its measurements but reclaimed nothing. */
+  outcome?: string
+  outcome_reason?: string | null
 }
 
 /** One historical encode of a movie (GET /api/movie history entry).

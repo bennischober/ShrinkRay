@@ -120,11 +120,19 @@
     return h > 0 ? `${h}h ${m}m` : `${m}m ${parts[2]}s`
   }
   const est = $derived(
-    encode?.saved_percent != null
-      ? encode.saved_percent <= 0
-        ? { text: `+${Math.abs(encode.saved_percent).toFixed(1)}% larger`, grew: true }
-        : { text: `${encode.saved_percent.toFixed(1)}% saved`, grew: false }
-      : null
+    encode?.outcome === 'discarded'
+      ? // a declined swap discarded the artifact (issue #625): nothing was
+        // reclaimed, and the reason is what the operator needs
+        {
+          text: 'Discarded',
+          grew: true,
+          title: `${encode.outcome_reason ?? 'the swap was declined'} (original untouched)`,
+        }
+      : encode?.saved_percent != null
+        ? encode.saved_percent <= 0
+          ? { text: `+${Math.abs(encode.saved_percent).toFixed(1)}% larger`, grew: true }
+          : { text: `${encode.saved_percent.toFixed(1)}% saved`, grew: false }
+        : null,
   )
 
   /** The stored plan's predicted saving vs the current source size —
@@ -148,9 +156,13 @@
    * predicted size against the latest encode's real output. Signed like
    * every delta in this console. */
   const planVsEncode = $derived.by(() => {
-    if (!plan?.estimated_size || !encode?.output_size || plan.skipped_reason) return null
-    const diff = plan.estimated_size - encode.output_size
-    const pct = (diff / encode.output_size) * 100
+    if (!plan?.estimated_size || plan.skipped_reason) return null
+    // a discarded attempt's output_size describes an artifact that was
+    // thrown away (issue #625): the honest base is the bytes on disk
+    const base = encode?.outcome === 'discarded' ? movie.size : encode?.output_size
+    if (!base) return null
+    const diff = plan.estimated_size - base
+    const pct = (diff / base) * 100
     return { text: `${diff <= 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% vs encode`, good: diff <= 0 }
   })
 
@@ -411,9 +423,13 @@
         <div class="facts">
           <div class="fact big">
             <span class="legend">RESULT</span>
-            <span class="mono result" class:bad={est?.grew}>{est?.text ?? '—'}</span>
+            <span class="mono result" class:bad={est?.grew} title={est?.title}>{est?.text ?? '—'}</span>
           </div>
-          <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(encode.input_size)} → {fmtGb(encode.output_size)}</span></div>
+          {#if encode.outcome === 'discarded'}
+            <div class="fact"><span class="legend">SIZE</span><span class="mono" title={encode.outcome_reason ?? 'the swap was declined'}>{fmtGb(movie.size)} (original untouched)</span></div>
+          {:else}
+            <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(encode.input_size)} → {fmtGb(encode.output_size)}</span></div>
+          {/if}
           <div class="fact">
             <span class="legend">VMAF</span>
             {#if encode.vmaf != null}
@@ -572,7 +588,19 @@
                 {/if}
               </span>
               <span class="num">{fmtGb(rec.output_size)}</span>
-              <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
+              <span
+                class="num"
+                class:bad={rec.outcome === 'discarded' || (rec.saved_percent ?? 0) <= 0}
+                title={rec.outcome === 'discarded'
+                  ? `discarded — ${rec.outcome_reason ?? 'the swap was declined'} (original untouched)`
+                  : undefined}
+              >
+                {rec.outcome === 'discarded'
+                  ? 'discarded'
+                  : rec.saved_percent != null
+                    ? `${rec.saved_percent.toFixed(0)}%`
+                    : '—'}
+              </span>
               <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
               <span class="delta" title="delta vs the previous run (a comparison between consecutive encodes — siblings of one generation are two runs of the same source)">
                 {#if i < encodesDesc.length - 1}
