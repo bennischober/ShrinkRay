@@ -237,9 +237,9 @@ other services keep their cores.
    (`--crop-samples` windows, bars common to every window) runs only when the
    pass learned nothing — a failed pass, or no readings at all
    ([#525](https://github.com/bennischober/ShrinkRay/issues/525)).
-4. **Quality search** — 10-second samples are encoded at a few CRF values and
-   scored with VMAF against their source: one window per 10 minutes of runtime
-   (12 for a 2-hour film) in every mode — `encode`, `plan` and the resident app
+4. **Quality search** — 4-second samples are encoded at a few CRF values and
+   scored with VMAF against their source: one window per 4 minutes of runtime
+   (30 for a 2-hour film) in every mode — `encode`, `plan` and the resident app
    resolve the count the same way; a configured `quality.sample_count` pins a fixed
    number instead (issue #526). The search
    interpolates between a passing and a failing probe and settles on the largest

@@ -245,7 +245,7 @@ the claim, because `--verify` arrived in v0.11.7.
 
 **Deliberate deviations, each with its reason:**
 
-- **Sample windows sit between 10% and 90% of the runtime** (`engine/samples.py:56-57`): lead-in and
+- **Sample windows sit between 10% and 90% of the runtime** (`engine/samples.py:61-62`): lead-in and
   credits are not representative of the movie's encode difficulty. ab-av1 spaces its windows over the
   whole file.
 - **Windows are 4 s every 240 s, cut by duration** (`DEFAULT_SAMPLE_SECONDS = 4.0`,

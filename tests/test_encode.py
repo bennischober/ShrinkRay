@@ -543,7 +543,7 @@ class TestEncode(unittest.TestCase):
             tools_process.configure_stall(-1)
             self.assertIsNone(tools_process.stall_timeout_seconds())
         finally:
-            tools_process.configure_stall((old or 240.0) / 60.0)
+            tools_process.configure_stall((old or 600.0) / 60.0)
 
     def test_quality_probe_run_stall_is_failure_not_cancel(self):
         """_run reports a stall as code -2 with a stall message - the probe

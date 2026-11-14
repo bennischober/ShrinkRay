@@ -2935,7 +2935,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
 
         The plan fingerprint keys on the sample count, so a plan recorded with
         three windows must not be reused by a run whose density derives
-        twelve (issue #14).
+        thirty (issue #14).
         """
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "movie.mkv"

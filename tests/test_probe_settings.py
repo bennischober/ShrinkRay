@@ -15,7 +15,7 @@ from unittest import mock
 from shrinkray import db
 from shrinkray.config import DEFAULT_SAMPLE_SECONDS, Conf
 from shrinkray.engine.samples import DEFAULT_SAMPLE_EVERY
-from shrinkray.engine.search import sample_count_for
+from shrinkray.engine.search import DEFAULT_CRF_RANGE, sample_count_for
 from shrinkray.server import jobs
 
 
@@ -55,7 +55,7 @@ class TestTheResolver(unittest.TestCase):
         self.assertEqual(Conf().probe_settings(sample_every=0.0), (0.0, None, 4.0))
 
     def test_the_count_follows_density_for_a_two_hour_film(self) -> None:
-        # the issue's own table: 7200 s at the 600 s density is 12 windows,
+        # the issue's own table: 7200 s at the 240 s density is 30 windows,
         # and a configured count still pins 5
         every, count, _ = Conf().probe_settings()
         self.assertEqual(sample_count_for(7200.0, every, count), 30)
@@ -134,8 +134,6 @@ class TestTheResidentJobUsesTheSameRule(unittest.TestCase):
         """The maintainer's 2026-11-14 decision (issue #651): a 4 s window
         every 240 s - a 2 h film gives 30 windows of 4 s, the same 1.67%
         footprint as before, spread 2.5x more evenly."""
-        from shrinkray.engine.search import sample_count_for
-
         self.assertEqual(DEFAULT_SAMPLE_EVERY, 240.0)
         self.assertEqual(DEFAULT_SAMPLE_SECONDS, 4.0)
         conf = Conf()
@@ -145,13 +143,10 @@ class TestTheResidentJobUsesTheSameRule(unittest.TestCase):
     def test_a_plan_stored_under_the_old_window_misses(self) -> None:
         """The plan fingerprint carries sample_seconds (issue #651): a plan
         measured under the old 10 s windows must not be reused by a run at
-        the new 4 s default - it re-probes."""
-        import threading
-        from unittest import mock
-
+        the new 4 s default - the lookup misses and the file re-probes."""
         movie = Path(self.tmp.name) / "Old Window_t00.mkv"
         movie.write_bytes(b"x" * 16)
-        db.upsert_file(
+        file_id = db.upsert_file(
             self.connection,
             db.MovieRecord(
                 path=movie,
@@ -162,46 +157,56 @@ class TestTheResidentJobUsesTheSameRule(unittest.TestCase):
             ),
         )
         self.connection.commit()
-        fake = SimpleNamespace(
-            input=movie,
-            output=movie,
-            success=False,
-            target_vmaf=96.0,
-            min_saving_percent=15,
-            chosen_crf=None,
-            achieved_vmaf=None,
-            probes=[],
-            input_size=movie.stat().st_size,
-            output_size=movie.stat().st_size,
-            error="skipped: re-encode would not shrink the file",
-            skipped_reason="no size gain",
-            saved_percent=0.0,
-            input_mtime=movie.stat().st_mtime,
-            encoder_preset="3",
-            probe_encoder_preset="5",
+        db.save_plan(
+            self.connection,
+            file_id,
+            chosen_crf=22,
+            achieved_vmaf=96.1,
             crop=None,
-            crf_range=(14, 32),
-            sample_count=3,
+            probes=[],
+            skipped_reason=None,
+            estimated_size=100,
+            input_mtime=movie.stat().st_mtime,
+            input_size=movie.stat().st_size,
+            encoder="svt_av1",
+            encoder_preset="5",
+            target_vmaf=96.0,
+            crf_low=14,
+            crf_high=70,
+            sample_count=12,
             # the OLD window length: what a pre-#651 plan row carries
             sample_seconds=10.0,
             crop_sample_count=10,
             vmaf_statistic="mean",
             vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
-            hdr=False,
-            encoder="svt_av1",
+            min_saving_percent=15,
         )
-        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
-        config = Conf()
-        with (
-            mock.patch("shrinkray.engine.plan.plan_quality", return_value=fake) as fake_plan,
-            mock.patch("shrinkray.server.jobs.cap_threads", return_value=1),
-            mock.patch("shrinkray.server.jobs.apply_reloaded_config"),
-            mock.patch("shrinkray.config.load_config", return_value=config),
-            mock.patch("shrinkray.config.refresh_config", return_value=config),
-        ):
-            jobs.execute_plan(job, self.connection, threading.Event())
-        # the job resolved the NEW default; the old row's fingerprint cannot match
-        self.assertEqual(fake_plan.call_args.kwargs.get("sample_seconds"), DEFAULT_SAMPLE_SECONDS)
+        fingerprint = {
+            "encoder": "svt_av1",
+            "encoder_preset": "5",
+            "target_vmaf": 96.0,
+            "crf_range": DEFAULT_CRF_RANGE,
+            "crop_sample_count": 10,
+            "vmaf_statistic": "mean",
+            "vmaf_recipe": "vmaf=2;fmt=yuv420p;hdr=no",
+            "min_saving_percent": 15,
+        }
+        # the row matches a lookup under its own fingerprint
+        self.assertIsNotNone(
+            db.get_valid_plan(
+                self.connection, movie, sample_count=12, sample_seconds=10.0, **fingerprint
+            )
+        )
+        # a run at the new default resolves a different fingerprint: miss
+        self.assertIsNone(
+            db.get_valid_plan(
+                self.connection,
+                movie,
+                sample_count=30,
+                sample_seconds=DEFAULT_SAMPLE_SECONDS,
+                **fingerprint,
+            )
+        )
 
     def test_a_configured_count_reaches_the_job(self) -> None:
         kwargs = self._plan_kwargs(Conf({"quality": {"sample_count": 5}}))
