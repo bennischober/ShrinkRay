@@ -254,7 +254,7 @@ Skip and failure reasons are mapped from the engine's strings in one table (`ui/
 
 **The One Voice Rule.** Every state, kind, outcome and reason word comes from the Glossary above and from `ui/src/lib/format.ts`; a page never invents its own word or its own number format.
 
-**The One Spelling Rule.** A unit has exactly one spelling across the whole UI — bitrate is `Mbps` (never `Mbps`), VMAF carries one decimal (never two in one panel and one in another). Two spellings for one quantity read as two quantities.
+**The One Spelling Rule.** A unit has exactly one spelling across the whole UI — bitrate is `Mbps` (never `Mb/s`), VMAF carries one decimal (never two in one panel and one in another). Two spellings for one quantity read as two quantities.
 
 **The Signed Delta Rule.** Comparisons print signed and colored (`−41.2% size · +3.8 VMAF`), never parenthesized prose — polarity must be readable without parsing: teal when the change is good (smaller, better quality), red when it is not. Matches the battle-proven diff-view convention (size-report bots, codec dashboards).
 
