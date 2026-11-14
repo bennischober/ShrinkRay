@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 if TYPE_CHECKING:
     # engine is ABOVE db in the layer contract; the summary type arrives as
@@ -86,6 +86,12 @@ CREATE TABLE IF NOT EXISTS encodes (
     verified_subsample INTEGER,
     crf_source TEXT,
     plan_created_at TEXT,
+    -- what the encode's artifact became: 'applied' (swapped into the
+    -- library), 'discarded' (the swap declined, the artifact thrown away,
+    -- issue #625) or 'skipped' (a skip marker row). The decline reason
+    -- rides outcome_reason so the UI can say WHY nothing was reclaimed.
+    outcome TEXT NOT NULL DEFAULT 'applied',
+    outcome_reason TEXT,
     encoded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -441,6 +447,23 @@ MIGRATIONS = {
         # with its bars kept. Dropping the rows re-probes them, as the v15
         # migration did for plans probed without bars; 8-bit plans are kept.
         "DELETE FROM plans WHERE vmaf_recipe LIKE '%;fmt=yuv420p10le;%'",
+    ],
+    22: [
+        # an encode's outcome is part of its record (issue #625): a swap that
+        # was declined (lost track, changed source, not smaller, SwapError)
+        # discarded the artifact, but the row kept its sizes and saved_percent
+        # and every surface reported the file as encoded - a reclaimed figure
+        # for space that was never reclaimed. Existing rows are backfilled
+        # from what they can still prove: a skip marker says so in its preset;
+        # a row with a source_file but a nulled output_file was a post-v7
+        # discarded attempt (#232). A row with NEITHER is a pre-v7 applied
+        # encode - v7 introduced the chain columns without a backfill, so its
+        # output_file was never written and proves nothing about the artifact.
+        "ALTER TABLE encodes ADD COLUMN outcome TEXT NOT NULL DEFAULT 'applied'",
+        "ALTER TABLE encodes ADD COLUMN outcome_reason TEXT",
+        "UPDATE encodes SET outcome = 'skipped' WHERE preset LIKE 'skipped%'",
+        "UPDATE encodes SET outcome = 'discarded' "
+        "WHERE output_file IS NULL AND source_file IS NOT NULL AND outcome = 'applied'",
     ],
 }
 
@@ -1094,6 +1117,8 @@ def add_encode(
     generation: int = 1,
     crf_source: str | None = None,
     plan_created_at: str | None = None,
+    outcome: str = "applied",
+    outcome_reason: str | None = None,
 ) -> int:
     """Records an encode in the history table.
 
@@ -1124,6 +1149,12 @@ def add_encode(
             when reused from a stored plan, 'probe' when measured now.
         plan_created_at (str | None): When the trusted plan was probed
             ('plan' provenance only).
+        outcome (str): What the artifact became: 'applied' (the swap put it
+            in the library), 'discarded' (the swap declined it) or 'skipped'
+            (a skip marker row, written by add_skip).
+        outcome_reason (str | None): Why the outcome is what it is - the
+            decline's reason for a discarded attempt, the skip's reason for
+            a skip marker.
 
     Returns:
         int: The encode id.
@@ -1137,9 +1168,9 @@ def add_encode(
             probe_count, probe_seconds, hdr, source_width, source_height,
             source_codec, source_bit_depth, source_duration, tool_versions,
             input_bitrate, output_bitrate, source_file, output_file, generation,
-            crf_source, plan_created_at
+            crf_source, plan_created_at, outcome, outcome_reason
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -1169,6 +1200,8 @@ def add_encode(
             generation,
             crf_source,
             plan_created_at,
+            outcome,
+            outcome_reason,
         ),
     )
     connection.commit()
@@ -1176,7 +1209,10 @@ def add_encode(
 
 
 def set_encode_output(
-    connection: sqlite3.Connection, encode_id: int, output_file: str | None
+    connection: sqlite3.Connection,
+    encode_id: int,
+    output_file: str | None,
+    reason: str | None = None,
 ) -> None:
     """Sets (or clears) an encode row's output_file after the fact.
 
@@ -1187,16 +1223,36 @@ def set_encode_output(
     `doctor` reports a vanished file for every declined swap and the
     generation chain links through a path that never held the artifact.
 
+    Clearing the path IS the discard (issue #625): the outcome and its reason
+    are written in the SAME statement, so a crash can never leave a row whose
+    sizes and saved-percent still read as an applied encode. (Two updates
+    committed separately left exactly that state for a kill between them:
+    `('applied', None, None)` with schema already at 21, unrepairable by the
+    backfill.)
+
     Args:
         connection (sqlite3.Connection): The database connection.
         encode_id (int): The encode row to update.
         output_file (str | None): The path that now holds the artifact, or
             None to record that the encode was discarded.
+        reason (str | None): The decline's reason (the discard case).
     """
-    connection.execute(
-        "UPDATE encodes SET output_file = ? WHERE id = ?",
-        (output_file, encode_id),
-    )
+    if output_file is None:
+        # clearing the path IS the discard: one statement, so a crash during
+        # the DECLINE can never leave the sizes reading as an applied encode
+        # (issue #625). The row is written 'applied' BEFORE the swap decides
+        # (#232's design): a crash in that insert-to-swap window is the
+        # pre-existing state doctor's vanished-output check reports.
+        connection.execute(
+            "UPDATE encodes SET output_file = NULL, outcome = 'discarded', "
+            "outcome_reason = ? WHERE id = ?",
+            (reason, encode_id),
+        )
+    else:
+        connection.execute(
+            "UPDATE encodes SET output_file = ? WHERE id = ?",
+            (output_file, encode_id),
+        )
     connection.commit()
 
 
@@ -1233,6 +1289,8 @@ def add_skip(
         0.0,
         chosen_crf=chosen_crf,
         achieved_vmaf=achieved_vmaf,
+        outcome="skipped",
+        outcome_reason=reason,
     )
 
 

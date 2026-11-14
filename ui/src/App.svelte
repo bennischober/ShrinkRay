@@ -348,7 +348,10 @@
 
   const savedTotalGb = $derived(
     movies.reduce((sum, m) => {
-      if (!m.encode || m.encode.saved_percent == null) return sum
+      // only an APPLIED encode reclaimed anything (issue #625): a discarded
+      // attempt's sizes describe an artifact that was thrown away
+      if (!m.encode || m.encode.outcome === 'discarded') return sum
+      if (m.encode.saved_percent == null) return sum
       return sum + ((m.encode.input_size ?? 0) - (m.encode.output_size ?? 0))
     }, 0) / 1024 ** 3
   )

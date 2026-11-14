@@ -343,6 +343,151 @@ class TestDb(unittest.TestCase):
             self.assertEqual(kept, ["eight", "hdr"])
             migrated.close()
 
+    def test_set_encode_output_clearing_is_the_discard(self):
+        """Issue #625: clearing an encode's output path IS the discard - the
+        outcome and its reason are written in the SAME statement. The contract
+        the replace path relies on: a caller that clears the path can never
+        leave the row reading as an applied encode, and a caller that SETS a
+        path must not touch the outcome."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            connection = db.connect(root / "t.db")
+            file_id = db.upsert_file(
+                connection,
+                db.MovieRecord(path=root / "a.mkv", mtime=1.0, size=100, name="a", category="c"),
+            )
+            encode_id = db.add_encode(
+                connection,
+                file_id,
+                "VMAF>96",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(root / "staged.mkv"),
+            )
+            connection.commit()
+
+            # clearing the path records the discard with its reason
+            db.set_encode_output(connection, encode_id, None, "output lost 2 subtitle track(s)")
+            row = connection.execute(
+                "SELECT output_file, outcome, outcome_reason FROM encodes WHERE id = ?",
+                (encode_id,),
+            ).fetchone()
+            self.assertIsNone(row["output_file"])
+            self.assertEqual(row["outcome"], "discarded")
+            self.assertEqual(row["outcome_reason"], "output lost 2 subtitle track(s)")
+
+            # setting a path does NOT resurrect the outcome: the swap's success
+            # path records its own outcome, this function only moves the path
+            db.set_encode_output(connection, encode_id, str(root / "real.mkv"))
+            row = connection.execute(
+                "SELECT output_file, outcome FROM encodes WHERE id = ?", (encode_id,)
+            ).fetchone()
+            self.assertEqual(row["output_file"], str(root / "real.mkv"))
+            self.assertEqual(row["outcome"], "discarded")
+            connection.close()
+
+    def test_migration_v20_to_v22_outcome(self):
+        """Issue #625: the encodes table gains an explicit outcome; existing
+        rows are backfilled from what they can still prove - a skip marker
+        says so in its preset, a row with a chain source but a nulled
+        output_file was a discarded attempt (#232), and a pre-v7 row has no
+        chain columns and stays applied."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v20.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (20);
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    mtime REAL NOT NULL,
+                    size INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL
+                );
+                CREATE TABLE crops (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    crop TEXT
+                );
+                CREATE TABLE encodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    preset TEXT NOT NULL,
+                    encoder TEXT NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    output_size INTEGER NOT NULL,
+                    saved_percent REAL NOT NULL,
+                    chosen_crf INTEGER,
+                    achieved_vmaf REAL,
+                    encoder_preset TEXT,
+                    probe_encoder_preset TEXT,
+                    encode_seconds REAL,
+                    probe_count INTEGER,
+                    probe_seconds REAL,
+                    hdr INTEGER,
+                    source_width INTEGER,
+                    source_height INTEGER,
+                    source_codec TEXT,
+                    source_bit_depth INTEGER,
+                    source_duration REAL,
+                    input_bitrate REAL,
+                    output_bitrate REAL,
+                    source_file TEXT,
+                    output_file TEXT,
+                    generation INTEGER NOT NULL DEFAULT 1,
+                    tool_versions TEXT,
+                    verified_vmaf REAL,
+                    verified_at TEXT,
+                    verified_subsample INTEGER,
+                    crf_source TEXT,
+                    plan_created_at TEXT
+                );
+                INSERT INTO files (path, mtime, size, name, category)
+                VALUES ('/tmp/movie.mkv', 1.0, 100, 'movie', 'cat');
+                -- an applied encode: its artifact stood in the library
+                INSERT INTO encodes (file_id, preset, encoder, input_size,
+                    output_size, saved_percent, output_file)
+                VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0, '/tmp/movie.shrinkray-original');
+                -- a discarded attempt (#232): the swap was declined, the
+                -- output_file was nulled, the sizes stayed. A post-v7 row has
+                -- the chain columns, so its NULL output proves the discard.
+                INSERT INTO encodes (file_id, preset, encoder, input_size,
+                    output_size, saved_percent, source_file, output_file)
+                VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0,
+                        '/tmp/movie.mkv', NULL);
+                -- a skip marker: zero sizes, the verdict in the preset
+                INSERT INTO encodes (file_id, preset, encoder, input_size,
+                    output_size, saved_percent)
+                VALUES (1, 'skipped (no size gain)', 'none', 0, 0, 0.0);
+                -- a pre-v7 applied encode: v7 introduced the chain columns
+                -- without a backfill, so neither is written and proves nothing
+                INSERT INTO encodes (file_id, preset, encoder, input_size,
+                    output_size, saved_percent)
+                VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0);
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = db.connect(db_path)
+            version = migrated.execute("SELECT version FROM schema_version").fetchone()
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
+            rows = migrated.execute("SELECT preset, outcome FROM encodes ORDER BY id").fetchall()
+            self.assertEqual(rows[0]["outcome"], "applied")
+            self.assertEqual(rows[1]["outcome"], "discarded")
+            self.assertEqual(rows[2]["outcome"], "skipped")
+            # the pre-v7 shape stays applied: its missing chain columns prove
+            # nothing (the round-3 finding - the old rule misclassified it)
+            self.assertEqual(rows[3]["outcome"], "applied")
+            migrated.close()
+
     def test_migration_v2_to_v3_absolute_paths(self):
         # v2 database with a relative path => migrated to absolute (or dropped)
         import tempfile
@@ -600,7 +745,9 @@ class TestDb(unittest.TestCase):
                     encoder TEXT NOT NULL,
                     input_size INTEGER NOT NULL,
                     output_size INTEGER NOT NULL,
-                    saved_percent REAL NOT NULL
+                    saved_percent REAL NOT NULL,
+                    output_file TEXT,
+                    source_file TEXT
                 );
                 CREATE TABLE plans (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
