@@ -3,9 +3,13 @@
   import { bytes, savedPercent, vmaf } from '../format'
   import EmptyState from '../components/EmptyState.svelte'
   import PageHeader from '../components/PageHeader.svelte'
+  import { freshness } from '../format'
 
   let {
     movies,
+    loadedAt = null,
+    loadFailed = false,
+    needsToken = false,
     selectedPaths,
     targetVmaf,
     runningMovie = null,
@@ -18,6 +22,10 @@
     onclear,
   }: {
     movies: Movie[]
+    /** when the last successful load happened, null before the first one */
+    loadedAt?: number | null
+    loadFailed?: boolean
+    needsToken?: boolean
     selectedPaths: Set<string>
     targetVmaf: number
     runningMovie?: string | null
@@ -167,7 +175,10 @@
 </script>
 
 <div class="page page-in">
-  <PageHeader title="Library" description={`${filtered.length} of ${movies.length} titles · target VMAF ${targetVmaf}`} />
+  <PageHeader
+    title="Library"
+    description={`${filtered.length} of ${movies.length} titles · target VMAF ${targetVmaf} · ${{ fresh: 'live', stale: 'stale', failed: 'load failed', unknown: 'not loaded', unauthorised: 'token needed' }[freshness(loadedAt, Date.now(), 3000, loadFailed, needsToken)]}`}
+  />
 
   <!-- ══ toolbar: search + category + decision-state (the #539 demotion: no view toggle, no scan control) ══ -->
   <div class="toolbar">
