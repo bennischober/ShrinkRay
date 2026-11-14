@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Plugin } from 'vite'
+import { busy, huge } from './fixtures/generated.js'
 import type { Fixture } from './src/lib/fixtures.js'
 
 /** Which fixture key answers which GET route. */
@@ -28,7 +29,12 @@ export function fixtureMock(dir = resolve(process.cwd(), 'fixtures')): Plugin {
   function load(name: string): Fixture {
     const cached = cache.get(name)
     if (cached) return cached
-    const fixture = JSON.parse(readFileSync(resolve(dir, `${name}.json`), 'utf8')) as Fixture
+    // the scale scenarios are generated (20 000 titles is megabytes of
+    // invented JSON for no extra coverage); the small ones are files
+    const generated = name === 'busy' ? busy : name === 'huge' ? huge : null
+    const fixture = generated
+      ? generated()
+      : (JSON.parse(readFileSync(resolve(dir, `${name}.json`), 'utf8')) as Fixture)
     cache.set(name, fixture)
     return fixture
   }

@@ -1,6 +1,7 @@
 import emptyJson from '../../fixtures/empty.json' with { type: 'json' }
 import nastyNamesJson from '../../fixtures/nasty-names.json' with { type: 'json' }
 import type { Config, Job, Movie, MovieDetail, RetainedFile, Status } from './api.js'
+import { busy, huge } from '../../fixtures/generated.js'
 
 /** A scenario a page can be rendered against with no resident process
  * (issue #628): every GET route's body, plus the events the SSE stream would
@@ -31,4 +32,9 @@ const empty = emptyJson satisfies Fixture
 const nastyNames = nastyNamesJson satisfies Fixture
 
 /** The scenarios `?fixture=<name>` knows. Adding one is adding its JSON here. */
-export const fixtures: Record<string, Fixture> = { empty, 'nasty-names': nastyNames }
+export const fixtures: Record<string, Fixture> = {
+  empty,
+  'nasty-names': nastyNames,
+  busy: busy(),
+  huge: huge(),
+}
