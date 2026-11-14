@@ -784,8 +784,10 @@ class TestCropLimitFollowsBitDepth(unittest.TestCase):
             self.assertEqual(args[args.index("-vf") + 1], "cropdetect=limit=96:round=2:reset=0")
 
     def test_the_scan_probe_measures_10_bit_at_its_native_black(self) -> None:
-        """has_black_bars passed a bare `cropdetect`, whose default limit is
-        the same 8-bit 24."""
+        """Pins the scan probe to the shared rule. Before #637 it passed a
+        bare `cropdetect`, whose default limit is the fraction 24/255 that
+        ffmpeg scales to the depth, so it was NOT affected by the defect (review
+        round 2): this guards the explicit limit, not a fixed bug."""
         from shrinkray.engine.crop import has_black_bars
 
         with patch("shrinkray.engine.crop.subprocess.run") as run:

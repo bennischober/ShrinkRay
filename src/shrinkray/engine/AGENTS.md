@@ -55,8 +55,8 @@ so stored SDR plans keep matching while historical `hdr=hable` plans never do.
 
 ## ANTI-PATTERNS
 
-- Never hand cropdetect an unscaled limit (`crop.py`): it reads the limit in the
-  stream's native range, so the 8-bit 24 finds no black in 10-bit video (#637).
+- Never hand cropdetect an unscaled limit (`crop.py`): it reads an absolute limit in
+  the stream's native range, so the 8-bit 24 finds no black in 10-bit video (#637).
   Every pass takes the source's depth and uses `cropdetect_limit`.
 - Never ship the "largest bars" combine (`crop.py`): it measured at keeping 0%
   of the frame. The shipped rule is the intersection of sustained readings.

@@ -36,8 +36,9 @@ FFMPEG_BINARY = "ffmpeg"
 
 # a detected bar smaller than this percentage of the dimension is noise
 MIN_BAR_PERCENT = 2.0
-# cropdetect's blackness threshold for an 8-bit source (ffmpeg's default).
-# Never pass it unscaled: cropdetect_limit() lifts it to the source's bit depth
+# cropdetect's blackness threshold for an 8-bit source. ffmpeg's own default
+# is the FRACTION 24/255, which it scales to the stream's depth; an absolute
+# 24 is not scaled, so never pass it unscaled: cropdetect_limit() lifts it
 CROP_DETECT_LIMIT = 24
 
 # cropdetect windows per movie: with the bars common to every sample the
@@ -800,8 +801,10 @@ def has_black_bars(
         min_width (int): Minimum width difference to detect black bars.
         min_height (int): Minimum height difference to detect black bars.
         bit_depth (int | None): The source's bit depth, which sets the
-            blackness threshold (issue #637: the bare filter's default is
-            the 8-bit value).
+            blackness threshold. The bare filter used before #637 already
+            measured 10-bit correctly (ffmpeg's default limit is the fraction
+            24/255, scaled to the depth); the explicit limit keeps this probe
+            on the same rule as the plan/encode passes (96 vs ffmpeg's 96.3).
 
     Returns:
         int: 1 if black bars were detected, 0 if not (or it could not be checked).
