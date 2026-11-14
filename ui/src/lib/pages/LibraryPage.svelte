@@ -1,6 +1,8 @@
 <script lang="ts">
   import { type Movie } from '../api'
   import { bytes, savedPercent, vmaf } from '../format'
+  import EmptyState from '../components/EmptyState.svelte'
+  import PageHeader from '../components/PageHeader.svelte'
 
   let {
     movies,
@@ -165,10 +167,7 @@
 </script>
 
 <div class="page page-in">
-  <header class="page-head">
-    <h2>Library</h2>
-    <p class="legend">{filtered.length} OF {movies.length} TITLES · TARGET VMAF {targetVmaf}</p>
-  </header>
+  <PageHeader title="Library" description={`${filtered.length} of ${movies.length} titles · target VMAF ${targetVmaf}`} />
 
   <!-- ══ toolbar: search + category + decision-state (the #539 demotion: no view toggle, no scan control) ══ -->
   <div class="toolbar">
@@ -318,9 +317,9 @@
             </tr>
           {:else}
             {#if movies.length === 0}
-              <tr><td colspan="8" class="empty dim">nothing scanned yet — the resident app's scan fills this library on its own</td></tr>
+              <tr><td colspan="8"><EmptyState title="Nothing scanned yet" hint="the resident app's scan fills this library on its own" /></td></tr>
             {:else}
-              <tr><td colspan="8" class="empty dim">no titles match — adjust the search</td></tr>
+              <tr><td colspan="8"><EmptyState title="No titles match" hint="adjust the search or clear a filter" /></td></tr>
             {/if}
           {/each}
         </tbody>
@@ -330,8 +329,6 @@
 
 <style>
   .page { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
-  .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }
   .warn { color: var(--amber); }
   .bad { color: var(--red); }

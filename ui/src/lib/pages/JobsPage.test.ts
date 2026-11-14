@@ -29,7 +29,7 @@ describe('JobsPage render', () => {
       history: [job(), job({ id: 2, kind: 'scan', state: 'running', result: null })],
       onopenMovie: () => {},
     })
-    expect(screen.getByText(/2 OF 2 ENTRIES/)).toBeTruthy()
+    expect(screen.getByText(/2 of 2 entries/)).toBeTruthy()
     // issue #134: the dashboard observes, it does not steer - no CANCEL
     expect(screen.queryByText('CANCEL')).toBeNull()
     expect(screen.getAllByText('DETAIL').length).toBeGreaterThan(0)

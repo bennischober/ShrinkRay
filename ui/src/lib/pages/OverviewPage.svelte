@@ -1,6 +1,7 @@
 <script lang="ts">
   import { humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
   import { bytes, duration, relative, savedPercent, span, vmaf } from '../format'
+  import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
 
   /** Path equality that survives separator and case differences. */
@@ -335,10 +336,7 @@
   let expandedErr = $state<number | null>(null)</script>
 
 <div class="page page-in">
-  <header class="page-head">
-    <h2>Overview</h2>
-    <p class="legend">THE LIBRARY AT A GLANCE · VMAF TARGET {targetVmaf}</p>
-  </header>
+  <PageHeader title="Overview" description={`The library at a glance · VMAF target ${targetVmaf}`} />
 
   <!-- system line: the console's own telemetry (only what's not already
        on the rail badges and the stat band — those carry the counts) -->
@@ -685,8 +683,6 @@
 
 <style>
   .page { display: flex; flex-direction: column; gap: 14px; }
-  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
-  .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }
   .warn { color: var(--amber); }
   .bad { color: var(--red); }

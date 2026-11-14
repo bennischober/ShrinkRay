@@ -11,6 +11,8 @@
     type MoviePlan,
   } from '../api'
   import { bytes, duration, relative, vmaf } from '../format'
+  import FileName from '../components/FileName.svelte'
+  import Time from '../components/Time.svelte'
 
   /** The provenance page: everything recorded about one title — source
    * facts, the latest encode with every schema-v5 metric, the COMPLETE
@@ -314,7 +316,7 @@
   <section class="hero">
     <div class="hero-main">
       <h2>{movie.name}</h2>
-      <p class="mono dim path">{movie.path}</p>
+      <p class="dim path"><FileName path={movie.path} /></p>
       <div class="chips">
         <span class="chip neutral"><span class="swatch"></span>{movie.category.toUpperCase()}</span>
         {#if fileGeneration > 1}<span class="chip progress" title="This file is itself the output of a previous encode (generation chain)"><span class="swatch"></span>GENERATION {fileGeneration}</span>{/if}
@@ -405,7 +407,7 @@
             {/if}
             <div class="fact">
               <span class="legend">PROBED</span>
-              <span class="mono">{relative(plan.created_at)}</span>
+              <Time iso={plan.created_at} />
               {#if plan.stale}<span class="mono warn">FILE CHANGED SINCE</span>{/if}
             </div>
             <div class="fact">

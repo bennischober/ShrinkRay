@@ -2,6 +2,12 @@
   import { humanizeError, failedOutcomeNote, type Job } from '../api'
   import { bytes, relative, span } from '../format'
   import { progressFor } from '../progress.svelte'
+  import EmptyState from '../components/EmptyState.svelte'
+  import FileName from '../components/FileName.svelte'
+  import PageHeader from '../components/PageHeader.svelte'
+  import ProgressBar from '../components/ProgressBar.svelte'
+  import StatusBadge from '../components/StatusBadge.svelte'
+  import type { Tone } from '../components/tone'
 
   /** The run log as an event log: every job with its timestamps, wall
    * duration, and expandable payload/result — the tool's audit trail. */
@@ -115,9 +121,10 @@
 </script>
 
 <div class="page page-in">
-  <header class="page-head">
-    <h2>Jobs</h2>
-    <p class="legend">{filteredHistory.length} OF {history.length} ENTRIES · THE FULL AUDIT TRAIL</p>
+  <PageHeader
+    title="Jobs"
+    description={`${filteredHistory.length} of ${history.length} entries · the full audit trail`}
+  >
     {#if history.length > 0}
       <div class="filters">
         <select class="mono" bind:value={kindFilter} aria-label="Filter by kind">
@@ -140,12 +147,12 @@
         </select>
       </div>
     {/if}
-  </header>
+  </PageHeader>
 
   {#if history.length === 0}
-    <div class="empty dim">no jobs yet — the resident app fills this page as it works</div>
+    <EmptyState title="No jobs yet" hint="the resident app fills this page as it works" />
   {:else if filteredHistory.length === 0}
-    <div class="empty dim">no entries match this filter</div>
+    <EmptyState title="No entries match this filter" hint="clear a filter to see the rest of the trail" />
   {:else}
     <div class="log">
       <div class="log-head legend">
@@ -166,13 +173,14 @@
                 <!-- single-movie jobs link to the title: the two audit
                      trails reference each other -->
                 <button class="movie-link" onclick={() => onopenMovie(singleMoviePath(job)!)} title="Open the movie's detail page">
-                  {(job.payload.paths as string[])[0].split(/[\\/]/).pop()}
+                  <FileName path={(job.payload.paths as string[])[0]} />
                 </button>
               {/if}
             </span>
-            <span class="state {stateClass(job)}">
-              {job.state.toUpperCase()}{#if job.state === 'done' && failedOutcomeNote(job) !== ''} · PARTIAL{/if}{#if liveElapsed(job)} · {liveElapsed(job)}{/if}
-            </span>
+            <span class="state"><StatusBadge
+              label={`${job.state.toUpperCase()}${job.state === 'done' && failedOutcomeNote(job) !== '' ? ' · PARTIAL' : ''}${liveElapsed(job) ? ` · ${liveElapsed(job)}` : ''}`}
+              tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
+            /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{relative(job.started_at)}</span>
             <span class="dur">{job.state === 'done' ? span(job.started_at, job.finished_at) ?? '—' : job.state === 'running' ? '…' : '—'}</span>
             <span class="ops">
@@ -184,12 +192,7 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <div class="trace" role="progressbar" aria-valuenow={p?.percent ?? undefined} aria-valuemin="0" aria-valuemax="100" aria-label="{job.kind} progress">
-              <div class="fill" style="width: {p?.percent ?? 2}%"></div>
-              <span class="mono reading">
-                {p?.movie ? `${p.movie} · ` : ''}{p?.detail ?? 'starting…'}{p?.percent != null ? ` · ${p.percent}%` : ''}
-              </span>
-            </div>
+            <ProgressBar percent={p?.percent ?? null} stage={`${p?.movie ? `${p.movie} · ` : ''}${p?.detail ?? 'starting…'}`} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}
@@ -229,9 +232,7 @@
 
 <style>
   .page { display: flex; flex-direction: column; gap: 12px; }
-  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
-  .page-head .legend { margin-top: 2px; }
-  .filters { display: flex; gap: 8px; margin-top: 8px; }
+      .filters { display: flex; gap: 8px; margin-top: 8px; }
   .filters select {
     background: var(--panel);
     color: var(--ink);
@@ -241,8 +242,7 @@
     font-size: 11px;
   }
   .dim { color: var(--ink-dim); }
-  .ok { color: var(--teal-ink); }
-  .movie-link {
+    .movie-link {
     background: transparent;
     border: none;
     padding: 0;
@@ -251,16 +251,7 @@
     font: inherit;
   }
   .movie-link:hover { text-decoration: underline; }
-  .partial { color: var(--amber); }
-  .bad { color: var(--red); }
-  .run { color: var(--amber); }
-  .empty {
-    padding: 60px 20px;
-    text-align: center;
-    border: 1px dashed var(--seam);
-    border-radius: var(--radius);
-  }
-  .log {
+        .log {
     border: 1px solid var(--seam);
     border-radius: var(--radius);
     background: var(--panel);
@@ -312,29 +303,6 @@
     min-width: 24px;
   }
   .mini:hover { color: var(--ink); border-color: var(--ink-dim); }
-  .trace {
-    position: relative;
-    height: 18px;
-    margin: 2px 0 8px;
-    background: var(--hatch-work);
-    border: 1px solid var(--seam);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  .fill {
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    background: var(--hatch-progress);
-    border-right: 2px solid var(--amber);
-  }
-  .reading {
-    position: absolute;
-    right: 6px; top: 2px;
-    color: var(--ink);
-    max-width: 85%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
   .note { padding: 2px 0 8px; }
   .error { padding: 2px 0 8px; color: var(--red); white-space: normal; word-break: break-word; }
   .detail {
