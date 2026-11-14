@@ -520,6 +520,146 @@ class TestJobs(unittest.TestCase):
             )
         )
 
+    def test_the_encode_stage_row_reports_the_live_progress(self):
+        """Issue #639: the stage rows show the folder job's live progress -
+        a row with no events reads "starting..." for the whole stage."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Live Progress_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        bus = jobs.ProgressBus()
+        queue = jobs.JobQueue(self.connection, bus)
+        job = queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+
+        seen: dict[int, dict] = {}
+        folder_events: list[dict] = []
+
+        def fake_search(decision, *args, **kwargs):
+            kwargs["progress"]({"stage": "probe", "percent": 10.0, "movie": decision.input.name})
+            seen.update(bus.latest())
+            return _prediction(movie)
+
+        def fake_encode(movie, output, *args, **kwargs):
+            kwargs["progress"]({"stage": "encode", "percent": 42.5, "movie": movie.name})
+            # the seed cache drops a row's progress when it finishes, so the
+            # event is captured while the encode is still running
+            seen.update(bus.latest())
+            output.write_bytes(b"y" * 8)
+            return _NS(
+                input_size=16,
+                output_size=8,
+                chosen_crf=21,
+                achieved_vmaf=95.4,
+                error=None,
+                input_mtime=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.stored_plan_row",
+                return_value=None,
+            ),
+            _patch("shrinkray.engine.plan.search_quality", side_effect=fake_search),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode),
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=True, skipped=False, error=None),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_encode(
+                job, self.connection, threading.Event(), progress=folder_events.append, queue=queue
+            )
+        rows = self.connection.execute(
+            "SELECT id, kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        search_row = next(row for row in rows if row["kind"] == "crf-search")
+        encode_row = next(row for row in rows if row["kind"] == "encode")
+        # both stage rows receive the engine's events...
+        self.assertIn(search_row["id"], seen)
+        self.assertEqual(seen[search_row["id"]]["percent"], 10.0)
+        self.assertIn(encode_row["id"], seen)
+        self.assertEqual(seen[encode_row["id"]]["percent"], 42.5)
+        # ...and the folder job keeps receiving them too
+        folder_percents = [event.get("percent") for event in folder_events]
+        self.assertIn(10.0, folder_percents)
+        self.assertIn(42.5, folder_percents)
+
+    def test_the_plan_path_search_row_reports_the_live_progress(self):
+        """Issue #639: the plan job's crf-search row shows the search's live
+        progress too - it is usually the longest stage of a plan run."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Plan Progress_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        bus = jobs.ProgressBus()
+        queue = jobs.JobQueue(self.connection, bus)
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        seen: dict[int, dict] = {}
+
+        def fake_search(decision, *args, **kwargs):
+            kwargs["progress"]({"stage": "probe", "percent": 33.0, "movie": decision.input.name})
+            seen.update(bus.latest())
+            return _prediction(movie)
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch("shrinkray.engine.plan.search_quality", side_effect=fake_search),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job, self.connection, threading.Event(), queue=queue)
+        row = self.connection.execute(
+            "SELECT id, kind FROM jobs WHERE id > ? AND kind = 'crf-search'", (job.id,)
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertIn(row["id"], seen)
+        self.assertEqual(seen[row["id"]]["percent"], 33.0)
+
     def test_a_stored_plan_skips_the_queue_path_search(self):
         """Issue #602: a valid stored plan means the search already ran for
         these bytes, so the encode job must not measure again - the search row
