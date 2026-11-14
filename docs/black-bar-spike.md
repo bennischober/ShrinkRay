@@ -198,11 +198,11 @@ mysterious. That is tracked as the reconcile-the-report work in the follow-up is
 4. Dark segments are the dominant noise source, at 18-26% of readings on the two SDR
    films, and the safe rule handles them correctly by giving up the crop opportunity
    instead of the picture.
-5. One HDR film with no bars reads as full frame at every limit from 8 to 48.
+5. ~~One HDR film with no bars reads as full frame at every limit from 8 to 48.~~ Void (issue #637): every limit from 8 to 48 lies below limited-range 10-bit black (code 64), so this measured nothing about the film's bars - see the Q5 correction.
 
 **Not established (needs more media):**
 
-- The HDR black level (Q5): one film with no bars cannot calibrate a limit.
+- The HDR black level (Q5): no 10-bit result was obtained here, because the range 8-48 cannot classify 10-bit black (the Q5 correction, issue #637). The shipped rule scales the limit with the bit depth. One 3 s window of a different 10-bit HDR film with real bars read full frame at `limit=24` and `3840x1608` at the depth-relative `limit=0.094` (issue #637): a spot check, not a calibration.
 - Burned-in subtitles in the bars (Q7): no such film here.
 - Credits (Q3): no film here whose credits differ in aspect ratio.
 - A genuinely variable-aspect-ratio film: **none of the three changes aspect ratio.**
