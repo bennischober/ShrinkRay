@@ -1,5 +1,6 @@
 <script lang="ts">
   import { humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { freshness } from '../format'
   import { bytes, duration, kindWord, percent, relative, savedPercent, span, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
@@ -23,6 +24,9 @@
     outputDir,
     sparkSamples = [],
     retainedFiles = [],
+    loadedAt = null,
+    loadFailed = false,
+    needsToken = false,
     ondismiss,
     ongoto,
     onopenmovie,
@@ -45,6 +49,12 @@
     /** the retention ledger's rows (App.svelte) — the panel totals the
      * present ones; the rows themselves are the Retained page's job */
     retainedFiles?: RetainedFile[]
+    /** when the last successful load happened, null before the first one */
+    loadedAt?: number | null
+    /** true when the last refresh failed: the values below are old, not absent */
+    loadFailed?: boolean
+    /** true when the server refused the request for a missing token */
+    needsToken?: boolean
     ondismiss: (id: number | null) => void
     ongoto: (page: 'overview' | 'library' | 'jobs' | 'config' | 'retained') => void
     onopenmovie: (movie: Movie) => void
@@ -341,6 +351,20 @@
        on the rail badges and the stat band — those carry the counts) -->
   <div class="sysline mono dim">
     <span title="adaptive: 1s while work is queued/running, 3s idle, 10s in hidden tabs">POLL ADAPTIVE</span>
+    <span class={freshness(loadedAt, Date.now(), 3000, loadFailed, needsToken) === 'stale' ? 'warn' : ''}
+      title={freshness(loadedAt, Date.now(), 3000, loadFailed, needsToken) === 'unknown'
+        ? 'this page has not loaded yet — the values below are not from the server'
+        : freshness(loadedAt, Date.now(), 3000, loadFailed, needsToken) === 'stale'
+          ? 'the last load is older than three poll intervals — the values below may be out of date'
+          : 'loaded from the server'}>
+      {{
+        unknown: 'NOT LOADED',
+        failed: 'LOAD FAILED',
+        unauthorised: 'TOKEN NEEDED',
+        stale: 'STALE',
+        fresh: 'LIVE',
+      }[freshness(loadedAt, Date.now(), 3000, loadFailed, needsToken)]}
+    </span>
     <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
     <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
     <span class="spacer"></span>

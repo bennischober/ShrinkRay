@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, kindWord, savedPercent, span, stateWord, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, freshness, kindWord, savedPercent, span, stateWord, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -160,5 +160,26 @@ describe('kindWord and verdictWord', () => {
     expect(verdictWord('skip')).toBe('Skip')
     expect(verdictWord('failed')).toBe('Failed')
     expect(verdictWord('deferred')).toBe('deferred')
+  })
+})
+
+describe('freshness', () => {
+  it('is unknown until the dashboard has loaded once', () => {
+    expect(freshness(null, 1_000, 3_000)).toBe('unknown')
+  })
+
+  it('is fresh within three poll intervals and stale past them', () => {
+    expect(freshness(1_000, 9_000, 3_000)).toBe('fresh')
+    expect(freshness(1_000, 10_001, 3_000)).toBe('stale')
+  })
+
+  it('says a failed refresh out loud, even when the last value is still recent', () => {
+    expect(freshness(1_000, 1_500, 3_000, true)).toBe('failed')
+    expect(freshness(null, 1_500, 3_000, true)).toBe('failed')
+  })
+
+  it('asks for a token before it says anything about the data', () => {
+    expect(freshness(null, 1_500, 3_000, false, true)).toBe('unauthorised')
+    expect(freshness(1_000, 1_500, 3_000, false, true)).toBe('unauthorised')
   })
 })
