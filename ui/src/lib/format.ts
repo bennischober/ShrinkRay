@@ -24,65 +24,46 @@ function parseStored(iso: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
-function clock(date: Date, timeZone?: string): string {
+function clock(date: Date): string {
   return date.toLocaleTimeString(LOCALE, {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
-    ...(timeZone ? { timeZone } : {}),
   })
 }
 
-function calendarDay(date: Date, timeZone?: string): number {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    ...(timeZone ? { timeZone } : {}),
-  }).formatToParts(date)
-  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value)
-  return Date.UTC(get('year'), get('month') - 1, get('day'))
+function calendarDay(date: Date): number {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
 }
 
-export function relative(
-  iso: string | null | undefined,
-  now: Date = new Date(),
-  timeZone?: string,
-): string {
+export function relative(iso: string | null | undefined, now: Date = new Date()): string {
   if (!iso) return '—'
   const d = parseStored(iso)
   if (!d) return '—'
   const seconds = Math.round((now.getTime() - d.getTime()) / 1000)
-  if (seconds < 0) return absolute(iso, now, timeZone)
-  const days = Math.round((calendarDay(now, timeZone) - calendarDay(d, timeZone)) / DAY)
+  if (seconds < 0) return absolute(iso, now)
+  const days = Math.round((calendarDay(now) - calendarDay(d)) / (DAY * 1000))
   if (days === 0) {
     if (seconds < MINUTE) return 'just now'
     if (seconds < HOUR) return `${Math.floor(seconds / MINUTE)} min ago`
     return `${Math.floor(seconds / HOUR)} h ago`
   }
-  if (days === 1) return `yesterday ${clock(d, timeZone)}`
+  if (days === 1) return `yesterday ${clock(d)}`
   if (days < 7) return `${days} days ago`
-  return d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', timeZone })
+  return d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' })
 }
 
-export function absolute(
-  iso: string | null | undefined,
-  now: Date = new Date(),
-  timeZone?: string,
-): string {
+export function absolute(iso: string | null | undefined, now: Date = new Date()): string {
   if (!iso) return '—'
   const d = parseStored(iso)
   if (!d) return '—'
-  const sameYear =
-    new Intl.DateTimeFormat('en-CA', { year: 'numeric', timeZone }).format(d) ===
-    new Intl.DateTimeFormat('en-CA', { year: 'numeric', timeZone }).format(now)
+  const sameYear = d.getFullYear() === now.getFullYear()
   const date = d.toLocaleDateString(LOCALE, {
     day: 'numeric',
     month: 'short',
     ...(sameYear ? {} : { year: 'numeric' }),
-    ...(timeZone ? { timeZone } : {}),
   })
-  return `${date}, ${clock(d, timeZone)}`
+  return `${date}, ${clock(d)}`
 }
 
 export function bytes(n: number | null | undefined): string {
