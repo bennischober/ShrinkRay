@@ -182,7 +182,7 @@
               tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{relative(job.started_at)}</span>
-            <span class="dur">{job.state === 'done' ? span(job.started_at, job.finished_at) ?? '—' : job.state === 'running' ? '…' : '—'}</span>
+            <span class="dur">{job.state === 'done' ? span(job.started_at, job.finished_at) : job.state === 'running' ? '…' : '—'}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}

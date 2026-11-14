@@ -98,7 +98,7 @@ export function crf(value: number | null | undefined): string {
 
 export function bitrate(kbps: number | null | undefined): string {
   if (kbps == null || !Number.isFinite(kbps) || kbps <= 0) return '—'
-  return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mb/s` : `${Math.round(kbps)} kb/s`
+  return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} kb/s`
 }
 
 export function eta(seconds: number | null | undefined): string {
@@ -133,6 +133,7 @@ const STATE_WORDS: Record<string, string> = {
   partial: 'Partial',
   failed: 'Failed',
   cancelled: 'Cancelled',
+  interrupted: 'Interrupted',
 }
 
 /** The screen word for a job state (DESIGN.md Glossary): one vocabulary,

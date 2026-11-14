@@ -147,7 +147,8 @@
     const savedLabel =
       `−${bytes(savedBytes)}`
     const vmafs = encoded.map((o) => o.vmaf).filter((v) => v != null) as number[]
-    const wall = span(lastEncodeRun.started_at, lastEncodeRun.finished_at)
+    const wallSpan = span(lastEncodeRun.started_at, lastEncodeRun.finished_at)
+    const wall = wallSpan === '—' ? '' : wallSpan
     return {
       id: lastEncodeRun.id,
       state: lastEncodeRun.state,
@@ -246,7 +247,7 @@
   const planAge = $derived.by(() => {
     if (!lastPlan?.finished_at) return ''
     const elapsed = span(lastPlan.finished_at, new Date().toISOString())
-    if (!span) return ''
+    if (elapsed === '—') return ''
     return `finished ${elapsed} ago`
   })
   /** Head summary in real terms: what happened SINCE the plan ran. */

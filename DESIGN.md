@@ -209,6 +209,7 @@ The one vocabulary every page uses (issue #627). A term below has exactly one us
 | State: running | Running | amber | hatched dot |
 | State: done | Done | ok | filled dot |
 | State: failed | Failed | red | dot with bar |
+| State: partial | Partial | amber | dot with bar |
 | Plan verdict: encode | Encode | amber | hatch |
 | Plan verdict: skip | Skip | dim | empty dot |
 | Plan verdict: failed | Failed | red | dot with bar |

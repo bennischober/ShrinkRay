@@ -26,9 +26,11 @@ describe('StatusBadge', () => {
     expect(container.querySelector('.badge.work')).toBeTruthy()
   })
 
-  it('never relies on colour alone', () => {
+  it('never relies on colour alone: the word is rendered and the mark is hidden from screen readers', () => {
     const { container } = render(StatusBadge, { label: 'Failed', tone: 'fail' })
-    expect(container.querySelector('[data-shape="dot"]')).toBeTruthy()
+    // the word carries the meaning; the coloured dot is decoration only
+    expect(screen.getByText('Failed')).toBeTruthy()
+    expect(container.querySelector('.mark')?.getAttribute('aria-hidden')).toBe('true')
   })
 })
 
