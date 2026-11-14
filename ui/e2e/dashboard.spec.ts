@@ -37,7 +37,10 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
 async function expectNothingEscapes(page: Page): Promise<void> {
   const escaped = await page.evaluate(() => {
     const out: string[] = []
-    for (const el of Array.from(document.querySelectorAll<HTMLElement>('main *'))) {
+    // `main > *` and `main > * > *`, never `main *`: the busy scenario has
+    // thousands of rows, and reading a rect for each of them took longer than
+    // the test's own 30 s timeout
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('main > *, main > * > *'))) {
       const rect = el.getBoundingClientRect()
       if (rect.width === 0 || rect.height === 0) continue
       if (rect.right > window.innerWidth + 1) {
