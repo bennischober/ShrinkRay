@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
-  import { bytes, duration, percent, relative, savedPercent, span, vmaf } from '../format'
+  import { bytes, duration, kindWord, percent, relative, savedPercent, span, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
 
@@ -382,7 +382,7 @@
   {#if runningJob}
     <div class="running">
       <div class="running-head">
-        <span class="legend amber">IN WORK · {runningJob.kind.toUpperCase()}</span>
+        <span class="legend amber">Working · {kindWord(runningJob.kind)}</span>
         <span class="mono dim">{runningProgress?.done != null && runningProgress?.total != null ? `${runningProgress.done}/${runningProgress.total} · ` : ''}{runningProgress?.percent != null ? `${runningProgress.percent}%` : ''}</span>
       </div>
       <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || runningJob.kind}</div>
@@ -652,7 +652,7 @@
           <div class="plan-row mono" class:plan-done={done} title={done ? 'the prediction has been overtaken by a measurement — the row shows the measured values' : ''}>
             <span class="p-name">{entry.movie}</span>
             <span class="chip {done ? 'done' : entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
-              <span class="swatch"></span>{done ? 'ENCODED' : entry.state.toUpperCase()}
+              <span class="swatch"></span>{done ? 'Encoded' : verdictWord(entry.state)}
             </span>
             <span class="p-num" class:measured={done && rec?.crf != null} title={done && rec?.crf != null ? 'measured value — the plan predicted ' + (entry.crf ?? '—') : 'planned value'}>
               {#if done}{rec?.crf ?? '—'}{#if crfDelta != null && crfDelta !== 0}<span class="delta-mark"> ({crfDelta > 0 ? '+' : '−'}{Math.abs(crfDelta)})</span>{/if}{:else}{entry.crf ?? '—'}{/if}

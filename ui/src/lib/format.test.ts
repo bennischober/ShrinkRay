@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, savedPercent, span, stateWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, kindWord, savedPercent, span, stateWord, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -144,5 +144,21 @@ describe('stateWord', () => {
 
   it('keeps an unknown state visible instead of blanking it', () => {
     expect(stateWord('reconciling')).toBe('reconciling')
+  })
+})
+
+describe('kindWord and verdictWord', () => {
+  it('gives every job kind its glossary word', () => {
+    expect(kindWord('scan')).toBe('Library scan')
+    expect(kindWord('crf-search')).toBe('CRF search')
+    expect(kindWord('encode')).toBe('Encode')
+    expect(kindWord('legacy')).toBe('Legacy')
+  })
+
+  it('gives every plan verdict its screen word and keeps an unknown one visible', () => {
+    expect(verdictWord('encode')).toBe('Encode')
+    expect(verdictWord('skip')).toBe('Skip')
+    expect(verdictWord('failed')).toBe('Failed')
+    expect(verdictWord('deferred')).toBe('deferred')
   })
 })

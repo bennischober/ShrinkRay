@@ -141,3 +141,30 @@ const STATE_WORDS: Record<string, string> = {
 export function stateWord(state: string): string {
   return STATE_WORDS[state] ?? state
 }
+
+const KIND_WORDS: Record<string, string> = {
+  scan: 'Library scan',
+  plan: 'Plan',
+  decision: 'Decision',
+  'crf-search': 'CRF search',
+  encode: 'Encode',
+  legacy: 'Legacy',
+}
+
+/** The screen word for a job kind (DESIGN.md Glossary): the enum never
+ * reaches the screen, and an unknown kind keeps its own word so a new one is
+ * visible rather than blank. */
+export function kindWord(kind: string): string {
+  return KIND_WORDS[kind] ?? kind
+}
+
+const VERDICT_WORDS: Record<string, string> = {
+  encode: 'Encode',
+  skip: 'Skip',
+  failed: 'Failed',
+}
+
+/** The screen word for a plan's verdict on one file. */
+export function verdictWord(verdict: string): string {
+  return VERDICT_WORDS[verdict] ?? verdict
+}

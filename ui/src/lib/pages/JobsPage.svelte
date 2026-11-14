@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job } from '../api'
-  import { bytes, relative, span, stateWord } from '../format'
+  import { bytes, kindWord, relative, span, stateWord } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -129,12 +129,12 @@
       <div class="filters">
         <select class="mono" bind:value={kindFilter} aria-label="Filter by kind">
           <option value="all">all kinds</option>
-          <option value="scan">scan</option>
-          <option value="plan">plan</option>
-          <option value="decision">decision</option>
-          <option value="crf-search">crf-search</option>
-          <option value="encode">encode</option>
-          <option value="legacy">legacy</option>
+          <option value="scan">{kindWord('scan')}</option>
+          <option value="plan">{kindWord('plan')}</option>
+          <option value="decision">{kindWord('decision')}</option>
+          <option value="crf-search">{kindWord('crf-search')}</option>
+          <option value="encode">{kindWord('encode')}</option>
+          <option value="legacy">{kindWord('legacy')}</option>
         </select>
         <select class="mono" bind:value={stateFilter} aria-label="Filter by state">
           <option value="all">all states</option>
@@ -168,7 +168,7 @@
           <div class="row mono">
             <span class="id">{job.id}</span>
             <span class="kind">
-              {job.kind}
+              {kindWord(job.kind)}
               {#if singleMoviePath(job)}
                 <!-- single-movie jobs link to the title: the two audit
                      trails reference each other -->
