@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "vitest run",
-    "test:e2e": "playwright test --project=desktop; playwright test --project=phone"
+    "test:e2e": "playwright test --project=desktop",
+    "test:e2e:phone": "playwright test --project=phone"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",
