@@ -487,8 +487,8 @@ class TestPlanReuse(unittest.TestCase):
             probe_encoder_preset="5",
             crop=None,
             crf_range=overrides.pop("crf_range", engine_search.DEFAULT_CRF_RANGE),
-            sample_count=engine_search.sample_count_for(600.0, engine_plan.DEFAULT_SAMPLE_EVERY),
-            sample_seconds=10.0,
+            sample_count=engine_search.sample_count_for(240.0, engine_plan.DEFAULT_SAMPLE_EVERY),
+            sample_seconds=engine_plan.DEFAULT_SAMPLE_SECONDS,
             hdr=False,
             encoder=overrides.pop("encoder", "svt_av1"),
             # the fingerprint's crop-independent recipe part (the tests'
@@ -517,7 +517,7 @@ class TestPlanReuse(unittest.TestCase):
             )
 
         with (
-            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
                 engine_pipeline,
@@ -616,7 +616,7 @@ class TestPlanReuse(unittest.TestCase):
             return ["hb", "--quality", str(crf), "--encoder-preset", preset]
 
         with (
-            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
                 engine_pipeline,
@@ -774,7 +774,7 @@ class TestPlanReuse(unittest.TestCase):
             )
 
         with (
-            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
                 engine_pipeline,
@@ -2220,7 +2220,7 @@ class TestMinSavingThreshold(unittest.TestCase):
     def _plan(self, min_saving_percent: int, factor: float):
         """Runs plan_quality with the search mocked to the given factor."""
         with (
-            patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+            patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
             patch.object(
                 engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
             ),
@@ -2423,7 +2423,7 @@ class TestUnreachableIsDecidedBeforeSize(unittest.TestCase):
                 ("find_optimal_crf", {"return_value": (chosen, achieved, [])}),
                 ("check_chosen_crf_shrinks", {"side_effect": fake_check}),
                 ("extract_samples", {"return_value": [(self.sample, 10.0)]}),
-                ("probe_duration_seconds", {"return_value": 600.0}),
+                ("probe_duration_seconds", {"return_value": 240.0}),
             ):
                 stack.enter_context(patch.object(engine_search, target, **value))
             yield stack
@@ -2431,7 +2431,7 @@ class TestUnreachableIsDecidedBeforeSize(unittest.TestCase):
     def _plan(self, chosen: int, achieved: float, chosen_factor: float, checked: list):
         with self._measured(chosen, achieved, chosen_factor, checked) as stack:
             for name, value in (
-                ("probe_duration_seconds", 600.0),
+                ("probe_duration_seconds", 240.0),
                 ("_source_dimensions", {"width": 1920, "height": 1080}),
                 ("source_codec", "h264"),
                 ("source_bit_depth", None),
@@ -2576,7 +2576,7 @@ class TestRecordedScoreKeepsTheSearchVerdict(unittest.TestCase):
                 ("estimate_size_factor", {"return_value": 0.5}),
                 ("check_chosen_crf_shrinks", {"return_value": 0.5}),
                 ("extract_samples", {"return_value": [(self.sample, 10.0)]}),
-                ("probe_duration_seconds", {"return_value": 600.0}),
+                ("probe_duration_seconds", {"return_value": 240.0}),
             ):
                 stack.enter_context(patch.object(engine_search, target, **value))
             yield stack
@@ -2594,7 +2594,7 @@ class TestRecordedScoreKeepsTheSearchVerdict(unittest.TestCase):
     def _plan(self, floor_score: float):
         with self._measured(self._scores(floor_score)) as stack:
             for name, value in (
-                ("probe_duration_seconds", 600.0),
+                ("probe_duration_seconds", 240.0),
                 ("_source_dimensions", {"width": 1920, "height": 1080}),
                 ("source_codec", "h264"),
                 ("source_bit_depth", None),
@@ -2727,7 +2727,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         """Runs plan_quality with the plan's non-search seams mocked to a
         small h264 file plus the caller's extra patches."""
         patches = [
-            patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+            patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
             patch.object(
                 engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
             ),
@@ -2815,7 +2815,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         key = engine_search.probe_cache_key(
             self.movie,
             10.0,
-            10.0,
+            4.0,
             22,
             "svt_av1",
             "5",
@@ -2863,7 +2863,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         vmaf_tools._vmaf_style = None
         try:
             with (
-                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=240.0),
                 patch(
                     "shrinkray.tools.vmaf.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffmpeg", timeout=60),
@@ -2901,17 +2901,17 @@ class TestSubprocessTimeouts(unittest.TestCase):
         sample_every keeps the probed fraction at sample_seconds /
         sample_every regardless of length (issue #14).
         """
-        # a 20-minute short: one window per 10 minutes => 2
-        self.assertEqual(engine_search.sample_count_for(1200.0, 600.0), 2)
-        # a 2-hour film => 12
-        self.assertEqual(engine_search.sample_count_for(7200.0, 600.0), 12)
-        # a 4-hour film => 24 (coverage stays the same fraction)
-        self.assertEqual(engine_search.sample_count_for(14400.0, 600.0), 24)
+        # a 20-minute short: one window per 4 minutes => 5
+        self.assertEqual(engine_search.sample_count_for(1200.0, 240.0), 5)
+        # a 2-hour film => 30 (the decided default's own example, issue #651)
+        self.assertEqual(engine_search.sample_count_for(7200.0, 240.0), 30)
+        # a 4-hour film => 60 (coverage stays the same fraction)
+        self.assertEqual(engine_search.sample_count_for(14400.0, 240.0), 60)
 
     def test_sample_count_for_short_input_yields_one(self):
         """An input shorter than the density still yields one window."""
-        self.assertEqual(engine_search.sample_count_for(300.0, 600.0), 1)
-        self.assertEqual(engine_search.sample_count_for(1.0, 600.0), 1)
+        self.assertEqual(engine_search.sample_count_for(120.0, 240.0), 1)
+        self.assertEqual(engine_search.sample_count_for(1.0, 240.0), 1)
 
     def test_sample_count_for_explicit_count_overrides(self):
         """An explicit sample_count wins over the density knob.
@@ -2919,7 +2919,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         A latency-sensitive caller (watch mode) must still be able to pin a
         fixed probe budget.
         """
-        self.assertEqual(engine_search.sample_count_for(7200.0, 600.0, sample_count=3), 3)
+        self.assertEqual(engine_search.sample_count_for(7200.0, 240.0, sample_count=3), 3)
 
     def test_sample_count_for_disabled_density_uses_default(self):
         """A disabled density falls back to the count-based default."""
@@ -2927,7 +2927,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             engine_search.sample_count_for(7200.0, 0.0), engine_plan.DEFAULT_SAMPLE_COUNT
         )
         self.assertEqual(
-            engine_search.sample_count_for(None, 600.0), engine_plan.DEFAULT_SAMPLE_COUNT
+            engine_search.sample_count_for(None, 240.0), engine_plan.DEFAULT_SAMPLE_COUNT
         )
 
     def test_plan_records_derived_sample_count(self):
@@ -2958,11 +2958,11 @@ class TestSubprocessTimeouts(unittest.TestCase):
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
                 ),
             ):
-                result = engine_plan.plan_quality(src, sample_every=600.0)
+                result = engine_plan.plan_quality(src, sample_every=240.0)
         self.assertTrue(result.success)
-        self.assertEqual(result.sample_count, 12)
+        self.assertEqual(result.sample_count, 30)
         # the extraction was asked for the derived count
-        self.assertEqual(fake_extract.call_args.args[2], 12)
+        self.assertEqual(fake_extract.call_args.args[2], 30)
 
     def test_detect_crop_rect_defaults_to_ten_samples(self):
         """The crop detector samples ten windows by default.
@@ -2982,7 +2982,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
-                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=240.0),
                 patch(
                     "shrinkray.engine.crop.subprocess.run",
                     return_value=type(
@@ -3015,7 +3015,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
-                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=240.0),
                 patch(
                     "shrinkray.engine.crop.subprocess.run",
                     return_value=type(
@@ -3102,7 +3102,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -3128,7 +3128,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -3158,7 +3158,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                     src = Path(tmp) / "movie.mkv"
                     src.write_bytes(b"x" * 8)
                     with (
-                        patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                        patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                         patch.object(
                             engine_plan,
                             "_source_dimensions",
@@ -3186,7 +3186,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                             return_value={"width": 1920, "height": 1080},
                         ),
                         patch.object(engine_plan, "is_hdr_file", return_value=False),
-                        patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+                        patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
                         patch.object(engine_pipeline, "source_codec", return_value=codec),
                         patch.object(
                             engine_pipeline,
@@ -3211,7 +3211,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -3225,7 +3225,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             ):
                 extended = engine_plan.plan_quality(src, candidate_codecs=(*SOURCE_CODECS, "mpeg4"))
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -3244,7 +3244,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -3275,7 +3275,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3308,7 +3308,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3342,7 +3342,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3369,7 +3369,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)  # a few bytes: far below 5 GB
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3393,7 +3393,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3422,7 +3422,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1280, "height": 720}
                 ),
@@ -3447,7 +3447,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 800}
                 ),
@@ -3467,13 +3467,13 @@ class TestSubprocessTimeouts(unittest.TestCase):
                         "width": 1920,
                         "height": 800,
                         "codec": "h264",
-                        "duration": 600.0,
+                        "duration": 240.0,
                         "bitrate": None,
                         "bit_depth": None,
                     },
                 ),
                 patch.object(engine_plan, "is_hdr_file", return_value=False),
-                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
                 patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
                 patch.object(engine_pipeline, "check_disk_space", return_value=(True, "")),
                 patch.object(
@@ -3511,7 +3511,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1440, "height": 1080}
                 ),
@@ -3537,7 +3537,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1280, "height": None}
                 ),
@@ -3560,7 +3560,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1280, "height": 720}
                 ),
@@ -3582,7 +3582,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 3840, "height": 2160}
                 ),
@@ -3598,7 +3598,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                     return_value={"width": 3840, "height": 2160},
                 ),
                 patch.object(engine_plan, "is_hdr_file", return_value=False),
-                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
                 ) as fake_probe,
@@ -3622,7 +3622,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": None, "height": None}
                 ),
@@ -3708,7 +3708,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
-                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=240.0),
                 patch(
                     "shrinkray.engine.samples.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),

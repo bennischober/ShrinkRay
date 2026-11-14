@@ -279,7 +279,7 @@ removed it: an unmeasured encode can take a library file's path).
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows for the sampled fallback detector (more samples can only shrink the crop) |
 | `--sample-count N` | the number of probe windows (default: unset — density from `quality.sample_every` applies; set `quality.sample_count` to pin a fixed number; plans stored under the old encode-mode fingerprint re-probe once) |
-| `--sample-every S` | seconds of runtime per probe window — the default (`quality.sample_every`, 600 s, i.e. one per 10 minutes); a configured `quality.sample_count` overrides it ([#526](https://github.com/bennischober/ShrinkRay/issues/526)) |
+| `--sample-every S` | seconds of runtime per probe window — the default (`quality.sample_every`, 240 s, i.e. one per 4 minutes); a configured `quality.sample_count` overrides it ([#526](https://github.com/bennischober/ShrinkRay/issues/526)) |
 | `--replan` | ignore stored plans and re-probe every movie |
 | `--threads N` | per-encode thread cap; 0 or omitted uses `handbrake.max_threads`, whose 0 means all cores |
 | `--db PATH` | keep a database (scan cache, plans, history); omitted, the run is stateless |
