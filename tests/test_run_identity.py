@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from shrinkray import db
+from shrinkray.config import DEFAULT_SAMPLE_SECONDS
 from shrinkray.engine.pipeline import encode_with_quality
 from shrinkray.engine.plan import QualityResult, plan_quality
 from shrinkray.engine.search import DEFAULT_CRF_RANGE
@@ -420,8 +421,8 @@ class TestPlanPathGuard(unittest.TestCase):
             encoder_preset="5",
             target_vmaf=96.0,
             crf_range=DEFAULT_CRF_RANGE,
-            sample_count=6,
-            sample_seconds=10.0,
+            sample_count=15,
+            sample_seconds=DEFAULT_SAMPLE_SECONDS,
             crop_sample_count=10,
             vmaf_statistic="mean",
             vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",

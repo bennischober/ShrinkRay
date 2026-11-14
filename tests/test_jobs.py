@@ -1035,7 +1035,7 @@ class TestJobs(unittest.TestCase):
                 jobs.execute_encode(job, self.connection, threading.Event())
 
         run(Conf())
-        self.assertEqual(captured["sample_every"], 600.0)
+        self.assertEqual(captured["sample_every"], 240.0)
         self.assertIsNone(captured["sample_count"])
         run(Conf({"quality": {"sample_count": 5}}))
         self.assertEqual(captured["sample_count"], 5)

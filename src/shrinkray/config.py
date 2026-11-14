@@ -88,9 +88,9 @@ DEFAULT_MIN_SOURCE_WIDTH = 1920
 DEFAULT_CROP_SAMPLE_COUNT = 10
 # probe density as a duration: one window per N seconds of runtime, so
 # coverage is a fixed fraction of the file instead of shrinking with length
-DEFAULT_SAMPLE_EVERY = 600.0
+DEFAULT_SAMPLE_EVERY = 240.0
 DEFAULT_SAMPLE_COUNT = 3
-DEFAULT_SAMPLE_SECONDS = 10.0
+DEFAULT_SAMPLE_SECONDS = 4.0
 # the required VMAF (quality.target_vmaf). 96 is the decided product default
 # (Netflix's 'visually transparent' zone; 93 is their common top-tier floor).
 # VMAF falls monotonically with rising CRF, so a higher target means a larger

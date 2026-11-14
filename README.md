@@ -237,9 +237,9 @@ other services keep their cores.
    (`--crop-samples` windows, bars common to every window) runs only when the
    pass learned nothing — a failed pass, or no readings at all
    ([#525](https://github.com/bennischober/ShrinkRay/issues/525)).
-4. **Quality search** — 10-second samples are encoded at a few CRF values and
-   scored with VMAF against their source: one window per 10 minutes of runtime
-   (12 for a 2-hour film) in every mode — `encode`, `plan` and the resident app
+4. **Quality search** — 4-second samples are encoded at a few CRF values and
+   scored with VMAF against their source: one window per 4 minutes of runtime
+   (30 for a 2-hour film) in every mode — `encode`, `plan` and the resident app
    resolve the count the same way; a configured `quality.sample_count` pins a fixed
    number instead (issue #526). The search
    interpolates between a passing and a failing probe and settles on the largest
@@ -279,7 +279,7 @@ removed it: an unmeasured encode can take a library file's path).
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows for the sampled fallback detector (more samples can only shrink the crop) |
 | `--sample-count N` | the number of probe windows (default: unset — density from `quality.sample_every` applies; set `quality.sample_count` to pin a fixed number; plans stored under the old encode-mode fingerprint re-probe once) |
-| `--sample-every S` | seconds of runtime per probe window — the default (`quality.sample_every`, 600 s, i.e. one per 10 minutes); a configured `quality.sample_count` overrides it ([#526](https://github.com/bennischober/ShrinkRay/issues/526)) |
+| `--sample-every S` | seconds of runtime per probe window — the default (`quality.sample_every`, 240 s, i.e. one per 4 minutes); a configured `quality.sample_count` overrides it ([#526](https://github.com/bennischober/ShrinkRay/issues/526)) |
 | `--replan` | ignore stored plans and re-probe every movie |
 | `--threads N` | per-encode thread cap; 0 or omitted uses `handbrake.max_threads`, whose 0 means all cores |
 | `--db PATH` | keep a database (scan cache, plans, history); omitted, the run is stateless |
@@ -331,7 +331,7 @@ backlog-on-start switch; and, where the resident app keeps its data (the contain
 `/data`, or `--db`), a pause/resume switch. Values go through the same schema as a config
 file loaded from disk, so a value the app would refuse is shown and never written (the 1080p
 floor, for example, can be raised but not lowered). A change to a setting that is part of
-every stored plan (the VMAF, the probe preset, the probe density) says that it re-measures
+every stored plan (the VMAF, the probe preset, the probe density, the probe window length) says that it re-measures
 the library before you save it. The resident app applies a save at its next file. The
 dashboard cannot do any of this: it only observes.
 
