@@ -245,6 +245,52 @@ class TestDb(unittest.TestCase):
             self.assertEqual(row["min_saving_percent"], 0)
             migrated.close()
 
+    def test_set_encode_output_clearing_is_the_discard(self):
+        """Issue #625: clearing an encode's output path IS the discard - the
+        outcome and its reason are written in the SAME statement. The contract
+        the replace path relies on: a caller that clears the path can never
+        leave the row reading as an applied encode, and a caller that SETS a
+        path must not touch the outcome."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            connection = db.connect(root / "t.db")
+            file_id = db.upsert_file(
+                connection,
+                db.MovieRecord(path=root / "a.mkv", mtime=1.0, size=100, name="a", category="c"),
+            )
+            encode_id = db.add_encode(
+                connection,
+                file_id,
+                "VMAF>96",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(root / "staged.mkv"),
+            )
+            connection.commit()
+
+            # clearing the path records the discard with its reason
+            db.set_encode_output(connection, encode_id, None, "output lost 2 subtitle track(s)")
+            row = connection.execute(
+                "SELECT output_file, outcome, outcome_reason FROM encodes WHERE id = ?",
+                (encode_id,),
+            ).fetchone()
+            self.assertIsNone(row["output_file"])
+            self.assertEqual(row["outcome"], "discarded")
+            self.assertEqual(row["outcome_reason"], "output lost 2 subtitle track(s)")
+
+            # setting a path does NOT resurrect the outcome: the swap's success
+            # path records its own outcome, this function only moves the path
+            db.set_encode_output(connection, encode_id, str(root / "real.mkv"))
+            row = connection.execute(
+                "SELECT output_file, outcome FROM encodes WHERE id = ?", (encode_id,)
+            ).fetchone()
+            self.assertEqual(row["output_file"], str(root / "real.mkv"))
+            self.assertEqual(row["outcome"], "discarded")
+            connection.close()
+
     def test_migration_v20_to_v21_outcome(self):
         """Issue #625: the encodes table gains an explicit outcome; existing
         rows are backfilled from what they can still prove - a skip marker
