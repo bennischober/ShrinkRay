@@ -1215,8 +1215,11 @@ def set_encode_output(
         reason (str | None): The decline's reason (the discard case).
     """
     if output_file is None:
-        # clearing the path IS the discard: one statement, so a crash can
-        # never leave the sizes reading as an applied encode (issue #625)
+        # clearing the path IS the discard: one statement, so a crash during
+        # the DECLINE can never leave the sizes reading as an applied encode
+        # (issue #625). The row is written 'applied' BEFORE the swap decides
+        # (#232's design): a crash in that insert-to-swap window is the
+        # pre-existing state doctor's vanished-output check reports.
         connection.execute(
             "UPDATE encodes SET output_file = NULL, outcome = 'discarded', "
             "outcome_reason = ? WHERE id = ?",

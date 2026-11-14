@@ -102,8 +102,10 @@ class TestDeclinedSwapIsNotAnEncode(unittest.TestCase):
         self.assertIn("subtitle track", encode["outcome_reason"])
 
     def test_every_decline_path_records_the_outcome(self) -> None:
-        """Verification failure, changed source, not smaller - each declines,
-        each records the outcome with its reason."""
+        """The service's error declines (a lost track, a changed source -
+        both arrive as the swap's `error` argument) record the outcome with
+        their reason. The not-smaller and SwapError branches have their own
+        tests below."""
         for error in (
             "output lost 2 subtitle track(s)",
             "the source changed while encoding",

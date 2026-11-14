@@ -82,9 +82,10 @@ def render_metrics(connection: sqlite3.Connection, library_root: Path | None = N
     ).fetchone()["n"]
     out += _family(
         "shrinkray_encodes_total",
-        "counter",
+        "gauge",
         "Encodes applied to the library (encode rows are never pruned; a"
-        " discarded attempt is not an encode - issue #625).",
+        " discarded attempt is not an encode - issue #625). The value can"
+        " FALL when a recorded encode's swap is declined.",
         [f"shrinkray_encodes_total {encodes}"],
     )
 
@@ -104,9 +105,9 @@ def render_metrics(connection: sqlite3.Connection, library_root: Path | None = N
     ).fetchone()["b"]
     out += _family(
         "shrinkray_bytes_reclaimed_total",
-        "counter",
+        "gauge",
         "Bytes the applied encodes saved in total (issue #625: a discarded"
-        " attempt reclaimed nothing).",
+        " attempt reclaimed nothing). The value can FALL on a decline.",
         [f"shrinkray_bytes_reclaimed_total {int(reclaimed)}"],
     )
 
