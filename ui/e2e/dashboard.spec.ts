@@ -55,6 +55,9 @@ async function expectNothingEscapes(page: Page): Promise<void> {
 for (const scenario of SCENARIOS) {
   for (const { hash, name } of PAGES) {
     test(`${name} · ${scenario}`, async ({ page }, testInfo) => {
+      // the busy and huge scenarios render thousands of rows, which is more
+      // than the 30 s default per test
+      test.setTimeout(120_000)
       const key = `${name} · ${scenario} · ${testInfo.project.name}`
       const known = KNOWN[key]
       const errors: string[] = []
