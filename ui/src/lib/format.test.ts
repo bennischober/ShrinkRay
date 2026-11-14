@@ -97,7 +97,7 @@ describe('percent, vmaf, crf, bitrate, eta', () => {
   })
 
   it('renders bitrates in the larger unit when it helps', () => {
-    expect(bitrate(4200)).toBe('4.2 Mb/s')
+    expect(bitrate(4200)).toBe('4.2 Mbps')
     expect(bitrate(640)).toBe('640 kb/s')
     expect(bitrate(null)).toBe('—')
   })
