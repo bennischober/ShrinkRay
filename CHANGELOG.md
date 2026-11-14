@@ -34,6 +34,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **The dashboard speaks one vocabulary and formats every number in one place** ([#627](https://github.com/bennischober/ShrinkRay/issues/627)): durations came in four formats, sizes were labelled GB while the math divided by 1024, and the same state read differently on every page. `ui/src/lib/format.ts` is now the shared place where a number becomes text (durations, relative and absolute times, binary sizes as GiB/MiB, percentages, VMAF with its target rule, CRF, bitrate, an estimate only when it is known), a shared component layer (`PageHeader`, `StatusBadge`, `FileName`, `Time`, `ProgressBar`, `EmptyState`, `Panel`) renders the facts every page repeats, and `DESIGN.md` carries the glossary both follow.
 
+- **A browser check for the dashboard** ([#628](https://github.com/bennischober/ShrinkRay/issues/628)): `npm run test:e2e` renders every page at 1440 and 390 px against one of four fixtures (`empty`, `busy`, `huge`, `nasty-names`) with no resident app, and fails on a page that scrolls sideways, an element that draws outside the viewport, a console error, or a serious accessibility violation. The cases that fail today are listed in `ui/e2e/known-failures.json`, each naming the page issue that fixes it, and the list fails when one of them starts passing.
+
 ## [0.6.1] - 2026-11-06
 
 ### Fixed
