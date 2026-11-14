@@ -5,7 +5,11 @@ import { defineConfig, devices } from '@playwright/test'
  * sees it. Screenshots and traces are CI artifacts, never committed. */
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: true,
+  globalSetup: './e2e/warmup.ts',
+  // one worker: the checks share one dev server, and a parallel run made the
+  // same commit report different failure sets (measured 29/1 and 14/16)
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
@@ -22,7 +26,9 @@ export default defineConfig({
     // the fixture mock is a dev-server plugin, so the checks run against `dev`
     command: 'npm run dev -- --port 4173',
     url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
+    // never reuse: a server left over from the previous run carries a stale
+    // module graph, and the same commit then reported 14 and 28 failures
+    reuseExistingServer: false,
     timeout: 60_000,
   },
 })
