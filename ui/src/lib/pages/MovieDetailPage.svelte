@@ -120,11 +120,15 @@
     return h > 0 ? `${h}h ${m}m` : `${m}m ${parts[2]}s`
   }
   const est = $derived(
-    encode?.saved_percent != null
-      ? encode.saved_percent <= 0
-        ? { text: `+${Math.abs(encode.saved_percent).toFixed(1)}% larger`, grew: true }
-        : { text: `${encode.saved_percent.toFixed(1)}% saved`, grew: false }
-      : null
+    encode?.outcome === 'discarded'
+      ? // a declined swap discarded the artifact (issue #625): nothing was
+        // reclaimed, and the reason is what the operator needs
+        { text: 'Discarded', grew: true }
+      : encode?.saved_percent != null
+        ? encode.saved_percent <= 0
+          ? { text: `+${Math.abs(encode.saved_percent).toFixed(1)}% larger`, grew: true }
+          : { text: `${encode.saved_percent.toFixed(1)}% saved`, grew: false }
+        : null,
   )
 
   /** The stored plan's predicted saving vs the current source size —
@@ -572,7 +576,19 @@
                 {/if}
               </span>
               <span class="num">{fmtGb(rec.output_size)}</span>
-              <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
+              <span
+                class="num"
+                class:bad={rec.outcome === 'discarded' || (rec.saved_percent ?? 0) <= 0}
+                title={rec.outcome === 'discarded'
+                  ? `discarded — ${rec.outcome_reason ?? 'the swap was declined'} (original untouched)`
+                  : undefined}
+              >
+                {rec.outcome === 'discarded'
+                  ? 'discarded'
+                  : rec.saved_percent != null
+                    ? `${rec.saved_percent.toFixed(0)}%`
+                    : '—'}
+              </span>
               <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
               <span class="delta" title="delta vs the previous run (a comparison between consecutive encodes — siblings of one generation are two runs of the same source)">
                 {#if i < encodesDesc.length - 1}

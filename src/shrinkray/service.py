@@ -144,7 +144,7 @@ def swap_encode_into_place(
         if current is None or current.st_size != input_size or current.st_mtime != input_mtime:
             reason = "the source changed during the encode"
             log_error(f"Not replacing '{source.name}': {reason}")
-            _encode_discarded(connection, encode_id)
+            _encode_discarded(connection, encode_id, reason)
             return SwapOutcome(replaced=False, reason=reason)
     if error is not None:
         # the artifact is fine (the picture measured at target), but the
@@ -156,21 +156,21 @@ def swap_encode_into_place(
         # artifact is discarded with its staging directory.
         reason = f"the encode failed verification: {error}"
         log_error(f"Not replacing '{source.name}': {reason}")
-        _encode_discarded(connection, encode_id)
+        _encode_discarded(connection, encode_id, reason)
         return SwapOutcome(replaced=False, reason=reason)
     size_before = source.stat().st_size
     size_after = output.stat().st_size
     if size_after >= size_before:
         reason = f"the output is not smaller ({size_before} -> {size_after} bytes)"
         log_error(f"Not replacing '{source.name}': {reason}")
-        _encode_discarded(connection, encode_id)
+        _encode_discarded(connection, encode_id, reason)
         return SwapOutcome(replaced=False, reason=reason)
     try:
         staged = stage_for_swap(output, source)
         retained = swap_into_library(source, staged)
     except SwapError as error:
         log_error(f"Not replacing '{source.name}': {error}")
-        _encode_discarded(connection, encode_id)
+        _encode_discarded(connection, encode_id, str(error))
         return SwapOutcome(replaced=False, reason=str(error))
     if connection is not None:
         db.add_retained(
@@ -190,7 +190,11 @@ def swap_encode_into_place(
     )
 
 
-def _encode_discarded(connection: sqlite3.Connection | None, encode_id: int | None) -> None:
+def _encode_discarded(
+    connection: sqlite3.Connection | None,
+    encode_id: int | None,
+    reason: str | None = None,
+) -> None:
     """Records that a written encode's artifact was discarded (issue #232).
 
     A declined swap leaves the encode in its staging directory, which the run
@@ -198,13 +202,19 @@ def _encode_discarded(connection: sqlite3.Connection | None, encode_id: int | No
     path; it must record the discard instead, or `doctor` reports a vanished
     output for a swap that was REFUSED - the healthy case.
 
+    The decline's reason rides the row's outcome (issue #625): a discarded
+    encode is a measured attempt whose result was thrown away, and the operator
+    sees WHY nothing was reclaimed.
+
     Args:
         connection: The database connection, or None for a stateless run.
         encode_id: The encode row to correct (None: nothing to correct).
+        reason: The decline's reason (why the artifact was discarded).
     """
     if connection is None or encode_id is None:
         return
     db.set_encode_output(connection, encode_id, None)
+    db.set_encode_outcome(connection, encode_id, "discarded", reason)
 
 
 def _latest_encode_id(connection: sqlite3.Connection, source: Path) -> int | None:

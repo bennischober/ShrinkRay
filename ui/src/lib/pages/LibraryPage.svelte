@@ -137,6 +137,10 @@
     const preset = movie.encode?.preset
     if (movie.missing) return { label: 'MISSING', cls: 'missing' }
     if (preset?.startsWith('skipped')) return { label: 'SKIPPED', cls: 'skip' }
+    // a declined swap is a measured attempt whose artifact was discarded
+    // (issue #625): it must not read as ENCODED
+    if (preset && movie.encode?.outcome === 'discarded')
+      return { label: 'DISCARDED', cls: 'skip' }
     if (preset) return { label: 'ENCODED', cls: 'done' }
     if (plannedPaths.includes(movie.path)) return { label: 'PLANNED', cls: 'planned' }
     // the default state renders as a bare swatch: 354 identical bordered

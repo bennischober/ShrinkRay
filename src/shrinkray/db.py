@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 if TYPE_CHECKING:
     # engine is ABOVE db in the layer contract; the summary type arrives as
@@ -86,6 +86,12 @@ CREATE TABLE IF NOT EXISTS encodes (
     verified_subsample INTEGER,
     crf_source TEXT,
     plan_created_at TEXT,
+    -- what the encode's artifact became: 'applied' (swapped into the
+    -- library), 'discarded' (the swap declined, the artifact thrown away,
+    -- issue #625) or 'skipped' (a skip marker row). The decline reason
+    -- rides outcome_reason so the UI can say WHY nothing was reclaimed.
+    outcome TEXT NOT NULL DEFAULT 'applied',
+    outcome_reason TEXT,
     encoded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -425,6 +431,21 @@ MIGRATIONS = {
         # shrink), so every pre-#316 plan misses the current lookup and is
         # re-probed - fail-safe to re-probe, never guess.
         "ALTER TABLE plans ADD COLUMN min_saving_percent INTEGER NOT NULL DEFAULT 0",
+    ],
+    21: [
+        # an encode's outcome is part of its record (issue #625): a swap that
+        # was declined (lost track, changed source, not smaller, SwapError)
+        # discarded the artifact, but the row kept its sizes and saved_percent
+        # and every surface reported the file as encoded - a reclaimed figure
+        # for space that was never reclaimed. Existing rows are backfilled
+        # from what they can still prove: a skip marker says so in its preset,
+        # a row whose output_file was nulled (#232) was discarded, everything
+        # else was applied.
+        "ALTER TABLE encodes ADD COLUMN outcome TEXT NOT NULL DEFAULT 'applied'",
+        "ALTER TABLE encodes ADD COLUMN outcome_reason TEXT",
+        "UPDATE encodes SET outcome = 'skipped' WHERE preset LIKE 'skipped%'",
+        "UPDATE encodes SET outcome = 'discarded' "
+        "WHERE output_file IS NULL AND outcome = 'applied'",
     ],
 }
 
@@ -1071,6 +1092,8 @@ def add_encode(
     generation: int = 1,
     crf_source: str | None = None,
     plan_created_at: str | None = None,
+    outcome: str = "applied",
+    outcome_reason: str | None = None,
 ) -> int:
     """Records an encode in the history table.
 
@@ -1114,9 +1137,9 @@ def add_encode(
             probe_count, probe_seconds, hdr, source_width, source_height,
             source_codec, source_bit_depth, source_duration, tool_versions,
             input_bitrate, output_bitrate, source_file, output_file, generation,
-            crf_source, plan_created_at
+            crf_source, plan_created_at, outcome, outcome_reason
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -1146,10 +1169,38 @@ def add_encode(
             generation,
             crf_source,
             plan_created_at,
+            outcome,
+            outcome_reason,
         ),
     )
     connection.commit()
     return int(cursor.lastrowid or 0)
+
+
+def set_encode_outcome(
+    connection: sqlite3.Connection,
+    encode_id: int,
+    outcome: str,
+    reason: str | None = None,
+) -> None:
+    """Records what an encode's artifact became (issue #625).
+
+    A swap that is declined discards the artifact; the row must then say so -
+    with the reason - or every surface that reads sizes and saved_percent
+    reports the file as encoded and a reclaimed figure for space that was
+    never reclaimed.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        encode_id (int): The encode row to update.
+        outcome (str): 'applied' or 'discarded'.
+        reason (str | None): Why the outcome changed (the decline reason).
+    """
+    connection.execute(
+        "UPDATE encodes SET outcome = ?, outcome_reason = ? WHERE id = ?",
+        (outcome, reason, encode_id),
+    )
+    connection.commit()
 
 
 def set_encode_output(
@@ -1210,6 +1261,8 @@ def add_skip(
         0.0,
         chosen_crf=chosen_crf,
         achieved_vmaf=achieved_vmaf,
+        outcome="skipped",
+        outcome_reason=reason,
     )
 
 

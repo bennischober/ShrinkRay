@@ -1004,6 +1004,11 @@ def snapshot(
                         "generation": r["generation"],
                         "input_bitrate": r["input_bitrate"],
                         "output_bitrate": r["output_bitrate"],
+                        # what the artifact became (issue #625): a discarded
+                        # attempt stays visible as an attempt, with its reason,
+                        # but no surface may count it as an applied encode
+                        "outcome": r["outcome"],
+                        "outcome_reason": r["outcome_reason"],
                     }
                     if r["preset"]
                     else None,
@@ -1016,7 +1021,8 @@ def snapshot(
                            e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
                            e.encode_seconds,
                            e.probe_count, e.probe_seconds, e.tool_versions,
-                           e.generation, e.input_bitrate, e.output_bitrate
+                           e.generation, e.input_bitrate, e.output_bitrate,
+                           e.outcome, e.outcome_reason
                     FROM files f
                     LEFT JOIN encodes e ON e.id = (
                         SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
@@ -1285,6 +1291,10 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "source_file": r["source_file"],
                 "output_file": r["output_file"],
                 "encoded_at": r["encoded_at"],
+                # the attempt's outcome (issue #625): discarded rows keep their
+                # measurements and name why nothing was reclaimed
+                "outcome": r["outcome"],
+                "outcome_reason": r["outcome_reason"],
             }
             for r in s.connection.execute(
                 """
