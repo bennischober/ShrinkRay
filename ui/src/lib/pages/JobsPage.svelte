@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
-  import { bytes, crf, etaShort, groupJobs, isStageRow, kindWord, progressLabel, relative, remainingSeconds, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
+  import { bytes, crf, elapsedSeconds, etaShort, groupJobs, isStageRow, kindWord, progressLabel, relative, remainingSeconds, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -207,7 +207,7 @@
               tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
-            <span class="dur" title={job.state === 'running' ? 'time left, estimated from the work done' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(job.started_at, workFraction(progress(job)), new Date(now))) || '…') : ''}</span>
+            <span class="dur" title={job.state === 'running' ? 'time left, estimated from the work done in this step' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(progress(job)?.elapsed ?? elapsedSeconds(job.started_at, new Date(now)), workFraction(progress(job)))) || '…') : ''}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}

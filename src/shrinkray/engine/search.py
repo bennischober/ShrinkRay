@@ -17,6 +17,7 @@ import hashlib
 import math
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -451,10 +452,13 @@ def probe_crf(
         recipe = vmaf_recipe(crop=crop)
     tool_versions = _tool_versions(handbrake)
     scores: list[float] = []
+    probe_started = time.monotonic()
     for index, (sample, offset) in enumerate(samples):
         _check_cancel(cancel)
-        # one event per sample: the sample index IS the search's position, the
-        # only progress a probe can honestly report (issue #690)
+        # one event per sample: the sample index IS the search's position, and the
+        # probe's OWN elapsed time is what an estimate must divide, never the
+        # job's — dividing the job's elapsed by a probe's fraction swung the
+        # estimate by an order of magnitude on every new probe (issue #690 review)
         if progress:
             progress(
                 {
@@ -463,6 +467,7 @@ def probe_crf(
                     "done": index,
                     "total": len(samples),
                     "crf": crf,
+                    "elapsed": round(time.monotonic() - probe_started, 1),
                 }
             )
         key = probe_cache_key(

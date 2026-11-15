@@ -4,7 +4,7 @@ import JobsPage from './JobsPage.svelte'
 
 // the running row's stage comes from the live progress store: a mutable stub
 // lets one test seed it without a stream (issue #630)
-let progressStub: { percent?: number; movie?: string | null; detail?: string | null; done?: number; total?: number | null } | null = null
+let progressStub: { percent?: number; movie?: string | null; detail?: string | null; done?: number; total?: number | null; elapsed?: number } | null = null
 vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
 import type { Job } from '../api'
 
@@ -179,7 +179,7 @@ describe('JobsPage render', () => {
     // estimate from the samples already probed
     const started = new Date(Date.now() - 20 * 60_000).toISOString()
     const j = job({ kind: 'crf-search', state: 'running', started_at: started, finished_at: null })
-    progressStub = { done: 1, total: 3, detail: 'sample 2/3 (CRF 30)' }
+    progressStub = { done: 1, total: 3, detail: 'sample 2/3 (CRF 30)', elapsed: 20 * 60 }
     const { container } = render(JobsPage, {
       history: [j],
       onopenMovie: () => {},

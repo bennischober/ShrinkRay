@@ -108,24 +108,35 @@ export function eta(seconds: number | null | undefined): string {
   return `about ${duration(seconds)} left`
 }
 
-/** The wall time a running job has left, from the fraction of its work it has
- * finished and the time it has been running: the engine sends no ETA, so a
- * proportional estimate is the only honest one. The fraction is `percent / 100`
- * during the final encode and `done / total` during a search, which reports a
- * sample count instead (issue #690). Null when there is no usable fraction — a row
- * then says `…` rather than inventing a number. */
+/** The wall time a step has left, from the fraction of its work it has finished
+ * and how long IT has been running: the engine sends no ETA, so a proportional
+ * estimate is the only honest one. `elapsed` must be the STEP's own — a probe's, not
+ * the job's — or a fresh probe divides the job's elapsed by a tiny fraction and
+ * swings the estimate by an order of magnitude (issue #690 review). Null when there
+ * is no usable fraction or elapsed time, so a row says `…` rather than inventing a
+ * number. */
 export function remainingSeconds(
-  startedIso: string | null | undefined,
+  elapsed: number | null | undefined,
   fraction: number | null | undefined,
+): number | null {
+  if (elapsed == null || !(elapsed > 0)) return null
+  if (fraction == null || !(fraction > 0) || fraction >= 1) return null
+  const total = elapsed / fraction
+  return Math.max(0, total - elapsed)
+}
+
+/** Seconds a running job has been running, from its start timestamp. Null when
+ * the timestamp is missing or unparseable. */
+export function elapsedSeconds(
+  startedIso: string | null | undefined,
   now: Date = new Date(),
 ): number | null {
-  if (!startedIso || fraction == null || !(fraction > 0) || fraction >= 1) return null
+  if (!startedIso) return null
   const iso =
     startedIso.endsWith('Z') || startedIso.includes('+') ? startedIso : `${startedIso}Z`
   const elapsed = (now.getTime() - Date.parse(iso)) / 1000
   if (!Number.isFinite(elapsed) || elapsed <= 0) return null
-  const total = elapsed / fraction
-  return Math.max(0, total - elapsed)
+  return elapsed
 }
 
 /** The same estimate for a table cell, where the column header already says
