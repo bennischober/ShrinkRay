@@ -195,12 +195,9 @@
   // ── selection (bulk ops live on the library page) ──
   let selectedPaths = $state<Set<string>>(new Set())
 
-  // ── resident-memory samples (the overview's sparkline buffer) ──
-  // Accumulated in the poll path, never in an $effect: an effect that
-  // issue #633: the Overview's sparkline is gone, so nothing reads the
-  // samples any more — the console keeps its own memory figure in the
-  // internals line and no longer accumulates a window for a panel that
-  // does not exist.
+  // issue #633: the Overview's sparkline is gone, and with it the
+  // resident-memory window that fed it — no panel shows the trend, so no
+  // code accumulates one.
 
   // ── refresh loop ──
   async function refresh() {
