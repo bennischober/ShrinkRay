@@ -506,6 +506,8 @@
     tbody td {
       border: none;
       padding: 2px 0;
+      white-space: normal;
+      word-break: break-word;
       display: flex;
       justify-content: space-between;
       align-items: baseline;
