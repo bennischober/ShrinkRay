@@ -545,6 +545,7 @@
           {scanPaths}
           {outputDir}
           {retainedFiles}
+          stale={connectionState === 'stale'}
           ondismiss={dismissFailed}
           ongoto={goto}
           onopenmovie={(m) => openDetail(m, 'overview')}

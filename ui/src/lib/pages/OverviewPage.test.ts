@@ -265,7 +265,13 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     const { container, rerender } = render(OverviewPage, { ...props, stale: false })
     const live = container.querySelector('.running')!.textContent
     vi.setSystemTime(new Date('2026-10-25T14:00:00Z'))
-    await rerender({ ...props, stale: true })
+    // a fresh job object forces the estimate to recompute against the new clock:
+    // with the freeze removed it would count down, and this assertion would fail
+    await rerender({
+      ...props,
+      stale: true,
+      runningJobs: [job({ started_at: '2026-10-25T10:00:00Z' })],
+    })
     expect(container.querySelector('.running')!.textContent).toBe(live)
     progressStub = null
     vi.useRealTimers()

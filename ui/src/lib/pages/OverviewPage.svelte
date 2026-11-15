@@ -117,6 +117,13 @@
   })
   const shownEta = $derived(stale ? frozenEta : eta)
 
+  // every elapsed statement reads the same clock, so none of them keeps
+  // counting up while the data is old (issue #629)
+  let shownClock = $state(Date.now())
+  $effect(() => {
+    if (!stale) shownClock = Date.now()
+  })
+
   // completion moment: the last finished encode run, stated (peak-end)
   interface OutcomeEntry {
     movie: string
@@ -315,7 +322,7 @@
   <div class="status-line mono" class:work={runningJob !== null}>
     {statusAnswer({
       running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
-      etaSeconds: eta,
+      etaSeconds: shownEta,
       queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
       watching: status?.watcher === 'running',
     })}
@@ -366,7 +373,7 @@
       </div>
       <div class="mono dim detail">
         {progressLabel(runningProgress?.stage, null, runningProgress?.detail, runningProgress?.percent)}
-        · started {relative(runningJob.started_at)}
+        · started {relative(runningJob.started_at, new Date(shownClock))}
         · {fmtEta(shownEta)}
       </div>
     </div>
