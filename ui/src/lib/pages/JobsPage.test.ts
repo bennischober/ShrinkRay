@@ -71,8 +71,23 @@ describe('JobsPage render', () => {
     expect(screen.getByText(/still starting/)).toBeTruthy()
   })
 
-  it('expands a row to show the payload JSON (the audit trail)', async () => {
-    const j = job({ payload: { path: '/m/a', quality: true, target_vmaf: 95 } })
+  it('expands a row to show what the job did, not its raw payload (issue #632)', async () => {
+    const movie = 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv'
+    const j = job({
+      payload: { paths: [`/media/Legend (2015)/${movie}`], quality: true },
+      result: {
+        outcomes: [
+          {
+            movie,
+            state: 'encoded',
+            crf: 33,
+            vmaf: 96.4,
+            input_size: 20_000_000_000,
+            output_size: 5_000_000_000,
+          },
+        ],
+      },
+    })
     const { container } = render(JobsPage, {
       history: [j],
       onopenMovie: () => {},
@@ -80,7 +95,13 @@ describe('JobsPage render', () => {
     const toggle = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
     expect(toggle.textContent?.trim()).toBe('DETAIL')
     fireEvent.click(toggle)
-    await expect.poll(() => screen.queryByText('PAYLOAD'), { timeout: 1000 }).toBeTruthy()
+    await expect.poll(() => screen.queryByText('WHAT IT DID'), { timeout: 1000 }).toBeTruthy()
+    const detail = container.querySelector('.detail')!
+    // the operator reads the outcome, not a JSON dump
+    expect(detail.textContent).toContain('CRF 33')
+    expect(detail.textContent).toContain('VMAF 96.4')
+    expect(detail.textContent).not.toContain('{"paths"')
+    expect(detail.textContent).not.toContain('"quality": true')
     const expandedToggle = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
     expect(expandedToggle.getAttribute('aria-expanded')).toBe('true')
     expect(expandedToggle.textContent?.trim()).toBe('HIDE')

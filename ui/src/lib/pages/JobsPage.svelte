@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
-  import { bytes, groupJobs, isStageRow, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns } from '../format'
+  import { bytes, crf, groupJobs, isStageRow, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -217,14 +217,40 @@
 
           {#if job.id !== null && expanded.has(job.id)}
             <div class="detail">
-              <div class="d-block">
-                <span class="legend">PAYLOAD</span>
-                <pre class="mono">{JSON.stringify(job.payload, null, 2)}</pre>
-              </div>
-              {#if job.result}
+              {#if outcomesOf(job).length > 0}
                 <div class="d-block">
-                  <span class="legend">RESULT</span>
-                  <pre class="mono">{JSON.stringify(job.result, null, 2)}</pre>
+                  <span class="legend">WHAT IT DID</span>
+                  <div class="d-table">
+                    {#each outcomesOf(job) as o (o.movie)}
+                      <div class="d-row mono">
+                        <span class="d-file" title={o.movie}>{o.movie}</span>
+                        <span class="d-state">{stateWord(o.state)}</span>
+                        {#if o.crf != null}<span class="d-num">CRF {crf(o.crf)}</span>{/if}
+                        {#if o.vmaf != null}<span class="d-num">VMAF {vmaf(o.vmaf)}</span>{/if}
+                        {#if typeof o.input_size === 'number' && typeof o.output_size === 'number'}
+                          <span class="d-num">{bytes(o.input_size)} → {bytes(o.output_size)}</span>
+                        {:else if typeof o.estimated_size === 'number'}
+                          <span class="d-num">≈ {bytes(o.estimated_size)}</span>
+                        {/if}
+                        {#if o.reason}<span class="d-why">{o.reason}</span>{/if}
+                        {#if o.error}<span class="d-why">{humanizeError(null, o.error)}</span>{/if}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+              {#if ((job.payload.paths as string[] | undefined) ?? []).length > 0}
+                <div class="d-block">
+                  <span class="legend">TARGET</span>
+                  {#each (job.payload.paths as string[] | undefined) ?? [] as path (path)}
+                    <div class="mono d-path">{path}</div>
+                  {/each}
+                </div>
+              {/if}
+              {#if job.error}
+                <div class="d-block">
+                  <span class="legend">ERROR</span>
+                  <pre class="mono error">{job.error}</pre>
                 </div>
               {/if}
               <div class="d-block">
@@ -386,6 +412,13 @@
     border-top: 1px solid var(--row-line);
   }
   .d-block .legend { display: block; margin: 8px 0 4px; }
+  .d-table { display: flex; flex-direction: column; gap: 6px; }
+  .d-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; font-size: 10.5px; }
+  .d-file { color: var(--ink); }
+  .d-state { color: var(--ink-dim); }
+  .d-num { color: var(--ink); }
+  .d-why { color: var(--ink-dim); }
+  .d-path { font-size: 10.5px; color: var(--ink-dim); padding: 1px 0; }
   .d-block pre {
     margin: 0;
     padding: 8px 10px;
