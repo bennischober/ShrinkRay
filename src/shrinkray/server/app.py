@@ -850,7 +850,10 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         # the worker's liveness and, when it gave up, why (issue #649): a
         # dead worker is never a silent one
         "worker": "running"
-        if s.worker and s.worker._thread and s.worker._thread.is_alive()
+        if s.worker
+        and s.worker._thread
+        and s.worker._thread.is_alive()
+        and not s.worker.fatal_error
         else "stopped",
         "worker_error": s.worker.fatal_error if s.worker else None,
         "database": str(s.db_file),
@@ -1056,7 +1059,10 @@ def snapshot(
             # the worker's liveness and, when it gave up, why (issue #649): a
             # dead worker is never a silent one
             "worker": "running"
-            if s.worker and s.worker._thread and s.worker._thread.is_alive()
+            if s.worker
+            and s.worker._thread
+            and s.worker._thread.is_alive()
+            and not s.worker.fatal_error
             else "stopped",
             "worker_error": s.worker.fatal_error if s.worker else None,
             "database": str(s.db_file),

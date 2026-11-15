@@ -1337,6 +1337,11 @@ class TestJobs(unittest.TestCase):
             self.assertIsNotNone(worker.fatal_error)
             self.assertIn("5 consecutive", worker.fatal_error or "")
             self.assertIn("the db is gone", worker.fatal_error or "")
+            # a restarted worker must not report running with the stale
+            # error (issue #660 round 9, finding 3 / round 10, finding 2)
+            worker.start()
+            self.assertIsNone(worker.fatal_error)
+            worker.stop()
 
     def test_the_queue_takes_the_app_lock_around_its_connection_use(self):
         """Issue #660 round 1, finding 4: the root-cause fix - the queue's
