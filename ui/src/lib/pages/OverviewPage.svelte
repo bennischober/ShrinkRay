@@ -331,7 +331,7 @@
        anything about its own internals -->
   <div class="status-line mono" class:work={runningJob !== null}>
     {statusAnswer({
-      running: runningJob,
+      running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
       etaSeconds: eta,
       queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
       watching: status?.watcher === 'running',
@@ -691,7 +691,7 @@
     padding: 2px 14px 10px;
     color: var(--ink-dim);
   }
-  .status-line.work { color: var(--work); }
+  .status-line.work { color: var(--amber); }
   .sysline {
     display: flex;
     gap: 16px;
