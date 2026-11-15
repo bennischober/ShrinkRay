@@ -637,7 +637,7 @@
   }
   .theme-toggle:hover { color: var(--ink); border-color: var(--ink-dim); }
   .watcher.on, .worker.on { color: var(--teal-ink); border-color: var(--teal); }
-  .watcher:not(.on):hover { color: var(--ink); }
+  .watcher:not(.on):hover, .worker:not(.on):hover { color: var(--ink); }
   /* the keyboard legend: shortcuts exist since always — this line makes
      them discoverable without an overlay or a help page */
   .shortcut-hint {
