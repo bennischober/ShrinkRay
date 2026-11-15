@@ -17,6 +17,7 @@ import hashlib
 import math
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -390,6 +391,7 @@ def probe_crf(
     db_file: Path | None = None,
     encoder_threads: int | None = None,
     use_probe_cache: bool = True,
+    progress: ProgressCallback | None = None,
 ) -> float:
     """Encodes all samples at one CRF and returns their mean VMAF score.
 
@@ -434,6 +436,10 @@ def probe_crf(
             (None = no limit; must match the final encode's cap).
         use_probe_cache (bool): False bypasses the cache entirely
             (force_reprobe: the caller asked to measure everything fresh).
+        progress (callable | None): Callback progress(dict) for live step
+            updates. One event per sample carries `done`/`total`, so the
+            dashboard can state how far the search has got (issue #690) —
+            without it a running search showed no position at all for hours.
 
     Returns:
         float: The mean per-sample VMAF mean at this CRF.
@@ -446,8 +452,24 @@ def probe_crf(
         recipe = vmaf_recipe(crop=crop)
     tool_versions = _tool_versions(handbrake)
     scores: list[float] = []
+    probe_started = time.monotonic()
     for index, (sample, offset) in enumerate(samples):
         _check_cancel(cancel)
+        # one event per sample: the sample index IS the search's position, and the
+        # probe's OWN elapsed time is what an estimate must divide, never the
+        # job's — dividing the job's elapsed by a probe's fraction swung the
+        # estimate by an order of magnitude on every new probe (issue #690 review)
+        if progress:
+            progress(
+                {
+                    "stage": "probe",
+                    "detail": f"sample {index + 1}/{len(samples)} (CRF {crf})",
+                    "done": index,
+                    "total": len(samples),
+                    "crf": crf,
+                    "elapsed": round(time.monotonic() - probe_started, 1),
+                }
+            )
         key = probe_cache_key(
             movie,
             offset,
@@ -742,6 +764,7 @@ def find_optimal_crf(
             db_file=db_file,
             encoder_threads=encoder_threads,
             use_probe_cache=use_probe_cache,
+            progress=progress,
         )
         # the recorded score keeps the verdict bisect_crf reaches on the
         # unrounded one (issue #595): target_unreachable reads it back

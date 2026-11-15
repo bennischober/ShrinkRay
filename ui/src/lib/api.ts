@@ -43,6 +43,10 @@ export interface JobOutcome {
   error?: string
   crf?: number | null
   vmaf?: number | null
+  /** the sizes the server writes on an encode outcome (`jobs.py`); a
+   * plan entry carries an estimate instead and no sizes */
+  input_size?: number | null
+  output_size?: number | null
   estimated_size?: number | null
   saved_percent?: number | null
   reason?: string
@@ -59,6 +63,12 @@ export function movieOutcome(job: Job, movieName: string): JobOutcome | null {
   return list.find((o) => o.movie === movieName) ?? null
 }
 
+import { isFailedOutcome } from './format'
+
+/** Re-exported so a page keeps importing the vocabulary from one module;
+ * the definition lives in `format.ts` beside the rest of it. */
+export { isFailedOutcome }
+
 /** A DONE job whose per-movie outcomes failed is not a clean done: the
  * lifecycle completed, but the work did not. Shared by the jobs page and
  * the detail trail — two audit trails must speak one language. */
@@ -66,7 +76,7 @@ export function failedOutcomeNote(job: Job): string {
   if (job.state !== 'done' || job.kind !== 'encode') return ''
   const r = job.result as { outcomes?: JobOutcome[] } | null
   if (!r?.outcomes) return ''
-  const failed = r.outcomes.filter((o) => o.state === 'failed')
+  const failed = r.outcomes.filter(isFailedOutcome)
   if (failed.length === 0) return ''
   return `__FAILED_OUTCOMES__${failed.length} of ${r.outcomes.length} failed: ${failed
     .map((o) => o.movie)
@@ -173,6 +183,15 @@ export interface RetainedFile {
 export interface Status {
   queue: Job[]
   watcher: 'running' | 'stopped'
+  /** why the watcher did not start (issue #648): the refusal reason, null
+   * while it runs — a stopped watcher is never a silent one */
+  watcher_error?: string | null
+  /** the job worker's liveness (issue #649): "running" while the worker
+   * thread is alive, "stopped" once it gave up on repeated failures */
+  worker?: 'running' | 'stopped'
+  /** why the job worker gave up (issue #649): the last fatal error, null
+   * while it works — the dashboard's top-priority attention item */
+  worker_error?: string | null
   database: string
   /** the resident app's own memory (MiB), self-measured every 5 min —
    * staying lean is a measured fact (4534e07); null when unmeasurable */

@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/svelte'
 import JobsPage from './JobsPage.svelte'
+
+// the running row's stage comes from the live progress store: a mutable stub
+// lets one test seed it without a stream (issue #630)
+let progressStub: { percent?: number; movie?: string | null; detail?: string | null; done?: number; total?: number | null; elapsed?: number } | null = null
+vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
 import type { Job } from '../api'
 
 /** The jobs page is the audit trail — the render test pins the contract a
@@ -66,8 +71,23 @@ describe('JobsPage render', () => {
     expect(screen.getByText(/still starting/)).toBeTruthy()
   })
 
-  it('expands a row to show the payload JSON (the audit trail)', async () => {
-    const j = job({ payload: { path: '/m/a', quality: true, target_vmaf: 95 } })
+  it('expands a row to show what the job did, not its raw payload (issue #632)', async () => {
+    const movie = 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv'
+    const j = job({
+      payload: { paths: [`/media/Legend (2015)/${movie}`], quality: true },
+      result: {
+        outcomes: [
+          {
+            movie,
+            state: 'encoded',
+            crf: 33,
+            vmaf: 96.4,
+            input_size: 20_000_000_000,
+            output_size: 5_000_000_000,
+          },
+        ],
+      },
+    })
     const { container } = render(JobsPage, {
       history: [j],
       onopenMovie: () => {},
@@ -75,10 +95,98 @@ describe('JobsPage render', () => {
     const toggle = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
     expect(toggle.textContent?.trim()).toBe('DETAIL')
     fireEvent.click(toggle)
-    await expect.poll(() => screen.queryByText('PAYLOAD'), { timeout: 1000 }).toBeTruthy()
+    await expect.poll(() => container.querySelector('.d-table'), { timeout: 1000 }).toBeTruthy()
+    const detail = container.querySelector('.detail')!
+    // the operator reads the outcome, not a JSON dump
+    expect(detail.textContent).toContain('CRF 33')
+    expect(detail.textContent).toContain('VMAF 96.4')
+    expect(detail.querySelector('.d-table')!.textContent).not.toContain('{')
+    // the raw JSON is still reachable, behind the disclosure the issue asks for
+    const raw = detail.querySelector('details')!
+    expect(raw.open).toBe(false)
+    expect(raw.textContent).toContain('"paths"')
     const expandedToggle = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
     expect(expandedToggle.getAttribute('aria-expanded')).toBe('true')
     expect(expandedToggle.textContent?.trim()).toBe('HIDE')
+  })
+
+  it('a running row states its ETA, not an ellipsis (issue #632)', () => {
+    // 30 min elapsed at 25% implies 90 min left; the engine sends no ETA,
+    // so the column carries the proportional estimate
+    const started = new Date(Date.now() - 30 * 60_000).toISOString()
+    const j = job({ state: 'running', started_at: started, finished_at: null })
+    progressStub = { percent: 25 }
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    const dur = container.querySelector('.dur')!
+    expect(dur.textContent).toContain('~1 h 30 min')
+    expect(dur.textContent?.trim()).not.toBe('…')
+    progressStub = null
+  })
+
+  it('a plan row shows its plans, not an empty table (issue #632 review)', async () => {
+    // a plan writes `plans` where an encode writes `outcomes`; reading only
+    // `outcomes` made every plan's reason unreachable
+    const j = job({
+      kind: 'plan',
+      payload: { paths: ['/media'] },
+      result: {
+        plans: [
+          {
+            movie: 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv',
+            state: 'skipped',
+            reason: 'already efficient',
+            estimated_size: 5_000_000_000,
+          },
+        ],
+      },
+    })
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+    await expect.poll(() => container.querySelector('.d-table'), { timeout: 1000 }).toBeTruthy()
+    const detail = container.querySelector('.detail')!
+    expect(detail.textContent).toContain('already efficient')
+    expect(detail.textContent).toContain('4.66 GiB')
+  })
+
+  it('a scan row lists the paths it could not read (issue #632 review)', async () => {
+    const j = job({
+      kind: 'scan',
+      payload: { paths: ['/media'] },
+      result: {
+        movies: 3,
+        categories: 1,
+        errors: ['/media/broken.mkv: invalid data'],
+        cancelled: false,
+      },
+    })
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+    await expect.poll(() => screen.queryByText('COULD NOT READ'), { timeout: 1000 }).toBeTruthy()
+    expect(container.querySelector('.detail')!.textContent).toContain('/media/broken.mkv: invalid data')
+  })
+
+  it('a search states its ETA from the samples it finished (issue #690)', () => {
+    // a crf-search reports done/total, never a percent: the row states an
+    // estimate from the samples already probed
+    const started = new Date(Date.now() - 20 * 60_000).toISOString()
+    const j = job({ kind: 'crf-search', state: 'running', started_at: started, finished_at: null })
+    progressStub = { done: 1, total: 3, detail: 'sample 2/3 (CRF 30)', elapsed: 20 * 60 }
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    // 20 min for 1 of 3 samples implies 40 min left
+    expect(container.querySelector('.dur')!.textContent).toContain('~40 min')
+    progressStub = null
   })
 
   it('single-movie jobs link to the detail page', () => {
@@ -100,6 +208,73 @@ describe('JobsPage render', () => {
     expect(container.querySelector('button.movie-link')).toBeNull()
   })
 
+  it('does not list a stage row as a second job doing the same work (issue #632)', () => {
+    // #602 made the folder job the runner: the CRF search writes its progress
+    // to the parent (#639), so listing it too read as two jobs on one file
+    const parent = job({
+      id: 3,
+      kind: 'encode',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      payload: { paths: ['/media'] },
+    })
+    const stage = job({
+      id: 17,
+      kind: 'crf-search',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      payload: { paths: ['/media/Legend (2015)/Legend.mkv'], pipeline: 'encode' },
+    })
+    const { container } = render(JobsPage, { history: [parent, stage], onopenMovie: () => {} })
+    const ids = [...container.querySelectorAll('.entry .id')].map((el) => (el.textContent ?? '').trim())
+    expect(ids).toContain('3')
+    expect(ids).not.toContain('17')
+  })
+
+  it('a queued scan row claims no encode mode it cannot have (issue #630)', async () => {
+    const scan = job({ id: 3, kind: 'scan', state: 'queued', started_at: null, finished_at: null, result: null, payload: { paths: ['/m/a'] } })
+    const { container } = render(JobsPage, { history: [scan], onopenMovie: () => {} })
+    const note = [...container.querySelectorAll('.note')].map((el) => (el.textContent ?? '').trim()).join(' ')
+    expect(note).not.toContain('preset')
+  })
+
+  it('a running row at 30 % says it is working, not starting (issue #630)', () => {
+    progressStub = { percent: 30.46, movie: null, detail: null }
+    const running = job({ id: 4, state: 'running', started_at: '2026-10-24T10:00:00Z', finished_at: null, result: null })
+    const { container } = render(JobsPage, { history: [running], onopenMovie: () => {} })
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).toContain('working')
+    expect(text).not.toContain('starting…')
+    progressStub = null
+  })
+
+  it('a queued row does not invent a VMAF target the payload does not carry (issue #630)', async () => {
+    // the payload has no target_vmaf: printing 95 would be a number the
+    // operator reads as fact while the configured target is 96
+    const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null, result: null, payload: { path: '/m/a', quality: true } })
+    const { container } = render(JobsPage, { history: [queued], onopenMovie: () => {} })
+    const note = [...container.querySelectorAll('.note')].map((el) => (el.textContent ?? '').trim()).join(' ')
+    expect(note).toContain('quality')
+    expect(note).not.toContain('VMAF>95')
+  })
+
+  it('gives the filename its own cell, never the KIND column (issue #630, case 13)', () => {
+    // a long name inside the 104 px KIND column wrapped character by character
+    // and drew over the start time: it needs a cell that can shrink
+    const encode = job({
+      id: 5,
+      kind: 'encode',
+      state: 'done',
+      payload: { paths: ['/m/a-very-long-movie-name-that-would-wrap.mkv'] },
+    })
+    const { container } = render(JobsPage, { history: [encode], onopenMovie: () => {} })
+    const row = container.querySelector('.entry')!
+    expect(row.querySelector('.kind .movie-link')).toBeNull()
+    expect(row.querySelector('.file .movie-link')).not.toBeNull()
+  })
+
   it('a queued job shows no start time; running and done rows keep theirs (issue #603)', async () => {
     const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null, result: null })
     const running = job({ id: 3, state: 'running', started_at: '2026-10-24T10:00:01Z', finished_at: null })
@@ -113,15 +288,18 @@ describe('JobsPage render', () => {
       [...container.querySelectorAll('.entry')].find((el) =>
         (el.querySelector('.state')?.textContent ?? '').trim().startsWith(state),
       )!
-    // the enqueue time must not be presented as the moment work began
-    expect(text(rowFor('Queued').querySelector('.when')!)).toBe('—')
+    // the enqueue time must not be presented as the moment work began, and
+    // a queued row has no duration either — the cells stay empty rather than
+    // printing a dash for a column the state cannot fill (issue #632)
+    expect(text(rowFor('Queued').querySelector('.when')!)).toBe('')
+    expect(text(rowFor('Queued').querySelector('.dur')!)).toBe('')
     expect(rowFor('Queued').querySelector('.when')!.getAttribute('title')).toBe('not started yet')
     expect(text(rowFor('Running').querySelector('.when')!)).toMatch(/\d/)
     expect(text(rowFor('Done').querySelector('.when')!)).toMatch(/\d/)
     // the expansion still shows all three timestamps, labeled - selected by
     // the row itself, not by fixture order
     const queuedRow = [...container.querySelectorAll('.entry')].find(
-      (el) => (el.querySelector('.when')?.textContent ?? '').trim() === '—',
+      (el) => el.querySelector('.when')?.getAttribute('title') === 'not started yet',
     )!
     fireEvent.click(queuedRow.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
     await expect.poll(() => container.querySelector('.detail')).toBeTruthy()

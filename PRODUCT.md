@@ -254,7 +254,8 @@ Before either question is asked, a file must be worth touching at all:
   (width 1920 / height 1080; either at class size qualifies) saves too little to be worth
   the work.
 - **Minimum codec: the whitelist.** A source codec outside the candidate list is not
-  re-encoded (h264, hevc, vp9, av1; MPEG-2/VC-1 and older are outside it).
+  re-encoded (h264, hevc, vp9; MPEG-2/VC-1 and older are outside it, and AV1 is the
+  output format and never a source, #650).
 
 Among eligible files, **the CRF search always runs** — and a re-encode happens only when
 that search shows the file would actually get smaller **by at least the minimum saving**
@@ -436,7 +437,7 @@ decoration per user preference).
   control routes absent), the terminal UI and the encode chain inside Docker, with
   transcripts retained by the operator. Known open defect at that date: the VMAF
   comparison under-scores AV1 output (issues #306-#317, milestone "VMAF measurement
-  matches ab-av1") — until it lands, plan's skip verdicts on AV1 candidates are not
+  matches ab-av1") — until it lands, skip verdicts on plans that would encode to AV1 are not
   trustworthy, and that is stated here rather than hidden.
 - An already-efficient HEVC source is correctly *skipped* rather than re-encoded.
 - Working dashboard (Svelte 5, dark/light) and a per-concern test suite as

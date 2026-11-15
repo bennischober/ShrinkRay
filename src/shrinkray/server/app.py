@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from shrinkray import __version__, db
 from shrinkray.config import Conf, encode_window_open, load_config, refresh_config
+from shrinkray.engine import watch as watch_mod
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pause import pause_reason
 from shrinkray.engine.pipeline import cap_threads
@@ -378,7 +379,7 @@ class AppState:
         self.connection = db.connect(db_file)
         try:
             self.bus = ProgressBus()
-            self.queue = JobQueue(self.connection, bus=self.bus)
+            self.queue = JobQueue(self.connection, bus=self.bus, connection_lock=self.db_lock)
             self.worker = JobWorker(self.connection, self.queue)
             with self.db_lock:
                 self._recover_stale_jobs()
@@ -840,9 +841,22 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     )
 
     rss = rss_mib()
+    # the worker fields come from one fixed-order read pair (issue #660
+    # round 13, finding 2 / round 14, finding 2): a give-up landing between
+    # the reads would render either running-with-error or
+    # stopped-without-reason - both fields come from the same pair
+    alive = bool(s.worker and s.worker._thread and s.worker._thread.is_alive())
+    fatal = s.worker.fatal_error if s.worker else None
     return {
         "queue": [j.to_dict() for j in running],
         "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
+        # a stopped watcher says why (issue #648): the refusal reason, null
+        # while it runs
+        "watcher_error": watch_mod.WATCHER_ERROR,
+        # the worker's liveness and, when it gave up, why (issue #649): a
+        # dead worker is never a silent one
+        "worker": "running" if alive and not fatal else "stopped",
+        "worker_error": fatal,
         "database": str(s.db_file),
         "rss_mib": round(rss, 1) if rss is not None else None,
         # an edited config.json that was NOT applied (issue #247): the app
@@ -1036,10 +1050,21 @@ def snapshot(
                 ).fetchall()
             ]
         )
+    # the same fixed-order read pair as /api/status (issue #660 round 14,
+    # finding 2)
+    alive = bool(s.worker and s.worker._thread and s.worker._thread.is_alive())
+    fatal = s.worker.fatal_error if s.worker else None
     return {
         "status": {
             "queue": [j.to_dict() for j in data["running"]],
             "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
+            # a stopped watcher says why (issue #648): the refusal reason, null
+            # while it runs
+            "watcher_error": watch_mod.WATCHER_ERROR,
+            # the worker's liveness and, when it gave up, why (issue #649): a
+            # dead worker is never a silent one
+            "worker": "running" if alive and not fatal else "stopped",
+            "worker_error": fatal,
             "database": str(s.db_file),
             "rss_mib": round(data["rss_mib"], 1) if data["rss_mib"] is not None else None,
             # the snapshot is the UI's one state channel (App.svelte reads
@@ -1343,7 +1368,29 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
             (str(p),),
         ).fetchone()
         plan = None
-        if plan_row is not None:
+        if plan_row is not None and row["codec"] == "av1" and plan_row["skipped_reason"] is None:
+            # the output format is never a source (issue #650): a stored
+            # PREDICTION for an AV1 file predates the rule and is never a
+            # prediction - the file cannot be re-encoded, so the dashboard
+            # shows the codec rule's reason and no saving. A stored SKIP
+            # verdict falls through to the branch below: it keeps its own
+            # reason (an AV1 file can have been skipped by an earlier gate
+            # - HDR, duration, resolution, size - before the codec rule
+            # existed), its stored settings and its staleness.
+            plan = {
+                "crf": None,
+                "achieved_vmaf": None,
+                "skipped_reason": "already AV1 (the output format)",
+                "estimated_size": None,
+                "created_at": plan_row["created_at"],
+                "encoder": None,
+                "encoder_preset": None,
+                "probe_encoder_preset": None,
+                "target_vmaf": None,
+                "stale": False,
+                "estimate_note": None,
+            }
+        elif plan_row is not None:
             try:
                 file_ok = (
                     p.is_file()
@@ -1743,6 +1790,9 @@ def start_watch(state: "AppState", roots: list[Path], output_dir: Path | None) -
                 extensions=list(refresh_config().extensions),
             )
         except Exception as e:
+            # a stopped watcher says why (issue #648): the crash reaches
+            # /api/status instead of dying in the log alone
+            watch_mod.WATCHER_ERROR = f"the watch loop crashed: {e}"
             log_error(f"watch loop crashed: {e}")
 
     state.watch_stop.clear()

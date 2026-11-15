@@ -22,7 +22,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
+from shrinkray.config import (
+    DEFAULT_ENCODER_PRESET,
+    DEFAULT_MIN_SOURCE_HEIGHT,
+    DEFAULT_MIN_SOURCE_WIDTH,
+)
 from shrinkray.engine.crop import (
     CROP_DETECT_LIMIT as CROP_DETECT_LIMIT,
 )
@@ -1126,7 +1130,7 @@ def encode_with_quality(
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
     encoder: str = "svt_av1",
     probe_encoder_preset: str = "5",
-    encoder_preset: str = "3",
+    encoder_preset: str = DEFAULT_ENCODER_PRESET,
     progress: ProgressCallback | None = None,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
@@ -1312,6 +1316,27 @@ def encode_with_quality(
     codec = source_codec(input_file)
 
     allowed = allowed_codecs(candidate_codecs)
+    if codec == "av1":
+        # the output format is never a source (issue #650): mirrored from
+        # decide_quality so the encode path enforces the decision with the
+        # same reason, independent of what the whitelist carries
+        log(f"Encode for '{input_file.name}': skip (already AV1 - the output format)")
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                "AV1 is the output format and never a source (issue #650): "
+                "re-encoding an AV1 source to AV1 buys no codec generation "
+                "gain"
+            ),
+            skipped_reason="already AV1 (the output format)",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
     if codec is not None and codec not in allowed:
         log(f"Encode for '{input_file.name}': skip (source codec not a candidate)")
         return QualityResult(

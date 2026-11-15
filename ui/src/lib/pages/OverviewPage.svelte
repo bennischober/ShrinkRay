@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
-  import { bytes, duration, kindWord, percent, relative, savedPercent, span, vmaf, verdictWord } from '../format'
+  import { humanizeError, isFailedOutcome, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { bytes, duration, kindWord, percent, progressLabel, relative, savedPercent, span, statusAnswer, titleBuckets, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
 
@@ -21,8 +21,8 @@
     failedJobs,
     scanPaths,
     outputDir,
-    sparkSamples = [],
     retainedFiles = [],
+    stale = false,
     ondismiss,
     ongoto,
     onopenmovie,
@@ -38,30 +38,18 @@
     failedJobs: Job[]
     scanPaths: string[]
     outputDir: string
-    /** resident-memory samples accumulated by the poll (App.svelte) —
-     * the sparkline's buffer lives at app level so it survives page
-     * switches and never writes what it reads */
-    sparkSamples?: number[]
     /** the retention ledger's rows (App.svelte) — the panel totals the
      * present ones; the rows themselves are the Retained page's job */
     retainedFiles?: RetainedFile[]
+    /** The shell's data is no longer current, so no time is derived from the
+     * clock and nothing that moves keeps moving (issue #629). */
+    stale?: boolean
     ondismiss: (id: number | null) => void
     ongoto: (page: 'overview' | 'library' | 'jobs' | 'config' | 'retained') => void
     onopenmovie: (movie: Movie) => void
   } = $props()
 
-  const encodedCount = $derived(
-    movies.filter(
-      (m) =>
-        m.encode &&
-        !m.encode.preset?.startsWith('skipped') &&
-        m.encode.outcome !== 'discarded',
-    ).length,
-  )
-  const discardedCount = $derived(
-    movies.filter((m) => m.encode?.outcome === 'discarded').length,
-  )
-  const untouchedCount = $derived(movies.filter((m) => !m.encode).length)
+  const buckets = $derived(titleBuckets(movies))
   const totalSizeGb = $derived(movies.reduce((sum, m) => sum + (m.size ?? 0), 0) / 1024 ** 3)
 
   // mean measured VMAF
@@ -121,6 +109,21 @@
     return `~${Math.floor(m / 60)}h ${m % 60}m remaining`
   }
 
+  // the estimate divides a clock, so it is frozen while the data is old rather
+  // than recomputed into a countdown nothing is backing (issue #629)
+  let frozenEta = $state<number | null>(null)
+  $effect(() => {
+    if (!stale) frozenEta = eta
+  })
+  const shownEta = $derived(stale ? frozenEta : eta)
+
+  // every elapsed statement reads the same clock, so none of them keeps
+  // counting up while the data is old (issue #629)
+  let shownClock = $state(Date.now())
+  $effect(() => {
+    if (!stale) shownClock = Date.now()
+  })
+
   // completion moment: the last finished encode run, stated (peak-end)
   interface OutcomeEntry {
     movie: string
@@ -153,7 +156,7 @@
       id: lastEncodeRun.id,
       state: lastEncodeRun.state,
       count: encoded.length,
-      failed: encodeOutcomes.filter((o) => o.state === 'failed').length,
+      failed: encodeOutcomes.filter(isFailedOutcome).length,
       savedLabel,
       minVmaf: vmafs.length ? Math.min(...vmafs) : null,
       wall,
@@ -200,7 +203,11 @@
   // reveals the rest inline — a "more →" that jumps to the library left
   // the chart literally cut off (round-6, user report)
   let showAllCats = $state(false)
-  const visibleCats = $derived(showAllCats ? catBars : catBars.slice(0, 8))
+  // issue #633: a category that holds one title is that title's own file
+  // size, not a category — the panel only earns its place where a category
+  // actually groups several titles
+  const groupedCats = $derived(catBars.filter((b) => b.titles > 1))
+  const visibleCats = $derived(showAllCats ? groupedCats : groupedCats.slice(0, 8))
 
   // plan results of the latest finished plan job
   interface PlanEntry {
@@ -233,8 +240,11 @@
         m.path.replace(/[\\/]/g, '').toLowerCase().endsWith(movie.replace(/[\\/]/g, '').toLowerCase()) &&
         m.encode != null &&
         // a discarded attempt is not an encode (issue #625): the title is
-        // still open, the prediction was never realised
-        m.encode.outcome !== 'discarded'
+        // still open, the prediction was never realised; neither is a skip
+        // record, whose preset says skipped (…) because nothing was written
+        // (issue #630, case 6)
+        m.encode.outcome !== 'discarded' &&
+        !(m.encode.preset ?? '').startsWith('skipped')
     )
   /** The library record for a plan entry (path-suffix join, plan entries
    * store bare filenames) — the measured truth an ENCODED row shows. */
@@ -246,9 +256,7 @@
   /** Plan age in honest units — a stale plan must say so. */
   const planAge = $derived.by(() => {
     if (!lastPlan?.finished_at) return ''
-    const elapsed = span(lastPlan.finished_at, new Date().toISOString())
-    if (elapsed === '—') return ''
-    return `finished ${elapsed} ago`
+    return `finished ${relative(lastPlan.finished_at)}`
   })
   /** Head summary in real terms: what happened SINCE the plan ran. */
   const planSummary = $derived.by(() => {
@@ -302,34 +310,6 @@
   })
 
   // ── resident-memory sparkline: the app watching itself ──
-  // rss_mib arrives live on every snapshot; the client keeps a small
-  // buffer so the SETUP panel shows the trend, not just the instant.
-  // A slow leak becomes visible before it becomes a problem.
-  // Samples accumulate in App.svelte's poll path (an $effect that read
-  // AND wrote rssSamples looped itself to death — Svelte 5 forbids
-  // self-reading effects, round-6.6 lesson).
-  const rssSpark = $derived.by(() => {
-    const samples = sparkSamples
-    if (samples.length < 2) return null
-    const min = Math.min(...samples)
-    const max = Math.max(...samples)
-    const span = Math.max(max - min, 2) // ≥2 MiB span: a flat line stays readable
-    const w = 180
-    const h = 30
-    const pts = samples.map(
-      (v, i) =>
-        `${((i / (samples.length - 1)) * w).toFixed(1)},${(h - 2 - ((v - min) / span) * (h - 4)).toFixed(1)}`
-    )
-    return {
-      points: pts.join(' '),
-      min,
-      max,
-      last: samples[samples.length - 1],
-      n: samples.length,
-      w,
-      h,
-    }
-  })
 
   /** The fail-row error currently expanded (one at a time). */
   let expandedErr = $state<number | null>(null)</script>
@@ -337,14 +317,15 @@
 <div class="page page-in">
   <PageHeader title="Overview" description={`The library at a glance · VMAF target ${targetVmaf}`} />
 
-  <!-- system line: the console's own telemetry (only what's not already
-       on the rail badges and the stat band — those carry the counts) -->
-  <div class="sysline mono dim">
-    <span title="adaptive: 1s while work is queued/running, 3s idle, 10s in hidden tabs">POLL ADAPTIVE</span>
-    <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
-    <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
-    <span class="spacer"></span>
-    <span>{scanPaths.length} SOURCE{scanPaths.length === 1 ? '' : 'S'}</span>
+  <!-- issue #633: the page answers "is everything OK?" before it says
+       anything about its own internals -->
+  <div class="status-line mono" class:work={runningJob !== null}>
+    {statusAnswer({
+      running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
+      etaSeconds: shownEta,
+      queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
+      watching: status?.watcher === 'running',
+    })}
   </div>
 
   <!-- ══ stat band ══ -->
@@ -353,9 +334,9 @@
       <span class="legend">TITLES</span>
       <span class="stat-v mono">{movies.length}</span>
       <span class="stat-sub mono dim"
-        >{encodedCount} encoded · {untouchedCount} untouched{discardedCount > 0
-          ? ` · ${discardedCount} discarded`
-          : ''}</span
+        >{buckets.encoded} encoded · {buckets.untouched} untouched{buckets.skipped > 0
+          ? ` · ${buckets.skipped} skipped`
+          : ''}{buckets.discarded > 0 ? ` · ${buckets.discarded} discarded` : ''}</span
       >
     </button>
     <button class="stat" onclick={() => ongoto('library')}>
@@ -391,9 +372,9 @@
         <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
       </div>
       <div class="mono dim detail">
-        {runningProgress?.detail ?? 'working…'}
-        · started {relative(runningJob.started_at)}
-        · {fmtEta(eta)}
+        {progressLabel(runningProgress?.stage, null, runningProgress?.detail, runningProgress?.percent)}
+        · started {relative(runningJob.started_at, new Date(shownClock))}
+        · {fmtEta(shownEta)}
       </div>
     </div>
   {:else}
@@ -480,36 +461,6 @@
       {/if}
     </section>
 
-    <!-- ══ setup ══ -->
-    <section class="panel">
-      <div class="panel-head">
-        <span class="legend">SETUP</span>
-        <button class="nav-link" onclick={() => ongoto('config')}>CONFIG →</button>
-      </div>
-      <div class="setup mono">
-        <div class="fact"><span class="legend">SCAN FROM</span><span class="src">{scanPaths.join(' · ') || '—'}</span></div>
-        <div class="fact"><span class="legend">WRITE TO</span><span class="src">{outputDir || '—'}</span></div>
-        <div class="fact"><span class="legend">DATABASE</span><span class="src">{status?.database ?? '—'}</span></div>
-        <div class="fact"><span class="legend">WATCHER</span><span class="src">{status?.watcher ?? '—'}</span></div>
-        {#if status?.rss_mib != null}
-          <div class="fact rss-fact">
-            <span class="legend">RESIDENT MEMORY</span>
-            {#if rssSpark}
-              <!-- the trend, not just the instant: a leak announces
-                   itself here before the log does -->
-              <span class="rss-wrap" title="resident {rssSpark.last.toFixed(1)} MiB · min {rssSpark.min.toFixed(1)} · max {rssSpark.max.toFixed(1)} MiB · {rssSpark.n} samples this session">
-                <svg viewBox="0 0 {rssSpark.w} {rssSpark.h}" preserveAspectRatio="none" aria-hidden="true">
-                  <polyline points={rssSpark.points} class="rss-line" fill="none"></polyline>
-                </svg>
-                <span class="mono">{rssSpark.last.toFixed(1)} MiB</span>
-              </span>
-            {:else}
-              <span class="src">{status.rss_mib.toFixed(1)} MiB</span>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    </section>
 
     <!-- ══ measured quality: the score that justifies the whole product ══ -->
     <!-- lives in the attention row (4th panel): the user asked for the avg
@@ -522,16 +473,16 @@
         <div class="dim pad">nothing measured yet — plan predicts, encode measures</div>
       {:else}
         <div class="quality mono">
+          {#if measured.length > 1}
           <div class="q-head">
             <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{vmaf(meanVmaf, targetVmaf)}</span>
             <span class="q-label legend">MEAN</span>
-            {#if measured.length > 1}
-              <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
-                   the single row carrying exactly that) — the sub-line only
-                   earns its place with a spread to summarize -->
-              <span class="q-sub mono dim">min {vmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
-            {/if}
+            <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
+                 the single row carrying exactly that) — the sub-line only
+                 earns its place with a spread to summarize -->
+            <span class="q-sub mono dim">min {vmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
           </div>
+          {/if}
           {#each measured.slice(0, 6) as m (m.path)}
             <div class="q-row" title="{m.name}: VMAF {vmaf(m.encode?.vmaf, targetVmaf)} (target {targetVmaf})">
               <span class="q-name">{m.name}</span>
@@ -568,7 +519,18 @@
     {/if}
   </div>
 
+  <!-- system line: the console's own telemetry (only what's not already
+       on the rail badges and the stat band — those carry the counts) -->
+  <div class="sysline mono dim">
+    <span title="adaptive: 1s while work is queued/running, 3s idle, 10s in hidden tabs">POLL ADAPTIVE</span>
+    <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
+    <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
+    <span class="spacer"></span>
+    <span>{scanPaths.length} SOURCE{scanPaths.length === 1 ? '' : 'S'}</span>
+  </div>
+
   <!-- ══ per-category bars: where the bytes live ══ -->
+  {#if groupedCats.length > 0}
   <section class="panel wide">
     <div class="panel-head">
       <span class="legend">LIBRARY BY CATEGORY — SIZE AND RECLAIMED</span>
@@ -597,13 +559,14 @@
       {:else}
         <div class="dim pad">no titles scanned yet</div>
       {/each}
-      {#if catBars.length > 8}
+      {#if groupedCats.length > 8}
         <button class="link legend more" onclick={() => (showAllCats = !showAllCats)}>
-          {showAllCats ? 'SHOW LESS' : `SHOW ${catBars.length - 8} MORE`}
+          {showAllCats ? 'SHOW LESS' : `SHOW ${groupedCats.length - 8} MORE`}
         </button>
       {/if}
     </div>
   </section>
+  {/if}
 
   <!-- ══ plan results: the prediction, visible ══ -->
   {#if planEntries.length > 0}
@@ -687,6 +650,11 @@
   .bad { color: var(--red); }
   .amber { color: var(--amber); }
 
+  .status-line {
+    padding: 2px 14px 10px;
+    color: var(--ink-dim);
+  }
+  .status-line.work { color: var(--amber); }
   .sysline {
     display: flex;
     gap: 16px;
@@ -939,14 +907,6 @@
   .nav-link:hover { text-decoration: underline; }
   .head-tools { display: flex; gap: 12px; align-items: center; }
   .more { padding: 8px 14px; text-align: left; }
-  .setup { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 14px; }
-  .fact { display: flex; justify-content: space-between; gap: 12px; }
-  .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
-  /* the memory sparkline: trend beside the instant figure */
-  .rss-fact { align-items: center; }
-  .rss-wrap { display: inline-flex; align-items: center; gap: 8px; }
-  .rss-wrap svg { width: 90px; height: 16px; }
-  .rss-line { stroke: var(--teal); stroke-width: 1.5; }
 
   /* measured quality panel */
   .quality { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 4px; }

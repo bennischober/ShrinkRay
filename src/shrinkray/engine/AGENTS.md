@@ -28,7 +28,7 @@ then bar detection, then sample extraction, then the CRF search. The only
 difference is the tail: `plan` returns a prediction, `encode` runs the full encode
 and checks the artifact. Sizing permission is a skip, never an error:
 `skipped_reason` is one of `too short`, `resolution too low`, `below min size`,
-`source codec not a candidate`, `hdr not supported` (issue #518: the maintainer's
+`source codec not a candidate`, `already AV1 (the output format)`, `hdr not supported` (issue #518: the maintainer's
 #340 decision — HDR is not supported until libvmaf's HDR models, #519; the gate keys
 on the TRANSFER characteristic, so a bt2020nc SDR master and 10-bit SDR stay eligible),
 `no size gain`, `target unreachable`, `output not smaller` (`pipeline.py`).
@@ -41,9 +41,10 @@ so stored SDR plans keep matching while historical `hdr=hable` plans never do.
 
 ## CONVENTIONS
 
-- Probe preset and final preset are different facts (`config.py`: 5 and 3). The
-  plan fingerprint keys on the PROBE preset only (`plan.py`, `db.py`): changing
-  the final preset must reuse a stored plan, changing the probe preset must not.
+- Probe preset and final preset are different settings that ship at the same
+  value (`config.py`: both 5, issue #686). The plan fingerprint keys on the
+  PROBE preset only (`plan.py`, `db.py`): changing the final preset must reuse
+  a stored plan, changing the probe preset must not.
 - Plan reuse is the default for an explicit encode; `force_reprobe` (`--replan`,
   `pipeline.py`) bypasses the plan AND the probe cache. The watchdog always
   passes `True` so it stays independent of plan staleness.

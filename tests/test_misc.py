@@ -88,11 +88,13 @@ class TestEncoderPresetConfig(unittest.TestCase):
     preset must be configurable, validated, and reachable from every entry
     point — before this, 'medium' was a constant no caller could override."""
 
-    def test_default_presets_are_split(self):
+    def test_shipped_presets_match(self):
         conf = config_helper.Conf({})
-        # probe = measurement setting, final = output setting (issue #22)
+        # both ship at 5 (issue #686) so the probe measures the curve the
+        # kept file runs. The keys stay independent (issue #22);
+        # test_config_value_overrides_default covers a split.
         self.assertEqual(conf.handbrake_probe_encoder_preset, "5")
-        self.assertEqual(conf.handbrake_encoder_preset, "3")
+        self.assertEqual(conf.handbrake_encoder_preset, "5")
 
     def test_config_value_overrides_default(self):
         conf = config_helper.Conf({"handbrake": {"encoder_preset": "6"}})

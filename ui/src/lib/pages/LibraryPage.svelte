@@ -16,6 +16,7 @@
     ontoggle,
     onselectall,
     onclear,
+    stale = false,
   }: {
     movies: Movie[]
     selectedPaths: Set<string>
@@ -28,6 +29,9 @@
     ontoggle: (path: string, checked: boolean) => void
     onselectall: (checked: boolean, paths: string[]) => void
     onclear: () => void
+    /** The shell's data is no longer current: a live-looking chip would claim
+     * a progress nothing is measuring (issue #629). */
+    stale?: boolean
   } = $props()
 
   // ── search + category (a select, not an exploding chip row) ──
@@ -220,7 +224,7 @@
     </div>
   {:else}
     <div class="bulk-bar idle">
-      <span class="mono dim">{filtered.length} titles — tick checkboxes for bulk work</span>
+      <span class="mono dim">{filtered.length} titles — tick titles to sum their plan estimate</span>
       <span class="spacer"></span>
       <span class="mono dim">the app works through the library on its own — this page only shows where it stands</span>
     </div>
@@ -274,18 +278,18 @@
                   aria-label="Select {movie.name}"
                 />
               </td>
-              <td>
+              <td data-label="Title">
                 <button class="name-btn" onclick={() => onopenmovie(movie)}>
                   {movie.name}
                   {#if movie.hdr}<span class="mono hdr">HDR</span>{/if}
                   {#if (movie.encode?.generation ?? 1) >= 2}<span class="mono gen-badge" title="Generation {movie.encode?.generation}: this file is itself the output of a previous encode">GEN {movie.encode?.generation}</span>{/if}
                 </button>
               </td>
-              <td class="dim">{movie.category}</td>
-              <td class="mono num">{bytes(movie.size)}</td>
-              <td>
+              <td class="dim" data-label="Category">{movie.category}</td>
+              <td class="mono num" data-label="Size">{bytes(movie.size)}</td>
+              <td data-label="Decision">
                 {#if runningMovie != null && movie.path === runningMovie}
-                  <span class="chip progress"><span class="swatch"></span>Running {runningPercent != null ? `${runningPercent}%` : ''}</span>
+                  <span class="chip progress" class:stale><span class="swatch"></span>Running {runningPercent != null ? `${runningPercent}%` : ''}{stale ? ' (stale)' : ''}</span>
                 {:else}
                   {#if decision.bare}
                     <!-- bare swatch: the state stays visible to sighted users via
@@ -301,9 +305,9 @@
                   {/if}
                 {/if}
               </td>
-              <td class="mono num">{movie.encode?.crf ?? '—'}</td>
-              <td class="mono num measured">{vmaf(movie.encode?.vmaf, targetVmaf)}</td>
-              <td class="mono num" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
+              <td class="mono num" data-label="CRF">{movie.encode?.crf ?? '—'}</td>
+              <td class="mono num measured" data-label="VMAF">{vmaf(movie.encode?.vmaf, targetVmaf)}</td>
+              <td class="mono num" data-label="Saved" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
                 {#if movie.encode?.outcome === 'discarded'}
                   {@const reason = movie.encode.outcome_reason ?? 'the swap was declined'}
                   <span class="bad" title={`${reason} (original untouched)`}>discarded</span>
@@ -486,5 +490,49 @@
     border: 1px solid var(--teal);
     padding: 0 4px;
     border-radius: 2px;
+  }
+  /* below 768px a row becomes a card: the desktop columns clip on a phone, and
+     only the checkbox and a truncated title were visible (issue #636) */
+  @media (max-width: 768px) {
+    table, thead, tbody, tr, td { display: block; width: auto; }
+    thead { display: none; }
+    tbody tr {
+      border: 1px solid var(--row-line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    tbody td {
+      border: none;
+      padding: 2px 0;
+      white-space: normal;
+      word-break: break-word;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+    }
+    tbody td::before {
+      content: attr(data-label);
+      flex: 0 0 auto;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-dim);
+    }
+    /* the title is the card's heading, not a label/value row: full width, wraps */
+    tbody td[data-label='Title'] {
+      display: block;
+      padding-bottom: 6px;
+    }
+    tbody td[data-label='Title']::before { display: none; }
+    tbody td[data-label='Title'] .name-btn {
+      white-space: normal;
+      word-break: break-word;
+      text-align: left;
+    }
+    tbody td.chk { padding-bottom: 6px; }
+    tbody td.chk::before { content: ''; flex: 0 0 auto; }
   }
 </style>

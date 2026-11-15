@@ -213,6 +213,10 @@ The one vocabulary every page uses (issue #627). A term below has exactly one us
 | Plan verdict: encode | Encode | amber | hatch |
 | Plan verdict: skip | Skip | dim | empty dot |
 | Plan verdict: failed | Failed | red | dot with bar |
+| Progress step: scan | scanning | dim | — |
+| Progress step: probe | probing | dim | — |
+| Progress step: encode | encoding | dim | — |
+| Progress step: paused | paused | amber | — |
 | State: cancelled | Cancelled | dim | empty dot |
 | State: interrupted | Interrupted | amber | half dot |
 | Outcome: encoded | Encoded | ok | filled dot |
@@ -226,7 +230,7 @@ The one vocabulary every page uses (issue #627). A term below has exactly one us
 | Library: encoded | Encoded | ok | filled dot |
 | Library: missing | Missing | red | bar |
 
-Skip and failure reasons are mapped from the engine's strings in one table (`ui/src/lib/format.ts` or its successor): `hdr not supported` -> "HDR — not supported yet", `too short` -> "Too short to be worth it", `resolution too low` -> "Resolution below 1080p class", `below min size` -> "Below the size floor", `source codec not a candidate` -> "Source codec not a candidate", `no size gain` -> "No size gain", `target unreachable` -> "Quality target unreachable", `saving below minimum` -> "Predicted saving below the minimum". Never show an engine string to the operator.
+Skip and failure reasons are mapped from the engine's strings in one table (`ui/src/lib/format.ts` or its successor): `hdr not supported` -> "HDR — not supported yet", `too short` -> "Too short to be worth it", `resolution too low` -> "Resolution below 1080p class", `below min size` -> "Below the size floor", `source codec not a candidate` -> "Source codec not a candidate", `already AV1 (the output format)` -> "Already AV1 — the output format", `no size gain` -> "No size gain", `target unreachable` -> "Quality target unreachable", `saving below minimum` -> "Predicted saving below the minimum". Never show an engine string to the operator.
 
 ## Typography
 
@@ -348,7 +352,7 @@ The library card whose poster *is typography* — reserved with the poster token
 The work area is the table — the poster grid's GRID/TABLE toggle was demoted with it (no segmented control renders; `grep -rn 'GRID' ui/src` → 0). The table adds a **Decision** chip column, right-aligned mono CRF/VMAF/Saved columns (measured VMAF in teal-ink 600; positive savings in the `.ok` class, which is `--teal-ink`, not green — `var(--ok)` has exactly one use in `ui/src`, the done chip's swatch at `tokens.css:152`), row hatch fills for selected/in-work rows, and a `role="alert"`-free honest empty row. Filters, selection and the bulk bar persist as today's snapshot state.
 
 ### Bulk Bar (the leader-note strip)
-The console's action strip, always above the list (resident app: the library works on its own — the strip has no PLAN/ENCODE verbs; issue #331's read-only rule). **Idle**: seam border, panel fill — "{n} titles — tick checkboxes for bulk work" and the standing note "the app works through the library on its own — this page only shows where it stands". **Armed** (any selection): teal border on `--panel-active`, entering with the leader-draw animation — the selection checkbox with `{n} SELECTED` in strong mono, then the **leader note** `→ PLAN-PREDICTED −X.X GB · Y GB BASE` in teal-ink mono (the plan's prediction over the selection against their base size; when *every* selected title is already encoded the basis is zero and the note says so — "no estimate (selection already encoded)" — it never invents a floor number), then CLEAR. The estimate always precedes the work: bulk work is never blind.
+The console's action strip, always above the list (resident app: the library works on its own — the strip has no PLAN/ENCODE verbs; issue #331's read-only rule). **Idle**: seam border, panel fill — "{n} titles — tick titles to sum their plan estimate" and the standing note "the app works through the library on its own — this page only shows where it stands". **Armed** (any selection): teal border on `--panel-active`, entering with the leader-draw animation — the selection checkbox with `{n} SELECTED` in strong mono, then the **leader note** `→ PLAN-PREDICTED −X.X GB · Y GB BASE` in teal-ink mono (the plan's prediction over the selection against their base size; when *every* selected title is already encoded the basis is zero and the note says so — "no estimate (selection already encoded)" — it never invents a floor number), then CLEAR. The estimate always precedes the work: bulk work is never blind.
 
 ### Movie Provenance Page (schema-v5/v7 metrics)
 The full record for one title, opened from the table (a `name-btn` row click; replaces round 1's drawer) and closed with `← LIBRARY` / `← OVERVIEW` / `← JOBS` (returns to where it was opened from, `MovieDetailPage.svelte:298`) or Escape; deep-linkable via `#/movie` (path in sessionStorage, F5 restores). **Hero**: the title at 22px, the full path in break-all mono, chips (category, HDR as `neutral`; `GENERATION {n}` as `progress` when the file is itself an encode of an encode; `MISSING SINCE {date}` when absent), and actions right — FOLDER (opens the containing folder via `POST /api/reveal` in the system explorer; the dashboard renders no PLAN or ENCODE control — job control is the resident process's, issue #134). **Two fact panels** side by side (stacking below 820px):
@@ -377,6 +381,21 @@ Two tiers, one discipline (the snapshot's own docstring is the contract):
 - **Tier 1.5 — the stream.** `/api/events` (SSE) is the one FLOW channel: engine ticks fan out through an in-memory `ProgressBus` (bounded drop-oldest mailboxes, seed cache = latest event per job) into `data:` frames; a `hello` frame on every connect/reconnect seeds the client authoritatively, a ping comment every 15 s keeps intermediaries from closing idle connections. Progress is published, never persisted — the web app's progress lives exactly where the console's does (a callback), just over a wire. State is polled and cached; flow is streamed and dropped.
 - **Tier 2 — on-demand detail.** Data only one view needs, fetched once when that view opens, never polled, no ETag: `/api/movie` (provenance page — file facts + COMPLETE encode history), `/api/config`. `POST` verbs (`encode`, `plan`, `reveal`) are commands, not retrieval.
 - **Discipline every retrieval endpoint follows:** one request = one lock pass (a write between two separate reads would return data that never coexisted), argument lists and allowlist validation for anything path-shaped, and **no refetching what the snapshot already delivered** — the provenance page filters the app's in-memory job list locally instead of re-hitting `/api/jobs`.
+
+## Data States
+
+One state machine (`ui/src/lib/connection.ts`, `deriveConnection`) answers the whole shell's one question: **is what is on screen true now?** It returns exactly one of four states, and a *claim* — a count, an "all clear", a running state, a progress bar, an elapsed time, an ETA — is only ever drawn in `live`.
+
+| state | when | what a page may show |
+|---|---|---|
+| `loading` | no snapshot yet | a neutral `Loading library…`; **never a `0`**, because zero is a measurement and "not yet" is not one |
+| `locked` | a 401: no token, or a refused one | the unlock panel only — no page content, no counts, no "clean"/"accounted for" text |
+| `live` | snapshot younger than two poll intervals **and** the event stream connected | everything, unchanged |
+| `stale` | anything else: a failed poll, an old snapshot, a dropped stream | the last known data, visibly marked old |
+
+The shell derives the state once (`App.svelte`) and passes it down; a page never re-derives it. In `stale` the freshness indicator names the age of the data (`Updated 2 min ago · reconnecting…`), motion stops — progress bars dim, elapsed times and ETAs freeze instead of counting down — and the watcher and worker lights read `?` rather than green, because their state is unknown rather than running.
+
+`locked` is an onboarding step, not an error: it says what the token is and where to find it (`/data/token` in the container, `$SHRINKRAY_TOKEN`), keeps a labelled password field and an `Unlock` button, and reports a refused token inline on the 401 after a submit. Red stays reserved for failure.
 
 ## Do's and Don'ts
 
