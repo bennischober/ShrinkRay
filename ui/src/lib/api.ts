@@ -59,6 +59,17 @@ export function movieOutcome(job: Job, movieName: string): JobOutcome | null {
   return list.find((o) => o.movie === movieName) ?? null
 }
 
+/** A job outcome that is work lost, not work done: a failed movie, or a
+ * swap the operator declined — which the server reports as `skipped` plus a
+ * decline error (`src/shrinkray/server/jobs.py`). A busy or HDR skip is
+ * neither. */
+export function isFailedOutcome(o: JobOutcome): boolean {
+  return (
+    o.state === 'failed' ||
+    (o.state === 'skipped' && (o.error ?? '').includes('declined'))
+  )
+}
+
 /** A DONE job whose per-movie outcomes failed is not a clean done: the
  * lifecycle completed, but the work did not. Shared by the jobs page and
  * the detail trail — two audit trails must speak one language. */
@@ -66,11 +77,7 @@ export function failedOutcomeNote(job: Job): string {
   if (job.state !== 'done' || job.kind !== 'encode') return ''
   const r = job.result as { outcomes?: JobOutcome[] } | null
   if (!r?.outcomes) return ''
-  const failed = r.outcomes.filter(
-    (o) =>
-      o.state === 'failed' ||
-      (o.state === 'skipped' && (o.error ?? '').includes('declined')),
-  )
+  const failed = r.outcomes.filter(isFailedOutcome)
   if (failed.length === 0) return ''
   return `__FAILED_OUTCOMES__${failed.length} of ${r.outcomes.length} failed: ${failed
     .map((o) => o.movie)
