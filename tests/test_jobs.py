@@ -909,7 +909,7 @@ class TestJobs(unittest.TestCase):
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job2, self.connection, threading.Event())
-        self.assertEqual(fake_plan2.call_args.kwargs.get("encoder_preset"), "3")
+        self.assertEqual(fake_plan2.call_args.kwargs.get("encoder_preset"), "5")
         # the probe preset is a separate payload key (issue #22)
         job3 = self.queue.enqueue(
             jobs.Job(

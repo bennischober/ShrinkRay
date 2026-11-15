@@ -22,7 +22,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
+from shrinkray.config import (
+    DEFAULT_ENCODER_PRESET,
+    DEFAULT_MIN_SOURCE_HEIGHT,
+    DEFAULT_MIN_SOURCE_WIDTH,
+)
 from shrinkray.engine.crop import (
     CROP_DETECT_LIMIT as CROP_DETECT_LIMIT,
 )
@@ -1126,7 +1130,7 @@ def encode_with_quality(
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
     encoder: str = "svt_av1",
     probe_encoder_preset: str = "5",
-    encoder_preset: str = "3",
+    encoder_preset: str = DEFAULT_ENCODER_PRESET,
     progress: ProgressCallback | None = None,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,

@@ -32,7 +32,7 @@
     "preset": "Fast 1080p30",
     "encoder": "svt_av1",
     "probe_encoder_preset": "5",
-    "encoder_preset": "3"
+    "encoder_preset": "5"
   },
   "language": "en"
 }
