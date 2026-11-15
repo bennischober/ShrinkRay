@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, isFailedOutcome, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
-  import { bytes, duration, kindWord, percent, relative, savedPercent, span, vmaf, verdictWord } from '../format'
+  import { bytes, duration, kindWord, percent, progressLabel, relative, savedPercent, span, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
 
@@ -392,7 +392,7 @@
         <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
       </div>
       <div class="mono dim detail">
-        {runningProgress?.detail ?? (runningProgress?.percent != null ? 'working' : 'working…')}
+        {progressLabel(runningProgress?.stage, null, runningProgress?.detail, runningProgress?.percent)}
         · started {relative(runningJob.started_at)}
         · {fmtEta(eta)}
       </div>

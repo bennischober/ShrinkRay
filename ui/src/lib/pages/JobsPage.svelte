@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job } from '../api'
-  import { bytes, kindWord, relative, span, stateWord } from '../format'
+  import { bytes, kindWord, progressLabel, relative, span, stateWord } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -192,7 +192,7 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <ProgressBar percent={p?.percent ?? null} stage={`${p?.movie ? `${p.movie} · ` : ''}${p?.detail ?? (p?.percent != null ? 'working' : 'starting…')}`} />
+            <ProgressBar percent={p?.percent ?? null} stage={progressLabel(p?.stage, p?.movie, p?.detail, p?.percent)} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}

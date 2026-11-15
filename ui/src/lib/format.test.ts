@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, kindWord, percent, queueLabel, relative, savedPercent, span, stateWord, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, kindWord, percent, progressLabel, queueLabel, relative, savedPercent, span, stageWord, stateWord, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -148,6 +148,36 @@ describe('stateWord', () => {
 
   it('keeps an unknown state visible instead of blanking it', () => {
     expect(stateWord('reconciling')).toBe('reconciling')
+  })
+})
+
+describe('stageWord', () => {
+  // issue #631: a multi-step job must say which step it is on, so a CRF
+  // probe cannot look like the final encode
+  it('names the step the job is on', () => {
+    expect(stageWord('probe')).toBe('probing')
+    expect(stageWord('encode')).toBe('encoding')
+    expect(stageWord('scan')).toBe('scanning')
+    expect(stageWord('paused')).toBe('paused')
+  })
+
+  it('shows a stage it has never heard of as itself, not as nothing', () => {
+    expect(stageWord('verify')).toBe('verify')
+    expect(stageWord(null)).toBe('')
+  })
+})
+
+describe('progressLabel', () => {
+  // issue #631: the bar must say what is happening, not just how far
+  it('names the step, the file and what the engine reported', () => {
+    expect(progressLabel('probe', 'a.mkv', 'CRF 24: VMAF 96.41', 42)).toBe(
+      'probing · a.mkv · CRF 24: VMAF 96.41',
+    )
+  })
+
+  it('falls back to a state word only when the payload carries nothing else', () => {
+    expect(progressLabel(null, null, null, 42)).toBe('working')
+    expect(progressLabel(null, null, null, null)).toBe('starting…')
   })
 })
 
