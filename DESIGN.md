@@ -382,6 +382,21 @@ Two tiers, one discipline (the snapshot's own docstring is the contract):
 - **Tier 2 — on-demand detail.** Data only one view needs, fetched once when that view opens, never polled, no ETag: `/api/movie` (provenance page — file facts + COMPLETE encode history), `/api/config`. `POST` verbs (`encode`, `plan`, `reveal`) are commands, not retrieval.
 - **Discipline every retrieval endpoint follows:** one request = one lock pass (a write between two separate reads would return data that never coexisted), argument lists and allowlist validation for anything path-shaped, and **no refetching what the snapshot already delivered** — the provenance page filters the app's in-memory job list locally instead of re-hitting `/api/jobs`.
 
+## Data States
+
+One state machine (`ui/src/lib/connection.ts`, `deriveConnection`) answers the whole shell's one question: **is what is on screen true now?** It returns exactly one of four states, and a *claim* — a count, an "all clear", a running state, a progress bar, an elapsed time, an ETA — is only ever drawn in `live`.
+
+| state | when | what a page may show |
+|---|---|---|
+| `loading` | no snapshot yet | a neutral `Loading library…`; **never a `0`**, because zero is a measurement and "not yet" is not one |
+| `locked` | a 401: no token, or a refused one | the unlock panel only — no page content, no counts, no "clean"/"accounted for" text |
+| `live` | snapshot younger than two poll intervals **and** the event stream connected | everything, unchanged |
+| `stale` | anything else: a failed poll, an old snapshot, a dropped stream | the last known data, visibly marked old |
+
+The shell derives the state once (`App.svelte`) and passes it down; a page never re-derives it. In `stale` the freshness indicator names the age of the data (`Updated 2 min ago · reconnecting…`), motion stops — progress bars dim, elapsed times and ETAs freeze instead of counting down — and the watcher and worker lights read `?` rather than green, because their state is unknown rather than running.
+
+`locked` is an onboarding step, not an error: it says what the token is and where to find it (`/data/token` in the container, `$SHRINKRAY_TOKEN`), keeps a labelled password field and an `Unlock` button, and reports a refused token inline on the 401 after a submit. Red stays reserved for failure.
+
 ## Do's and Don'ts
 
 ### Do:

@@ -22,6 +22,7 @@
     scanPaths,
     outputDir,
     retainedFiles = [],
+    stale = false,
     ondismiss,
     ongoto,
     onopenmovie,
@@ -40,6 +41,9 @@
     /** the retention ledger's rows (App.svelte) — the panel totals the
      * present ones; the rows themselves are the Retained page's job */
     retainedFiles?: RetainedFile[]
+    /** The shell's data is no longer current, so no time is derived from the
+     * clock and nothing that moves keeps moving (issue #629). */
+    stale?: boolean
     ondismiss: (id: number | null) => void
     ongoto: (page: 'overview' | 'library' | 'jobs' | 'config' | 'retained') => void
     onopenmovie: (movie: Movie) => void
@@ -104,6 +108,21 @@
     if (m < 60) return `~${m}m remaining`
     return `~${Math.floor(m / 60)}h ${m % 60}m remaining`
   }
+
+  // the estimate divides a clock, so it is frozen while the data is old rather
+  // than recomputed into a countdown nothing is backing (issue #629)
+  let frozenEta = $state<number | null>(null)
+  $effect(() => {
+    if (!stale) frozenEta = eta
+  })
+  const shownEta = $derived(stale ? frozenEta : eta)
+
+  // every elapsed statement reads the same clock, so none of them keeps
+  // counting up while the data is old (issue #629)
+  let shownClock = $state(Date.now())
+  $effect(() => {
+    if (!stale) shownClock = Date.now()
+  })
 
   // completion moment: the last finished encode run, stated (peak-end)
   interface OutcomeEntry {
@@ -303,7 +322,7 @@
   <div class="status-line mono" class:work={runningJob !== null}>
     {statusAnswer({
       running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
-      etaSeconds: eta,
+      etaSeconds: shownEta,
       queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
       watching: status?.watcher === 'running',
     })}
@@ -354,8 +373,8 @@
       </div>
       <div class="mono dim detail">
         {progressLabel(runningProgress?.stage, null, runningProgress?.detail, runningProgress?.percent)}
-        · started {relative(runningJob.started_at)}
-        · {fmtEta(eta)}
+        · started {relative(runningJob.started_at, new Date(shownClock))}
+        · {fmtEta(shownEta)}
       </div>
     </div>
   {:else}

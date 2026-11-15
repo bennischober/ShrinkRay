@@ -16,6 +16,7 @@
     ontoggle,
     onselectall,
     onclear,
+    stale = false,
   }: {
     movies: Movie[]
     selectedPaths: Set<string>
@@ -28,6 +29,9 @@
     ontoggle: (path: string, checked: boolean) => void
     onselectall: (checked: boolean, paths: string[]) => void
     onclear: () => void
+    /** The shell's data is no longer current: a live-looking chip would claim
+     * a progress nothing is measuring (issue #629). */
+    stale?: boolean
   } = $props()
 
   // ── search + category (a select, not an exploding chip row) ──
@@ -285,7 +289,7 @@
               <td class="mono num">{bytes(movie.size)}</td>
               <td>
                 {#if runningMovie != null && movie.path === runningMovie}
-                  <span class="chip progress"><span class="swatch"></span>Running {runningPercent != null ? `${runningPercent}%` : ''}</span>
+                  <span class="chip progress" class:stale><span class="swatch"></span>Running {runningPercent != null ? `${runningPercent}%` : ''}{stale ? ' (stale)' : ''}</span>
                 {:else}
                   {#if decision.bare}
                     <!-- bare swatch: the state stays visible to sighted users via
