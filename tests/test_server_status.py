@@ -1,10 +1,11 @@
-"""The /api/status payload's watcher fields (issue #648).
+"""The status payload's watcher and worker fields (issues #648 and #649).
 
 `watcher` says whether the resident watcher's thread is alive; `watcher_error`
 says why it is not — the refusal reason watch() records (a held lock) or the
-crash the server's run_watch wrapper records. The dashboard reads both (the
-WATCHER chip and its strip); this module pins the route so the field cannot
-silently disappear.
+crash the server's run_watch wrapper records. `worker`/`worker_error` are the
+job worker's analogue (alive; why it gave up). The dashboard reads the
+/snapshot dict's copies (the WATCHER/WORKER chips and their strips); this
+module pins the routes and the wiring so no field can silently disappear.
 """
 
 import tempfile
@@ -18,6 +19,70 @@ import shrinkray.server.app as app_module
 from shrinkray.engine import watch as watch_mod
 from shrinkray.server.app import AppState
 from shrinkray.server.app import app as fast_app
+
+
+class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
+    """The watcher fields on /api/status and /api/snapshot (issue #648)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+
+    def tearDown(self) -> None:
+        if app_module.state is not None:
+            app_module.state.shutdown()
+        app_module.state = None
+        self.tmp.cleanup()
+
+    def test_the_app_queue_holds_the_app_lock(self) -> None:
+        """Issue #660 round 3, finding 1: the root-cause fix is the WIRING -
+        the queue the app builds must hold the SAME lock the routes use.
+        A queue built with its own private lock keeps every other test
+        green while the startup collision returns."""
+        self.assertIs(
+            app_module.state.queue._connection_lock,
+            app_module.state.db_lock,
+        )
+
+    def test_a_stopped_watcher_names_the_reason(self) -> None:
+        client = TestClient(fast_app)
+        with mock.patch.object(
+            watch_mod,
+            "WATCHER_ERROR",
+            "another watcher holds the single-instance lock",
+        ):
+            body = client.get("/api/status").json()
+        self.assertEqual(body["watcher"], "stopped")
+        self.assertEqual(
+            body["watcher_error"],
+            "another watcher holds the single-instance lock",
+        )
+
+    def test_a_running_watcher_reports_no_reason(self) -> None:
+        client = TestClient(fast_app)
+        # a live THREAD would make shutdown's join (timeout=10) wait out a
+        # dummy target's lifetime - a fixed wait a unit test must not pay;
+        # the route reads watch_thread.is_alive(), which a mock states
+        app_module.state.watch_thread = mock.Mock(is_alive=lambda: True)
+        body = client.get("/api/status").json()
+        self.assertEqual(body["watcher"], "running")
+        self.assertIsNone(body["watcher_error"])
+
+    def test_the_snapshot_status_carries_the_reason_too(self) -> None:
+        """The dashboard reads /api/snapshot's status dict (App.svelte's
+        strip and WATCHER chip), not /api/status - the field must survive
+        there as well (issue #648 round 2)."""
+        client = TestClient(fast_app)
+        with mock.patch.object(
+            watch_mod,
+            "WATCHER_ERROR",
+            "another watcher holds the single-instance lock",
+        ):
+            body = client.get("/api/snapshot").json()
+        self.assertEqual(
+            body["status"]["watcher_error"],
+            "another watcher holds the single-instance lock",
+        )
 
 
 class TestTheStatusCarriesTheWorkerFields(unittest.TestCase):
@@ -73,16 +138,6 @@ class TestTheStatusCarriesTheWorkerFields(unittest.TestCase):
             "the worker gave up after 5 consecutive failed iterations",
         )
 
-    def test_a_running_watcher_reports_no_reason(self) -> None:
-        client = TestClient(fast_app)
-        # a live THREAD would make shutdown's join (timeout=10) wait out a
-        # dummy target's lifetime - a fixed wait a unit test must not pay;
-        # the route reads watch_thread.is_alive(), which a mock states
-        app_module.state.watch_thread = mock.Mock(is_alive=lambda: True)
-        body = client.get("/api/status").json()
-        self.assertEqual(body["watcher"], "running")
-        self.assertIsNone(body["watcher_error"])
-
 
 class TestTheWatchLoopCrashIsRecorded(unittest.TestCase):
     """A watch-loop crash reaches /api/status (issue #648 round 2): the
@@ -115,45 +170,3 @@ class TestTheWatchLoopCrashIsRecorded(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertIsNotNone(watch_mod.WATCHER_ERROR)
         self.assertIn("the inbox vanished", watch_mod.WATCHER_ERROR or "")
-
-
-class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        app_module.state = AppState(Path(self.tmp.name) / "test.db")
-
-    def tearDown(self) -> None:
-        if app_module.state is not None:
-            app_module.state.shutdown()
-        app_module.state = None
-        self.tmp.cleanup()
-
-    def test_a_stopped_watcher_names_the_reason(self) -> None:
-        client = TestClient(fast_app)
-        with mock.patch.object(
-            watch_mod,
-            "WATCHER_ERROR",
-            "another watcher holds the single-instance lock",
-        ):
-            body = client.get("/api/status").json()
-        self.assertEqual(body["watcher"], "stopped")
-        self.assertEqual(
-            body["watcher_error"],
-            "another watcher holds the single-instance lock",
-        )
-
-    def test_the_snapshot_status_carries_the_reason_too(self) -> None:
-        """The dashboard reads /api/snapshot's status dict (App.svelte's
-        strip and WATCHER chip), not /api/status - the field must survive
-        there as well (issue #648 round 2)."""
-        client = TestClient(fast_app)
-        with mock.patch.object(
-            watch_mod,
-            "WATCHER_ERROR",
-            "another watcher holds the single-instance lock",
-        ):
-            body = client.get("/api/snapshot").json()
-        self.assertEqual(
-            body["status"]["watcher_error"],
-            "another watcher holds the single-instance lock",
-        )

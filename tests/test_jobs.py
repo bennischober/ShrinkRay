@@ -1355,7 +1355,7 @@ class TestJobs(unittest.TestCase):
         reached = threading.Event()
 
         def take_and_signal():
-            reached.set()  # the taker is INSIDE take_next when this fires
+            reached.set()  # the taker has reached the take_next call
             taken.append(queue.take_next())
 
         with gate:  # simulate a route holding the app's database lock
@@ -1424,11 +1424,15 @@ class TestJobs(unittest.TestCase):
         payload_dir = Path(self.tmp.name) / "movies"
         payload_dir.mkdir()
         (payload_dir / "x.mkv").write_bytes(b"junk")
-        job = self.queue.enqueue(
-            jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)})
-        )
+        # ONE queue for the job, the worker and the test's reads: the worker
+        # must consume the queue the job was enqueued into (issue #660
+        # round 3, finding 6), and the shared lock is the same lock the
+        # worker writes under (round 1, finding 5)
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
 
-        real_take_next = self.queue.take_next
+        real_take_next = queue.take_next
         calls = {"n": 0}
 
         def flaky(only_kinds=None):
@@ -1441,8 +1445,6 @@ class TestJobs(unittest.TestCase):
         # worker writes it - exactly the unsynchronized shape the root cause
         # blames, so the test's own reads must hold the same lock (issue
         # #660 round 1, finding 5)
-        gate = threading.RLock()
-        queue = jobs.JobQueue(self.connection, connection_lock=gate)
         worker = jobs.JobWorker(self.connection, queue)
         finished = threading.Event()
         real_finish = queue.finish
