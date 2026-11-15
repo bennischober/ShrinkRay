@@ -130,6 +130,10 @@ describe('savedPercent', () => {
   it('is an em dash when there is no value', () => {
     expect(savedPercent(null)).toEqual({ text: '—', grew: false })
   })
+
+  it('calls zero zero, not growth (issue #630)', () => {
+    expect(savedPercent(0)).toEqual({ text: '0.0%', grew: false })
+  })
 })
 
 describe('stateWord', () => {
