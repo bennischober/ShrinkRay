@@ -122,6 +122,18 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(screen.getAllByText(/● Working — encoding/).length).toBeGreaterThan(0)
   })
 
+  it('does not show the Setup panel: its facts are elsewhere or not actionable (issue #633)', () => {
+    // the scan root and write target are the Config page's, the watcher is in
+    // the status line, the database path is in the internals line — so the
+    // panel repeated all four without giving the operator an action
+    renderOverview()
+    expect(screen.queryByText('SETUP')).toBeNull()
+    expect(screen.queryByText('SCAN FROM')).toBeNull()
+    expect(screen.queryByText('WRITE TO')).toBeNull()
+    expect(screen.queryByText('RESIDENT MEMORY')).toBeNull()
+    expect(screen.getAllByText(/POLL ADAPTIVE/).length).toBeGreaterThan(0)
+  })
+
   it('the stat band says where every title went (issue #633)', () => {
     // a skip record is neither an encode nor untouched: the band used to
     // account for five of seven titles and say nothing about the rest

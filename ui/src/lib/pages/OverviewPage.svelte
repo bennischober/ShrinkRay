@@ -292,34 +292,6 @@
   })
 
   // ── resident-memory sparkline: the app watching itself ──
-  // rss_mib arrives live on every snapshot; the client keeps a small
-  // buffer so the SETUP panel shows the trend, not just the instant.
-  // A slow leak becomes visible before it becomes a problem.
-  // Samples accumulate in App.svelte's poll path (an $effect that read
-  // AND wrote rssSamples looped itself to death — Svelte 5 forbids
-  // self-reading effects, round-6.6 lesson).
-  const rssSpark = $derived.by(() => {
-    const samples = sparkSamples
-    if (samples.length < 2) return null
-    const min = Math.min(...samples)
-    const max = Math.max(...samples)
-    const span = Math.max(max - min, 2) // ≥2 MiB span: a flat line stays readable
-    const w = 180
-    const h = 30
-    const pts = samples.map(
-      (v, i) =>
-        `${((i / (samples.length - 1)) * w).toFixed(1)},${(h - 2 - ((v - min) / span) * (h - 4)).toFixed(1)}`
-    )
-    return {
-      points: pts.join(' '),
-      min,
-      max,
-      last: samples[samples.length - 1],
-      n: samples.length,
-      w,
-      h,
-    }
-  })
 
   /** The fail-row error currently expanded (one at a time). */
   let expandedErr = $state<number | null>(null)</script>
@@ -480,36 +452,6 @@
       {/if}
     </section>
 
-    <!-- ══ setup ══ -->
-    <section class="panel">
-      <div class="panel-head">
-        <span class="legend">SETUP</span>
-        <button class="nav-link" onclick={() => ongoto('config')}>CONFIG →</button>
-      </div>
-      <div class="setup mono">
-        <div class="fact"><span class="legend">SCAN FROM</span><span class="src">{scanPaths.join(' · ') || '—'}</span></div>
-        <div class="fact"><span class="legend">WRITE TO</span><span class="src">{outputDir || '—'}</span></div>
-        <div class="fact"><span class="legend">DATABASE</span><span class="src">{status?.database ?? '—'}</span></div>
-        <div class="fact"><span class="legend">WATCHER</span><span class="src">{status?.watcher ?? '—'}</span></div>
-        {#if status?.rss_mib != null}
-          <div class="fact rss-fact">
-            <span class="legend">RESIDENT MEMORY</span>
-            {#if rssSpark}
-              <!-- the trend, not just the instant: a leak announces
-                   itself here before the log does -->
-              <span class="rss-wrap" title="resident {rssSpark.last.toFixed(1)} MiB · min {rssSpark.min.toFixed(1)} · max {rssSpark.max.toFixed(1)} MiB · {rssSpark.n} samples this session">
-                <svg viewBox="0 0 {rssSpark.w} {rssSpark.h}" preserveAspectRatio="none" aria-hidden="true">
-                  <polyline points={rssSpark.points} class="rss-line" fill="none"></polyline>
-                </svg>
-                <span class="mono">{rssSpark.last.toFixed(1)} MiB</span>
-              </span>
-            {:else}
-              <span class="src">{status.rss_mib.toFixed(1)} MiB</span>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    </section>
 
     <!-- ══ measured quality: the score that justifies the whole product ══ -->
     <!-- lives in the attention row (4th panel): the user asked for the avg
@@ -944,14 +886,6 @@
   .nav-link:hover { text-decoration: underline; }
   .head-tools { display: flex; gap: 12px; align-items: center; }
   .more { padding: 8px 14px; text-align: left; }
-  .setup { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 14px; }
-  .fact { display: flex; justify-content: space-between; gap: 12px; }
-  .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
-  /* the memory sparkline: trend beside the instant figure */
-  .rss-fact { align-items: center; }
-  .rss-wrap { display: inline-flex; align-items: center; gap: 8px; }
-  .rss-wrap svg { width: 90px; height: 16px; }
-  .rss-line { stroke: var(--teal); stroke-width: 1.5; }
 
   /* measured quality panel */
   .quality { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 4px; }
