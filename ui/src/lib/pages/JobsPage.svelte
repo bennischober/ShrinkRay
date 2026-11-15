@@ -32,6 +32,16 @@
 
   const progress = (job: Job) => progressFor(job.id)
 
+  /** How much of the job's work is done, as a fraction: the final encode reports
+   * a frame percent, a CRF search reports a sample count (`done`/`total`, #690).
+   * Null when neither is known, so the row states no estimate. */
+  function workFraction(p: { percent?: number; done?: number; total?: number | null } | null): number | null {
+    if (!p) return null
+    if (p.done != null && p.total != null && p.total > 0) return p.done / p.total
+    if (p.percent != null) return p.percent / 100
+    return null
+  }
+
   let now = $state(Date.now())
   $effect(() => {
     if (!history.some((j) => j.state === 'running')) return
@@ -197,7 +207,7 @@
               tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
-            <span class="dur" title={job.state === 'running' ? 'time left, estimated from the percent done' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(job.started_at, progress(job)?.percent, new Date(now))) || '…') : ''}</span>
+            <span class="dur" title={job.state === 'running' ? 'time left, estimated from the work done' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(job.started_at, workFraction(progress(job)), new Date(now))) || '…') : ''}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}

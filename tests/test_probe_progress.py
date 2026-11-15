@@ -178,6 +178,47 @@ class TestProbeProgress(unittest.TestCase):
         self.assertTrue(all("VMAF" in d for d in details[1::2]))  # result events
         self.assertEqual(events[-1]["probes_done"], len(probes))
 
+    def test_probe_crf_reports_each_sample(self):
+        """Issue #690: a probe states the sample it is on, so a running search
+        has a position (and an ETA) instead of showing nothing for hours."""
+        events: list[dict] = []
+
+        def fake_run(command, cancel=None):
+            Path(command[-1]).write_bytes(b"x" * 8)
+            return 0, ""
+
+        with (
+            patch.object(engine_search, "probe_cache_key", return_value="k"),
+            patch.object(engine_search, "_cached_or_none", return_value=(None, None, None)),
+            patch.object(
+                engine_search,
+                "build_encode_command",
+                side_effect=lambda hb, sample, out, *a, **k: ["hb", str(out)],
+            ),
+            patch.object(engine_search, "_run", side_effect=fake_run),
+            patch.object(engine_search, "measure_vmaf", return_value=95.0),
+            patch.object(engine_search, "_store_probe"),
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            engine_search.probe_crf(
+                [(Path("s0.mkv"), 0.0), (Path("s1.mkv"), 10.0)],
+                30,
+                Path(tmp),
+                "hb",
+                Path("movie.mkv"),
+                10.0,
+                "svt_av1",
+                "5",
+                progress=events.append,
+            )
+        self.assertEqual(
+            [e["detail"] for e in events],
+            ["sample 1/2 (CRF 30)", "sample 2/2 (CRF 30)"],
+        )
+        self.assertEqual([e["done"] for e in events], [0, 1])
+        self.assertEqual(events[0]["total"], 2)
+        self.assertEqual(events[0]["crf"], 30)
+
     def test_estimate_size_factor_reports_size_probe(self):
         """The skip-check size probe emits its step event."""
         events: list[dict] = []

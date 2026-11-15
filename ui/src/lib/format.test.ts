@@ -359,15 +359,17 @@ describe('queueLabel', () => {
 describe('remainingSeconds', () => {
   const now = new Date('2026-11-15T12:00:00Z')
 
-  it('scales the elapsed time by the percent done', () => {
+  it('scales the elapsed time by the work fraction done', () => {
     // 30 min elapsed at 25% implies 2 h total, so 90 min left
-    expect(remainingSeconds('2026-11-15T11:30:00Z', 25, now)).toBe(90 * 60)
+    expect(remainingSeconds('2026-11-15T11:30:00Z', 0.25, now)).toBe(90 * 60)
   })
 
   it('says nothing it cannot estimate', () => {
     expect(remainingSeconds('2026-11-15T11:30:00Z', null, now)).toBeNull()
     expect(remainingSeconds('2026-11-15T11:30:00Z', 0, now)).toBeNull()
-    expect(remainingSeconds(null, 40, now)).toBeNull()
+    expect(remainingSeconds(null, 0.4, now)).toBeNull()
+    // a finished fraction has nothing left to estimate
+    expect(remainingSeconds('2026-11-15T11:30:00Z', 1, now)).toBeNull()
   })
 })
 
