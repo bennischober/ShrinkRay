@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
-  import { bytes, isStageRow, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns } from '../format'
+  import { bytes, groupJobs, isStageRow, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -127,12 +127,11 @@
   // issue #632: two lists, not one dump — what is running above, what
   // happened below. A per-file stage row is the running folder job's own work
   // (#602), so it says which job it belongs to rather than pretending to be one.
-  const activeRows = $derived(
-    filteredHistory.filter((j) => j.state === 'running' || j.state === 'queued'),
-  )
-  const pastRows = $derived(
-    filteredHistory.filter((j) => j.state !== 'running' && j.state !== 'queued'),
-  )
+  // The order inside ACTIVE stays the operator's: running first, then the queue
+  // oldest-first, because the snapshot is newest-first (issue #632 review).
+  const groups = $derived(groupJobs(filteredHistory))
+  const activeRows = $derived([...groups.running, ...groups.queued])
+  const pastRows = $derived(groups.history)
 </script>
 
 <div class="page page-in">
