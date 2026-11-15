@@ -213,6 +213,10 @@ The one vocabulary every page uses (issue #627). A term below has exactly one us
 | Plan verdict: encode | Encode | amber | hatch |
 | Plan verdict: skip | Skip | dim | empty dot |
 | Plan verdict: failed | Failed | red | dot with bar |
+| Progress step: scan | scanning | dim | — |
+| Progress step: probe | probing | dim | — |
+| Progress step: encode | encoding | dim | — |
+| Progress step: paused | paused | amber | — |
 | State: cancelled | Cancelled | dim | empty dot |
 | State: interrupted | Interrupted | amber | half dot |
 | Outcome: encoded | Encoded | ok | filled dot |

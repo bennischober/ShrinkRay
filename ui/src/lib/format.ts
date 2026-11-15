@@ -160,6 +160,40 @@ export function kindWord(kind: string): string {
   return KIND_WORDS[kind] ?? kind
 }
 
+const STAGE_WORDS: Record<string, string> = {
+  scan: 'scanning',
+  probe: 'probing',
+  encode: 'encoding',
+  paused: 'paused',
+}
+
+/** The step a multi-step job is on, in one voice (issue #631): an operator
+ * can tell a CRF probe from the final encode. An unknown stage passes
+ * through rather than disappearing, so a new server stage shows up as itself. */
+export function stageWord(stage: string | null | undefined): string {
+  if (!stage) return ''
+  return STAGE_WORDS[stage] ?? stage
+}
+
+/** What a running job's progress bar says (issue #631): the step it is
+ * on, the file, and what the engine reported — never a bare percentage
+ * with no explanation of what is being measured. Falls back to a plain
+ * state word only when the payload carries nothing else. */
+export function progressLabel(
+  stage: string | null | undefined,
+  movie: string | null | undefined,
+  detail: string | null | undefined,
+  percent: number | null | undefined,
+): string {
+  const rest = [movie, detail].filter(Boolean)
+  // the engine's own detail sometimes names the step already
+  // ("scanning library", "probing a.mkv"): never say it twice
+  const saysStepAlready = (detail ?? '').toLowerCase().startsWith(stageWord(stage))
+  const parts = stageWord(stage) && !saysStepAlready ? [stageWord(stage), ...rest] : rest
+  if (parts.length > 0) return parts.join(' · ')
+  return percent != null ? 'working' : 'starting…'
+}
+
 const VERDICT_WORDS: Record<string, string> = {
   encode: 'Encode',
   skip: 'Skip',
