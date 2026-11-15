@@ -55,7 +55,7 @@
     if (job.state !== 'queued') return ''
     const p = job.payload as Record<string, unknown>
     const parts: string[] = []
-    if (p.quality) parts.push(`quality · VMAF>${p.target_vmaf ?? 95}`)
+    if (p.quality) parts.push(p.target_vmaf != null ? `quality · VMAF>${p.target_vmaf}` : 'quality')
     else parts.push('fixed preset (removed mode)')
     if (p.remove_bars) parts.push('bars removed')
     return parts.join(' · ')

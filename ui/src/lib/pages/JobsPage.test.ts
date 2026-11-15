@@ -100,6 +100,16 @@ describe('JobsPage render', () => {
     expect(container.querySelector('button.movie-link')).toBeNull()
   })
 
+  it('a queued row does not invent a VMAF target the payload does not carry (issue #630)', async () => {
+    // the payload has no target_vmaf: printing 95 would be a number the
+    // operator reads as fact while the configured target is 96
+    const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null, result: null, payload: { path: '/m/a', quality: true } })
+    const { container } = render(JobsPage, { history: [queued], onopenMovie: () => {} })
+    const note = [...container.querySelectorAll('.note')].map((el) => (el.textContent ?? '').trim()).join(' ')
+    expect(note).toContain('quality')
+    expect(note).not.toContain('VMAF>95')
+  })
+
   it('a queued job shows no start time; running and done rows keep theirs (issue #603)', async () => {
     const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null, result: null })
     const running = job({ id: 3, state: 'running', started_at: '2026-10-24T10:00:01Z', finished_at: null })
