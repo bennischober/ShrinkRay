@@ -313,22 +313,35 @@ describe('statusAnswer', () => {
   // issue #633: the page must answer "is everything OK?" first, in one line
   it('says what is running, how long is left and what is waiting', () => {
     expect(
-      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, watching: true }),
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, failed: 0, watching: true, known: true }),
     ).toBe('● Working — encoding a.mkv, about 1 h 50 min left · 7 files waiting')
   })
 
   it('says it is idle when nothing is running, and whether it is watching', () => {
-    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: true })).toBe(
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, failed: 0, watching: true, known: true })).toBe(
       '● Idle — all caught up · watching for new files',
     )
-    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: false })).toBe(
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, failed: 0, watching: false, known: true })).toBe(
       '● Idle — all caught up · the watcher is off',
+    )
+  })
+
+  it('never says all caught up while a failure exists (issue #679)', () => {
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, failed: 2, watching: true, known: true })).toBe(
+      '● 2 need you — 2 failed · watching for new files',
+    )
+  })
+
+  it('never says all caught up when it does not know (issue #679)', () => {
+    // while loading or disconnected the snapshot is missing: no claim either way
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, failed: 0, watching: false, known: false })).toBe(
+      '● Connecting…',
     )
   })
 
   it('names one waiting file in the singular', () => {
     expect(
-      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: null, queued: 1, watching: true }),
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: null, queued: 1, failed: 0, watching: true, known: true }),
     ).toBe('● Working — encoding a.mkv · 1 file waiting')
   })
 })

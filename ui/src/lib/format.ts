@@ -305,8 +305,15 @@ export function statusAnswer(input: {
   running: { movie?: string | null } | null
   etaSeconds: number | null
   queued: number
+  /** how many jobs lost work (issue #679): a failure must never read as
+   * all-clear, which is what this line did before */
+  failed: number
   watching: boolean
+  /** false while the snapshot is missing (loading or disconnected): the line
+   * must not claim all-clear when it does not know */
+  known: boolean
 }): string {
+  if (!input.known) return '● Connecting…'
   if (input.running) {
     const parts = [`encoding ${input.running.movie ?? 'a file'}`]
     const left = eta(input.etaSeconds)
@@ -316,6 +323,9 @@ export function statusAnswer(input: {
       line += ` · ${input.queued} file${input.queued === 1 ? '' : 's'} waiting`
     }
     return line
+  }
+  if (input.failed > 0) {
+    return `● ${input.failed} need you — ${input.failed} failed${input.watching ? ' · watching for new files' : ''}`
   }
   const tail = input.watching ? 'watching for new files' : 'the watcher is off'
   return `● Idle — all caught up · ${tail}`

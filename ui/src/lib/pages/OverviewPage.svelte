@@ -305,7 +305,9 @@
       running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
       etaSeconds: eta,
       queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
+      failed: failedJobs.length,
       watching: status?.watcher === 'running',
+      known: status != null,
     })}
   </div>
 
