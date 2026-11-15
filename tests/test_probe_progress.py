@@ -218,6 +218,11 @@ class TestProbeProgress(unittest.TestCase):
         self.assertEqual([e["done"] for e in events], [0, 1])
         self.assertEqual(events[0]["total"], 2)
         self.assertEqual(events[0]["crf"], 30)
+        # the probe's OWN elapsed time is what an ETA divides: without it the
+        # page falls back to the job's elapsed and swings the estimate by an
+        # order of magnitude on every new probe (issue #690 review)
+        self.assertIsInstance(events[0]["elapsed"], float)
+        self.assertGreaterEqual(events[1]["elapsed"], events[0]["elapsed"])
 
     def test_estimate_size_factor_reports_size_probe(self):
         """The skip-check size probe emits its step event."""
