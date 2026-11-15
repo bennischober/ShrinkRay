@@ -72,6 +72,20 @@ describe('movieOutcome', () => {
 })
 
 describe('failedOutcomeNote', () => {
+  it('counts a discarded encode as work thrown away, not a clean done (issue #630)', () => {
+    const j = job({
+      kind: 'encode',
+      result: {
+        outcomes: [
+          { movie: '/m/a', state: 'done' },
+          { movie: '/m/b', state: 'discarded', error: 'the swap was declined' },
+        ],
+      },
+    })
+    expect(failedOutcomeNote(j)).toContain('1 of 2')
+    expect(failedOutcomeNote(j)).toContain('/m/b')
+  })
+
   it('names the failed movies of a partially-done encode', () => {
     const j = job({
       kind: 'encode',
