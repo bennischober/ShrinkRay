@@ -361,7 +361,7 @@ describe('remainingSeconds', () => {
 
   it('scales the elapsed time by the percent done', () => {
     // 30 min elapsed at 25% implies 2 h total, so 90 min left
-    expect(remainingSeconds('2026-11-15T11:30:00Z', 25, now)).toBe(90 * 60)
+    expect(remainingSeconds('2026-11-15T11:30:00Z', 0.25, now)).toBe(90 * 60)
   })
 
   it('says nothing it cannot estimate', () => {

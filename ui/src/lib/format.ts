@@ -108,21 +108,23 @@ export function eta(seconds: number | null | undefined): string {
   return `about ${duration(seconds)} left`
 }
 
-/** The wall time a running job has left, from the percent it reports and the
- * time it has been running: the engine sends no ETA, so a proportional estimate
- * is the only honest one. Null when the percent is unknown or too small to
- * divide by — a row then says `…` rather than inventing a number. */
+/** The wall time a running job has left, from the fraction of its work it has
+ * finished and the time it has been running: the engine sends no ETA, so a
+ * proportional estimate is the only honest one. The fraction is `percent / 100`
+ * during the final encode and `done / total` during a search, which reports a
+ * sample count instead. Null when there is no usable fraction — a row then says
+ * `…` rather than inventing a number. */
 export function remainingSeconds(
   startedIso: string | null | undefined,
-  percent: number | null | undefined,
+  fraction: number | null | undefined,
   now: Date = new Date(),
 ): number | null {
-  if (!startedIso || percent == null || !(percent > 1)) return null
+  if (!startedIso || fraction == null || !(fraction > 0) || fraction >= 1) return null
   const iso =
     startedIso.endsWith('Z') || startedIso.includes('+') ? startedIso : `${startedIso}Z`
   const elapsed = (now.getTime() - Date.parse(iso)) / 1000
   if (!Number.isFinite(elapsed) || elapsed <= 0) return null
-  const total = elapsed / (percent / 100)
+  const total = elapsed / fraction
   return Math.max(0, total - elapsed)
 }
 

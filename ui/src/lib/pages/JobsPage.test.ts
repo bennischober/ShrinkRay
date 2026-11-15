@@ -4,7 +4,7 @@ import JobsPage from './JobsPage.svelte'
 
 // the running row's stage comes from the live progress store: a mutable stub
 // lets one test seed it without a stream (issue #630)
-let progressStub: { percent?: number; movie?: string | null; detail?: string | null } | null = null
+let progressStub: { percent?: number; movie?: string | null; detail?: string | null; done?: number; total?: number | null } | null = null
 vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
 import type { Job } from '../api'
 
@@ -172,6 +172,21 @@ describe('JobsPage render', () => {
     fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
     await expect.poll(() => screen.queryByText('COULD NOT READ'), { timeout: 1000 }).toBeTruthy()
     expect(container.querySelector('.detail')!.textContent).toContain('/media/broken.mkv: invalid data')
+  })
+
+  it('a search states its ETA from the samples it has finished (issue #632)', () => {
+    // a crf-search reports done/total, never a percent: the row still states
+    // an estimate once at least one sample is done
+    const started = new Date(Date.now() - 20 * 60_000).toISOString()
+    const j = job({ kind: 'crf-search', state: 'running', started_at: started, finished_at: null })
+    progressStub = { done: 1, total: 3 }
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    // 20 min for 1 of 3 samples implies 40 min left
+    expect(container.querySelector('.dur')!.textContent).toContain('~40 min')
+    progressStub = null
   })
 
   it('single-movie jobs link to the detail page', () => {
