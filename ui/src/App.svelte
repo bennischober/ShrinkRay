@@ -815,7 +815,7 @@
       gap: 8px;
     }
     .rail-foot .shortcut-hint { display: none; }
-    .main { padding: 14px 12px 20px; flex: 1; }
+    .main { padding: 14px 12px 20px; flex: 1; scroll-margin-bottom: 72px; }
   }
 
   /* a keyboard legend is meaningless without a keyboard (issue #636) */
@@ -826,7 +826,7 @@
   /* prose keeps a readable measure on a very wide screen (issue #636) */
   @media (min-width: 1800px) {
     .main { padding: 24px 32px; }
-    :global(.page-head .sub), :global(.prose) { max-width: 75ch; }
+    :global(.page-header .desc) { max-width: 75ch; }
   }
   .unlock {
     max-width: 460px;

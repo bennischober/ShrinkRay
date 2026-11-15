@@ -56,4 +56,11 @@ describe('the shell data states (issue #629)', () => {
     expect(container.querySelectorAll('.rail-badge')).toHaveLength(0)
     expect(container.textContent).toContain('Locked')
   })
+  it('marks the current page for assistive technology, not by colour alone (issue #636)', async () => {
+    mode = 'live'
+    const { container } = render(App)
+    const current = container.querySelectorAll('[aria-current="page"]')
+    expect(current).toHaveLength(1)
+    expect(current[0].textContent).toContain('Overview')
+  })
 })
