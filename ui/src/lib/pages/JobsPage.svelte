@@ -170,6 +170,7 @@
       <div class="log-head legend">
         <span>#</span>
         <span>KIND</span>
+        <span>FILE</span>
         <span>STATE</span>
         <span>STARTED</span>
         <span>DURATION</span>
@@ -180,8 +181,8 @@
         <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:partial={job.state === 'done' && failedOutcomeNote(job) !== ''} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
-            <span class="kind">
-              {kindWord(job.kind)}
+            <span class="kind">{kindWord(job.kind)}</span>
+            <span class="file">
               {#if singleMoviePath(job)}
                 <!-- single-movie jobs link to the title: the two audit
                      trails reference each other -->
@@ -274,7 +275,7 @@
   }
   .log-head {
     display: grid;
-    grid-template-columns: 44px 130px 150px 90px 80px 1fr;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 80px 92px;
     gap: 10px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--seam);
@@ -295,13 +296,17 @@
   .entry.open { background: var(--panel-raised); }
   .row {
     display: grid;
-    grid-template-columns: 44px 130px 150px 90px 80px 1fr;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 80px 92px;
     gap: 10px;
     align-items: baseline;
     padding: 7px 0;
   }
   .id { color: var(--ink-faint); }
   .kind { font-weight: 600; }
+  /* issue #632: the filename has its own cell, so it can neither wrap
+     character by character inside KIND nor draw over the start time;
+     min-width 0 lets it shrink instead of widening the row */
+  .file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .when { color: var(--ink-dim); }
   .dur { color: var(--ink-dim); }
   .ops { display: flex; gap: 6px; justify-content: flex-end; }
