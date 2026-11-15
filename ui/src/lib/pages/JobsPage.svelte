@@ -15,10 +15,14 @@
   let {
     history,
     onopenMovie,
+    stale = false,
   }: {
     history: Job[]
     /** Open a movie's detail page (single-movie jobs link to their title). */
     onopenMovie: (path: string) => void
+    /** The shell's data is no longer current: the clock stops so a frozen
+     * elapsed time and ETA cannot keep looking live (issue #629). */
+    stale?: boolean
   } = $props()
 
   /** True when the job targeted exactly one movie FILE (the UI's
@@ -44,6 +48,7 @@
 
   let now = $state(Date.now())
   $effect(() => {
+    if (stale) return
     if (!history.some((j) => j.state === 'running')) return
     const timer = setInterval(() => (now = Date.now()), 1000)
     return () => clearInterval(timer)
@@ -217,7 +222,7 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <ProgressBar percent={p?.percent ?? null} stage={progressLabel(p?.stage, p?.movie, p?.detail, p?.percent)} />
+            <ProgressBar percent={p?.percent ?? null} stale={stale} stage={progressLabel(p?.stage, p?.movie, p?.detail, p?.percent)} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}

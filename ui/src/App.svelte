@@ -7,6 +7,7 @@
     isFailedOutcome,
     jobPaths,
     storeToken,
+    storedToken,
     type Movie,
     type RetainedFile,
     type Status,
@@ -19,7 +20,8 @@
   import ConfigPage from './lib/pages/ConfigPage.svelte'
   import RetainedPage from './lib/pages/RetainedPage.svelte'
   import MovieDetailPage from './lib/pages/MovieDetailPage.svelte'
-  import { connectEvents, progressFor } from './lib/progress.svelte'
+  import { connectEvents, eventsConnected, progressFor, resetEvents } from './lib/progress.svelte'
+  import { deriveConnection, freshnessText } from './lib/connection'
 
   type Page = 'overview' | 'library' | 'jobs' | 'retained' | 'config'
 
@@ -31,6 +33,25 @@
   /** The server requires a bearer token and none is stored (issue #36):
    * the UI asks for it instead of showing a red error strip. */
   let needsToken = $state(false)
+  /** when the last snapshot arrived: the freshness indicator and the stale
+   * state both read it (issue #629) */
+  let lastOkAt = $state<number | null>(null)
+  let tokenWrong = $state(false)
+  /** ticks once a second so the freshness text ages without a new snapshot */
+  let clock = $state(Date.now())
+  $effect(() => {
+    const timer = setInterval(() => (clock = Date.now()), 1000)
+    return () => clearInterval(timer)
+  })
+  const connectionState = $derived(
+    deriveConnection({
+      hasSnapshot: status !== null,
+      locked: needsToken,
+      lastOkAt,
+      eventsUp: eventsConnected(),
+      now: clock,
+    }),
+  )
   let tokenInput = $state('')
   /** Informational feedback ("already queued") — never red; red is for
    * failure only (the console's own Red Lock Rule). */
@@ -208,11 +229,13 @@
       if (snap.library !== null) movies = snap.library // unchanged: keep the current array
       error = null
       needsToken = false
+      lastOkAt = Date.now()
     } catch (e) {
       // a 401 is not an error to report: the server requires a token, so
       // the UI asks for one instead of showing a red strip (issue #36)
       if (isAuthFailure(e)) {
         needsToken = true
+        tokenWrong = storedToken() !== null
         return
       }
       error = e instanceof Error ? e.message : String(e)
@@ -224,6 +247,11 @@
     storeToken(tokenInput.trim())
     tokenInput = ''
     needsToken = false
+    tokenWrong = false
+    // the stream is opened once: without this the first mount's tokenless
+    // connection would never carry the new token (issue #629)
+    resetEvents()
+    connectEvents()
     void refresh()
   }
 
@@ -404,31 +432,56 @@
         title={status?.worker === 'running' ? 'The job worker is running' : (status?.worker_error ?? 'The job worker is stopped')}>
         {status?.worker === 'running' ? '● WORKER' : '○ WORKER'}
       </span>
+      <span class="legend freshness" class:stale={connectionState === 'stale'} class:live={connectionState === 'live'}>
+        {freshnessText(connectionState, lastOkAt, clock)}
+      </span>
       <span class="legend shortcut-hint mono">{SHORTCUT_LEGEND}</span>
     </div>
   </aside>
 
   <!-- ══ main column ══ -->
   <main class="main" id="main-content" tabindex="-1">
-    {#if needsToken}
-      <div class="api-error mono" role="alert">
+    {#if connectionState === 'locked'}
+      <div class="unlock">
         <form
+          class="mono"
           onsubmit={(e) => {
             e.preventDefault()
             submitToken()
           }}>
-          <label for="token-input">this dashboard requires a token (SHRINKRAY_TOKEN):</label>
+          <h2>ShrinkRay needs a token</h2>
+          <p class="dim">
+            The dashboard reads the token the server was started with — <code>/data/token</code> in the container, or
+            <code>$SHRINKRAY_TOKEN</code>.
+          </p>
+          <label for="token-input">Token</label>
           <input
             id="token-input"
             type="password"
             bind:value={tokenInput}
             autocomplete="current-password"
             placeholder="paste the token"
+            aria-describedby={tokenWrong ? 'token-wrong' : undefined}
           />
-          <button type="submit">unlock</button>
+          {#if tokenWrong}
+            <p class="unlock-wrong" id="token-wrong" role="status">That token was refused — check /data/token.</p>
+          {/if}
+          <button type="submit">Unlock</button>
         </form>
       </div>
-    {/if}
+    {:else if connectionState === 'loading'}
+      <div class="loading mono dim">Loading library…</div>
+    {:else}
+      {#if connectionState === 'stale'}
+        <div class="api-notice mono" role="status">
+          Can't reach ShrinkRay — retrying every 3 s. Work on the server continues.
+          <span class="dim"> {freshnessText(connectionState, lastOkAt, clock)}</span>
+          <details>
+            <summary>Details</summary>
+            <pre class="mono">{error ?? 'no response'}</pre>
+          </details>
+        </div>
+      {/if}
     {#if status?.worker_error}
       <!-- not dismissible: it clears on the worker's next app restart (issue
         #649): a dead worker means nothing runs - the first thing to see -->
@@ -523,7 +576,7 @@
         />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
-        <JobsPage {history} onopenMovie={(p) => openDetailFromJobs(p)} />
+        <JobsPage {history} stale={connectionState === 'stale'} onopenMovie={(p) => openDetailFromJobs(p)} />
       </div>
       <div class="pages" class:hidden={page !== 'retained'}>
         <RetainedPage files={retainedFiles} onrecover={() => void loadRetained()} />
@@ -531,6 +584,7 @@
       <div class="pages" class:hidden={page !== 'config'}>
         <ConfigPage {scanPaths} {outputDir} {targetVmaf} />
       </div>
+    {/if}
     {/if}
   </main>
 </div>
@@ -723,4 +777,29 @@
     .rail-foot { margin-top: 0; flex-direction: row; }
     .main { padding: 14px; }
   }
+  .unlock {
+    max-width: 460px;
+    margin: 14vh auto 0;
+    padding: 26px;
+    border: 1px solid var(--row-line);
+    border-radius: 4px;
+    background: var(--panel);
+  }
+  .unlock h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+  .unlock p { margin: 0 0 14px; font-size: 12px; line-height: 1.55; }
+  .unlock label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  .unlock input { width: 100%; margin-bottom: 12px; }
+  .unlock button { padding: 6px 16px; }
+  .unlock-wrong { color: var(--red); margin: 0 0 12px; font-size: 11px; }
+  .loading { padding: 14vh 0; text-align: center; font-size: 12px; }
+  .freshness { margin-left: auto; }
+  .freshness.live { color: var(--green); }
+  .freshness.stale { color: var(--amber); }
 </style>
