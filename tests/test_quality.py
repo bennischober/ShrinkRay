@@ -2845,6 +2845,115 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.4))
 
 
+class TestTheCodecRule(unittest.TestCase):
+    """Issue #650, the maintainer's decision (2026-11-14, relayed by Zef-X;
+    confirmed 2026-11-15): AV1 is the output format and never a source. An
+    AV1 source is skipped at the codec gate with a reason that says why, the
+    config cannot re-add av1, and the gate runs before any plan reuse - so a
+    stored plan for an AV1 source can never encode."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.movie = Path(self.tmp.name) / "movie.mkv"
+        self.movie.write_bytes(b"x" * 800)
+
+    def _plan(self, db_file=None, extra_config=None):
+        from unittest.mock import Mock
+
+        from shrinkray import config as config_helper
+        from shrinkray.engine.plan import plan_quality
+
+        probed = Mock(return_value=(20, 96.0, [], False, 0.5))
+        raw = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "av1",
+                    "color_transfer": "bt709",
+                    "width": 1920,
+                    "height": 1080,
+                }
+            ]
+        }
+        conf = config_helper.Conf(extra_config or {})
+        with (
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+            patch("shrinkray.config.load_config", return_value=conf),
+            patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
+        ):
+            result = plan_quality(self.movie, target_vmaf=95.0, db_file=db_file)
+        return result, probed
+
+    def test_an_av1_source_is_skipped_at_the_codec_gate(self) -> None:
+        """Fails on main: av1 was in SOURCE_CODECS, so an AV1 source was
+        eligible and got probed (the observed CRF 38 re-encode plan)."""
+        result, probed = self._plan()
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "already AV1 (the output format)")
+        self.assertIn("never a source", result.error)
+        probed.assert_not_called()
+
+    def test_the_config_cannot_re_add_av1(self) -> None:
+        """The candidate_codecs validator rejects av1 at load with a clear
+        error - one config line must not re-enable re-encoding outputs."""
+        import pydantic
+
+        with self.assertRaises((pydantic.ValidationError, ValueError)) as ctx:
+            _ = self._plan(extra_config={"eligibility": {"candidate_codecs": ["av1"]}})
+        self.assertIn("never a source", str(ctx.exception))
+
+    def test_a_stored_plan_for_an_av1_source_cannot_encode(self) -> None:
+        """The codec gate runs before plan reuse: a stored plan row for an
+        AV1 source is never consulted, so the plan cannot encode it."""
+        from shrinkray import db
+
+        db_file = Path(self.tmp.name) / "metadata.db"
+        connection = db.connect(db_file)
+        try:
+            db.upsert_file(
+                connection,
+                db.MovieRecord(
+                    path=self.movie,
+                    mtime=self.movie.stat().st_mtime,
+                    size=self.movie.stat().st_size,
+                    name=self.movie.name,
+                    category="Cat",
+                ),
+            )
+            connection.commit()
+            db.save_plan(
+                connection,
+                connection.execute("SELECT id FROM files").fetchone()["id"],
+                chosen_crf=38,
+                achieved_vmaf=96.01,
+                crop=None,
+                probes=[],
+                skipped_reason=None,
+                estimated_size=100,
+                input_mtime=self.movie.stat().st_mtime,
+                input_size=self.movie.stat().st_size,
+                encoder="svt_av1",
+                encoder_preset="5",
+                target_vmaf=96.0,
+                crf_low=14,
+                crf_high=70,
+                sample_count=30,
+                sample_seconds=4.0,
+            )
+            connection.commit()
+            # the stored plan WOULD match the fingerprint (the row exists):
+            # the codec gate must still skip before the reuse lookup runs
+            result, probed = self._plan(db_file=db_file)
+            self.assertEqual(result.skipped_reason, "already AV1 (the output format)")
+            probed.assert_not_called()
+        finally:
+            connection.close()
+
+
 class TestSubprocessTimeouts(unittest.TestCase):
     """The short-lived ffprobe/ffmpeg calls turn a TimeoutExpired into their
     documented failure path instead of hanging the thread forever (issue

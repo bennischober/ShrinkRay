@@ -311,5 +311,13 @@ from the crop and from a better encode. That may still be worth it, or it may no
   which the rule forbids as a reason. That makes AV1 a skip at gate 5 alongside MPEG-2.
 
 The second reading is closer to "AV1 is the output format" — re-encoding the same codec is generation
-loss for whatever small gain the crop gives. But the first is defensible and simpler. **Not decided;
-record the choice here before implementing.**
+loss for whatever small gain the crop gives. But the first is defensible and simpler.
+
+**Decided (the maintainer, 2026-11-14, issue #650): the second option — AV1 is the output format and
+never a source.** `av1` is out of `SOURCE_CODECS`, so an AV1 source is skipped at gate 5 with the
+reason `already AV1 (the output format)`. The rule guarantees "never re-encode our own output" at the
+codec level: every ShrinkRay output is AV1, so no file ShrinkRay wrote can pass the gate — no identity
+bookkeeping (sizes, encode chains) that breaks when a database is reset or a file is restored. The
+config cannot re-add it: `eligibility.candidate_codecs` rejects `av1` at load with a clear error, so
+one config line cannot re-enable re-encoding outputs. A stored plan whose source is AV1 can no longer
+encode: this gate runs before plan reuse, so the stored row is never consulted.

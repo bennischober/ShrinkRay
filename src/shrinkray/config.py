@@ -287,7 +287,17 @@ class EligibilitySection(BaseModel):
     @classmethod
     def _lowercase_codecs(cls, value: Any) -> Any:
         if isinstance(value, list):
-            return [str(c).lower() for c in value]
+            lowered = [str(c).lower() for c in value]
+            # AV1 is the output format and never a source (issue #650, the
+            # maintainer's decision 2026-11-14): a config line cannot
+            # re-enable re-encoding ShrinkRay's own output, so the value
+            # fails loudly at load instead of being silently honored
+            if "av1" in lowered:
+                raise ValueError(
+                    "candidate_codecs cannot contain 'av1': AV1 is the output "
+                    "format and never a source (issue #650)"
+                )
+            return lowered
         return value
 
 
