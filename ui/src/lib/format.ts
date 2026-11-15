@@ -194,6 +194,25 @@ export function progressLabel(
   return percent != null ? 'working' : 'starting…'
 }
 
+/** The three questions the jobs page answers (issue #632) — what is
+ * running now, what comes next, what happened — as three groups rather
+ * than one id-ordered list, so the running job and the next one can never
+ * scroll out of view behind a backlog. "Next" is the oldest queued job, the
+ * one the worker will pick up first. */
+export function groupJobs<T extends { id: number | null; state: string }>(
+  jobs: readonly T[],
+): { running: T[]; next: T | null; history: T[] } {
+  const running = jobs.filter((j) => j.state === 'running')
+  const queued = jobs
+    .filter((j) => j.state === 'queued' && j.id !== null)
+    .sort((a, b) => (a.id as number) - (b.id as number))
+  return {
+    running,
+    next: queued[0] ?? null,
+    history: jobs.filter((j) => j.state !== 'running' && j.state !== 'queued'),
+  }
+}
+
 const VERDICT_WORDS: Record<string, string> = {
   encode: 'Encode',
   skip: 'Skip',

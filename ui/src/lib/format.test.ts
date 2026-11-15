@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, kindWord, percent, progressLabel, queueLabel, relative, savedPercent, span, stageWord, stateWord, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, savedPercent, span, stageWord, stateWord, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -184,6 +184,32 @@ describe('progressLabel', () => {
   it('falls back to a state word only when the payload carries nothing else', () => {
     expect(progressLabel(null, null, null, 42)).toBe('working')
     expect(progressLabel(null, null, null, null)).toBe('starting…')
+  })
+})
+
+describe('groupJobs', () => {
+  // issue #632: the page answers three questions, not one id-ordered list
+  const j = (id: number | null, state: string) => ({ id, state })
+
+  it('separates what runs now, what comes next and what happened', () => {
+    const g = groupJobs([
+      j(9, 'running'),
+      j(10, 'queued'),
+      j(12, 'queued'),
+      j(4, 'done'),
+      j(5, 'failed'),
+    ])
+    expect(g.running.map((x) => x.id)).toEqual([9])
+    expect(g.history.map((x) => x.id)).toEqual([4, 5])
+  })
+
+  it('makes the oldest queued job the next one, whatever the list order', () => {
+    const g = groupJobs([j(12, 'queued'), j(10, 'queued'), j(9, 'running')])
+    expect(g.next?.id).toBe(10)
+  })
+
+  it('has no next job when nothing is queued', () => {
+    expect(groupJobs([j(9, 'running'), j(4, 'done')]).next).toBeNull()
   })
 })
 

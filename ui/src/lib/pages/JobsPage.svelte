@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job } from '../api'
-  import { bytes, kindWord, progressLabel, relative, span, stateWord } from '../format'
+  import { bytes, groupJobs, kindWord, progressLabel, relative, span, stateWord } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -107,6 +107,13 @@
     sessionStorage.setItem('ms.jobsState', stateFilter)
   })
   const isPartial = (j: Job) => j.state === 'done' && failedOutcomeNote(j) !== ''
+  // issue #632: what is running and what comes next come first, then the
+  // trail — a backlog can no longer push them below six queued rows
+  const orderedHistory = $derived.by(() => {
+    const g = groupJobs(filteredHistory)
+    return [...g.running, ...(g.next ? [g.next] : []), ...g.history]
+  })
+
   const filteredHistory = $derived(
     history.filter((j) => {
       if (kindFilter !== 'all' && j.kind !== kindFilter) return false
@@ -163,7 +170,7 @@
         <span>DURATION</span>
         <span></span>
       </div>
-      {#each filteredHistory as job (job.id)}
+      {#each orderedHistory as job (job.id)}
         <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:partial={job.state === 'done' && failedOutcomeNote(job) !== ''} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
