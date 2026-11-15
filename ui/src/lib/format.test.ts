@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, isStageRow, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageRowsFor, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -330,6 +330,42 @@ describe('statusAnswer', () => {
     expect(
       statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: null, queued: 1, watching: true }),
     ).toBe('● Working — encoding a.mkv · 1 file waiting')
+  })
+})
+
+describe('isStageRow and stageRowsFor', () => {
+  // issue #602: the folder job is the runner; a crf-search row is its stage
+  const j = (id: number, kind: string, pipeline?: string) =>
+    ({ id, kind, payload: pipeline ? { pipeline } : {} }) as { id: number; kind: string; payload: unknown }
+
+  it('tells a per-file stage row from a job of its own', () => {
+    expect(isStageRow(j(7, 'crf-search', 'plan'))).toBe(true)
+    expect(isStageRow(j(2, 'plan'))).toBe(false)
+  })
+
+  it('nests a stage row under the job whose kind its pipeline names', () => {
+    const rows = stageRowsFor({ kind: 'plan', payload: {} }, [
+      { id: 7, state: 'running', payload: { pipeline: 'plan' } },
+      { id: 4, state: 'running', payload: { pipeline: 'encode' } },
+      { id: 9, state: 'running', payload: { pipeline: 'encode' } },
+    ] as never)
+    expect(rows.map((r) => r.id)).toEqual([7])
+  })
+
+  it('nests only the stages that are running now, not the finished ones', () => {
+    const rows = stageRowsFor(
+      { kind: 'plan', payload: {} },
+      [
+        { id: 6, state: 'done', payload: { pipeline: 'plan' } },
+        { id: 7, state: 'running', payload: { pipeline: 'plan' } },
+        { id: 8, state: 'running', payload: { pipeline: 'encode' } },
+      ] as never,
+    )
+    expect(rows.map((r) => r.id)).toEqual([7])
+  })
+
+  it('finds no stage rows for a job that has none', () => {
+    expect(stageRowsFor(j(1, 'scan'), [j(7, 'crf-search', 'plan')])).toEqual([])
   })
 })
 
