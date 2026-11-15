@@ -185,7 +185,11 @@ export function progressLabel(
   detail: string | null | undefined,
   percent: number | null | undefined,
 ): string {
-  const parts = [stageWord(stage), movie, detail].filter(Boolean)
+  const rest = [movie, detail].filter(Boolean)
+  // the engine's own detail sometimes names the step already
+  // ("scanning library", "probing a.mkv"): never say it twice
+  const saysStepAlready = (detail ?? '').toLowerCase().startsWith(stageWord(stage))
+  const parts = stageWord(stage) && !saysStepAlready ? [stageWord(stage), ...rest] : rest
   if (parts.length > 0) return parts.join(' · ')
   return percent != null ? 'working' : 'starting…'
 }

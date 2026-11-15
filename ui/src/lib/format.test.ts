@@ -175,6 +175,12 @@ describe('progressLabel', () => {
     )
   })
 
+  it('does not say the step twice when the engine names it already', () => {
+    // two live emissions do exactly this: "scanning library", "probing a.mkv"
+    expect(progressLabel('scan', null, 'scanning library', 10)).toBe('scanning library')
+    expect(progressLabel('probe', 'a.mkv', 'probing a.mkv', 20)).toBe('a.mkv · probing a.mkv')
+  })
+
   it('falls back to a state word only when the payload carries nothing else', () => {
     expect(progressLabel(null, null, null, 42)).toBe('working')
     expect(progressLabel(null, null, null, null)).toBe('starting…')
