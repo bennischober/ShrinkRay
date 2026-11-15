@@ -437,7 +437,7 @@ decoration per user preference).
   control routes absent), the terminal UI and the encode chain inside Docker, with
   transcripts retained by the operator. Known open defect at that date: the VMAF
   comparison under-scores AV1 output (issues #306-#317, milestone "VMAF measurement
-  matches ab-av1") — until it lands, plan's skip verdicts on AV1 candidates are not
+  matches ab-av1") — until it lands, skip verdicts on plans that would encode to AV1 are not
   trustworthy, and that is stated here rather than hidden.
 - An already-efficient HEVC source is correctly *skipped* rather than re-encoded.
 - Working dashboard (Svelte 5, dark/light) and a per-concern test suite as

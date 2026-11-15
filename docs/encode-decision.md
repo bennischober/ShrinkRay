@@ -301,7 +301,7 @@ Item 3 also needed a schema migration: a plan stored while the flag existed was 
 *without* a crop when the flag was off, so reusing it would encode the film with its bars kept.
 Migration 15 drops every stored plan rather than reuse one that describes an uncropped output.
 
-## The one open question
+## AV1 sources - decided
 
 **AV1 sources.** Re-encoding AV1 to AV1 buys no codec generation gain, so the only saving would come
 from the crop and from a better encode. That may still be worth it, or it may not. Two options:
