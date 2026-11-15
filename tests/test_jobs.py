@@ -1313,13 +1313,63 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(reloaded.state, jobs.JobState.FAILED)
         self.assertIn("RuntimeError: engine exploded", reloaded.error)
 
+    def test_repeated_failures_end_the_worker_loudly(self):
+        """Issue #649's AC: a worker that cannot recover ends itself after
+        WORKER_MAX_CONSECUTIVE_FAILURES consecutive failures, with the
+        reason on fatal_error - the server keeps serving and /api/status
+        says the worker is dead and why."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        worker = jobs.JobWorker(self.connection, queue)
+
+        with mock.patch.object(
+            queue,
+            "take_next",
+            side_effect=RuntimeError("the db is gone"),
+        ):
+            worker.start()
+            # await the worker's end (bounded): the give-up is the signal
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if not worker._thread.is_alive():
+                    break
+                threading.Event().wait(0.05)
+            self.assertFalse(worker._thread.is_alive(), "the worker never gave up")
+            self.assertIsNotNone(worker.fatal_error)
+            self.assertIn("5 consecutive", worker.fatal_error or "")
+            self.assertIn("the db is gone", worker.fatal_error or "")
+
+    def test_the_queue_takes_the_app_lock_around_its_connection_use(self):
+        """Issue #660 round 1, finding 4: the root-cause fix - the queue's
+        connection use must hold the SAME lock the routes hold (the app's
+        db_lock). The pin: while another thread holds the lock, take_next
+        blocks; after the release it completes. Without the gate the take
+        would run immediately and the first assert would fail."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        taken = []
+        with gate:  # simulate a route holding the app's database lock
+            taker = threading.Thread(target=lambda: taken.append(queue.take_next()))
+            taker.start()
+            # the probe is deliberately-negative and safe in both directions:
+            # the buggy code finishes in microseconds, so a short bound never
+            # misclassifies it as blocked
+            taker.join(timeout=0.3)
+            self.assertTrue(taker.is_alive(), "take_next ran while the app's db lock was held")
+        taker.join(timeout=5.0)
+        self.assertFalse(taker.is_alive(), "take_next stayed blocked after the release")
+        self.assertIsNotNone(taken[0])
+
     def test_a_failed_take_next_does_not_kill_the_worker(self):
         """Issue #649: one failed iteration - ANY exception from take_next -
         is logged and survived: the worker keeps running and executes the
         next job. On main the exception kills the thread and nothing says
         the worker is gone."""
-        import time as time_mod
-
         payload_dir = Path(self.tmp.name) / "movies"
         payload_dir.mkdir()
         (payload_dir / "x.mkv").write_bytes(b"junk")
@@ -1336,25 +1386,35 @@ class TestJobs(unittest.TestCase):
                 raise RuntimeError("the db blinked")
             return real_take_next(only_kinds)
 
-        worker = jobs.JobWorker(self.connection, self.queue)
-        with mock.patch.object(self.queue, "take_next", side_effect=flaky):
+        # the shared lock: the test thread reads the queue (get) while the
+        # worker writes it - exactly the unsynchronized shape the root cause
+        # blames, so the test's own reads must hold the same lock (issue
+        # #660 round 1, finding 5)
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        worker = jobs.JobWorker(self.connection, queue)
+        finished = threading.Event()
+        real_finish = queue.finish
+
+        def signalling_finish(job, result):
+            real_finish(job, result)
+            finished.set()
+
+        with (
+            mock.patch.object(queue, "take_next", side_effect=flaky),
+            mock.patch.object(queue, "finish", side_effect=signalling_finish),
+        ):
             worker.start()
             try:
-                # await the job's DONE state with bounded fragments: the
-                # signal is the queue row, the bound keeps a hang visible
-                deadline = time_mod.monotonic() + 10.0
-                done = False
-                while time_mod.monotonic() < deadline:
-                    if self.queue.get(job.id).state == jobs.JobState.DONE:
-                        done = True
-                        break
-                    self.assertTrue(
-                        worker._thread.is_alive(),
-                        "the worker died on a failed take_next",
-                    )
-                    threading.Event().wait(0.05)
-                self.assertTrue(done, "the worker never ran the job after the failure")
+                # the exact signal: the worker's finish() sets the event - no
+                # row polling, no 50 ms fragments (issue #660 round 1,
+                # finding 9)
+                self.assertTrue(
+                    finished.wait(10.0), "the worker never ran the job after the failure"
+                )
                 self.assertTrue(worker._thread.is_alive())
+                reloaded = queue.get(job.id)
+                self.assertEqual(reloaded.state, jobs.JobState.DONE)
             finally:
                 worker.stop()
 

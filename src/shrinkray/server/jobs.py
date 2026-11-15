@@ -1696,6 +1696,11 @@ class JobWorker:
                     log_error(f"Job worker: {self.fatal_error}")
                     return
                 log_error(f"Job worker iteration failed ({consecutive_failures} consecutive): {e}")
+                # a real back-off: a stale wake (an enqueue during the failed
+                # iteration) would otherwise return immediately and the
+                # "back off" would be no delay at all (issue #660 round 1,
+                # finding 6)
+                self.queue._wake.clear()
                 self.queue.wait_for_work(timeout=1.0)
             else:
                 consecutive_failures = 0

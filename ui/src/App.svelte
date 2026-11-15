@@ -433,6 +433,11 @@
         </form>
       </div>
     {/if}
+    {#if status?.worker_error}
+      <!-- not dismissible: it clears on the worker's next app restart (issue
+        #649): a dead worker means nothing runs - the first thing to see -->
+      <div class="api-error mono" role="alert">{status.worker_error}</div>
+    {/if}
     {#if status?.config_error}
       <!-- not dismissible: it clears once the file is fixed (issue #247) -->
       <div class="api-error mono" role="alert">{status.config_error}</div>
@@ -440,11 +445,6 @@
     {#if status?.watcher_error}
       <!-- not dismissible: it clears when the watcher starts (issue #648) -->
       <div class="api-error mono" role="alert">{status.watcher_error}</div>
-    {/if}
-    {#if status?.worker_error}
-      <!-- not dismissible: it clears on the worker's next app restart (issue
-        #649): a dead worker is the dashboard's top-priority attention item -->
-      <div class="api-error mono" role="alert">{status.worker_error}</div>
     {/if}
     {#if status?.encode_window === 'closed'}
       <!-- read-only: the window is set in config.json (issue #434) -->

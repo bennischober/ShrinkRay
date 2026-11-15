@@ -78,6 +78,29 @@ class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
             "another watcher holds the single-instance lock",
         )
 
+    def test_a_dead_worker_names_the_reason(self) -> None:
+        """Issue #649's AC: /api/status exposes the worker's liveness and,
+        when it gave up, the reason - dropping either field fails this."""
+        client = TestClient(fast_app)
+        app_module.state.worker = mock.Mock(
+            _thread=mock.Mock(is_alive=lambda: False),
+            fatal_error="the worker gave up after 5 consecutive failed iterations",
+        )
+        body = client.get("/api/status").json()
+        self.assertEqual(body["worker"], "stopped")
+        self.assertEqual(
+            body["worker_error"], "the worker gave up after 5 consecutive failed iterations"
+        )
+
+    def test_a_running_worker_reports_no_reason(self) -> None:
+        client = TestClient(fast_app)
+        app_module.state.worker = mock.Mock(
+            _thread=mock.Mock(is_alive=lambda: True), fatal_error=None
+        )
+        body = client.get("/api/status").json()
+        self.assertEqual(body["worker"], "running")
+        self.assertIsNone(body["worker_error"])
+
     def test_a_running_watcher_reports_no_reason(self) -> None:
         client = TestClient(fast_app)
         # a live THREAD would make shutdown's join (timeout=10) wait out a
