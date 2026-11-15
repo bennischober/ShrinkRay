@@ -135,6 +135,22 @@ class TestTheStatusCarriesTheWorkerFields(unittest.TestCase):
         self.assertEqual(body["worker"], "running")
         self.assertIsNone(body["worker_error"])
 
+    def test_a_giving_up_worker_is_reported_stopped_with_the_reason(self) -> None:
+        """Issue #660 round 13, finding 3: the running-with-error guard - an
+        alive thread with a non-null fatal_error must report "stopped" with
+        the reason (the give-up window), never running-with-error."""
+        client = TestClient(fast_app)
+        app_module.state.worker = mock.Mock(
+            _thread=mock.Mock(is_alive=lambda: True),
+            fatal_error="the worker gave up after 5 consecutive failed iterations",
+        )
+        body = client.get("/api/status").json()
+        self.assertEqual(body["worker"], "stopped")
+        self.assertEqual(
+            body["worker_error"],
+            "the worker gave up after 5 consecutive failed iterations",
+        )
+
     def test_the_snapshot_status_carries_the_worker_fields_too(self) -> None:
         """The dashboard reads /api/snapshot's status dict (the WORKER chip
         and its strip) - deleting the snapshot's worker fields fails this

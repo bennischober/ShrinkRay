@@ -1678,8 +1678,12 @@ class JobWorker:
     def start(self) -> None:
         """Starts the worker thread."""
         # a restarted worker must not render running with a previous
-        # give-up's error strip (issue #660 round 9, finding 3)
+        # give-up's error strip (issue #660 round 9, finding 3), and a
+        # restart after a graceful stop() must actually run: _stop is the
+        # loop's exit flag, so it is cleared here too (issue #660 round 13,
+        # finding 1)
         self.fatal_error = None
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="job-worker", daemon=True)
         self._thread.start()
 

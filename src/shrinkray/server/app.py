@@ -841,6 +841,9 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     )
 
     rss = rss_mib()
+    # one read for both worker fields (issue #660 round 13, finding 2): a
+    # give-up landing between two reads would render running-with-error
+    fatal = s.worker.fatal_error if s.worker else None
     return {
         "queue": [j.to_dict() for j in running],
         "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
@@ -850,12 +853,9 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         # the worker's liveness and, when it gave up, why (issue #649): a
         # dead worker is never a silent one
         "worker": "running"
-        if s.worker
-        and s.worker._thread
-        and s.worker._thread.is_alive()
-        and not s.worker.fatal_error
+        if s.worker and s.worker._thread and s.worker._thread.is_alive() and not fatal
         else "stopped",
-        "worker_error": s.worker.fatal_error if s.worker else None,
+        "worker_error": fatal,
         "database": str(s.db_file),
         "rss_mib": round(rss, 1) if rss is not None else None,
         # an edited config.json that was NOT applied (issue #247): the app
@@ -1049,6 +1049,8 @@ def snapshot(
                 ).fetchall()
             ]
         )
+    # one read for both worker fields (issue #660 round 13, finding 2)
+    fatal = s.worker.fatal_error if s.worker else None
     return {
         "status": {
             "queue": [j.to_dict() for j in data["running"]],
@@ -1059,12 +1061,9 @@ def snapshot(
             # the worker's liveness and, when it gave up, why (issue #649): a
             # dead worker is never a silent one
             "worker": "running"
-            if s.worker
-            and s.worker._thread
-            and s.worker._thread.is_alive()
-            and not s.worker.fatal_error
+            if s.worker and s.worker._thread and s.worker._thread.is_alive() and not fatal
             else "stopped",
-            "worker_error": s.worker.fatal_error if s.worker else None,
+            "worker_error": fatal,
             "database": str(s.db_file),
             "rss_mib": round(data["rss_mib"], 1) if data["rss_mib"] is not None else None,
             # the snapshot is the UI's one state channel (App.svelte reads
