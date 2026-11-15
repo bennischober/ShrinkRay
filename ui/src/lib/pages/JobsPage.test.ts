@@ -100,6 +100,13 @@ describe('JobsPage render', () => {
     expect(container.querySelector('button.movie-link')).toBeNull()
   })
 
+  it('a queued scan row claims no encode mode it cannot have (issue #630)', async () => {
+    const scan = job({ id: 3, kind: 'scan', state: 'queued', started_at: null, finished_at: null, result: null, payload: { paths: ['/m/a'] } })
+    const { container } = render(JobsPage, { history: [scan], onopenMovie: () => {} })
+    const note = [...container.querySelectorAll('.note')].map((el) => (el.textContent ?? '').trim()).join(' ')
+    expect(note).not.toContain('preset')
+  })
+
   it('a queued row does not invent a VMAF target the payload does not carry (issue #630)', async () => {
     // the payload has no target_vmaf: printing 95 would be a number the
     // operator reads as fact while the configured target is 96
