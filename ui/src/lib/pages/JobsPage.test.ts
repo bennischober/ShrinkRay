@@ -132,6 +132,21 @@ describe('JobsPage render', () => {
     expect(note).not.toContain('VMAF>95')
   })
 
+  it('gives the filename its own cell, never the KIND column (issue #630, case 13)', () => {
+    // a long name inside the 104 px KIND column wrapped character by character
+    // and drew over the start time: it needs a cell that can shrink
+    const encode = job({
+      id: 5,
+      kind: 'encode',
+      state: 'done',
+      payload: { paths: ['/m/a-very-long-movie-name-that-would-wrap.mkv'] },
+    })
+    const { container } = render(JobsPage, { history: [encode], onopenMovie: () => {} })
+    const row = container.querySelector('.entry')!
+    expect(row.querySelector('.kind .movie-link')).toBeNull()
+    expect(row.querySelector('.file .movie-link')).not.toBeNull()
+  })
+
   it('a queued job shows no start time; running and done rows keep theirs (issue #603)', async () => {
     const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null, result: null })
     const running = job({ id: 3, state: 'running', started_at: '2026-10-24T10:00:01Z', finished_at: null })
