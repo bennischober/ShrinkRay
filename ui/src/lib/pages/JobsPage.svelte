@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job } from '../api'
-  import { bytes, groupJobs, kindWord, progressLabel, relative, span, stateWord } from '../format'
+  import { bytes, groupJobs, kindWord, progressLabel, relative, resultSummary, span, stateWord } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -107,6 +107,11 @@
     sessionStorage.setItem('ms.jobsState', stateFilter)
   })
   const isPartial = (j: Job) => j.state === 'done' && failedOutcomeNote(j) !== ''
+  /** The per-movie outcomes a finished row summarises; scans and legacy
+   * rows carry none, so they show no summary. */
+  const outcomesOf = (j: Job) =>
+    (j.result as { outcomes?: JobOutcome[] } | null)?.outcomes ?? []
+
   // issue #632: what is running and what comes next come first, then the
   // trail — a backlog can no longer push them below six queued rows
   const orderedHistory = $derived.by(() => {
@@ -207,6 +212,8 @@
             <div class="mono error">
               {note.replace('__FAILED_OUTCOMES__', '')}
             </div>
+          {:else if job.state === 'done' && resultSummary(outcomesOf(job))}
+            <div class="mono dim note">{resultSummary(outcomesOf(job))}</div>
           {:else if job.error}
             <!-- translated for the row (the operator's language); the raw
                  exception stays in the DETAIL expansion for diagnosis -->
