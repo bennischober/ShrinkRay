@@ -109,6 +109,28 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(screen.queryByText('96.0')).toBeNull()
   })
 
+  it('says how long ago the plan finished (issue #630, case 8)', () => {
+    // pin the clock: relative() counts calendar days, so a real Date.now()
+    // crosses a DST boundary twice a year and flips 3 to 2 or 4
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-15T12:00:00Z'))
+    try {
+      const planJob = job({
+        kind: 'plan',
+        state: 'done',
+        finished_at: '2026-06-12T12:00:00Z',
+        payload: { path: '/m', quality: true, target_vmaf: 96 },
+        result: {
+          plans: [{ movie: 'a.mkv', state: 'encode', crf: 30, vmaf: 96.1, estimated_size: 1024 ** 2, saved_percent: 50 }],
+        },
+      })
+      renderOverview([], [movie()], [planJob])
+      expect(screen.getAllByText(/finished 3 days ago/).length).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not count a skip record as an encoded title (issue #630, case 6)', () => {
     // a skip record means nothing was written, so the plan entry is still
     // open: the summary must say "to encode", never "encoded since"
