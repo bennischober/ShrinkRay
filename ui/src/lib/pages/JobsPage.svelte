@@ -111,7 +111,7 @@
   // trail — a backlog can no longer push them below six queued rows
   const orderedHistory = $derived.by(() => {
     const g = groupJobs(filteredHistory)
-    return [...g.running, ...(g.next ? [g.next] : []), ...g.history]
+    return [...g.running, ...g.queued, ...g.history]
   })
 
   const filteredHistory = $derived(
