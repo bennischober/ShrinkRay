@@ -1464,6 +1464,9 @@ class TestJobs(unittest.TestCase):
             self.assertRaises(RuntimeError),
         ):
             queue.cancel(job.id)
+        # the failed commit's CANCELLED UPDATE must not linger: the rollback
+        # ended the transaction (issue #660 round 18, finding 1)
+        self.assertFalse(queue._connection.in_transaction)
         self.assertIn(job, queue._pending)
         self.assertEqual(job.state, jobs.JobState.QUEUED)
         # a job whose cancel never committed is effectively not cancelled:
@@ -1513,6 +1516,10 @@ class TestJobs(unittest.TestCase):
             self.assertRaises(RuntimeError),
         ):
             queue.take_next()
+        # the failed commit's UPDATE must not linger on the shared
+        # connection: the rollback ended the transaction (issue #660 round
+        # 18, finding 1 - deleting the rollback fails this)
+        self.assertFalse(queue._connection.in_transaction)
         second = queue.take_next()
         self.assertIsNotNone(second, "the job was stranded by the failed commit")
         self.assertEqual(second.id, job.id)
