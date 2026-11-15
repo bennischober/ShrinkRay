@@ -109,6 +109,19 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(screen.queryByText('96.0')).toBeNull()
   })
 
+  it('answers "is everything OK?" before its internals (issue #633)', () => {
+    const running = job({
+      id: 9,
+      kind: 'encode',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      payload: { paths: ['/m/a.mkv'] },
+    })
+    renderOverview([running])
+    expect(screen.getAllByText(/● Working — encoding/).length).toBeGreaterThan(0)
+  })
+
   it('the stat band says where every title went (issue #633)', () => {
     // a skip record is neither an encode nor untouched: the band used to
     // account for five of seven titles and say nothing about the rest
