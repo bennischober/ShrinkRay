@@ -553,7 +553,11 @@ class JobQueue:
         """Requests cancellation of a queued job (or signals a running one).
 
         Queued jobs are removed from the queue directly; running jobs get
-        their cancel event set (the engine checks it between movies).
+        their cancel event set (the engine checks it between movies). A job
+        in the TAKE window (marked RUNNING while its gated write runs, still
+        in the pending list) is found but NOT cancellable as queued: cancel
+        returns False for it, and the running job's own cancel event (the
+        one _execute registers) is the way to stop it.
 
         The connection gate is taken BEFORE _lock, and `_lock` is never
         held while waiting for the gate (`take_next` releases it before
@@ -567,7 +571,9 @@ class JobQueue:
             job_id (int): The job to cancel.
 
         Returns:
-            bool: True if a job was found for the id.
+            bool: True if a queued job was cancelled or a running job's
+                cancel event was signalled; False for a job in the take
+                window (not cancellable as queued) or an unknown id.
         """
         cancelled = None
         event = None
