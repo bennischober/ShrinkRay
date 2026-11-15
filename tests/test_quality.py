@@ -2999,16 +2999,20 @@ class TestTheCodecRule(unittest.TestCase):
             patch("shrinkray.engine.plan.is_hdr_file", return_value=False),
             patch("shrinkray.config.load_config", return_value=conf),
         ):
-            result = encode_with_quality(self.movie, out, progress=None, db_file=db_file)
+            result = encode_with_quality(
+                self.movie, out, progress=None, db_file=db_file, target_vmaf=95.0
+            )
         return result, lookup, probed
 
     def test_the_encode_path_skips_an_av1_source_before_probe_and_reuse(self) -> None:
         """The encode path enforces the same decision (issue #650): the
         mirrored codec-gate branch skips an AV1 source with the decision's
-        reason, before any probe and before the encode boundary's plan-reuse
-        lookup. The stored row's fingerprint MATCHES the lookup, so the
-        not-called assertion is a live pin: the only thing standing between
-        the row and reuse is the gate."""
+        reason, before the CRF probe and before the encode boundary's
+        plan-reuse lookup. The stored row's fingerprint MATCHES the lookup
+        (the same target, threshold, crop-sample count, sample settings,
+        encoder and recipe the lookup compares), so the not-called assertion
+        is a live pin: the only thing standing between the row and reuse is
+        the gate."""
         result, lookup, probed = self._encode_with_stored_plan("av1")
         self.assertEqual(result.skipped_reason, "already AV1 (the output format)")
         probed.assert_not_called()
