@@ -1411,10 +1411,11 @@ class TestJobs(unittest.TestCase):
 
     def test_a_job_being_taken_is_not_cancelled_as_queued(self):
         """Issue #660 round 4, finding 1: take_next marks a job RUNNING
-        outside _lock while its gated write runs; a cancel arriving in that
-        window used to pop the job, write CANCELLED, and let the take's
-        UPDATE write RUNNING over it - a row stranded running until the
-        next start's recovery. cancel() now only takes QUEUED jobs."""
+        under _lock and leaves it in _pending while its gated write runs; a
+        cancel arriving in that window used to pop the job, write
+        CANCELLED, and let the take's UPDATE write RUNNING over it - a row
+        stranded running until the next start's recovery. cancel() now only
+        takes QUEUED jobs."""
         gate = threading.RLock()
         queue = jobs.JobQueue(self.connection, connection_lock=gate)
         payload_dir = Path(self.tmp.name) / "movies"
