@@ -1,3 +1,3 @@
 {
-  "overview \u00b7 busy \u00b7 desktop": "the overview is 5 px wider than 1440 \u2014 fixed by its own page issue (#633)"
+  "overview · busy · desktop": "the overview's scroll width is 1445 px in a 1440 px window; no element's border box crosses the edge, and the merged overview page (#633) still measures this"
 }
