@@ -1342,8 +1342,9 @@ class TestJobs(unittest.TestCase):
         """Issue #660 round 1, finding 4: the root-cause fix - the queue's
         connection use must hold the SAME lock the routes hold (the app's
         db_lock). The pin: while another thread holds the lock, take_next
-        blocks; after the release it completes. Without the gate the take
-        would run immediately and the first assert would fail."""
+        blocks; after the release it completes. The count assert is the
+        guard: it is the taker's own acquisition, and a gate that ignored
+        the lock would never increment."""
         gate = threading.RLock()
         queue = jobs.JobQueue(self.connection, connection_lock=gate)
         payload_dir = Path(self.tmp.name) / "movies"
@@ -1382,9 +1383,11 @@ class TestJobs(unittest.TestCase):
         with counting:  # simulate a route holding the app's database lock
             taker = threading.Thread(target=lambda: taken.append(queue.take_next()))
             with mock.patch.object(queue, "_connection_lock", counting):
-                # the setup's enqueue already acquired the gate once; the
-                # count below asserts the TAKE's own acquisition
+                # the test thread's own acquisition already set the event and
+                # counted: reset BOTH, so the taker's acquisition is what the
+                # asserts observe (issue #660 round 6, finding 1)
                 counting.count = 0
+                entered.clear()
                 taker.start()
                 # once acquired, the taker holds the gate and cannot complete
                 # while this thread holds the real lock - state checks only

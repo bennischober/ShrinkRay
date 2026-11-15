@@ -255,12 +255,13 @@ class JobQueue:
             connection_lock (threading.RLock | None): The lock every OTHER
                 user of this connection holds (the resident app's database
                 lock). Every queue method takes it around its connection
-                use: one shared connection used from two threads under two
-                different locks is the unsynchronized-access shape behind
-                the observed ``SystemError: commit returned NULL`` (issue
-                #649). Re-entrant, so a route that already holds it and
-                calls into the queue nests safely. None (CLI/tests) uses
-                the connection bare.
+                use: the queue's connection calls ran with no lock while
+                the routes read the same connection under the app's lock -
+                the unsynchronized-access shape behind the observed
+                ``SystemError: commit returned NULL`` (issue #649).
+                Re-entrant, so a route that already holds it and calls into
+                the queue nests safely. None (tests without the app lock)
+                uses the connection bare; the CLI never builds a queue.
         """
         self._connection = connection
         self._bus = bus
