@@ -1352,24 +1352,48 @@ class TestJobs(unittest.TestCase):
         queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
 
         taken = []
-        reached = threading.Event()
+        entered = threading.Event()
+        calls = {"n": 0}
+        real_gate = queue._conn_gate
 
-        def take_and_signal():
-            reached.set()  # the taker has reached the take_next call
-            taken.append(queue.take_next())
+        def recording_gate():
+            calls["n"] += 1
+            entered.set()  # the gate is ENTERED when this fires: the taker
+            return real_gate()  # is deterministically blocked on the lock
 
         with gate:  # simulate a route holding the app's database lock
-            taker = threading.Thread(target=take_and_signal)
-            taker.start()
-            # await the taker reaching take_next FIRST: is_alive() alone
-            # could be true for an unscheduled thread (issue #660 round 2,
-            # finding 4)
-            self.assertTrue(reached.wait(5.0), "the taker never reached take_next")
-            taker.join(timeout=0.3)
-            self.assertTrue(taker.is_alive(), "take_next ran while the app's db lock was held")
+            taker = threading.Thread(target=lambda: taken.append(queue.take_next()))
+            with mock.patch.object(queue, "_conn_gate", side_effect=recording_gate):
+                taker.start()
+                # the GATE's own event is the signal: once it fires, the
+                # taker holds the gate and cannot complete while this thread
+                # holds the lock - a state check, no wall-clock wait (issue
+                # #660 round 4, finding 9)
+                self.assertTrue(entered.wait(5.0), "take_next never took the gate")
+                self.assertEqual(calls["n"], 1)
+                self.assertEqual(taken, [], "take_next completed while the lock was held")
         taker.join(timeout=5.0)
         self.assertFalse(taker.is_alive(), "take_next stayed blocked after the release")
         self.assertIsNotNone(taken[0])
+
+    def test_a_job_being_taken_is_not_cancelled_as_queued(self):
+        """Issue #660 round 4, finding 1: take_next marks a job RUNNING
+        outside _lock while its gated write runs; a cancel arriving in that
+        window used to pop the job, write CANCELLED, and let the take's
+        UPDATE write RUNNING over it - a row stranded running until the
+        next start's recovery. cancel() now only takes QUEUED jobs."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        # a job being taken (state RUNNING while still in _pending) is not
+        # cancelled as queued
+        job.state = jobs.JobState.RUNNING
+        self.assertFalse(queue.cancel(job.id))
+        self.assertIn(job, queue._pending)
 
     def test_a_failed_gated_commit_keeps_the_job_takable(self):
         """Issue #660 round 2, finding 1: the observed SystemError is raised

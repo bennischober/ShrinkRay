@@ -34,16 +34,6 @@ class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
         app_module.state = None
         self.tmp.cleanup()
 
-    def test_the_app_queue_holds_the_app_lock(self) -> None:
-        """Issue #660 round 3, finding 1: the root-cause fix is the WIRING -
-        the queue the app builds must hold the SAME lock the routes use.
-        A queue built with its own private lock keeps every other test
-        green while the startup collision returns."""
-        self.assertIs(
-            app_module.state.queue._connection_lock,
-            app_module.state.db_lock,
-        )
-
     def test_a_stopped_watcher_names_the_reason(self) -> None:
         client = TestClient(fast_app)
         with mock.patch.object(
@@ -82,6 +72,29 @@ class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
         self.assertEqual(
             body["status"]["watcher_error"],
             "another watcher holds the single-instance lock",
+        )
+
+
+class TestTheAppWiring(unittest.TestCase):
+    """The queue/lock wiring the resident app builds (issue #649's root
+    cause): the queue's connection use must hold the SAME lock the routes
+    hold - a private lock keeps every other test green while the startup
+    collision returns."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+
+    def tearDown(self) -> None:
+        if app_module.state is not None:
+            app_module.state.shutdown()
+        app_module.state = None
+        self.tmp.cleanup()
+
+    def test_the_app_queue_holds_the_app_lock(self) -> None:
+        self.assertIs(
+            app_module.state.queue._connection_lock,
+            app_module.state.db_lock,
         )
 
 

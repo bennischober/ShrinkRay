@@ -550,6 +550,14 @@ class JobQueue:
         with self._lock:
             for index, job in enumerate(self._pending):
                 if job.id == job_id:
+                    # only a QUEUED job is cancelled here: take_next marks a
+                    # job RUNNING outside _lock while its gated write runs
+                    # (issue #660 round 4, finding 1) - cancelling a job that
+                    # is being taken would pop it, have the take's UPDATE
+                    # write RUNNING over the CANCELLED row, and strand the
+                    # row running until the next start's recovery
+                    if job.state is not JobState.QUEUED:
+                        break
                     job.state = JobState.CANCELLED
                     self._pending.pop(index)
                     with self._conn_gate():
