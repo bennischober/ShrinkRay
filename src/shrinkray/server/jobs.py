@@ -555,12 +555,13 @@ class JobQueue:
         Queued jobs are removed from the queue directly; running jobs get
         their cancel event set (the engine checks it between movies).
 
-        The connection gate is taken OUTSIDE _lock (the same order every
-        other method uses: the gate, then the pending list - issue #660
-        round 9, finding 1), and the row is committed CANCELLED before the
-        job leaves _pending (the ordering take_next got, round 5, finding
-        4): a failed commit leaves the job takable instead of stranding a
-        queued row.
+        The connection gate is taken BEFORE _lock, and `_lock` is never
+        held while waiting for the gate (`take_next` releases it before
+        taking the gate for its commit) - no lock cycle is possible (issue
+        #660 round 9, finding 1 / round 15, finding 2). The row is
+        committed CANCELLED before the job leaves _pending (the ordering
+        take_next got, round 5, finding 4): a failed commit leaves the job
+        takable instead of stranding a queued row.
 
         Args:
             job_id (int): The job to cancel.
