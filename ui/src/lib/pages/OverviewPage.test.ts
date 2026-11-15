@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import OverviewPage from './OverviewPage.svelte'
+
+// the running card's stage comes from the live progress store: a mutable stub
+// lets one test seed it without a stream (issue #630)
+let progressStub: { percent?: number; movie?: string | null; detail?: string | null } | null = null
+vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
 import type { Job, Movie, Status } from '../api'
 
 /** The overview is the status window's front page. Issue #239: it rendered
@@ -119,5 +124,15 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     renderOverview([], [movie()], [planJob])
     expect(screen.getAllByText('95.1').length).toBeGreaterThan(0)
     expect(screen.queryByText('95.0')).toBeNull()
+  })
+
+  it('the running card at 30 % says working, not working… (issue #630)', async () => {
+    progressStub = { percent: 30.46, movie: 'Titel', detail: null }
+    const running = { id: 4, kind: 'encode', state: 'running', created_at: '2026-10-24T10:00:00Z', started_at: '2026-10-24T10:00:00Z', finished_at: null, payload: {}, result: null, error: null } as unknown as Job
+    const { container } = render(OverviewPage, { movies: [] as Movie[], history: [running], status: null, targetVmaf: 96, savedTotalGb: 0, measuredCount: 0, missingMovies: [], runningJobs: [running], failedJobs: [], scanPaths: [], outputDir: '' })
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).toContain('working')
+    expect(text).not.toContain('working…')
+    progressStub = null
   })
 })

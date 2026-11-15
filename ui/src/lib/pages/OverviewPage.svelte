@@ -391,7 +391,7 @@
         <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
       </div>
       <div class="mono dim detail">
-        {runningProgress?.detail ?? 'working…'}
+        {runningProgress?.detail ?? (runningProgress?.percent != null ? 'working' : 'working…')}
         · started {relative(runningJob.started_at)}
         · {fmtEta(eta)}
       </div>
