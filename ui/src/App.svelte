@@ -403,25 +403,25 @@
       <p class="legend">LIBRARY CONSOLE</p>
     </div>
     <nav class="rail-nav" aria-label="Sections">
-      <button class="rail-item" class:active={page === 'overview'} onclick={() => goto('overview')}>
+      <button class="rail-item" class:active={page === 'overview'} aria-current={page === 'overview' ? 'page' : undefined} onclick={() => goto('overview')}>
         <span class="rail-label">Overview</span>
         {#if showCounts && failedJobs.length > 0}<span class="rail-badge bad mono">{failedJobs.length}</span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'library'} onclick={() => goto('library')}>
+      <button class="rail-item" class:active={page === 'library'} aria-current={page === 'library' ? 'page' : undefined} onclick={() => goto('library')}>
         <span class="rail-label">Library</span>
         {#if showCounts}<span class="rail-badge mono">{movies.length}</span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'jobs'} onclick={() => goto('jobs')}>
+      <button class="rail-item" class:active={page === 'jobs'} aria-current={page === 'jobs' ? 'page' : undefined} onclick={() => goto('jobs')}>
         <span class="rail-label">Jobs</span>
         {#if showCounts && runningJobs.length > 0}<span class="rail-badge warn mono" title={queueLabel(runningJobs.length)} aria-label={queueLabel(runningJobs.length)}>{runningJobs.length}</span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'retained'} onclick={() => goto('retained')}>
+      <button class="rail-item" class:active={page === 'retained'} aria-current={page === 'retained' ? 'page' : undefined} onclick={() => goto('retained')}>
         <span class="rail-label">Retained</span>
         {#if showCounts && retainedFiles.filter((f) => f.present).length > 0}<span class="rail-badge warn mono">
           {retainedFiles.filter((f) => f.present).length}
         </span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'config'} onclick={() => goto('config')}>
+      <button class="rail-item" class:active={page === 'config'} aria-current={page === 'config' ? 'page' : undefined} onclick={() => goto('config')}>
         <span class="rail-label">Config</span>
       </button>
     </nav>
@@ -771,22 +771,79 @@
   }
 
   @media (max-width: 900px) {
-    .console { flex-direction: column; }
+    /* the rail becomes a bottom tab bar: thumb reach and one-tap switching fit a
+       status app, and every item is reachable at 320 px instead of scrolling
+       sideways inside the rail (issue #636) */
+    .console { flex-direction: column-reverse; }
     .rail {
       width: 100%;
       height: auto;
-      position: static;
-      flex-direction: row;
-      align-items: center;
-      padding: 10px 14px;
-      gap: 12px;
+      position: sticky;
+      bottom: 0;
+      z-index: 20;
+      flex-direction: column;
+      gap: 6px;
+      padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+      border-right: none;
+      border-top: 1px solid var(--seam);
     }
-    .brand .legend { display: none; }
-    .rail-nav { flex-direction: row; flex: 1; overflow-x: auto; }
-    .rail-item { padding: 6px 10px; white-space: nowrap; }
-    .rail-item.active { box-shadow: inset 0 -2px 0 var(--teal); }
-    .rail-foot { margin-top: 0; flex-direction: row; }
-    .main { padding: 14px; }
+    .brand { display: none; }
+    .rail-nav {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 2px;
+      overflow: visible;
+    }
+    .rail-item {
+      justify-content: center;
+      padding: 8px 2px;
+      white-space: normal;
+      text-align: center;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+    .rail-item.active {
+      background: var(--panel-active);
+      box-shadow: inset 0 2px 0 var(--teal);
+    }
+    .rail-foot {
+      margin-top: 0;
+      flex-direction: row;
+      flex-wrap: wrap;
+      row-gap: 4px;
+      justify-content: space-between;
+      padding: 0;
+      border-top: none;
+      gap: 8px;
+    }
+    /* the freshness line is long and grows with the age ("Updated 27 s ago ·
+       reconnecting…"): on its own row it cannot push the bar past the viewport
+       (issue #636 review) */
+    .rail-foot .freshness {
+      flex: 0 0 100%;
+      margin-left: 0;
+      text-align: right;
+      white-space: normal;
+    }
+    .rail-foot .shortcut-hint { display: none; }
+    .main { padding: 14px 12px 20px; flex: 1; }
+    /* the margin belongs to the element that scrolls into view, not to the
+       container: on .main it changed nothing and a tabbed-to button still landed
+       fully behind the sticky bar (issue #636 review) */
+    :global(.main :is(button, a, input, select, textarea, summary)) {
+      scroll-margin-bottom: 84px;
+    }
+  }
+
+  /* a keyboard legend is meaningless without a keyboard (issue #636) */
+  @media (hover: none) {
+    .shortcut-hint { display: none; }
+  }
+
+  /* prose keeps a readable measure on a very wide screen (issue #636) */
+  @media (min-width: 1800px) {
+    .main { padding: 24px 32px; }
+    :global(.page-header .desc) { max-width: 75ch; }
   }
   .unlock {
     max-width: 460px;
