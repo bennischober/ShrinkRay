@@ -151,6 +151,22 @@ class TestTheStatusCarriesTheWorkerFields(unittest.TestCase):
             "the worker gave up after 5 consecutive failed iterations",
         )
 
+    def test_the_snapshots_giving_up_worker_is_stopped_with_the_reason(self) -> None:
+        """The snapshot builder's running-with-error guard (issue #660 round
+        14, finding 1): an alive thread with a non-null fatal_error must
+        report "stopped" with the reason there too."""
+        client = TestClient(fast_app)
+        app_module.state.worker = mock.Mock(
+            _thread=mock.Mock(is_alive=lambda: True),
+            fatal_error="the worker gave up after 5 consecutive failed iterations",
+        )
+        body = client.get("/api/snapshot").json()
+        self.assertEqual(body["status"]["worker"], "stopped")
+        self.assertEqual(
+            body["status"]["worker_error"],
+            "the worker gave up after 5 consecutive failed iterations",
+        )
+
     def test_the_snapshot_status_carries_the_worker_fields_too(self) -> None:
         """The dashboard reads /api/snapshot's status dict (the WORKER chip
         and its strip) - deleting the snapshot's worker fields fails this

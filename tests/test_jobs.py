@@ -1517,6 +1517,24 @@ class TestJobs(unittest.TestCase):
         self.assertIsNotNone(second, "the job was stranded by the failed commit")
         self.assertEqual(second.id, job.id)
 
+    def test_a_start_after_a_graceful_stop_actually_runs(self):
+        """Issue #660 round 14, finding 4: start() clears _stop, so a worker
+        restarted after a graceful stop() runs instead of exiting at once
+        (a stopped-with-no-reason worker). The deliberately-negative probe:
+        the buggy code exits in microseconds, so a short bound never
+        misclassifies it as alive."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        worker = jobs.JobWorker(self.connection, queue)
+        worker.start()
+        worker.stop()
+        worker.start()
+        try:
+            worker._thread.join(timeout=0.2)
+            self.assertTrue(worker._thread.is_alive(), "a restarted worker exited at once")
+        finally:
+            worker.stop()
+
     def test_a_failed_take_next_does_not_kill_the_worker(self):
         """Issue #649: one failed iteration - ANY exception from take_next -
         is logged and survived: the worker keeps running and executes the
