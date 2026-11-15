@@ -192,7 +192,7 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <ProgressBar percent={p?.percent ?? null} stage={`${p?.movie ? `${p.movie} · ` : ''}${p?.detail ?? 'starting…'}`} />
+            <ProgressBar percent={p?.percent ?? null} stage={`${p?.movie ? `${p.movie} · ` : ''}${p?.detail ?? (p?.percent != null ? 'working' : 'starting…')}`} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}
