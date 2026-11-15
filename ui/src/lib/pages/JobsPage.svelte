@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
-  import { bytes, crf, groupJobs, isStageRow, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
+  import { bytes, crf, etaShort, groupJobs, isStageRow, kindWord, progressLabel, relative, remainingSeconds, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -189,7 +189,7 @@
               tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
-            <span class="dur">{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? '…' : ''}</span>
+            <span class="dur" title={job.state === 'running' ? 'time left, estimated from the percent done' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(job.started_at, progress(job)?.percent, new Date(now))) || '…') : ''}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}
@@ -354,7 +354,7 @@
   }
   .log-head {
     display: grid;
-    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 80px 92px;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 112px 92px;
     gap: 10px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--seam);
@@ -375,7 +375,7 @@
   .entry.open { background: var(--panel-raised); }
   .row {
     display: grid;
-    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 80px 92px;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 112px 92px;
     gap: 10px;
     align-items: baseline;
     padding: 7px 0;
@@ -387,7 +387,7 @@
      min-width 0 lets it shrink instead of widening the row */
   .file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .when { color: var(--ink-dim); }
-  .dur { color: var(--ink-dim); }
+  .dur { color: var(--ink-dim); white-space: nowrap; }
   .ops { display: flex; gap: 6px; justify-content: flex-end; }
   .mini {
     background: transparent;

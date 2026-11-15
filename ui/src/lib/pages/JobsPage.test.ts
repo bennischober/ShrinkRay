@@ -107,6 +107,22 @@ describe('JobsPage render', () => {
     expect(expandedToggle.textContent?.trim()).toBe('HIDE')
   })
 
+  it('a running row states its ETA, not an ellipsis (issue #632)', () => {
+    // 30 min elapsed at 25% implies 90 min left; the engine sends no ETA,
+    // so the column carries the proportional estimate
+    const started = new Date(Date.now() - 30 * 60_000).toISOString()
+    const j = job({ state: 'running', started_at: started, finished_at: null })
+    progressStub = { percent: 25 }
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    const dur = container.querySelector('.dur')!
+    expect(dur.textContent).toContain('~1 h 30 min')
+    expect(dur.textContent?.trim()).not.toBe('…')
+    progressStub = null
+  })
+
   it('single-movie jobs link to the detail page', () => {
     const j = job({ payload: { paths: ['/m/a'] } })
     const { container } = render(JobsPage, {
