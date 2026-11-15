@@ -1451,14 +1451,15 @@ class TestJobs(unittest.TestCase):
                 return getattr(self._real, name)
 
         # the commit failure raises through cancel (the caller sees the
-        # real cause); the in-memory state was set CANCELLED before the
-        # failed commit, but the job STAYS in the queue
+        # real cause); the failed commit RESTORES QUEUED, so the job is
+        # takable again (issue #660 round 11, finding 1)
         with (
             mock.patch.object(queue, "_connection", _FlakyCancelCommit(queue._connection)),
             self.assertRaises(RuntimeError),
         ):
             queue.cancel(job.id)
         self.assertIn(job, queue._pending)
+        self.assertEqual(job.state, jobs.JobState.QUEUED)
         # a job whose cancel never committed is effectively not cancelled:
         # the next take still returns it
         taken = queue.take_next()

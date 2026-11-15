@@ -405,7 +405,10 @@ class JobQueue:
                 return None
             index = None
             for i, job in enumerate(self._pending):
-                if only_kinds is None or job.kind in only_kinds:
+                # only QUEUED jobs are taken: a job a concurrent cancel
+                # marked CANCELLED (its commit may still be in flight) is
+                # not handed out (issue #660 round 11, finding 1)
+                if (only_kinds is None or job.kind in only_kinds) and job.state is JobState.QUEUED:
                     index = i
                     break
             if index is None:
@@ -418,11 +421,19 @@ class JobQueue:
         # job must still be in _pending for the next take_next, or a queued
         # row exists that nothing will ever run
         with self._conn_gate():
-            self._connection.execute(
-                "UPDATE jobs SET state = ?, started_at = datetime('now') WHERE id = ?",
-                (JobState.RUNNING.value, job.id),
-            )
-            self._connection.commit()
+            try:
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, started_at = datetime('now') WHERE id = ?",
+                    (JobState.RUNNING.value, job.id),
+                )
+                self._connection.commit()
+            except Exception:
+                # the take failed: restore QUEUED so the next take_next can
+                # hand it out (the QUEUED filter would otherwise skip the
+                # stale RUNNING mark), and let the caller see the real cause
+                # (issue #660 round 11, finding 1)
+                job.state = JobState.QUEUED
+                raise
         with self._lock:
             self._pending.remove(job)
         return job
@@ -559,34 +570,43 @@ class JobQueue:
         """
         cancelled = None
         event = None
-        with self._lock:
-            for job in self._pending:
-                if job.id == job_id:
-                    # only a QUEUED job is cancelled here: take_next marks a
-                    # job RUNNING outside _lock while its gated write runs
-                    # (issue #660 round 4, finding 1) - cancelling a job that
-                    # is being taken would pop it, have the take's UPDATE
-                    # write RUNNING over the CANCELLED row, and strand the
-                    # row running until the next start's recovery
-                    if job.state is not JobState.QUEUED:
-                        break
-                    job.state = JobState.CANCELLED
-                    cancelled = job
-                    break
-            else:
-                event = self._cancel_events.get(job_id)
-        if cancelled is not None:
-            with self._conn_gate():
-                self._connection.execute(
-                    "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
-                    (JobState.CANCELLED.value, job_id),
-                )
-                self._connection.commit()
+        # the gate is taken BEFORE _lock - the order every method uses, so
+        # no thread ever holds _lock while waiting for the gate (issue #660
+        # round 10, finding 1) - and the state write, the commit and the pop
+        # all happen with both held: take_next (which now filters QUEUED)
+        # can never hand out a job this method decided about
+        with self._conn_gate():
             with self._lock:
-                # a job marked CANCELLED is never handed out by take_next
-                # (it only takes QUEUED jobs), so it is still here to remove
-                if cancelled in self._pending:
-                    self._pending.remove(cancelled)
+                for job in self._pending:
+                    if job.id == job_id:
+                        # only a QUEUED job is cancelled here: a job being
+                        # taken (RUNNING) or already running is not
+                        # cancelled as queued (issue #660 round 4, finding 1)
+                        if job.state is not JobState.QUEUED:
+                            break
+                        job.state = JobState.CANCELLED
+                        cancelled = job
+                        break
+                else:
+                    event = self._cancel_events.get(job_id)
+            if cancelled is not None:
+                try:
+                    self._connection.execute(
+                        "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
+                        (JobState.CANCELLED.value, job_id),
+                    )
+                    self._connection.commit()
+                except Exception:
+                    # the commit failed (the observed SystemError's shape):
+                    # the job is NOT cancelled - restore QUEUED so take_next
+                    # can still hand it out, and let the caller see the real
+                    # cause (issue #660 round 10, finding 1)
+                    cancelled.state = JobState.QUEUED
+                    raise
+                with self._lock:
+                    if cancelled in self._pending:
+                        self._pending.remove(cancelled)
+        if cancelled is not None:
             return True
         if event is not None:
             event.set()
