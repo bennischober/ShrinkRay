@@ -72,6 +72,19 @@ describe('movieOutcome', () => {
 })
 
 describe('failedOutcomeNote', () => {
+  it('leaves a busy or HDR skip clean, because nothing was thrown away (issue #630)', () => {
+    const j = job({
+      kind: 'encode',
+      result: {
+        outcomes: [
+          { movie: '/m/a', state: 'skipped', error: 'hdr not supported' },
+          { movie: '/m/b', state: 'skipped', error: 'the file was busy' },
+        ],
+      },
+    })
+    expect(failedOutcomeNote(j)).toBe('')
+  })
+
   it('counts a discarded encode as work thrown away, not a clean done (issue #630)', () => {
     const j = job({
       kind: 'encode',
