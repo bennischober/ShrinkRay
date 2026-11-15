@@ -230,7 +230,7 @@ The one vocabulary every page uses (issue #627). A term below has exactly one us
 | Library: encoded | Encoded | ok | filled dot |
 | Library: missing | Missing | red | bar |
 
-Skip and failure reasons are mapped from the engine's strings in one table (`ui/src/lib/format.ts` or its successor): `hdr not supported` -> "HDR — not supported yet", `too short` -> "Too short to be worth it", `resolution too low` -> "Resolution below 1080p class", `below min size` -> "Below the size floor", `source codec not a candidate` -> "Source codec not a candidate", `no size gain` -> "No size gain", `target unreachable` -> "Quality target unreachable", `saving below minimum` -> "Predicted saving below the minimum". Never show an engine string to the operator.
+Skip and failure reasons are mapped from the engine's strings in one table (`ui/src/lib/format.ts` or its successor): `hdr not supported` -> "HDR — not supported yet", `too short` -> "Too short to be worth it", `resolution too low` -> "Resolution below 1080p class", `below min size` -> "Below the size floor", `source codec not a candidate` -> "Source codec not a candidate", `already AV1 (the output format)` -> "Already AV1 — the output format", `no size gain` -> "No size gain", `target unreachable` -> "Quality target unreachable", `saving below minimum` -> "Predicted saving below the minimum". Never show an engine string to the operator.
 
 ## Typography
 

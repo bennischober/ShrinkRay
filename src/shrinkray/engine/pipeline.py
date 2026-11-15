@@ -1328,9 +1328,8 @@ def encode_with_quality(
             target_vmaf=target_vmaf,
             error=(
                 "AV1 is the output format and never a source (issue #650): "
-                "re-encoding AV1 to AV1 buys no codec generation gain, and a "
-                "second generation's quality would be measured against "
-                "ShrinkRay's own output"
+                "re-encoding an AV1 source to AV1 buys no codec generation "
+                "gain"
             ),
             skipped_reason="already AV1 (the output format)",
             input_size=identity.size,

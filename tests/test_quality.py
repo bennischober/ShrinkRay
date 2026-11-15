@@ -3008,11 +3008,11 @@ class TestTheCodecRule(unittest.TestCase):
         """The encode path enforces the same decision (issue #650): the
         mirrored codec-gate branch skips an AV1 source with the decision's
         reason, before the CRF probe and before the encode boundary's
-        plan-reuse lookup. The stored row's fingerprint MATCHES the lookup
-        (the same target, threshold, crop-sample count, sample settings,
-        encoder and recipe the lookup compares), so the not-called assertion
-        is a live pin: the only thing standing between the row and reuse is
-        the gate."""
+        plan-reuse lookup. The stored row's fingerprint carries the fields
+        the lookup compares (the same target, threshold, crop-sample count,
+        sample settings, encoder and recipe), but the lookup itself is
+        mocked: the pin proves the ORDER - the gate returns before the
+        lookup seam is ever reached - not the fingerprint comparison."""
         result, lookup, probed = self._encode_with_stored_plan("av1")
         self.assertEqual(result.skipped_reason, "already AV1 (the output format)")
         probed.assert_not_called()
