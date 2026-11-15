@@ -544,14 +544,23 @@ class JobQueue:
         Queued jobs are removed from the queue directly; running jobs get
         their cancel event set (the engine checks it between movies).
 
+        The connection gate is taken OUTSIDE _lock (the same order every
+        other method uses: the gate, then the pending list - issue #660
+        round 9, finding 1), and the row is committed CANCELLED before the
+        job leaves _pending (the ordering take_next got, round 5, finding
+        4): a failed commit leaves the job takable instead of stranding a
+        queued row.
+
         Args:
             job_id (int): The job to cancel.
 
         Returns:
             bool: True if a job was found for the id.
         """
+        cancelled = None
+        event = None
         with self._lock:
-            for index, job in enumerate(self._pending):
+            for job in self._pending:
                 if job.id == job_id:
                     # only a QUEUED job is cancelled here: take_next marks a
                     # job RUNNING outside _lock while its gated write runs
@@ -561,20 +570,24 @@ class JobQueue:
                     # row running until the next start's recovery
                     if job.state is not JobState.QUEUED:
                         break
-                    # the row is committed CANCELLED before the job leaves
-                    # _pending (the same ordering take_next got, issue #660
-                    # round 5, finding 4): a failed commit leaves the job
-                    # takable instead of stranding a queued row
                     job.state = JobState.CANCELLED
-                    with self._conn_gate():
-                        self._connection.execute(
-                            "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
-                            (JobState.CANCELLED.value, job_id),
-                        )
-                        self._connection.commit()
-                    self._pending.pop(index)
-                    return True
-            event = self._cancel_events.get(job_id)
+                    cancelled = job
+                    break
+            else:
+                event = self._cancel_events.get(job_id)
+        if cancelled is not None:
+            with self._conn_gate():
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
+                    (JobState.CANCELLED.value, job_id),
+                )
+                self._connection.commit()
+            with self._lock:
+                # a job marked CANCELLED is never handed out by take_next
+                # (it only takes QUEUED jobs), so it is still here to remove
+                if cancelled in self._pending:
+                    self._pending.remove(cancelled)
+            return True
         if event is not None:
             event.set()
             return True
@@ -1643,6 +1656,9 @@ class JobWorker:
 
     def start(self) -> None:
         """Starts the worker thread."""
+        # a restarted worker must not render running with a previous
+        # give-up's error strip (issue #660 round 9, finding 3)
+        self.fatal_error = None
         self._thread = threading.Thread(target=self._run, name="job-worker", daemon=True)
         self._thread.start()
 

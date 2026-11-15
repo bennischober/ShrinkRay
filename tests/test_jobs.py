@@ -1417,6 +1417,49 @@ class TestJobs(unittest.TestCase):
         self.assertFalse(queue.cancel(job.id))
         self.assertIn(job, queue._pending)
 
+    def test_a_failed_cancel_commit_keeps_the_job_takable(self):
+        """Issue #660 round 9, finding 2: the cancel ordering's pin - a
+        failing gated commit leaves the job in the in-memory queue, and the
+        next take_next returns it (no stranded queued row)."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        class _FlakyCancelCommit:
+            def __init__(self, real):
+                self._real = real
+                self._failed = False
+
+            def execute(self, *args, **kwargs):
+                return self._real.execute(*args, **kwargs)
+
+            def commit(self):
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("the db blinked")
+                return self._real.commit()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        # the commit failure raises through cancel (the caller sees the
+        # real cause); the in-memory state was set CANCELLED before the
+        # failed commit, but the job STAYS in the queue
+        with (
+            mock.patch.object(queue, "_connection", _FlakyCancelCommit(queue._connection)),
+            self.assertRaises(RuntimeError),
+        ):
+            queue.cancel(job.id)
+        self.assertIn(job, queue._pending)
+        # a job whose cancel never committed is effectively not cancelled:
+        # the next take still returns it
+        taken = queue.take_next()
+        self.assertIsNotNone(taken, "the job was stranded by the failed cancel")
+        self.assertEqual(taken.id, job.id)
+
     def test_a_failed_gated_commit_keeps_the_job_takable(self):
         """Issue #660 round 2, finding 1: the observed SystemError is raised
         by take_next's commit - the job must stay in the in-memory queue
