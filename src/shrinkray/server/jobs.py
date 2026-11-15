@@ -407,14 +407,21 @@ class JobQueue:
                     break
             if index is None:
                 return None
-            job = self._pending.pop(index)
+            job = self._pending[index]
             job.state = JobState.RUNNING
+        # the row is marked running and committed BEFORE the job leaves the
+        # in-memory queue (issue #660 round 1, finding 2): the observed
+        # SystemError is raised by exactly this commit - if it fails, the
+        # job must still be in _pending for the next take_next, or a queued
+        # row exists that nothing will ever run
         with self._conn_gate():
             self._connection.execute(
                 "UPDATE jobs SET state = ?, started_at = datetime('now') WHERE id = ?",
                 (JobState.RUNNING.value, job.id),
             )
             self._connection.commit()
+        with self._lock:
+            self._pending.remove(job)
         return job
 
     def report_progress(self, job: Job, progress: dict) -> None:

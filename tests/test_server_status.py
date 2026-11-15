@@ -20,6 +20,70 @@ from shrinkray.server.app import AppState
 from shrinkray.server.app import app as fast_app
 
 
+class TestTheStatusCarriesTheWorkerFields(unittest.TestCase):
+    """The worker analogue (issue #649): /api/status's `worker` says whether
+    the worker thread is alive; `worker_error` says why it gave up."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        app_module.state = AppState(Path(self.tmp.name) / "test.db")
+
+    def tearDown(self) -> None:
+        if app_module.state is not None:
+            app_module.state.shutdown()
+        app_module.state = None
+        self.tmp.cleanup()
+
+    def test_a_dead_worker_names_the_reason(self) -> None:
+        """Issue #649's AC: /api/status exposes the worker's liveness and,
+        when it gave up, the reason - dropping either field fails this."""
+        client = TestClient(fast_app)
+        app_module.state.worker = mock.Mock(
+            _thread=mock.Mock(is_alive=lambda: False),
+            fatal_error="the worker gave up after 5 consecutive failed iterations",
+        )
+        body = client.get("/api/status").json()
+        self.assertEqual(body["worker"], "stopped")
+        self.assertEqual(
+            body["worker_error"], "the worker gave up after 5 consecutive failed iterations"
+        )
+
+    def test_a_running_worker_reports_no_reason(self) -> None:
+        client = TestClient(fast_app)
+        app_module.state.worker = mock.Mock(
+            _thread=mock.Mock(is_alive=lambda: True), fatal_error=None
+        )
+        body = client.get("/api/status").json()
+        self.assertEqual(body["worker"], "running")
+        self.assertIsNone(body["worker_error"])
+
+    def test_the_snapshot_status_carries_the_worker_fields_too(self) -> None:
+        """The dashboard reads /api/snapshot's status dict (the WORKER chip
+        and its strip) - deleting the snapshot's worker fields fails this
+        while /api/status stays green (issue #660 round 2, finding 3)."""
+        client = TestClient(fast_app)
+        app_module.state.worker = mock.Mock(
+            _thread=mock.Mock(is_alive=lambda: False),
+            fatal_error="the worker gave up after 5 consecutive failed iterations",
+        )
+        body = client.get("/api/snapshot").json()
+        self.assertEqual(body["status"]["worker"], "stopped")
+        self.assertEqual(
+            body["status"]["worker_error"],
+            "the worker gave up after 5 consecutive failed iterations",
+        )
+
+    def test_a_running_watcher_reports_no_reason(self) -> None:
+        client = TestClient(fast_app)
+        # a live THREAD would make shutdown's join (timeout=10) wait out a
+        # dummy target's lifetime - a fixed wait a unit test must not pay;
+        # the route reads watch_thread.is_alive(), which a mock states
+        app_module.state.watch_thread = mock.Mock(is_alive=lambda: True)
+        body = client.get("/api/status").json()
+        self.assertEqual(body["watcher"], "running")
+        self.assertIsNone(body["watcher_error"])
+
+
 class TestTheWatchLoopCrashIsRecorded(unittest.TestCase):
     """A watch-loop crash reaches /api/status (issue #648 round 2): the
     server's run_watch wrapper records the reason, so deleting that line
@@ -77,39 +141,6 @@ class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
             body["watcher_error"],
             "another watcher holds the single-instance lock",
         )
-
-    def test_a_dead_worker_names_the_reason(self) -> None:
-        """Issue #649's AC: /api/status exposes the worker's liveness and,
-        when it gave up, the reason - dropping either field fails this."""
-        client = TestClient(fast_app)
-        app_module.state.worker = mock.Mock(
-            _thread=mock.Mock(is_alive=lambda: False),
-            fatal_error="the worker gave up after 5 consecutive failed iterations",
-        )
-        body = client.get("/api/status").json()
-        self.assertEqual(body["worker"], "stopped")
-        self.assertEqual(
-            body["worker_error"], "the worker gave up after 5 consecutive failed iterations"
-        )
-
-    def test_a_running_worker_reports_no_reason(self) -> None:
-        client = TestClient(fast_app)
-        app_module.state.worker = mock.Mock(
-            _thread=mock.Mock(is_alive=lambda: True), fatal_error=None
-        )
-        body = client.get("/api/status").json()
-        self.assertEqual(body["worker"], "running")
-        self.assertIsNone(body["worker_error"])
-
-    def test_a_running_watcher_reports_no_reason(self) -> None:
-        client = TestClient(fast_app)
-        # a live THREAD would make shutdown's join (timeout=10) wait out a
-        # dummy target's lifetime - a fixed wait a unit test must not pay;
-        # the route reads watch_thread.is_alive(), which a mock states
-        app_module.state.watch_thread = mock.Mock(is_alive=lambda: True)
-        body = client.get("/api/status").json()
-        self.assertEqual(body["watcher"], "running")
-        self.assertIsNone(body["watcher_error"])
 
     def test_the_snapshot_status_carries_the_reason_too(self) -> None:
         """The dashboard reads /api/snapshot's status dict (App.svelte's

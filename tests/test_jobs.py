@@ -1322,18 +1322,17 @@ class TestJobs(unittest.TestCase):
         queue = jobs.JobQueue(self.connection, connection_lock=gate)
         worker = jobs.JobWorker(self.connection, queue)
 
-        with mock.patch.object(
-            queue,
-            "take_next",
-            side_effect=RuntimeError("the db is gone"),
+        with (
+            mock.patch.object(
+                queue,
+                "take_next",
+                side_effect=RuntimeError("the db is gone"),
+            ),
+            mock.patch.object(queue, "wait_for_work", side_effect=lambda timeout: False),
         ):
             worker.start()
-            # await the worker's end (bounded): the give-up is the signal
-            deadline = time.monotonic() + 10.0
-            while time.monotonic() < deadline:
-                if not worker._thread.is_alive():
-                    break
-                threading.Event().wait(0.05)
+            # the give-up is the signal: a bounded join, no poll fragments
+            worker._thread.join(timeout=10.0)
             self.assertFalse(worker._thread.is_alive(), "the worker never gave up")
             self.assertIsNotNone(worker.fatal_error)
             self.assertIn("5 consecutive", worker.fatal_error or "")
@@ -1353,17 +1352,69 @@ class TestJobs(unittest.TestCase):
         queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
 
         taken = []
+        reached = threading.Event()
+
+        def take_and_signal():
+            reached.set()  # the taker is INSIDE take_next when this fires
+            taken.append(queue.take_next())
+
         with gate:  # simulate a route holding the app's database lock
-            taker = threading.Thread(target=lambda: taken.append(queue.take_next()))
+            taker = threading.Thread(target=take_and_signal)
             taker.start()
-            # the probe is deliberately-negative and safe in both directions:
-            # the buggy code finishes in microseconds, so a short bound never
-            # misclassifies it as blocked
+            # await the taker reaching take_next FIRST: is_alive() alone
+            # could be true for an unscheduled thread (issue #660 round 2,
+            # finding 4)
+            self.assertTrue(reached.wait(5.0), "the taker never reached take_next")
             taker.join(timeout=0.3)
             self.assertTrue(taker.is_alive(), "take_next ran while the app's db lock was held")
         taker.join(timeout=5.0)
         self.assertFalse(taker.is_alive(), "take_next stayed blocked after the release")
         self.assertIsNotNone(taken[0])
+
+    def test_a_failed_gated_commit_keeps_the_job_takable(self):
+        """Issue #660 round 2, finding 1: the observed SystemError is raised
+        by take_next's commit - the job must stay in the in-memory queue
+        when that write fails, so the next take_next still returns it and
+        nothing is stranded as a queued row nothing runs."""
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)})
+
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        queue.enqueue(job)
+
+        # sqlite3.Connection.commit is read-only: the gated write fails via a
+        # delegating proxy, so the REAL take_next ordering is what runs
+        class _FlakyCommit:
+            def __init__(self, real):
+                self._real = real
+                self._failed = False
+
+            def execute(self, *args, **kwargs):
+                return self._real.execute(*args, **kwargs)
+
+            def commit(self):
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("the db blinked")
+                return self._real.commit()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        # the gated commit raises (the observed SystemError's site): the
+        # job must still be in _pending, so the NEXT take still returns
+        # it - take_next either returns a job or raises, never strands
+        with (
+            mock.patch.object(queue, "_connection", _FlakyCommit(queue._connection)),
+            self.assertRaises(RuntimeError),
+        ):
+            queue.take_next()
+        second = queue.take_next()
+        self.assertIsNotNone(second, "the job was stranded by the failed commit")
+        self.assertEqual(second.id, job.id)
 
     def test_a_failed_take_next_does_not_kill_the_worker(self):
         """Issue #649: one failed iteration - ANY exception from take_next -
@@ -1403,6 +1454,10 @@ class TestJobs(unittest.TestCase):
         with (
             mock.patch.object(queue, "take_next", side_effect=flaky),
             mock.patch.object(queue, "finish", side_effect=signalling_finish),
+            # the failure branch's back-off must not burn a real second per
+            # failure in a test (the file's own stop_after_first_wait
+            # pattern)
+            mock.patch.object(queue, "wait_for_work", side_effect=lambda timeout: False),
         ):
             worker.start()
             try:
