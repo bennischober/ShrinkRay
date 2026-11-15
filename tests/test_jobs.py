@@ -1353,24 +1353,43 @@ class TestJobs(unittest.TestCase):
 
         taken = []
         entered = threading.Event()
-        calls = {"n": 0}
-        real_gate = queue._conn_gate
 
-        def recording_gate():
-            calls["n"] += 1
-            entered.set()  # the gate is ENTERED when this fires: the taker
-            return real_gate()  # is deterministically blocked on the lock
+        class _CountingGate:
+            # counts the ACQUISITION itself (issue #660 round 5, finding 5):
+            # a gate that ignored the lock would never increment, so the
+            # count check closes the timing hole the event alone had
+            def __init__(self, real):
+                self._real = real
+                self.count = 0
 
-        with gate:  # simulate a route holding the app's database lock
+            def acquire(self, *args, **kwargs):
+                self.count += 1
+                entered.set()
+                return self._real.acquire(*args, **kwargs)
+
+            def release(self):
+                return self._real.release()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *args):
+                self.release()
+                return False
+
+        counting = _CountingGate(gate)
+        with counting:  # simulate a route holding the app's database lock
             taker = threading.Thread(target=lambda: taken.append(queue.take_next()))
-            with mock.patch.object(queue, "_conn_gate", side_effect=recording_gate):
+            with mock.patch.object(queue, "_connection_lock", counting):
+                # the setup's enqueue already acquired the gate once; the
+                # count below asserts the TAKE's own acquisition
+                counting.count = 0
                 taker.start()
-                # the GATE's own event is the signal: once it fires, the
-                # taker holds the gate and cannot complete while this thread
-                # holds the lock - a state check, no wall-clock wait (issue
-                # #660 round 4, finding 9)
+                # once acquired, the taker holds the gate and cannot complete
+                # while this thread holds the real lock - state checks only
                 self.assertTrue(entered.wait(5.0), "take_next never took the gate")
-                self.assertEqual(calls["n"], 1)
+                self.assertEqual(counting.count, 1)
                 self.assertEqual(taken, [], "take_next completed while the lock was held")
         taker.join(timeout=5.0)
         self.assertFalse(taker.is_alive(), "take_next stayed blocked after the release")

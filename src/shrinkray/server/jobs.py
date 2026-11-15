@@ -274,8 +274,10 @@ class JobQueue:
     def _conn_gate(self) -> "contextlib.AbstractContextManager[None]":
         """Serializes this queue's connection use with its other users.
 
-        See __init__'s connection_lock: one shared connection used from two
-        threads under two different locks produced the observed
+        See __init__'s connection_lock: the shared connection's queue calls
+        ran with NO lock (only cancel held _lock) while the routes read the
+        same connection under the app's database lock - the
+        unsynchronized-access shape that produced the observed
         ``SystemError: commit returned NULL without setting an exception``
         (issue #649). The lock is re-entrant, so nesting is safe.
         """
@@ -558,14 +560,18 @@ class JobQueue:
                     # row running until the next start's recovery
                     if job.state is not JobState.QUEUED:
                         break
+                    # the row is committed CANCELLED before the job leaves
+                    # _pending (the same ordering take_next got, issue #660
+                    # round 5, finding 4): a failed commit leaves the job
+                    # takable instead of stranding a queued row
                     job.state = JobState.CANCELLED
-                    self._pending.pop(index)
                     with self._conn_gate():
                         self._connection.execute(
                             "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
                             (JobState.CANCELLED.value, job_id),
                         )
                         self._connection.commit()
+                    self._pending.pop(index)
                     return True
             event = self._cancel_events.get(job_id)
         if event is not None:
