@@ -120,7 +120,7 @@ describe('OverviewPage VMAF display (issue #599)', () => {
         plans: [{ movie: 'a.mkv', state: 'encode', crf: 30, vmaf: 97.04, estimated_size: 1024 ** 2, saved_percent: 50 }],
       },
     })
-    renderOverview([], [movie({ encode: { preset: 'skipped (size floor)' } as never })], [planJob])
+    renderOverview([], [movie({ encode: { preset: 'skipped (no size gain)' } as never })], [planJob])
     expect(screen.queryByText(/encoded since/)).toBeNull()
     expect(screen.getAllByText(/to encode/).length).toBeGreaterThan(0)
   })
