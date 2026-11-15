@@ -330,25 +330,6 @@ export function isStageRow(job: { payload?: unknown }): boolean {
   return typeof p?.pipeline === 'string'
 }
 
-/** The stage rows a running folder job is executing right now, in id order:
- * the ones whose `pipeline` names that job's kind. A finished stage is
- * history, not active work. */
-export function stageRowsFor<
-  T extends { id: number | null; state?: string; payload?: unknown },
->(parent: { kind?: string; payload?: unknown }, jobs: readonly T[]): T[] {
-  const kind = (parent as { kind?: string }).kind
-  if (!kind) return []
-  return jobs
-    .filter((j) => {
-      const p = j.payload as { pipeline?: unknown } | null
-      return (
-        typeof p?.pipeline === 'string' &&
-        p.pipeline === kind &&
-        j.state === 'running'
-      )
-    })
-    .sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
-}
 
 const VERDICT_WORDS: Record<string, string> = {
   encode: 'Encode',
