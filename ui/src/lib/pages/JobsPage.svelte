@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
-  import { bytes, groupJobs, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns } from '../format'
+  import { bytes, groupJobs, isStageRow, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -112,13 +112,6 @@
   const outcomesOf = (j: Job) =>
     (j.result as { outcomes?: JobOutcome[] } | null)?.outcomes ?? []
 
-  // issue #632: what is running and what comes next come first, then the
-  // trail — a backlog can no longer push them below six queued rows
-  const orderedHistory = $derived.by(() => {
-    const g = groupJobs(filteredHistory)
-    return [...g.running, ...g.queued, ...g.history]
-  })
-
   const filteredHistory = $derived(
     history.filter((j) => {
       if (kindFilter !== 'all' && j.kind !== kindFilter) return false
@@ -130,12 +123,22 @@
       return true
     })
   )
+
+  // issue #632: two lists, not one dump — what is running above, what
+  // happened below. A per-file stage row is the running folder job's own work
+  // (#602): the folder job shows its progress, so the stage row is not a job of
+  // its own and must not appear as a second one doing the same thing.
+  // The order inside ACTIVE stays the operator's: running first, then the queue
+  // oldest-first, because the snapshot is newest-first.
+  const groups = $derived(groupJobs(filteredHistory.filter((j) => !isStageRow(j))))
+  const activeRows = $derived([...groups.running, ...groups.queued])
+  const pastRows = $derived(groups.history)
 </script>
 
 <div class="page page-in">
   <PageHeader
     title="Jobs"
-    description={`${filteredHistory.length} of ${history.length} entries · the full audit trail`}
+    description={`${filteredHistory.length} of ${history.length} entries · the full audit trail${history.length !== filteredHistory.length ? ` · stage rows are the running job's own work, not jobs` : ''}`}
   >
     {#if history.length > 0}
       <div class="filters">
@@ -166,18 +169,8 @@
   {:else if filteredHistory.length === 0}
     <EmptyState title="No entries match this filter" hint="clear a filter to see the rest of the trail" />
   {:else}
-    <div class="log">
-      <div class="log-head legend">
-        <span>#</span>
-        <span>KIND</span>
-        <span>FILE</span>
-        <span>STATE</span>
-        <span>STARTED</span>
-        <span>DURATION</span>
-        <span></span>
-      </div>
-      {#each orderedHistory as job (job.id)}
-        {@const cols = timeColumns(job)}
+    {#snippet jobRow(job: Job)}
+      {@const cols = timeColumns(job)}
         <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:partial={job.state === 'done' && failedOutcomeNote(job) !== ''} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
@@ -241,8 +234,59 @@
             </div>
           {/if}
         </div>
-      {/each}
-    </div>
+    {/snippet}
+
+    <!-- ACTIVE: what is running now and what comes next (issue #632). -->
+    <section class="section">
+      <div class="section-head legend">
+        <span>ACTIVE</span>
+        <span class="section-count mono">{activeRows.length} running or waiting</span>
+      </div>
+      {#if activeRows.length === 0}
+        <div class="dim pad">nothing running — the watcher is idle</div>
+      {:else}
+        <div class="log">
+          <div class="log-head legend">
+            <span>#</span>
+            <span>KIND</span>
+            <span>FILE</span>
+            <span>STATE</span>
+            <span>STARTED</span>
+            <span>DURATION</span>
+            <span></span>
+          </div>
+          {#each activeRows as job (job.id)}
+            {@render jobRow(job)}
+          {/each}
+        </div>
+      {/if}
+    </section>
+
+    <!-- HISTORY: what happened, newest first, on its own. -->
+    <section class="section">
+      <div class="section-head legend">
+        <span>HISTORY</span>
+        <span class="section-count mono">{pastRows.length} finished</span>
+      </div>
+      {#if pastRows.length === 0}
+        <div class="dim pad">nothing finished yet</div>
+      {:else}
+        <div class="log">
+          <div class="log-head legend">
+            <span>#</span>
+            <span>KIND</span>
+            <span>FILE</span>
+            <span>STATE</span>
+            <span>STARTED</span>
+            <span>DURATION</span>
+            <span></span>
+          </div>
+          {#each pastRows as job (job.id)}
+            {@render jobRow(job)}
+          {/each}
+        </div>
+      {/if}
+    </section>
   {/if}
 </div>
 
@@ -257,6 +301,15 @@
     padding: 3px 8px;
     font-size: 11px;
   }
+  .section { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 0 14px;
+    color: var(--ink-dim);
+  }
+  .section-count { margin-left: auto; color: var(--ink-faint); }
   .dim { color: var(--ink-dim); }
     .movie-link {
     background: transparent;

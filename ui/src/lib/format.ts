@@ -321,6 +321,16 @@ export function statusAnswer(input: {
   return `● Idle — all caught up · ${tail}`
 }
 
+/** A per-file stage row is the running folder job's own work, not a job of
+ * its own (issue #602): the folder job stays the runner and writes these rows
+ * so the page can follow each stage. Showing both at the top level is how one
+ * CRF search looked like two running jobs. */
+export function isStageRow(job: { payload?: unknown }): boolean {
+  const p = job.payload as { pipeline?: unknown } | null
+  return typeof p?.pipeline === 'string'
+}
+
+
 const VERDICT_WORDS: Record<string, string> = {
   encode: 'Encode',
   skip: 'Skip',

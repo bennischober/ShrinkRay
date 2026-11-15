@@ -105,6 +105,31 @@ describe('JobsPage render', () => {
     expect(container.querySelector('button.movie-link')).toBeNull()
   })
 
+  it('does not list a stage row as a second job doing the same work (issue #632)', () => {
+    // #602 made the folder job the runner: the CRF search writes its progress
+    // to the parent (#639), so listing it too read as two jobs on one file
+    const parent = job({
+      id: 3,
+      kind: 'encode',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      payload: { paths: ['/media'] },
+    })
+    const stage = job({
+      id: 17,
+      kind: 'crf-search',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      payload: { paths: ['/media/Legend (2015)/Legend.mkv'], pipeline: 'encode' },
+    })
+    const { container } = render(JobsPage, { history: [parent, stage], onopenMovie: () => {} })
+    const ids = [...container.querySelectorAll('.entry .id')].map((el) => (el.textContent ?? '').trim())
+    expect(ids).toContain('3')
+    expect(ids).not.toContain('17')
+  })
+
   it('a queued scan row claims no encode mode it cannot have (issue #630)', async () => {
     const scan = job({ id: 3, kind: 'scan', state: 'queued', started_at: null, finished_at: null, result: null, payload: { paths: ['/m/a'] } })
     const { container } = render(JobsPage, { history: [scan], onopenMovie: () => {} })
