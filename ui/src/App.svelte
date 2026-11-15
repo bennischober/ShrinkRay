@@ -815,7 +815,13 @@
       gap: 8px;
     }
     .rail-foot .shortcut-hint { display: none; }
-    .main { padding: 14px 12px 20px; flex: 1; scroll-margin-bottom: 72px; }
+    .main { padding: 14px 12px 20px; flex: 1; }
+    /* the margin belongs to the element that scrolls into view, not to the
+       container: on .main it changed nothing and a tabbed-to button still landed
+       fully behind the sticky bar (issue #636 review) */
+    :global(.main :is(button, a, input, select, textarea, summary)) {
+      scroll-margin-bottom: 84px;
+    }
   }
 
   /* a keyboard legend is meaningless without a keyboard (issue #636) */
