@@ -400,7 +400,7 @@
         title={status?.watcher === 'running' ? 'The background watcher is running' : (status?.watcher_error ?? 'The background watcher is stopped')}>
         {status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER'}
       </span>
-      <span class="legend watcher" class:on={status?.worker === 'running'}
+      <span class="legend worker" class:on={status?.worker === 'running'}
         title={status?.worker === 'running' ? 'The job worker is running' : (status?.worker_error ?? 'The job worker is stopped')}>
         {status?.worker === 'running' ? '● WORKER' : '○ WORKER'}
       </span>
@@ -622,7 +622,7 @@
     flex-direction: column;
     gap: 6px;
   }
-  .theme-toggle, .watcher {
+  .theme-toggle, .watcher, .worker {
     background: transparent;
     border: 1px solid var(--seam);
     border-radius: var(--radius);
@@ -636,7 +636,7 @@
     min-height: 24px;
   }
   .theme-toggle:hover { color: var(--ink); border-color: var(--ink-dim); }
-  .watcher.on { color: var(--teal-ink); border-color: var(--teal); }
+  .watcher.on, .worker.on { color: var(--teal-ink); border-color: var(--teal); }
   .watcher:not(.on):hover { color: var(--ink); }
   /* the keyboard legend: shortcuts exist since always — this line makes
      them discoverable without an overlay or a help page */
