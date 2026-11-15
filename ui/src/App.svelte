@@ -809,10 +809,21 @@
     .rail-foot {
       margin-top: 0;
       flex-direction: row;
+      flex-wrap: wrap;
+      row-gap: 4px;
       justify-content: space-between;
       padding: 0;
       border-top: none;
       gap: 8px;
+    }
+    /* the freshness line is long and grows with the age ("Updated 27 s ago ·
+       reconnecting…"): on its own row it cannot push the bar past the viewport
+       (issue #636 review) */
+    .rail-foot .freshness {
+      flex: 0 0 100%;
+      margin-left: 0;
+      text-align: right;
+      white-space: normal;
     }
     .rail-foot .shortcut-hint { display: none; }
     .main { padding: 14px 12px 20px; flex: 1; }
