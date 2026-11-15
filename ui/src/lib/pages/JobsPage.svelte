@@ -126,10 +126,11 @@
 
   // issue #632: two lists, not one dump — what is running above, what
   // happened below. A per-file stage row is the running folder job's own work
-  // (#602), so it says which job it belongs to rather than pretending to be one.
+  // (#602): the folder job shows its progress, so the stage row is not a job of
+  // its own and must not appear as a second one doing the same thing.
   // The order inside ACTIVE stays the operator's: running first, then the queue
-  // oldest-first, because the snapshot is newest-first (issue #632 review).
-  const groups = $derived(groupJobs(filteredHistory))
+  // oldest-first, because the snapshot is newest-first.
+  const groups = $derived(groupJobs(filteredHistory.filter((j) => !isStageRow(j))))
   const activeRows = $derived([...groups.running, ...groups.queued])
   const pastRows = $derived(groups.history)
 </script>
