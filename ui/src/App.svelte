@@ -4,12 +4,14 @@
   import {
     api,
     isAuthFailure,
+    isFailedOutcome,
     jobPaths,
     storeToken,
     type Movie,
     type RetainedFile,
     type Status,
     type Job,
+    type JobOutcome,
   } from './lib/api'
   import OverviewPage from './lib/pages/OverviewPage.svelte'
   import LibraryPage from './lib/pages/LibraryPage.svelte'
@@ -323,8 +325,8 @@
       if (j.id === null || dismissed.has(j.id)) return false
       if (j.state === 'failed') return true
       if (j.state === 'done' && j.kind === 'encode') {
-        const outcomes = (j.result as { outcomes?: { state: string }[] } | null)?.outcomes ?? []
-        return outcomes.some((o) => o.state === 'failed')
+        const outcomes = (j.result as { outcomes?: JobOutcome[] } | null)?.outcomes ?? []
+        return outcomes.some(isFailedOutcome)
       }
       return false
     })

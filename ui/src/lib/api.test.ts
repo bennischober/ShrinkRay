@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   failedOutcomeNote,
+  isFailedOutcome,
   humanizeError,
   isAuthFailure,
   jobPaths,
@@ -68,6 +69,19 @@ describe('movieOutcome', () => {
     expect(movieOutcome(job({ kind: 'legacy' }), '/m/a')).toBeNull()
     expect(movieOutcome(job({ kind: 'encode', result: { outcomes: [] } }), '/m/a')).toBeNull()
     expect(movieOutcome(job({ kind: 'encode', result: null }), '/m/a')).toBeNull()
+  })
+})
+
+describe('isFailedOutcome', () => {
+  // the rail's roll-up and the note must agree on what counts as work lost
+  it('counts a failed movie and a declined swap, never a busy or HDR skip', () => {
+    expect(isFailedOutcome({ movie: 'a', state: 'failed' })).toBe(true)
+    expect(
+      isFailedOutcome({ movie: 'b', state: 'skipped', error: 'the swap was declined: subtitles' }),
+    ).toBe(true)
+    expect(isFailedOutcome({ movie: 'c', state: 'skipped', error: 'hdr not supported' })).toBe(false)
+    expect(isFailedOutcome({ movie: 'd', state: 'skipped', error: 'the file was busy' })).toBe(false)
+    expect(isFailedOutcome({ movie: 'e', state: 'encoded' })).toBe(false)
   })
 })
 

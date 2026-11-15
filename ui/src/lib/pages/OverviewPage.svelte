@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { humanizeError, isFailedOutcome, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
   import { bytes, duration, kindWord, percent, relative, savedPercent, span, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
@@ -153,7 +153,7 @@
       id: lastEncodeRun.id,
       state: lastEncodeRun.state,
       count: encoded.length,
-      failed: encodeOutcomes.filter((o) => o.state === 'failed').length,
+      failed: encodeOutcomes.filter(isFailedOutcome).length,
       savedLabel,
       minVmaf: vmafs.length ? Math.min(...vmafs) : null,
       wall,
