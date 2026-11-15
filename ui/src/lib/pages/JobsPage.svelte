@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { humanizeError, failedOutcomeNote, type Job } from '../api'
-  import { bytes, kindWord, relative, span, stateWord } from '../format'
+  import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
+  import { bytes, groupJobs, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -55,8 +55,8 @@
     if (job.state !== 'queued') return ''
     const p = job.payload as Record<string, unknown>
     const parts: string[] = []
-    if (p.quality) parts.push(`quality · VMAF>${p.target_vmaf ?? 95}`)
-    else parts.push('fixed preset (removed mode)')
+    if (p.quality) parts.push(p.target_vmaf != null ? `quality · VMAF>${p.target_vmaf}` : 'quality')
+    else if (job.kind === 'encode') parts.push('fixed preset')
     if (p.remove_bars) parts.push('bars removed')
     return parts.join(' · ')
   }
@@ -107,6 +107,18 @@
     sessionStorage.setItem('ms.jobsState', stateFilter)
   })
   const isPartial = (j: Job) => j.state === 'done' && failedOutcomeNote(j) !== ''
+  /** The per-movie outcomes a finished row summarises; scans and legacy
+   * rows carry none, so they show no summary. */
+  const outcomesOf = (j: Job) =>
+    (j.result as { outcomes?: JobOutcome[] } | null)?.outcomes ?? []
+
+  // issue #632: what is running and what comes next come first, then the
+  // trail — a backlog can no longer push them below six queued rows
+  const orderedHistory = $derived.by(() => {
+    const g = groupJobs(filteredHistory)
+    return [...g.running, ...g.queued, ...g.history]
+  })
+
   const filteredHistory = $derived(
     history.filter((j) => {
       if (kindFilter !== 'all' && j.kind !== kindFilter) return false
@@ -158,17 +170,19 @@
       <div class="log-head legend">
         <span>#</span>
         <span>KIND</span>
+        <span>FILE</span>
         <span>STATE</span>
         <span>STARTED</span>
         <span>DURATION</span>
         <span></span>
       </div>
-      {#each filteredHistory as job (job.id)}
+      {#each orderedHistory as job (job.id)}
+        {@const cols = timeColumns(job)}
         <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:partial={job.state === 'done' && failedOutcomeNote(job) !== ''} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
-            <span class="kind">
-              {kindWord(job.kind)}
+            <span class="kind">{kindWord(job.kind)}</span>
+            <span class="file">
               {#if singleMoviePath(job)}
                 <!-- single-movie jobs link to the title: the two audit
                      trails reference each other -->
@@ -181,8 +195,8 @@
               label={`${stateWord(job.state)}${job.state === 'done' && failedOutcomeNote(job) !== '' ? ' · Partial' : ''}${liveElapsed(job) ? ` · ${liveElapsed(job)}` : ''}`}
               tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
-            <span class="when" title={job.started_at ?? 'not started yet'}>{relative(job.started_at)}</span>
-            <span class="dur">{job.state === 'done' ? span(job.started_at, job.finished_at) : job.state === 'running' ? '…' : '—'}</span>
+            <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
+            <span class="dur">{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? '…' : ''}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}
@@ -192,7 +206,7 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <ProgressBar percent={p?.percent ?? null} stage={`${p?.movie ? `${p.movie} · ` : ''}${p?.detail ?? 'starting…'}`} />
+            <ProgressBar percent={p?.percent ?? null} stage={progressLabel(p?.stage, p?.movie, p?.detail, p?.percent)} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}
@@ -200,6 +214,8 @@
             <div class="mono error">
               {note.replace('__FAILED_OUTCOMES__', '')}
             </div>
+          {:else if job.state === 'done' && resultSummary(outcomesOf(job))}
+            <div class="mono dim note">{resultSummary(outcomesOf(job))}</div>
           {:else if job.error}
             <!-- translated for the row (the operator's language); the raw
                  exception stays in the DETAIL expansion for diagnosis -->
@@ -259,7 +275,7 @@
   }
   .log-head {
     display: grid;
-    grid-template-columns: 44px 130px 150px 90px 80px 1fr;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 80px 92px;
     gap: 10px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--seam);
@@ -280,13 +296,17 @@
   .entry.open { background: var(--panel-raised); }
   .row {
     display: grid;
-    grid-template-columns: 44px 130px 150px 90px 80px 1fr;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 80px 92px;
     gap: 10px;
     align-items: baseline;
     padding: 7px 0;
   }
   .id { color: var(--ink-faint); }
   .kind { font-weight: 600; }
+  /* issue #632: the filename has its own cell, so it can neither wrap
+     character by character inside KIND nor draw over the start time;
+     min-width 0 lets it shrink instead of widening the row */
+  .file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .when { color: var(--ink-dim); }
   .dur { color: var(--ink-dim); }
   .ops { display: flex; gap: 6px; justify-content: flex-end; }

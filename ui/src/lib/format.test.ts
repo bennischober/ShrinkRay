@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, kindWord, savedPercent, span, stateWord, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -130,6 +130,10 @@ describe('savedPercent', () => {
   it('is an em dash when there is no value', () => {
     expect(savedPercent(null)).toEqual({ text: '—', grew: false })
   })
+
+  it('calls zero zero, not growth (issue #630)', () => {
+    expect(savedPercent(0)).toEqual({ text: '0.0%', grew: false })
+  })
 })
 
 describe('stateWord', () => {
@@ -147,6 +151,188 @@ describe('stateWord', () => {
   })
 })
 
+describe('stageWord', () => {
+  // issue #631: a multi-step job must say which step it is on, so a CRF
+  // probe cannot look like the final encode
+  it('names the step the job is on', () => {
+    expect(stageWord('probe')).toBe('probing')
+    expect(stageWord('encode')).toBe('encoding')
+    expect(stageWord('scan')).toBe('scanning')
+    expect(stageWord('paused')).toBe('paused')
+  })
+
+  it('shows a stage it has never heard of as itself, not as nothing', () => {
+    expect(stageWord('verify')).toBe('verify')
+    expect(stageWord(null)).toBe('')
+  })
+})
+
+describe('progressLabel', () => {
+  // issue #631: the bar must say what is happening, not just how far
+  it('names the step, the file and what the engine reported', () => {
+    expect(progressLabel('probe', 'a.mkv', 'CRF 24: VMAF 96.41', 42)).toBe(
+      'probing · a.mkv · CRF 24: VMAF 96.41',
+    )
+  })
+
+  it('does not say the step twice when the engine names it already', () => {
+    // two live emissions do exactly this: "scanning library", "probing a.mkv"
+    expect(progressLabel('scan', null, 'scanning library', 10)).toBe('scanning library')
+    expect(progressLabel('probe', 'a.mkv', 'probing a.mkv', 20)).toBe('a.mkv · probing a.mkv')
+  })
+
+  it('falls back to a state word only when the payload carries nothing else', () => {
+    expect(progressLabel(null, null, null, 42)).toBe('working')
+    expect(progressLabel(null, null, null, null)).toBe('starting…')
+  })
+})
+
+describe('groupJobs', () => {
+  // issue #632: the page answers three questions, not one id-ordered list
+  const j = (id: number | null, state: string) => ({ id, state })
+
+  it('separates what runs now, what comes next and what happened', () => {
+    const g = groupJobs([
+      j(9, 'running'),
+      j(10, 'queued'),
+      j(12, 'queued'),
+      j(4, 'done'),
+      j(5, 'failed'),
+    ])
+    expect(g.running.map((x) => x.id)).toEqual([9])
+    expect(g.queued.map((x) => x.id)).toEqual([10, 12])
+    expect(g.history.map((x) => x.id)).toEqual([4, 5])
+  })
+
+  it('puts every job in exactly one group, so ordering cannot drop one', () => {
+    // the invariant the first version broke: a queued job that is not the
+    // oldest vanished from the page
+    const input = [j(9, 'running'), j(10, 'queued'), j(12, 'queued'), j(4, 'done'), j(5, 'failed')]
+    const g = groupJobs(input)
+    const seen = [...g.running, ...g.queued, ...g.history].map((x) => x.id)
+    expect(seen.sort((a, b) => (a as number) - (b as number))).toEqual([4, 5, 9, 10, 12])
+  })
+
+  it('makes the oldest queued job the next one, whatever the list order', () => {
+    const g = groupJobs([j(12, 'queued'), j(10, 'queued'), j(9, 'running')])
+    expect(g.next?.id).toBe(10)
+  })
+
+  it('has no next job when nothing is queued', () => {
+    expect(groupJobs([j(9, 'running'), j(4, 'done')]).next).toBeNull()
+  })
+})
+
+describe('resultSummary', () => {
+  // issue #632: a finished row must say what happened, not make the
+  // operator click DETAIL and parse raw JSON
+  it('summarises what the job did, with the average saving', () => {
+    const s = resultSummary([
+      { movie: 'a', state: 'encoded', input_size: 1000, output_size: 600 },
+      { movie: 'b', state: 'encoded', input_size: 1000, output_size: 558 },
+      { movie: 'c', state: 'skipped', reason: 'no size gain' },
+    ])
+    expect(s).toContain('2 encoded')
+    expect(s).toContain('42.1% size')
+    expect(s).toContain('1 skipped')
+  })
+
+  it('counts a declined swap as failed, never as a clean skip', () => {
+    const s = resultSummary([
+      { movie: 'a', state: 'encoded', input_size: 1000, output_size: 900 },
+      { movie: 'b', state: 'skipped', error: 'the swap was declined: subtitles' },
+    ])
+    expect(s).toContain('1 failed')
+    expect(s).not.toContain('1 skipped')
+  })
+
+  it('names an already-encoded title, which is its own outcome', () => {
+    // jobs.py writes state 'already_encoded': without its own bucket such a
+    // run rendered no summary at all
+    expect(resultSummary([{ movie: 'a', state: 'already_encoded' }])).toBe('1 already encoded')
+  })
+
+  it('says nothing when the payload carries no outcomes', () => {
+    expect(resultSummary([])).toBe('')
+  })
+})
+
+describe('timeColumns', () => {
+  // issue #632: a row must not print a column it cannot fill. Driven by the
+  // timestamps, so a state the UI has not heard of still shows what it has.
+  it('gives a queued row neither a start nor a duration', () => {
+    expect(timeColumns({ started_at: null, finished_at: null })).toEqual({
+      started: false,
+      duration: false,
+    })
+  })
+
+  it('gives a running row a start but no duration yet', () => {
+    expect(timeColumns({ started_at: '2026-10-24T10:00:01Z', finished_at: null })).toEqual({
+      started: true,
+      duration: false,
+    })
+  })
+
+  it('gives a cancelled-while-running row both, though it is no state of its own', () => {
+    // a cancelled job keeps both timestamps; the old state table dropped them
+    expect(timeColumns({ started_at: '2026-10-24T10:00:01Z', finished_at: '2026-10-24T10:02:00Z' })).toEqual({
+      started: true,
+      duration: true,
+    })
+  })
+})
+
+describe('titleBuckets', () => {
+  // issue #633: the band's numbers must add up to the title count
+  it('puts every title in exactly one bucket, so the four add up', () => {
+    const b = titleBuckets([
+      { encode: { outcome: 'encoded' } },
+      { encode: { outcome: 'discarded' } },
+      { encode: { preset: 'skipped (no size gain)' } },
+      { encode: null },
+      { encode: null },
+    ])
+    expect(b).toEqual({ encoded: 1, discarded: 1, skipped: 1, untouched: 2, total: 5 })
+    expect(b.encoded + b.discarded + b.skipped + b.untouched).toBe(b.total)
+  })
+
+  it('counts a skip record as skipped, never as an encode', () => {
+    // the band said 1 encoded against 7 titles: the two skips were in no bucket
+    expect(titleBuckets([{ encode: { preset: 'skipped (hdr not supported)' } }])).toEqual({
+      encoded: 0,
+      discarded: 0,
+      skipped: 1,
+      untouched: 0,
+      total: 1,
+    })
+  })
+})
+
+describe('statusAnswer', () => {
+  // issue #633: the page must answer "is everything OK?" first, in one line
+  it('says what is running, how long is left and what is waiting', () => {
+    expect(
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, watching: true }),
+    ).toBe('● Working — encoding a.mkv, about 1 h 50 min left · 7 files waiting')
+  })
+
+  it('says it is idle when nothing is running, and whether it is watching', () => {
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: true })).toBe(
+      '● Idle — all caught up · watching for new files',
+    )
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: false })).toBe(
+      '● Idle — all caught up · the watcher is off',
+    )
+  })
+
+  it('names one waiting file in the singular', () => {
+    expect(
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: null, queued: 1, watching: true }),
+    ).toBe('● Working — encoding a.mkv · 1 file waiting')
+  })
+})
+
 describe('kindWord and verdictWord', () => {
   it('gives every job kind its glossary word', () => {
     expect(kindWord('scan')).toBe('Library scan')
@@ -160,5 +346,12 @@ describe('kindWord and verdictWord', () => {
     expect(verdictWord('skip')).toBe('Skip')
     expect(verdictWord('failed')).toBe('Failed')
     expect(verdictWord('deferred')).toBe('deferred')
+  })
+})
+
+describe('queueLabel', () => {
+  it('says what the rail count counts, in the right number', () => {
+    expect(queueLabel(1)).toBe('1 job in the queue')
+    expect(queueLabel(3)).toBe('3 jobs in the queue')
   })
 })

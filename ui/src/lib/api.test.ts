@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   failedOutcomeNote,
+  isFailedOutcome,
   humanizeError,
   isAuthFailure,
   jobPaths,
@@ -71,7 +72,47 @@ describe('movieOutcome', () => {
   })
 })
 
+describe('isFailedOutcome', () => {
+  // the rail's roll-up and the note must agree on what counts as work lost
+  it('counts a failed movie and a declined swap, never a busy or HDR skip', () => {
+    expect(isFailedOutcome({ movie: 'a', state: 'failed' })).toBe(true)
+    expect(
+      isFailedOutcome({ movie: 'b', state: 'skipped', error: 'the swap was declined: subtitles' }),
+    ).toBe(true)
+    expect(isFailedOutcome({ movie: 'c', state: 'skipped', error: 'hdr not supported' })).toBe(false)
+    expect(isFailedOutcome({ movie: 'd', state: 'skipped', error: 'the file was busy' })).toBe(false)
+    expect(isFailedOutcome({ movie: 'e', state: 'encoded' })).toBe(false)
+  })
+})
+
 describe('failedOutcomeNote', () => {
+  it('leaves a busy or HDR skip clean, because nothing was thrown away (issue #630)', () => {
+    const j = job({
+      kind: 'encode',
+      result: {
+        outcomes: [
+          { movie: '/m/a', state: 'skipped', error: 'hdr not supported' },
+          { movie: '/m/b', state: 'skipped', error: 'the file was busy' },
+        ],
+      },
+    })
+    expect(failedOutcomeNote(j)).toBe('')
+  })
+
+  it('counts a discarded encode as work thrown away, not a clean done (issue #630)', () => {
+    const j = job({
+      kind: 'encode',
+      result: {
+        outcomes: [
+          { movie: '/m/a', state: 'done' },
+          { movie: '/m/b', state: 'skipped', output_size: null, error: 'the swap was declined: subtitles (the encode is discarded)' },
+        ],
+      },
+    })
+    expect(failedOutcomeNote(j)).toContain('1 of 2')
+    expect(failedOutcomeNote(j)).toContain('/m/b')
+  })
+
   it('names the failed movies of a partially-done encode', () => {
     const j = job({
       kind: 'encode',

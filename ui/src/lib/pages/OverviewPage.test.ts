@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import OverviewPage from './OverviewPage.svelte'
+
+// the running card's stage comes from the live progress store: a mutable stub
+// lets one test seed it without a stream (issue #630)
+let progressStub: { percent?: number; movie?: string | null; detail?: string | null } | null = null
+vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
 import type { Job, Movie, Status } from '../api'
 
 /** The overview is the status window's front page. Issue #239: it rendered
@@ -104,6 +109,112 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(screen.queryByText('96.0')).toBeNull()
   })
 
+  it('answers "is everything OK?" before its internals (issue #633)', () => {
+    const running = job({
+      id: 9,
+      kind: 'encode',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      payload: { paths: ['/m/a.mkv'] },
+    })
+    renderOverview([running])
+    expect(screen.getAllByText(/● Working — encoding/).length).toBeGreaterThan(0)
+  })
+
+  it('does not show the Setup panel: its facts are elsewhere or not actionable (issue #633)', () => {
+    // the scan root and write target are the Config page's, the watcher is in
+    // the status line, the database path is in the internals line — so the
+    // panel repeated all four without giving the operator an action
+    renderOverview()
+    expect(screen.queryByText('SETUP')).toBeNull()
+    expect(screen.queryByText('SCAN FROM')).toBeNull()
+    expect(screen.queryByText('WRITE TO')).toBeNull()
+    expect(screen.queryByText('RESIDENT MEMORY')).toBeNull()
+    expect(screen.getAllByText(/POLL ADAPTIVE/).length).toBeGreaterThan(0)
+  })
+
+  it('does not chart a category that holds one title (issue #633)', () => {
+    // a category with one title is that title's own file size, not a category
+    const movies = [
+      movie({ path: '/m/a.mkv', name: 'a.mkv', category: 'Same' }),
+      movie({ path: '/m/b.mkv', name: 'b.mkv', category: 'Same' }),
+      movie({ path: '/m/c.mkv', name: 'c.mkv', category: 'Alone' }),
+    ]
+    const { container } = renderOverview([], movies)
+    const names = [...container.querySelectorAll('.bar-name')].map((e) => e.textContent?.trim())
+    expect(names).toContain('Same')
+    expect(names).not.toContain('Alone')
+  })
+
+  it('does not repeat a single title\u2019s value as a mean (issue #633)', () => {
+    // the head never repeats the single row beneath it (DESIGN.md): with one
+    // measured title the panel shows that title's own row and no head figure
+    const { container } = renderOverview([], [movie({ encode: { vmaf: 96.1 } as never })])
+    expect(screen.queryByText('MEAN')).toBeNull()
+    expect(screen.queryByText('MEASURED')).toBeNull()
+    expect(container.querySelectorAll('.q-row').length).toBe(1)
+  })
+
+  it('says what needs you before its own internals (issue #633)', () => {
+    // the page's order is the operator's: is everything OK, then what needs
+    // you, then the rest — the poll mode and database path come last
+    const { container } = renderOverview()
+    const text = container.textContent ?? ''
+    expect(text.indexOf('ATTENTION')).toBeGreaterThan(-1)
+    expect(text.indexOf('ATTENTION')).toBeLessThan(text.indexOf('POLL ADAPTIVE'))
+  })
+
+  it('the stat band says where every title went (issue #633)', () => {
+    // a skip record is neither an encode nor untouched: the band used to
+    // account for five of seven titles and say nothing about the rest
+    const movies = [
+      movie({ path: '/m/a.mkv', encode: { preset: 'skipped (hdr not supported)' } as never }),
+      movie({ path: '/m/b.mkv', encode: null }),
+    ]
+    renderOverview([], movies)
+    expect(screen.getAllByText(/1 skipped/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/1 untouched/).length).toBeGreaterThan(0)
+  })
+
+  it('says how long ago the plan finished (issue #630, case 8)', () => {
+    // pin the clock: relative() counts calendar days, so a real Date.now()
+    // crosses a DST boundary twice a year and flips 3 to 2 or 4
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-15T12:00:00Z'))
+    try {
+      const planJob = job({
+        kind: 'plan',
+        state: 'done',
+        finished_at: '2026-06-12T12:00:00Z',
+        payload: { path: '/m', quality: true, target_vmaf: 96 },
+        result: {
+          plans: [{ movie: 'a.mkv', state: 'encode', crf: 30, vmaf: 96.1, estimated_size: 1024 ** 2, saved_percent: 50 }],
+        },
+      })
+      renderOverview([], [movie()], [planJob])
+      expect(screen.getAllByText(/finished 3 days ago/).length).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not count a skip record as an encoded title (issue #630, case 6)', () => {
+    // a skip record means nothing was written, so the plan entry is still
+    // open: the summary must say "to encode", never "encoded since"
+    const planJob = job({
+      kind: 'plan',
+      state: 'done',
+      payload: { path: '/m', quality: true, target_vmaf: 96 },
+      result: {
+        plans: [{ movie: 'a.mkv', state: 'encode', crf: 30, vmaf: 97.04, estimated_size: 1024 ** 2, saved_percent: 50 }],
+      },
+    })
+    renderOverview([], [movie({ encode: { preset: 'skipped (no size gain)' } as never })], [planJob])
+    expect(screen.queryByText(/encoded since/)).toBeNull()
+    expect(screen.getAllByText(/to encode/).length).toBeGreaterThan(0)
+  })
+
   it('reads a plan score against the target its job was run with', () => {
     // 95.04 rounds onto 95.0 under the job's 95 target: the display must
     // step up to 95.1, which only the payload target can produce (the live
@@ -119,5 +230,15 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     renderOverview([], [movie()], [planJob])
     expect(screen.getAllByText('95.1').length).toBeGreaterThan(0)
     expect(screen.queryByText('95.0')).toBeNull()
+  })
+
+  it('the running card at 30 % says working, not working… (issue #630)', async () => {
+    progressStub = { percent: 30.46, movie: 'Titel', detail: null }
+    const running = { id: 4, kind: 'encode', state: 'running', created_at: '2026-10-24T10:00:00Z', started_at: '2026-10-24T10:00:00Z', finished_at: null, payload: {}, result: { plans: [] }, error: null } as unknown as Job
+    const { container } = render(OverviewPage, { movies: [] as Movie[], history: [running], status: null, targetVmaf: 96, savedTotalGb: 0, measuredCount: 0, missingMovies: [], runningJobs: [running], failedJobs: [], scanPaths: [], outputDir: '', ondismiss: () => {}, ongoto: () => {}, onopenmovie: () => {} })
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).toContain('working')
+    expect(text).not.toContain('working…')
+    progressStub = null
   })
 })

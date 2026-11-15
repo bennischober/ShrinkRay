@@ -1,3 +1,5 @@
+import type { JobOutcome } from './api'
+
 const LOCALE = 'en-GB'
 
 const MINUTE = 60
@@ -122,7 +124,8 @@ export function savedPercent(value: number | null | undefined): {
   grew: boolean
 } {
   if (value == null || !Number.isFinite(value)) return { text: '—', grew: false }
-  if (value <= 0) return { text: `+${Math.abs(value).toFixed(1)}% larger`, grew: true }
+  if (value === 0) return { text: '0.0%', grew: false }
+  if (value < 0) return { text: `+${Math.abs(value).toFixed(1)}% larger`, grew: true }
   return { text: `${value.toFixed(1)}%`, grew: false }
 }
 
@@ -159,6 +162,165 @@ export function kindWord(kind: string): string {
   return KIND_WORDS[kind] ?? kind
 }
 
+const STAGE_WORDS: Record<string, string> = {
+  scan: 'scanning',
+  probe: 'probing',
+  encode: 'encoding',
+  paused: 'paused',
+}
+
+/** The step a multi-step job is on, in one voice (issue #631): an operator
+ * can tell a CRF probe from the final encode. An unknown stage passes
+ * through rather than disappearing, so a new server stage shows up as itself. */
+export function stageWord(stage: string | null | undefined): string {
+  if (!stage) return ''
+  return STAGE_WORDS[stage] ?? stage
+}
+
+/** What a running job's progress bar says (issue #631): the step it is
+ * on, the file, and what the engine reported — never a bare percentage
+ * with no explanation of what is being measured. Falls back to a plain
+ * state word only when the payload carries nothing else. */
+export function progressLabel(
+  stage: string | null | undefined,
+  movie: string | null | undefined,
+  detail: string | null | undefined,
+  percent: number | null | undefined,
+): string {
+  const rest = [movie, detail].filter(Boolean)
+  // the engine's own detail sometimes names the step already
+  // ("scanning library", "probing a.mkv"): never say it twice
+  const saysStepAlready = (detail ?? '').toLowerCase().startsWith(stageWord(stage))
+  const parts = stageWord(stage) && !saysStepAlready ? [stageWord(stage), ...rest] : rest
+  if (parts.length > 0) return parts.join(' · ')
+  return percent != null ? 'working' : 'starting…'
+}
+
+/** The three questions the jobs page answers (issue #632) — what is
+ * running now, what comes next, what happened — as three groups rather
+ * than one id-ordered list, so the running job and the next one can never
+ * scroll out of view behind a backlog. "Next" is the oldest queued job; every
+ * queued job is in `queued`, so ordering the page can never drop one. */
+export function groupJobs<T extends { id: number | null; state: string }>(
+  jobs: readonly T[],
+): { running: T[]; queued: T[]; next: T | null; history: T[] } {
+  const running = jobs.filter((j) => j.state === 'running')
+  const queued = jobs
+    .filter((j) => j.state === 'queued')
+    .sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
+  return {
+    running,
+    queued,
+    next: queued[0] ?? null,
+    history: jobs.filter((j) => j.state !== 'running' && j.state !== 'queued'),
+  }
+}
+
+/** What a finished job did, in one line (issue #632): the operator reads
+ * the result instead of clicking DETAIL and parsing raw JSON. Empty when the
+ * payload carries no per-movie outcomes (scans, legacy rows). */
+export function resultSummary(outcomes: readonly JobOutcome[]): string {
+  if (outcomes.length === 0) return ''
+  const encoded = outcomes.filter((o) => o.state === 'encoded')
+  const skipped = outcomes.filter((o) => o.state === 'skipped' && !isFailedOutcome(o))
+  const already = outcomes.filter((o) => o.state === 'already_encoded')
+  const failed = outcomes.filter(isFailedOutcome)
+  const parts: string[] = []
+  if (encoded.length > 0) parts.push(`${encoded.length} encoded`)
+  // the saving comes from the sizes the server actually writes on an encode
+  // outcome (input_size − output_size), not from `saved_percent`, which only
+  // plan entries carry
+  const savings = encoded
+    .filter((o) => typeof o.input_size === 'number' && typeof o.output_size === 'number')
+    .map((o) => ((o.input_size as number) - (o.output_size as number)) / (o.input_size as number) * 100)
+  if (savings.length > 0) {
+    const avg = savings.reduce((sum, p) => sum + p, 0) / savings.length
+    parts.push(`${savedPercent(avg).text} size`)
+  }
+  if (skipped.length > 0) parts.push(`${skipped.length} skipped`)
+  if (already.length > 0) parts.push(`${already.length} already encoded`)
+  if (failed.length > 0) parts.push(`${failed.length} failed`)
+  return parts.join(' · ')
+}
+
+/** A job outcome that is work lost, not work done: a failed movie, or a
+ * swap the operator declined — which the server reports as `skipped` plus a
+ * decline error (`src/shrinkray/server/jobs.py`). A busy or HDR skip is
+ * neither. One definition, so no surface can disagree with another. */
+export function isFailedOutcome(o: JobOutcome): boolean {
+  return (
+    o.state === 'failed' ||
+    (o.state === 'skipped' && (o.error ?? '').includes('declined'))
+  )
+}
+
+/** Which of the time columns a row has (issue #632): a queued row has
+ * no start and no duration, a running row no duration, so the row must not
+ * print a column it cannot fill. Read from the timestamps themselves, not
+ * from a table of states, so a state the UI has not heard of (a cancelled
+ * job keeps both) still shows what it has. */
+export function timeColumns(job: {
+  started_at?: string | null
+  finished_at?: string | null
+}): { started: boolean; duration: boolean } {
+  return {
+    started: job.started_at != null,
+    duration: job.started_at != null && job.finished_at != null,
+  }
+}
+
+/** How a library's titles divide, so the band adds up (issue #633): the
+ * issue found `1 encoded · 4 untouched` against 7 titles with no
+ * explanation of the other two. Every title is in exactly one bucket, so
+ * the four always sum to `total`. */
+export function titleBuckets(
+  movies: readonly {
+    encode?: { outcome?: string | null; preset?: string | null } | null
+  }[],
+): {
+  encoded: number
+  discarded: number
+  skipped: number
+  untouched: number
+  total: number
+} {
+  let encoded = 0
+  let discarded = 0
+  let skipped = 0
+  let untouched = 0
+  for (const m of movies) {
+    if (m.encode?.outcome === 'discarded') discarded++
+    else if (m.encode && (m.encode.preset ?? '').startsWith('skipped')) skipped++
+    else if (m.encode) encoded++
+    else untouched++
+  }
+  return { encoded, discarded, skipped, untouched, total: movies.length }
+}
+
+/** The one line the Overview answers "is everything OK?" with, first on the
+ * page (issue #633): the state, what it is doing, how long is left and how
+ * much is waiting — never the poll mode, the database path or a count of
+ * sources. The operator reads one sentence and knows whether to act. */
+export function statusAnswer(input: {
+  running: { movie?: string | null } | null
+  etaSeconds: number | null
+  queued: number
+  watching: boolean
+}): string {
+  if (input.running) {
+    const parts = [`encoding ${input.running.movie ?? 'a file'}`]
+    const left = eta(input.etaSeconds)
+    if (left) parts.push(left)
+    let line = `● Working — ${parts.join(', ')}`
+    if (input.queued > 0) {
+      line += ` · ${input.queued} file${input.queued === 1 ? '' : 's'} waiting`
+    }
+    return line
+  }
+  const tail = input.watching ? 'watching for new files' : 'the watcher is off'
+  return `● Idle — all caught up · ${tail}`
+}
+
 const VERDICT_WORDS: Record<string, string> = {
   encode: 'Encode',
   skip: 'Skip',
@@ -168,4 +330,10 @@ const VERDICT_WORDS: Record<string, string> = {
 /** The screen word for a plan's verdict on one file. */
 export function verdictWord(verdict: string): string {
   return VERDICT_WORDS[verdict] ?? verdict
+}
+
+/** What a rail count counts (issue #630): the number alone says nothing, so
+ * it carries its own words. One job is "1 job", not "1 jobs". */
+export function queueLabel(count: number): string {
+  return `${count} job${count === 1 ? '' : 's'} in the queue`
 }

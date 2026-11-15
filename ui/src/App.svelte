@@ -1,14 +1,17 @@
 <script lang="ts">
+  import { queueLabel } from './lib/format'
   import { onMount } from 'svelte'
   import {
     api,
     isAuthFailure,
+    isFailedOutcome,
     jobPaths,
     storeToken,
     type Movie,
     type RetainedFile,
     type Status,
     type Job,
+    type JobOutcome,
   } from './lib/api'
   import OverviewPage from './lib/pages/OverviewPage.svelte'
   import LibraryPage from './lib/pages/LibraryPage.svelte'
@@ -192,15 +195,9 @@
   // ── selection (bulk ops live on the library page) ──
   let selectedPaths = $state<Set<string>>(new Set())
 
-  // ── resident-memory samples (the overview's sparkline buffer) ──
-  // Accumulated in the poll path, never in an $effect: an effect that
-  // read AND wrote its buffer looped itself to death (round-6.6). Pure
-  // write-on-new-sample; capped at 40 (the sparkline's window).
-  let rssSamples = $state<number[]>([])
-  function rememberRss(v: number | null | undefined) {
-    if (v == null) return
-    rssSamples = [...rssSamples, v].slice(-40)
-  }
+  // issue #633: the Overview's sparkline is gone, and with it the
+  // resident-memory window that fed it — no panel shows the trend, so no
+  // code accumulates one.
 
   // ── refresh loop ──
   async function refresh() {
@@ -209,7 +206,6 @@
       status = snap.status
       if (snap.jobs !== null) history = snap.jobs // unchanged: keep the current array
       if (snap.library !== null) movies = snap.library // unchanged: keep the current array
-      rememberRss(snap.status?.rss_mib)
       error = null
       needsToken = false
     } catch (e) {
@@ -322,8 +318,8 @@
       if (j.id === null || dismissed.has(j.id)) return false
       if (j.state === 'failed') return true
       if (j.state === 'done' && j.kind === 'encode') {
-        const outcomes = (j.result as { outcomes?: { state: string }[] } | null)?.outcomes ?? []
-        return outcomes.some((o) => o.state === 'failed')
+        const outcomes = (j.result as { outcomes?: JobOutcome[] } | null)?.outcomes ?? []
+        return outcomes.some(isFailedOutcome)
       }
       return false
     })
@@ -382,7 +378,7 @@
       </button>
       <button class="rail-item" class:active={page === 'jobs'} onclick={() => goto('jobs')}>
         <span class="rail-label">Jobs</span>
-        {#if runningJobs.length > 0}<span class="rail-badge warn mono">{runningJobs.length}</span>{/if}
+        {#if runningJobs.length > 0}<span class="rail-badge warn mono" title={queueLabel(runningJobs.length)} aria-label={queueLabel(runningJobs.length)}>{runningJobs.length}</span>{/if}
       </button>
       <button class="rail-item" class:active={page === 'retained'} onclick={() => goto('retained')}>
         <span class="rail-label">Retained</span>
@@ -492,7 +488,6 @@
           {scanPaths}
           {outputDir}
           {retainedFiles}
-          sparkSamples={rssSamples}
           ondismiss={dismissFailed}
           ongoto={goto}
           onopenmovie={(m) => openDetail(m, 'overview')}

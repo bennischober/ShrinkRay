@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/svelte'
 import JobsPage from './JobsPage.svelte'
+
+// the running row's stage comes from the live progress store: a mutable stub
+// lets one test seed it without a stream (issue #630)
+let progressStub: { percent?: number; movie?: string | null; detail?: string | null } | null = null
+vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
 import type { Job } from '../api'
 
 /** The jobs page is the audit trail — the render test pins the contract a
@@ -100,6 +105,48 @@ describe('JobsPage render', () => {
     expect(container.querySelector('button.movie-link')).toBeNull()
   })
 
+  it('a queued scan row claims no encode mode it cannot have (issue #630)', async () => {
+    const scan = job({ id: 3, kind: 'scan', state: 'queued', started_at: null, finished_at: null, result: null, payload: { paths: ['/m/a'] } })
+    const { container } = render(JobsPage, { history: [scan], onopenMovie: () => {} })
+    const note = [...container.querySelectorAll('.note')].map((el) => (el.textContent ?? '').trim()).join(' ')
+    expect(note).not.toContain('preset')
+  })
+
+  it('a running row at 30 % says it is working, not starting (issue #630)', () => {
+    progressStub = { percent: 30.46, movie: null, detail: null }
+    const running = job({ id: 4, state: 'running', started_at: '2026-10-24T10:00:00Z', finished_at: null, result: null })
+    const { container } = render(JobsPage, { history: [running], onopenMovie: () => {} })
+    const text = (container.textContent ?? '').replace(/\s+/g, ' ')
+    expect(text).toContain('working')
+    expect(text).not.toContain('starting…')
+    progressStub = null
+  })
+
+  it('a queued row does not invent a VMAF target the payload does not carry (issue #630)', async () => {
+    // the payload has no target_vmaf: printing 95 would be a number the
+    // operator reads as fact while the configured target is 96
+    const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null, result: null, payload: { path: '/m/a', quality: true } })
+    const { container } = render(JobsPage, { history: [queued], onopenMovie: () => {} })
+    const note = [...container.querySelectorAll('.note')].map((el) => (el.textContent ?? '').trim()).join(' ')
+    expect(note).toContain('quality')
+    expect(note).not.toContain('VMAF>95')
+  })
+
+  it('gives the filename its own cell, never the KIND column (issue #630, case 13)', () => {
+    // a long name inside the 104 px KIND column wrapped character by character
+    // and drew over the start time: it needs a cell that can shrink
+    const encode = job({
+      id: 5,
+      kind: 'encode',
+      state: 'done',
+      payload: { paths: ['/m/a-very-long-movie-name-that-would-wrap.mkv'] },
+    })
+    const { container } = render(JobsPage, { history: [encode], onopenMovie: () => {} })
+    const row = container.querySelector('.entry')!
+    expect(row.querySelector('.kind .movie-link')).toBeNull()
+    expect(row.querySelector('.file .movie-link')).not.toBeNull()
+  })
+
   it('a queued job shows no start time; running and done rows keep theirs (issue #603)', async () => {
     const queued = job({ id: 2, state: 'queued', started_at: null, finished_at: null, result: null })
     const running = job({ id: 3, state: 'running', started_at: '2026-10-24T10:00:01Z', finished_at: null })
@@ -113,15 +160,18 @@ describe('JobsPage render', () => {
       [...container.querySelectorAll('.entry')].find((el) =>
         (el.querySelector('.state')?.textContent ?? '').trim().startsWith(state),
       )!
-    // the enqueue time must not be presented as the moment work began
-    expect(text(rowFor('Queued').querySelector('.when')!)).toBe('—')
+    // the enqueue time must not be presented as the moment work began, and
+    // a queued row has no duration either — the cells stay empty rather than
+    // printing a dash for a column the state cannot fill (issue #632)
+    expect(text(rowFor('Queued').querySelector('.when')!)).toBe('')
+    expect(text(rowFor('Queued').querySelector('.dur')!)).toBe('')
     expect(rowFor('Queued').querySelector('.when')!.getAttribute('title')).toBe('not started yet')
     expect(text(rowFor('Running').querySelector('.when')!)).toMatch(/\d/)
     expect(text(rowFor('Done').querySelector('.when')!)).toMatch(/\d/)
     // the expansion still shows all three timestamps, labeled - selected by
     // the row itself, not by fixture order
     const queuedRow = [...container.querySelectorAll('.entry')].find(
-      (el) => (el.querySelector('.when')?.textContent ?? '').trim() === '—',
+      (el) => el.querySelector('.when')?.getAttribute('title') === 'not started yet',
     )!
     fireEvent.click(queuedRow.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
     await expect.poll(() => container.querySelector('.detail')).toBeTruthy()
