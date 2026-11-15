@@ -469,4 +469,34 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
+  /* below 768px a job becomes a card: the desktop columns clip on a phone and
+     the filename wrapped into a 3-4 line column (issue #636) */
+  @media (max-width: 768px) {
+    .log-head { display: none; }
+    .log { overflow-x: visible; }
+    .entry { padding: 0 10px; }
+    .row {
+      grid-template-columns: auto 1fr auto;
+      grid-template-areas:
+        'id kind ops'
+        'file file file'
+        'state when dur';
+      gap: 6px 10px;
+      align-items: center;
+      padding: 10px 0;
+    }
+    .id { grid-area: id; }
+    .kind { grid-area: kind; }
+    .file {
+      grid-area: file;
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+      word-break: break-word;
+    }
+    .state { grid-area: state; }
+    .when { grid-area: when; }
+    .dur { grid-area: dur; }
+    .ops { grid-area: ops; justify-self: end; }
+  }
 </style>
