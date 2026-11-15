@@ -138,7 +138,7 @@
 <div class="page page-in">
   <PageHeader
     title="Jobs"
-    description={`${filteredHistory.length} of ${history.length} entries · the full audit trail`}
+    description={`${filteredHistory.length} of ${history.length} entries · the full audit trail${history.length !== filteredHistory.length ? ` · stage rows are the running job's own work, not jobs` : ''}`}
   >
     {#if history.length > 0}
       <div class="filters">
@@ -200,8 +200,6 @@
           {#if job.state === 'running'}
             {@const p = progress(job)}
             <ProgressBar percent={p?.percent ?? null} stage={progressLabel(p?.stage, p?.movie, p?.detail, p?.percent)} />
-          {:else if isStageRow(job)}
-            <div class="mono dim note">a stage of the job above, not a job of its own</div>
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}
