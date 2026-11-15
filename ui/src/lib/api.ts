@@ -43,6 +43,10 @@ export interface JobOutcome {
   error?: string
   crf?: number | null
   vmaf?: number | null
+  /** the sizes the server writes on an encode outcome (`jobs.py`); a
+   * plan entry carries an estimate instead and no sizes */
+  input_size?: number | null
+  output_size?: number | null
   estimated_size?: number | null
   saved_percent?: number | null
   reason?: string

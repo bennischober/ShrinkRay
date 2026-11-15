@@ -223,17 +223,22 @@ export function resultSummary(outcomes: readonly JobOutcome[]): string {
   if (outcomes.length === 0) return ''
   const encoded = outcomes.filter((o) => o.state === 'encoded')
   const skipped = outcomes.filter((o) => o.state === 'skipped' && !isFailedOutcome(o))
+  const already = outcomes.filter((o) => o.state === 'already_encoded')
   const failed = outcomes.filter(isFailedOutcome)
   const parts: string[] = []
   if (encoded.length > 0) parts.push(`${encoded.length} encoded`)
+  // the saving comes from the sizes the server actually writes on an encode
+  // outcome (input_size − output_size), not from `saved_percent`, which only
+  // plan entries carry
   const savings = encoded
-    .map((o) => o.saved_percent)
-    .filter((p): p is number => typeof p === 'number')
+    .filter((o) => typeof o.input_size === 'number' && typeof o.output_size === 'number')
+    .map((o) => ((o.input_size as number) - (o.output_size as number)) / (o.input_size as number) * 100)
   if (savings.length > 0) {
     const avg = savings.reduce((sum, p) => sum + p, 0) / savings.length
     parts.push(`${savedPercent(avg).text} size`)
   }
   if (skipped.length > 0) parts.push(`${skipped.length} skipped`)
+  if (already.length > 0) parts.push(`${already.length} already encoded`)
   if (failed.length > 0) parts.push(`${failed.length} failed`)
   return parts.join(' · ')
 }

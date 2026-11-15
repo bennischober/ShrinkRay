@@ -228,8 +228,8 @@ describe('resultSummary', () => {
   // operator click DETAIL and parse raw JSON
   it('summarises what the job did, with the average saving', () => {
     const s = resultSummary([
-      { movie: 'a', state: 'encoded', saved_percent: 40 },
-      { movie: 'b', state: 'encoded', saved_percent: 44.2 },
+      { movie: 'a', state: 'encoded', input_size: 1000, output_size: 600 },
+      { movie: 'b', state: 'encoded', input_size: 1000, output_size: 558 },
       { movie: 'c', state: 'skipped', reason: 'no size gain' },
     ])
     expect(s).toContain('2 encoded')
@@ -239,11 +239,17 @@ describe('resultSummary', () => {
 
   it('counts a declined swap as failed, never as a clean skip', () => {
     const s = resultSummary([
-      { movie: 'a', state: 'encoded', saved_percent: 10 },
+      { movie: 'a', state: 'encoded', input_size: 1000, output_size: 900 },
       { movie: 'b', state: 'skipped', error: 'the swap was declined: subtitles' },
     ])
     expect(s).toContain('1 failed')
     expect(s).not.toContain('1 skipped')
+  })
+
+  it('names an already-encoded title, which is its own outcome', () => {
+    // jobs.py writes state 'already_encoded': without its own bucket such a
+    // run rendered no summary at all
+    expect(resultSummary([{ movie: 'a', state: 'already_encoded' }])).toBe('1 already encoded')
   })
 
   it('says nothing when the payload carries no outcomes', () => {

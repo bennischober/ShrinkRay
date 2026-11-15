@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { humanizeError, failedOutcomeNote, type Job } from '../api'
+  import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
   import { bytes, groupJobs, kindWord, progressLabel, relative, resultSummary, span, stateWord } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
