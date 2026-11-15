@@ -19,6 +19,9 @@ export interface ProgressData {
   percent?: number
   done?: number
   total?: number | null
+  /** seconds the current STEP has run: a probe reports its own, so an estimate
+   * never divides the job's elapsed time by a probe's fraction (issue #690) */
+  elapsed?: number
 }
 
 let progressByJob = $state<Record<number, ProgressData>>({})
