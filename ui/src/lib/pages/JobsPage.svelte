@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
-  import { bytes, groupJobs, isStageRow, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns } from '../format'
+  import { bytes, crf, etaShort, groupJobs, isStageRow, kindWord, progressLabel, relative, remainingSeconds, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -107,10 +107,18 @@
     sessionStorage.setItem('ms.jobsState', stateFilter)
   })
   const isPartial = (j: Job) => j.state === 'done' && failedOutcomeNote(j) !== ''
-  /** The per-movie outcomes a finished row summarises; scans and legacy
-   * rows carry none, so they show no summary. */
-  const outcomesOf = (j: Job) =>
-    (j.result as { outcomes?: JobOutcome[] } | null)?.outcomes ?? []
+  /** The per-movie outcomes a finished row summarises; a plan writes `plans`
+   * where an encode writes `outcomes` (`jobs.py`), and both are the same shape.
+   * Scans and legacy rows carry neither, so they show no summary. */
+  const outcomesOf = (j: Job) => {
+    const r = j.result as { outcomes?: JobOutcome[]; plans?: JobOutcome[] } | null
+    return r?.outcomes ?? r?.plans ?? []
+  }
+
+  /** A scan reports the paths it could not read; without this the only trace
+   * of them was the raw JSON (issue #632 review). */
+  const scanErrorsOf = (j: Job) =>
+    ((j.result as { errors?: string[] } | null)?.errors ?? [])
 
   const filteredHistory = $derived(
     history.filter((j) => {
@@ -189,7 +197,7 @@
               tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
-            <span class="dur">{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? '…' : ''}</span>
+            <span class="dur" title={job.state === 'running' ? 'time left, estimated from the percent done' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(job.started_at, progress(job)?.percent, new Date(now))) || '…') : ''}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}
@@ -217,20 +225,60 @@
 
           {#if job.id !== null && expanded.has(job.id)}
             <div class="detail">
-              <div class="d-block">
-                <span class="legend">PAYLOAD</span>
-                <pre class="mono">{JSON.stringify(job.payload, null, 2)}</pre>
-              </div>
-              {#if job.result}
+              {#if outcomesOf(job).length > 0}
                 <div class="d-block">
-                  <span class="legend">RESULT</span>
-                  <pre class="mono">{JSON.stringify(job.result, null, 2)}</pre>
+                  <span class="legend">WHAT IT DID</span>
+                  <div class="d-table">
+                    {#each outcomesOf(job) as o (o.movie)}
+                      <div class="d-row mono">
+                        <span class="d-file" title={o.movie}>{o.movie}</span>
+                        <span class="d-state">{stateWord(o.state)}</span>
+                        {#if o.crf != null}<span class="d-num">CRF {crf(o.crf)}</span>{/if}
+                        {#if o.vmaf != null}<span class="d-num">VMAF {vmaf(o.vmaf)}</span>{/if}
+                        {#if typeof o.input_size === 'number' && typeof o.output_size === 'number'}
+                          <span class="d-num">{bytes(o.input_size)} → {bytes(o.output_size)}</span>
+                        {:else if typeof o.estimated_size === 'number'}
+                          <span class="d-num">≈ {bytes(o.estimated_size)}</span>
+                        {/if}
+                        {#if o.reason}<span class="d-why">{o.reason}</span>{/if}
+                        {#if o.error}<span class="d-why">{humanizeError(null, o.error)}</span>{/if}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+              {#if ((job.payload.paths as string[] | undefined) ?? []).length > 0}
+                <div class="d-block">
+                  <span class="legend">TARGET</span>
+                  {#each (job.payload.paths as string[] | undefined) ?? [] as path (path)}
+                    <div class="mono d-path">{path}</div>
+                  {/each}
+                </div>
+              {/if}
+              {#if scanErrorsOf(job).length > 0}
+                <div class="d-block">
+                  <span class="legend">COULD NOT READ</span>
+                  {#each scanErrorsOf(job) as e}
+                    <div class="mono d-why">{e}</div>
+                  {/each}
+                </div>
+              {/if}
+              {#if job.error}
+                <div class="d-block">
+                  <span class="legend">ERROR</span>
+                  <pre class="mono error">{job.error}</pre>
                 </div>
               {/if}
               <div class="d-block">
                 <span class="legend">TIMESTAMPS</span>
                 <pre class="mono">created {relative(job.created_at)} · started {relative(job.started_at)} · finished {relative(job.finished_at)}</pre>
               </div>
+              <!-- the issue's own wording: the raw payload/result JSON lives behind
+                   a disclosure, for bug reports, not in the operator's way -->
+              <details class="d-block">
+                <summary class="legend">TECHNICAL DETAILS</summary>
+                <pre class="mono">{JSON.stringify({ payload: job.payload, result: job.result }, null, 2)}</pre>
+              </details>
             </div>
           {/if}
         </div>
@@ -328,7 +376,7 @@
   }
   .log-head {
     display: grid;
-    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 80px 92px;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 112px 92px;
     gap: 10px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--seam);
@@ -349,7 +397,7 @@
   .entry.open { background: var(--panel-raised); }
   .row {
     display: grid;
-    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 80px 92px;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 112px 92px;
     gap: 10px;
     align-items: baseline;
     padding: 7px 0;
@@ -361,7 +409,7 @@
      min-width 0 lets it shrink instead of widening the row */
   .file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .when { color: var(--ink-dim); }
-  .dur { color: var(--ink-dim); }
+  .dur { color: var(--ink-dim); white-space: nowrap; }
   .ops { display: flex; gap: 6px; justify-content: flex-end; }
   .mini {
     background: transparent;
@@ -386,6 +434,13 @@
     border-top: 1px solid var(--row-line);
   }
   .d-block .legend { display: block; margin: 8px 0 4px; }
+  .d-table { display: flex; flex-direction: column; gap: 6px; }
+  .d-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; font-size: 10.5px; }
+  .d-file { color: var(--ink); }
+  .d-state { color: var(--ink-dim); }
+  .d-num { color: var(--ink); }
+  .d-why { color: var(--ink-dim); }
+  .d-path { font-size: 10.5px; color: var(--ink-dim); padding: 1px 0; }
   .d-block pre {
     margin: 0;
     padding: 8px 10px;

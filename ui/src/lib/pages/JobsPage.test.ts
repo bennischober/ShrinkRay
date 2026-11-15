@@ -71,8 +71,23 @@ describe('JobsPage render', () => {
     expect(screen.getByText(/still starting/)).toBeTruthy()
   })
 
-  it('expands a row to show the payload JSON (the audit trail)', async () => {
-    const j = job({ payload: { path: '/m/a', quality: true, target_vmaf: 95 } })
+  it('expands a row to show what the job did, not its raw payload (issue #632)', async () => {
+    const movie = 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv'
+    const j = job({
+      payload: { paths: [`/media/Legend (2015)/${movie}`], quality: true },
+      result: {
+        outcomes: [
+          {
+            movie,
+            state: 'encoded',
+            crf: 33,
+            vmaf: 96.4,
+            input_size: 20_000_000_000,
+            output_size: 5_000_000_000,
+          },
+        ],
+      },
+    })
     const { container } = render(JobsPage, {
       history: [j],
       onopenMovie: () => {},
@@ -80,10 +95,83 @@ describe('JobsPage render', () => {
     const toggle = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
     expect(toggle.textContent?.trim()).toBe('DETAIL')
     fireEvent.click(toggle)
-    await expect.poll(() => screen.queryByText('PAYLOAD'), { timeout: 1000 }).toBeTruthy()
+    await expect.poll(() => container.querySelector('.d-table'), { timeout: 1000 }).toBeTruthy()
+    const detail = container.querySelector('.detail')!
+    // the operator reads the outcome, not a JSON dump
+    expect(detail.textContent).toContain('CRF 33')
+    expect(detail.textContent).toContain('VMAF 96.4')
+    expect(detail.querySelector('.d-table')!.textContent).not.toContain('{')
+    // the raw JSON is still reachable, behind the disclosure the issue asks for
+    const raw = detail.querySelector('details')!
+    expect(raw.open).toBe(false)
+    expect(raw.textContent).toContain('"paths"')
     const expandedToggle = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
     expect(expandedToggle.getAttribute('aria-expanded')).toBe('true')
     expect(expandedToggle.textContent?.trim()).toBe('HIDE')
+  })
+
+  it('a running row states its ETA, not an ellipsis (issue #632)', () => {
+    // 30 min elapsed at 25% implies 90 min left; the engine sends no ETA,
+    // so the column carries the proportional estimate
+    const started = new Date(Date.now() - 30 * 60_000).toISOString()
+    const j = job({ state: 'running', started_at: started, finished_at: null })
+    progressStub = { percent: 25 }
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    const dur = container.querySelector('.dur')!
+    expect(dur.textContent).toContain('~1 h 30 min')
+    expect(dur.textContent?.trim()).not.toBe('…')
+    progressStub = null
+  })
+
+  it('a plan row shows its plans, not an empty table (issue #632 review)', async () => {
+    // a plan writes `plans` where an encode writes `outcomes`; reading only
+    // `outcomes` made every plan's reason unreachable
+    const j = job({
+      kind: 'plan',
+      payload: { paths: ['/media'] },
+      result: {
+        plans: [
+          {
+            movie: 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv',
+            state: 'skipped',
+            reason: 'already efficient',
+            estimated_size: 5_000_000_000,
+          },
+        ],
+      },
+    })
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+    await expect.poll(() => container.querySelector('.d-table'), { timeout: 1000 }).toBeTruthy()
+    const detail = container.querySelector('.detail')!
+    expect(detail.textContent).toContain('already efficient')
+    expect(detail.textContent).toContain('4.66 GiB')
+  })
+
+  it('a scan row lists the paths it could not read (issue #632 review)', async () => {
+    const j = job({
+      kind: 'scan',
+      payload: { paths: ['/media'] },
+      result: {
+        movies: 3,
+        categories: 1,
+        errors: ['/media/broken.mkv: invalid data'],
+        cancelled: false,
+      },
+    })
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+    await expect.poll(() => screen.queryByText('COULD NOT READ'), { timeout: 1000 }).toBeTruthy()
+    expect(container.querySelector('.detail')!.textContent).toContain('/media/broken.mkv: invalid data')
   })
 
   it('single-movie jobs link to the detail page', () => {
