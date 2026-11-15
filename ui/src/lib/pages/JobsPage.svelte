@@ -176,7 +176,7 @@
         <span></span>
       </div>
       {#each orderedHistory as job (job.id)}
-        {@const cols = timeColumns(job.state)}
+        {@const cols = timeColumns(job)}
         <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:partial={job.state === 'done' && failedOutcomeNote(job) !== ''} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
