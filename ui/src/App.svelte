@@ -109,9 +109,14 @@
     page = next
     location.hash = `/${next}`
   }
+  let pendingDetailFrom: 'overview' | 'library' | 'jobs' = 'library'
   function openDetail(movie: Movie, from: 'overview' | 'library' | 'jobs') {
     detailMovie = movie
     detailFrom = from
+    // the deep-link effect reads pendingDetailFrom, so the click's origin must
+    // ride there too or the effect resets it to 'library' and the back link
+    // says LIBRARY for a title opened from Overview or Jobs (issue #635 review)
+    pendingDetailFrom = from
     detailPath = null
     // deep link: the hash stays routable (#/movie), the path rides in
     // sessionStorage so F5 on a detail page restores the same title
@@ -298,7 +303,6 @@
   // not knowable after a reload — library is the honest default, since a
   // fresh session has no page history to return to. openDetailFromJobs
   // presets the origin it wants ('jobs') before the library arrives.
-  let pendingDetailFrom: 'library' | 'jobs' = 'library'
   $effect(() => {
     if (detailPath && movies.length > 0) {
       const m = movies.find((mv) => mv.path === detailPath)

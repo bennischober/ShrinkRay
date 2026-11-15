@@ -77,7 +77,12 @@ describe('the shell data states (issue #629)', () => {
     mode = 'live'
     window.location.hash = '#/movie/' + encodeURIComponent('/media/Legend (2015)/Legend.mkv')
     const { container } = render(App)
-    await vi.waitFor(() => expect(container.textContent).toContain('Legend'), { timeout: 3000 })
+    // the hero only renders on the detail page: asserting the name alone passed
+    // with the fix reverted, because the library listing carries it too
+    await vi.waitFor(() => expect(container.querySelector('.hero h2')).not.toBeNull(), {
+      timeout: 3000,
+    })
+    expect(container.querySelector('.hero h2')!.textContent).toContain('Legend')
     window.location.hash = ''
   })
 })
