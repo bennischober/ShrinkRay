@@ -275,7 +275,7 @@ removed it: an unmeasured encode can take a library file's path).
 |---|---|
 | `--target-vmaf N` | quality floor (default: `96`) |
 | `--probe-encoder-preset N` | the PROBES' encoder speed preset (default: the `handbrake.probe_encoder_preset` config value, shipped as `5`; SVT-AV1 speed -1 to 10, higher = faster (a lower preset is slower and compresses better); a measurement setting — changing it invalidates stored plans) |
-| `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `3`; an output setting — the probes run `--probe-encoder-preset`) |
+| `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `5`; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows for the sampled fallback detector (more samples can only shrink the crop) |
 | `--sample-count N` | the number of probe windows (default: unset — density from `quality.sample_every` applies; set `quality.sample_count` to pin a fixed number; plans stored under the old encode-mode fingerprint re-probe once) |
@@ -502,7 +502,7 @@ Example [config.json](config.json):
         "preset": "Fast 1080p30",        // legacy: unread by the measured pipeline
         "encoder": "svt_av1",
         "probe_encoder_preset": "5", // the PROBES' speed preset
-        "encoder_preset": "3",         // the FINAL encode's preset
+        "encoder_preset": "5",         // the FINAL encode's preset
         "max_threads": 0                  // per-encode thread cap (0 = all cores)
     },
     "quality": {
@@ -531,23 +531,23 @@ Three keys named "preset" with different meanings — the distinction:
 `handbrake.preset` is a legacy key the measured pipeline no longer reads
 (it named the removed fixed mode's HandBrake preset *name*). The other two
 are the encoder *speed* presets — the SVT-AV1 ladder. **`probe_encoder_preset` is a measurement
-setting**: the CRF search's throwaway probe encodes run at it (default
-`5` — cheap, and representative of what the final encode will look
-like). **`encoder_preset` is an output setting**: the final encode — the
-artifact that gets kept — runs at it (default `3`, slower and better).
+setting**: the CRF search's throwaway probe encodes run at it.
+**`encoder_preset` is an output setting**: the final encode — the
+artifact that gets kept — runs at it. Both ship at `5`.
 
-**The measured-at-5 / encoded-at-3 trade-off is deliberate** (issue
-#22): the probe predicts the final encode, and preset shifts the CRF→VMAF
-curve, so a probe at a different preset measures a slightly different curve
-than the final encode runs — the chosen CRF can miss the target a little in
-either direction. That is accepted so the search stays cheap; if a drift
-investigation ever shows it matters on real titles, the fallback is to probe
-at the final preset and pay the time. The plan's size estimate comes from a
-probe-preset encode, so it describes a preset-`5` file, not the
-preset-`3` file that gets written. Both presets are recorded on every
-encode row (`encoder_preset`, `probe_encoder_preset`) so the provenance
-page shows which number produced which measurement. A change to the PROBE
-preset invalidates stored plans (they are re-probed); a change to the FINAL
+**The two settings stay independent** (issue #22, and both at `5` since
+issue #686). The shipped defaults match, so a probe measures the CRF→VMAF
+curve the kept file is encoded on, and the plan's size estimate describes
+that same preset. Setting the probe faster than the final measures a
+different curve: the search keeps the largest CRF whose probe still meets
+the target, so a less efficient probe picks a lower CRF and the final
+encode is believed to land above that score. That direction is believed,
+not measured (`docs/encode-decision.md`). The size estimate still comes
+from the probe preset, so a split describes the probe file, not the file
+that gets written. Both presets are recorded on every encode row
+(`encoder_preset`, `probe_encoder_preset`) so the provenance page shows
+which number produced which measurement. A change to the PROBE preset
+invalidates stored plans (they are re-probed); a change to the FINAL
 preset does not (a plan is a probe result). Values outside the encoder's
 vocabulary are rejected at load, never passed to HandBrake.
 

@@ -379,7 +379,7 @@ class AppState:
         self.connection = db.connect(db_file)
         try:
             self.bus = ProgressBus()
-            self.queue = JobQueue(self.connection, bus=self.bus)
+            self.queue = JobQueue(self.connection, bus=self.bus, connection_lock=self.db_lock)
             self.worker = JobWorker(self.connection, self.queue)
             with self.db_lock:
                 self._recover_stale_jobs()
@@ -841,12 +841,22 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
     )
 
     rss = rss_mib()
+    # the worker fields come from one fixed-order read pair (issue #660
+    # round 13, finding 2 / round 14, finding 2): a give-up landing between
+    # the reads would render either running-with-error or
+    # stopped-without-reason - both fields come from the same pair
+    alive = bool(s.worker and s.worker._thread and s.worker._thread.is_alive())
+    fatal = s.worker.fatal_error if s.worker else None
     return {
         "queue": [j.to_dict() for j in running],
         "watcher": "running" if s.watch_thread and s.watch_thread.is_alive() else "stopped",
         # a stopped watcher says why (issue #648): the refusal reason, null
         # while it runs
         "watcher_error": watch_mod.WATCHER_ERROR,
+        # the worker's liveness and, when it gave up, why (issue #649): a
+        # dead worker is never a silent one
+        "worker": "running" if alive and not fatal else "stopped",
+        "worker_error": fatal,
         "database": str(s.db_file),
         "rss_mib": round(rss, 1) if rss is not None else None,
         # an edited config.json that was NOT applied (issue #247): the app
@@ -1040,6 +1050,10 @@ def snapshot(
                 ).fetchall()
             ]
         )
+    # the same fixed-order read pair as /api/status (issue #660 round 14,
+    # finding 2)
+    alive = bool(s.worker and s.worker._thread and s.worker._thread.is_alive())
+    fatal = s.worker.fatal_error if s.worker else None
     return {
         "status": {
             "queue": [j.to_dict() for j in data["running"]],
@@ -1047,6 +1061,10 @@ def snapshot(
             # a stopped watcher says why (issue #648): the refusal reason, null
             # while it runs
             "watcher_error": watch_mod.WATCHER_ERROR,
+            # the worker's liveness and, when it gave up, why (issue #649): a
+            # dead worker is never a silent one
+            "worker": "running" if alive and not fatal else "stopped",
+            "worker_error": fatal,
             "database": str(s.db_file),
             "rss_mib": round(data["rss_mib"], 1) if data["rss_mib"] is not None else None,
             # the snapshot is the UI's one state channel (App.svelte reads

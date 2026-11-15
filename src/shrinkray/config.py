@@ -28,13 +28,13 @@ DEFAULT_BLACK_BAR_MIN_HEIGHT = 100
 DEFAULT_LANGUAGE = "en"
 DEFAULT_MAX_THREADS = 0  # 0 = use all cores
 DEFAULT_IDLE_PRIORITY = True
-# quality mode's encoder speed preset (x264/x265 ladder; see #21 for AV1)
-# quality mode's encoder speed presets (x264/x265 ladder; see #21 for AV1).
+# quality mode's encoder speed presets (SVT-AV1 ladder; see #21).
 # TWO presets since #22: the PROBE preset is a measurement setting (the CRF
 # search's throwaway encodes), the FINAL preset is an output setting (the kept
-# artifact). They are settable - and defaulted - separately on purpose.
+# artifact). They stay settable separately. Both ship at 5 (issue #686), so a
+# probe measures the curve the kept file is encoded on.
 DEFAULT_PROBE_ENCODER_PRESET = "5"
-DEFAULT_ENCODER_PRESET = "3"
+DEFAULT_ENCODER_PRESET = "5"
 # AV1 is the only output codec (issue #21): SVT-AV1 on the CPU, 10-bit for
 # HDR. A config that still names x265 is rejected at load rather than
 # silently producing H.265.
@@ -54,9 +54,9 @@ ENCODER_PRESETS = (
     "veryslow",
     "placebo",
 )
-# per-encoder preset vocabularies and defaults (issue #22: the issue's numeric
-# defaults 5/3 are SVT-AV1 vocabulary; x265 takes names). The SVT-AV1 entry is
-# the shape #21 will activate; no encoder selects it yet.
+# per-encoder preset vocabularies and defaults (issue #22). SVT-AV1 is the
+# live encoder and the numeric defaults are its vocabulary; x264/x265 names
+# stay in the table and are rejected as output codecs.
 ENCODER_PRESET_VOCABULARIES: dict[str, tuple[str, ...]] = {
     "x264": ENCODER_PRESETS,
     "x265": ENCODER_PRESETS,
@@ -68,7 +68,7 @@ ENCODER_PRESET_DEFAULTS: dict[str, tuple[str, str]] = {
     "x264": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
     "x265": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
     "x265_10bit": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
-    "svt_av1": ("5", "3"),
+    "svt_av1": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
 }
 # stall watchdog: minutes of child silence before termination (0 = off)
 DEFAULT_STALL_MINUTES = 10.0
@@ -446,12 +446,10 @@ class Conf:
         self.handbrake_preset: str = model.handbrake.preset
         self.handbrake_encoder: str = model.handbrake.encoder
         # quality mode's TWO encoder speed presets (issue #22): the probe
-        # preset drives the CRF search's throwaway measurement encodes, the
-        # final preset drives the kept artifact - measurement at 'medium',
-        # artifact at 'slow' by default. The probe is a PREDICTION of the
-        # final encode: preset shifts the CRF-to-VMAF curve, so a probe at a
-        # different preset than the final encode measures a different curve
-        # - a deliberate trade-off (documented in the README), not a bug.
+        # preset drives the CRF search, the final preset drives the kept
+        # artifact. Both ship at 5 (issue #686), so the measurement describes
+        # the file that is written. Setting them apart measures a different
+        # CRF-to-VMAF curve (README, docs/encode-decision.md).
         self.handbrake_probe_encoder_preset: str = model.handbrake.probe_encoder_preset
         self.handbrake_encoder_preset: str = model.handbrake.encoder_preset
         self.handbrake_max_threads: int = model.handbrake.max_threads

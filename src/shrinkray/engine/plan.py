@@ -14,7 +14,11 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
+from shrinkray.config import (
+    DEFAULT_ENCODER_PRESET,
+    DEFAULT_MIN_SOURCE_HEIGHT,
+    DEFAULT_MIN_SOURCE_WIDTH,
+)
 from shrinkray.engine.crop import (
     DEFAULT_CROP_SAMPLE_COUNT,
     crop_bars_or_fallback,
@@ -724,7 +728,7 @@ def search_quality(
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     min_saving_percent: int = 15,
     probe_encoder_preset: str = "5",
-    encoder_preset: str = "3",
+    encoder_preset: str = DEFAULT_ENCODER_PRESET,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
@@ -1003,7 +1007,7 @@ def plan_quality(
     sample_seconds: float = DEFAULT_SAMPLE_SECONDS,
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
     probe_encoder_preset: str = "5",
-    encoder_preset: str = "3",
+    encoder_preset: str = DEFAULT_ENCODER_PRESET,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
