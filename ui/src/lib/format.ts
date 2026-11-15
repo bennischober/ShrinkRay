@@ -254,6 +254,16 @@ export function isFailedOutcome(o: JobOutcome): boolean {
   )
 }
 
+/** Which of the time columns a row of this state has (issue #632): a
+ * queued row has no start and no duration, a running row no duration, so
+ * the row must not print a column it cannot fill. */
+export function timeColumns(state: string): { started: boolean; duration: boolean } {
+  return {
+    started: state === 'running' || state === 'done' || state === 'failed',
+    duration: state === 'done' || state === 'failed',
+  }
+}
+
 const VERDICT_WORDS: Record<string, string> = {
   encode: 'Encode',
   skip: 'Skip',

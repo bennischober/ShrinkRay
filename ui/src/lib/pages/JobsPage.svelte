@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
-  import { bytes, groupJobs, kindWord, progressLabel, relative, resultSummary, span, stateWord } from '../format'
+  import { bytes, groupJobs, kindWord, progressLabel, relative, resultSummary, span, stateWord, timeColumns } from '../format'
   import { progressFor } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -176,6 +176,7 @@
         <span></span>
       </div>
       {#each orderedHistory as job (job.id)}
+        {@const cols = timeColumns(job.state)}
         <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:partial={job.state === 'done' && failedOutcomeNote(job) !== ''} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
@@ -193,8 +194,8 @@
               label={`${stateWord(job.state)}${job.state === 'done' && failedOutcomeNote(job) !== '' ? ' · Partial' : ''}${liveElapsed(job) ? ` · ${liveElapsed(job)}` : ''}`}
               tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
-            <span class="when" title={job.started_at ?? 'not started yet'}>{relative(job.started_at)}</span>
-            <span class="dur">{job.state === 'done' ? span(job.started_at, job.finished_at) : job.state === 'running' ? '…' : '—'}</span>
+            <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
+            <span class="dur">{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? '…' : ''}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}

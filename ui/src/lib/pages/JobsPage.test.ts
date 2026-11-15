@@ -145,15 +145,18 @@ describe('JobsPage render', () => {
       [...container.querySelectorAll('.entry')].find((el) =>
         (el.querySelector('.state')?.textContent ?? '').trim().startsWith(state),
       )!
-    // the enqueue time must not be presented as the moment work began
-    expect(text(rowFor('Queued').querySelector('.when')!)).toBe('—')
+    // the enqueue time must not be presented as the moment work began, and
+    // a queued row has no duration either — the cells stay empty rather than
+    // printing a dash for a column the state cannot fill (issue #632)
+    expect(text(rowFor('Queued').querySelector('.when')!)).toBe('')
+    expect(text(rowFor('Queued').querySelector('.dur')!)).toBe('')
     expect(rowFor('Queued').querySelector('.when')!.getAttribute('title')).toBe('not started yet')
     expect(text(rowFor('Running').querySelector('.when')!)).toMatch(/\d/)
     expect(text(rowFor('Done').querySelector('.when')!)).toMatch(/\d/)
     // the expansion still shows all three timestamps, labeled - selected by
     // the row itself, not by fixture order
     const queuedRow = [...container.querySelectorAll('.entry')].find(
-      (el) => (el.querySelector('.when')?.textContent ?? '').trim() === '—',
+      (el) => el.querySelector('.when')?.getAttribute('title') === 'not started yet',
     )!
     fireEvent.click(queuedRow.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
     await expect.poll(() => container.querySelector('.detail')).toBeTruthy()

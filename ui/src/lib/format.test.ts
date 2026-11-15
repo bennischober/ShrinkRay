@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, timeColumns, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -254,6 +254,22 @@ describe('resultSummary', () => {
 
   it('says nothing when the payload carries no outcomes', () => {
     expect(resultSummary([])).toBe('')
+  })
+})
+
+describe('timeColumns', () => {
+  // issue #632: a row must not print a column its state cannot fill
+  it('gives a queued row neither a start nor a duration', () => {
+    expect(timeColumns('queued')).toEqual({ started: false, duration: false })
+  })
+
+  it('gives a running row a start but no duration yet', () => {
+    expect(timeColumns('running')).toEqual({ started: true, duration: false })
+  })
+
+  it('gives a finished row both', () => {
+    expect(timeColumns('done')).toEqual({ started: true, duration: true })
+    expect(timeColumns('failed')).toEqual({ started: true, duration: true })
   })
 })
 
