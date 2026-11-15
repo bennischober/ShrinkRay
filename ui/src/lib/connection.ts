@@ -2,8 +2,10 @@ import { duration } from './format'
 
 export type ConnectionState = 'loading' | 'locked' | 'live' | 'stale'
 
-/** Two idle poll intervals (3 s) plus slack for a slow response. */
-export const STALE_AFTER_MS = 8000
+/** Two hidden-tab poll intervals (10 s) plus slack: the shell polls at 1 s, 3 s
+ * and 10 s (hidden), so anything shorter than the slowest cadence would call a
+ * healthy hidden tab stale. */
+export const STALE_AFTER_MS = 22_000
 
 export interface ConnectionInput {
   hasSnapshot: boolean

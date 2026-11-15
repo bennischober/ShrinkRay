@@ -54,6 +54,14 @@
   )
   // a badge is a count: it is never drawn while the data is unknown or old
   const showCounts = $derived(connectionState === 'live' || connectionState === 'stale')
+  // the banner names the failure it actually has: a dropped event stream is not
+  // an unreachable server, and blaming the server would send the operator to the
+  // wrong place (issue #629 review)
+  const staleReason = $derived(
+    error !== null
+      ? "Can't reach ShrinkRay — retrying every 3 s. Work on the server continues."
+      : 'Live progress disconnected — the numbers below are from the last update. Reconnecting…',
+  )
   let tokenInput = $state('')
   /** Informational feedback ("already queued") — never red; red is for
    * failure only (the console's own Red Lock Rule). */
@@ -478,7 +486,7 @@
     {:else}
       {#if connectionState === 'stale'}
         <div class="api-notice mono" role="status">
-          Can't reach ShrinkRay — retrying every 3 s. Work on the server continues.
+          {staleReason}
           <span class="dim"> {freshnessText(connectionState, lastOkAt, clock)}</span>
           <details>
             <summary>Details</summary>
