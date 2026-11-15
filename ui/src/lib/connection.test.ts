@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deriveConnection, freshnessText, STALE_AFTER_MS, type ConnectionInput } from './connection'
+import { deriveConnection, freshnessText, POLL_HIDDEN, STALE_AFTER_MS, type ConnectionInput } from './connection'
 
 const NOW = 1_000_000
 
@@ -15,6 +15,12 @@ function input(overrides: Partial<ConnectionInput> = {}): ConnectionInput {
 }
 
 describe('deriveConnection', () => {
+  it('outlasts every poll cadence, so a healthy tab is never stale', () => {
+    // the shell polls at 1 s, 3 s and 10 s; a threshold below the slowest one
+    // would call a healthy hidden tab stale
+    expect(STALE_AFTER_MS).toBeGreaterThan(POLL_HIDDEN)
+  })
+
   it('is loading until the first snapshot arrives', () => {
     expect(deriveConnection(input({ hasSnapshot: false, lastOkAt: null }))).toBe('loading')
     expect(deriveConnection(input({ hasSnapshot: false, lastOkAt: NOW }))).toBe('loading')

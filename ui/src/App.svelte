@@ -21,7 +21,7 @@
   import RetainedPage from './lib/pages/RetainedPage.svelte'
   import MovieDetailPage from './lib/pages/MovieDetailPage.svelte'
   import { connectEvents, eventsConnected, progressFor, resetEvents } from './lib/progress.svelte'
-  import { deriveConnection, freshnessText } from './lib/connection'
+  import { deriveConnection, freshnessText, POLL_ACTIVE, POLL_HIDDEN, POLL_IDLE } from './lib/connection'
 
   type Page = 'overview' | 'library' | 'jobs' | 'retained' | 'config'
 
@@ -292,11 +292,8 @@
     }
   })
 
-  // adaptive polling: one snapshot request per tick, fast (1s) while work
-  // is queued/running, relaxed (3s) when idle, paused entirely while the
-  // tab is hidden (the browser throttles it anyway — this is explicit)
-  const POLL_ACTIVE = 1000
-  const POLL_IDLE = 3000
+  // adaptive polling: one snapshot request per tick, fast while work runs,
+  // relaxed when idle, slow while the tab is hidden
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   async function poll() {
     await refresh()
@@ -305,7 +302,7 @@
     schedule(busy ? POLL_ACTIVE : POLL_IDLE, hidden)
   }
   function schedule(interval: number, hidden: boolean) {
-    pollTimer = setTimeout(poll, hidden ? 10000 : interval)
+    pollTimer = setTimeout(poll, hidden ? POLL_HIDDEN : interval)
   }
 
   // ── the whole-library confirmation ──
