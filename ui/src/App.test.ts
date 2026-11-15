@@ -10,7 +10,17 @@ vi.mock('./lib/api', () => ({
         return Promise.resolve({
           status: { watcher: 'running', worker: 'running' },
           jobs: [],
-          library: [],
+          library: [
+            {
+              path: '/media/Legend (2015)/Legend.mkv',
+              name: 'Legend.mkv',
+              category: 'C',
+              size: 1024 ** 3,
+              duration: '02:00:00',
+              codec: 'h264',
+              hdr: false,
+            },
+          ],
         })
       if (mode === 'locked') return Promise.reject(Object.assign(new Error('401'), { status: 401 }))
       return new Promise(() => {})
@@ -62,5 +72,12 @@ describe('the shell data states (issue #629)', () => {
     const current = container.querySelectorAll('[aria-current="page"]')
     expect(current).toHaveLength(1)
     expect(current[0].textContent).toContain('Overview')
+  })
+  it('restores the title from its own URL, not only from sessionStorage (issue #635)', async () => {
+    mode = 'live'
+    window.location.hash = '#/movie/' + encodeURIComponent('/media/Legend (2015)/Legend.mkv')
+    const { container } = render(App)
+    await vi.waitFor(() => expect(container.textContent).toContain('Legend'), { timeout: 3000 })
+    window.location.hash = ''
   })
 })
