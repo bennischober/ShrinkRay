@@ -241,4 +241,33 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(text).not.toContain('working…')
     progressStub = null
   })
+  it('freezes its ETA when the data goes stale (issue #629)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-25T12:00:00Z'))
+    const running = job({ started_at: '2026-10-25T10:00:00Z' })
+    progressStub = { percent: 50, movie: 'a.mkv', detail: null }
+    const props = {
+      movies: [movie()],
+      history: [running],
+      status,
+      targetVmaf: 96,
+      savedTotalGb: 0,
+      measuredCount: 0,
+      missingMovies: [],
+      runningJobs: [running],
+      failedJobs: [],
+      scanPaths: ['/m'],
+      outputDir: '/out',
+      ondismiss: () => {},
+      ongoto: () => {},
+      onopenmovie: () => {},
+    }
+    const { container, rerender } = render(OverviewPage, { ...props, stale: false })
+    const live = container.querySelector('.running')!.textContent
+    vi.setSystemTime(new Date('2026-10-25T14:00:00Z'))
+    await rerender({ ...props, stale: true })
+    expect(container.querySelector('.running')!.textContent).toBe(live)
+    progressStub = null
+    vi.useRealTimers()
+  })
 })

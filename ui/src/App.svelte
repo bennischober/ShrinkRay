@@ -564,6 +564,7 @@
               : [],
           )}
           onopenmovie={(m) => openDetail(m, 'library')}
+          stale={connectionState === 'stale'}
           ontoggle={(path, checked) => {
             const next = new Set(selectedPaths)
             if (checked) next.add(path)
