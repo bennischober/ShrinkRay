@@ -189,7 +189,11 @@
   // reveals the rest inline — a "more →" that jumps to the library left
   // the chart literally cut off (round-6, user report)
   let showAllCats = $state(false)
-  const visibleCats = $derived(showAllCats ? catBars : catBars.slice(0, 8))
+  // issue #633: a category that holds one title is that title's own file
+  // size, not a category — the panel only earns its place where a category
+  // actually groups several titles
+  const groupedCats = $derived(catBars.filter((b) => b.titles > 1))
+  const visibleCats = $derived(showAllCats ? groupedCats : groupedCats.slice(0, 8))
 
   // plan results of the latest finished plan job
   interface PlanEntry {
@@ -466,7 +470,7 @@
         <div class="quality mono">
           <div class="q-head">
             <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{vmaf(meanVmaf, targetVmaf)}</span>
-            <span class="q-label legend">MEAN</span>
+            <span class="q-label legend">{measured.length > 1 ? 'MEAN' : 'MEASURED'}</span>
             {#if measured.length > 1}
               <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
                    the single row carrying exactly that) — the sub-line only

@@ -134,6 +134,27 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(screen.getAllByText(/POLL ADAPTIVE/).length).toBeGreaterThan(0)
   })
 
+  it('does not chart a category that holds one title (issue #633)', () => {
+    // a category with one title is that title's own file size, not a category
+    const movies = [
+      movie({ path: '/m/a.mkv', name: 'a.mkv', category: 'Same' }),
+      movie({ path: '/m/b.mkv', name: 'b.mkv', category: 'Same' }),
+      movie({ path: '/m/c.mkv', name: 'c.mkv', category: 'Alone' }),
+    ]
+    const { container } = renderOverview([], movies)
+    const names = [...container.querySelectorAll('.bar-name')].map((e) => e.textContent?.trim())
+    expect(names).toContain('Same')
+    expect(names).not.toContain('Alone')
+  })
+
+  it('does not call one title\u2019s value a mean (issue #633)', () => {
+    // with one measured title the mean is that title's own value, and the row
+    // beneath it repeats it
+    renderOverview([], [movie({ encode: { vmaf: 96.1 } as never })])
+    expect(screen.queryByText('MEAN')).toBeNull()
+    expect(screen.getAllByText('MEASURED').length).toBeGreaterThan(0)
+  })
+
   it('the stat band says where every title went (issue #633)', () => {
     // a skip record is neither an encode nor untouched: the band used to
     // account for five of seven titles and say nothing about the rest
