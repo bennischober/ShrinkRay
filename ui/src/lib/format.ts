@@ -269,6 +269,34 @@ export function timeColumns(job: {
   }
 }
 
+/** How a library's titles divide, so the band adds up (issue #633): the
+ * issue found `1 encoded · 4 untouched` against 7 titles with no
+ * explanation of the other two. Every title is in exactly one bucket, so
+ * the four always sum to `total`. */
+export function titleBuckets(
+  movies: readonly {
+    encode?: { outcome?: string | null; preset?: string | null } | null
+  }[],
+): {
+  encoded: number
+  discarded: number
+  skipped: number
+  untouched: number
+  total: number
+} {
+  let encoded = 0
+  let discarded = 0
+  let skipped = 0
+  let untouched = 0
+  for (const m of movies) {
+    if (m.encode?.outcome === 'discarded') discarded++
+    else if (m.encode && (m.encode.preset ?? '').startsWith('skipped')) skipped++
+    else if (m.encode) encoded++
+    else untouched++
+  }
+  return { encoded, discarded, skipped, untouched, total: movies.length }
+}
+
 const VERDICT_WORDS: Record<string, string> = {
   encode: 'Encode',
   skip: 'Skip',

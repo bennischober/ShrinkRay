@@ -109,6 +109,18 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(screen.queryByText('96.0')).toBeNull()
   })
 
+  it('the stat band says where every title went (issue #633)', () => {
+    // a skip record is neither an encode nor untouched: the band used to
+    // account for five of seven titles and say nothing about the rest
+    const movies = [
+      movie({ path: '/m/a.mkv', encode: { preset: 'skipped (hdr not supported)' } as never }),
+      movie({ path: '/m/b.mkv', encode: null }),
+    ]
+    renderOverview([], movies)
+    expect(screen.getAllByText(/1 skipped/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/1 untouched/).length).toBeGreaterThan(0)
+  })
+
   it('says how long ago the plan finished (issue #630, case 8)', () => {
     // pin the clock: relative() counts calendar days, so a real Date.now()
     // crosses a DST boundary twice a year and flips 3 to 2 or 4

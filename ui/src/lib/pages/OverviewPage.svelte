@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, isFailedOutcome, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
-  import { bytes, duration, kindWord, percent, progressLabel, relative, savedPercent, span, vmaf, verdictWord } from '../format'
+  import { bytes, duration, kindWord, percent, progressLabel, relative, savedPercent, span, titleBuckets, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
 
@@ -50,18 +50,7 @@
     onopenmovie: (movie: Movie) => void
   } = $props()
 
-  const encodedCount = $derived(
-    movies.filter(
-      (m) =>
-        m.encode &&
-        !m.encode.preset?.startsWith('skipped') &&
-        m.encode.outcome !== 'discarded',
-    ).length,
-  )
-  const discardedCount = $derived(
-    movies.filter((m) => m.encode?.outcome === 'discarded').length,
-  )
-  const untouchedCount = $derived(movies.filter((m) => !m.encode).length)
+  const buckets = $derived(titleBuckets(movies))
   const totalSizeGb = $derived(movies.reduce((sum, m) => sum + (m.size ?? 0), 0) / 1024 ** 3)
 
   // mean measured VMAF
@@ -354,9 +343,9 @@
       <span class="legend">TITLES</span>
       <span class="stat-v mono">{movies.length}</span>
       <span class="stat-sub mono dim"
-        >{encodedCount} encoded · {untouchedCount} untouched{discardedCount > 0
-          ? ` · ${discardedCount} discarded`
-          : ''}</span
+        >{buckets.encoded} encoded · {buckets.untouched} untouched{buckets.skipped > 0
+          ? ` · ${buckets.skipped} skipped`
+          : ''}{buckets.discarded > 0 ? ` · ${buckets.discarded} discarded` : ''}</span
       >
     </button>
     <button class="stat" onclick={() => ongoto('library')}>
