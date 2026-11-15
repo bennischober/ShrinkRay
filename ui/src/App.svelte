@@ -52,6 +52,8 @@
       now: clock,
     }),
   )
+  // a badge is a count: it is never drawn while the data is unknown or old
+  const showCounts = $derived(connectionState === 'live' || connectionState === 'stale')
   let tokenInput = $state('')
   /** Informational feedback ("already queued") — never red; red is for
    * failure only (the console's own Red Lock Rule). */
@@ -398,19 +400,19 @@
     <nav class="rail-nav" aria-label="Sections">
       <button class="rail-item" class:active={page === 'overview'} onclick={() => goto('overview')}>
         <span class="rail-label">Overview</span>
-        {#if failedJobs.length > 0}<span class="rail-badge bad mono">{failedJobs.length}</span>{/if}
+        {#if showCounts && failedJobs.length > 0}<span class="rail-badge bad mono">{failedJobs.length}</span>{/if}
       </button>
       <button class="rail-item" class:active={page === 'library'} onclick={() => goto('library')}>
         <span class="rail-label">Library</span>
-        <span class="rail-badge mono">{movies.length}</span>
+        {#if showCounts}<span class="rail-badge mono">{movies.length}</span>{/if}
       </button>
       <button class="rail-item" class:active={page === 'jobs'} onclick={() => goto('jobs')}>
         <span class="rail-label">Jobs</span>
-        {#if runningJobs.length > 0}<span class="rail-badge warn mono" title={queueLabel(runningJobs.length)} aria-label={queueLabel(runningJobs.length)}>{runningJobs.length}</span>{/if}
+        {#if showCounts && runningJobs.length > 0}<span class="rail-badge warn mono" title={queueLabel(runningJobs.length)} aria-label={queueLabel(runningJobs.length)}>{runningJobs.length}</span>{/if}
       </button>
       <button class="rail-item" class:active={page === 'retained'} onclick={() => goto('retained')}>
         <span class="rail-label">Retained</span>
-        {#if retainedFiles.filter((f) => f.present).length > 0}<span class="rail-badge warn mono">
+        {#if showCounts && retainedFiles.filter((f) => f.present).length > 0}<span class="rail-badge warn mono">
           {retainedFiles.filter((f) => f.present).length}
         </span>{/if}
       </button>
@@ -424,14 +426,16 @@
         title={theme === 'dark' ? 'Switch to the light working bench' : 'Switch to the dark cinema ground'}>
         {theme === 'dark' ? '◐ DARK' : '◑ LIGHT'}
       </button>
-      <span class="legend watcher" class:on={status?.watcher === 'running'}
-        title={status?.watcher === 'running' ? 'The background watcher is running' : (status?.watcher_error ?? 'The background watcher is stopped')}>
-        {status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER'}
-      </span>
-      <span class="legend worker" class:on={status?.worker === 'running'}
-        title={status?.worker === 'running' ? 'The job worker is running' : (status?.worker_error ?? 'The job worker is stopped')}>
-        {status?.worker === 'running' ? '● WORKER' : '○ WORKER'}
-      </span>
+      {#if showCounts}
+        <span class="legend watcher" class:on={connectionState === 'live' && status?.watcher === 'running'}
+          title={connectionState === 'live' ? (status?.watcher === 'running' ? 'The background watcher is running' : (status?.watcher_error ?? 'The background watcher is stopped')) : 'The watcher state is unknown: the data is not current'}>
+          {connectionState === 'live' ? (status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER') : '? WATCHER'}
+        </span>
+        <span class="legend worker" class:on={connectionState === 'live' && status?.worker === 'running'}
+          title={connectionState === 'live' ? (status?.worker === 'running' ? 'The job worker is running' : (status?.worker_error ?? 'The job worker is stopped')) : 'The worker state is unknown: the data is not current'}>
+          {connectionState === 'live' ? (status?.worker === 'running' ? '● WORKER' : '○ WORKER') : '? WORKER'}
+        </span>
+      {/if}
       <span class="legend freshness" class:stale={connectionState === 'stale'} class:live={connectionState === 'live'}>
         {freshnessText(connectionState, lastOkAt, clock)}
       </span>
@@ -503,7 +507,7 @@
       <!-- read-only: pausing and resuming happen in the terminal (issue #250) -->
       <div class="api-notice mono" role="status">Paused — no new file starts: {status.paused}</div>
     {/if}
-    {#if error}
+    {#if error && connectionState !== 'stale'}
       <div class="api-error mono" role="alert">
         {error}
         <button class="dismiss" onclick={() => (error = null)} aria-label="Dismiss error">✕</button>
