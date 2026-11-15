@@ -468,16 +468,16 @@
         <div class="dim pad">nothing measured yet — plan predicts, encode measures</div>
       {:else}
         <div class="quality mono">
+          {#if measured.length > 1}
           <div class="q-head">
             <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{vmaf(meanVmaf, targetVmaf)}</span>
-            <span class="q-label legend">{measured.length > 1 ? 'MEAN' : 'MEASURED'}</span>
-            {#if measured.length > 1}
-              <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
-                   the single row carrying exactly that) — the sub-line only
-                   earns its place with a spread to summarize -->
-              <span class="q-sub mono dim">min {vmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
-            {/if}
+            <span class="q-label legend">MEAN</span>
+            <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
+                 the single row carrying exactly that) — the sub-line only
+                 earns its place with a spread to summarize -->
+            <span class="q-sub mono dim">min {vmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
           </div>
+          {/if}
           {#each measured.slice(0, 6) as m (m.path)}
             <div class="q-row" title="{m.name}: VMAF {vmaf(m.encode?.vmaf, targetVmaf)} (target {targetVmaf})">
               <span class="q-name">{m.name}</span>
@@ -515,6 +515,7 @@
   </div>
 
   <!-- ══ per-category bars: where the bytes live ══ -->
+  {#if groupedCats.length > 0}
   <section class="panel wide">
     <div class="panel-head">
       <span class="legend">LIBRARY BY CATEGORY — SIZE AND RECLAIMED</span>
@@ -543,13 +544,14 @@
       {:else}
         <div class="dim pad">no titles scanned yet</div>
       {/each}
-      {#if catBars.length > 8}
+      {#if groupedCats.length > 8}
         <button class="link legend more" onclick={() => (showAllCats = !showAllCats)}>
-          {showAllCats ? 'SHOW LESS' : `SHOW ${catBars.length - 8} MORE`}
+          {showAllCats ? 'SHOW LESS' : `SHOW ${groupedCats.length - 8} MORE`}
         </button>
       {/if}
     </div>
   </section>
+  {/if}
 
   <!-- ══ plan results: the prediction, visible ══ -->
   {#if planEntries.length > 0}

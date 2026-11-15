@@ -147,12 +147,13 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(names).not.toContain('Alone')
   })
 
-  it('does not call one title\u2019s value a mean (issue #633)', () => {
-    // with one measured title the mean is that title's own value, and the row
-    // beneath it repeats it
-    renderOverview([], [movie({ encode: { vmaf: 96.1 } as never })])
+  it('does not repeat a single title\u2019s value as a mean (issue #633)', () => {
+    // the head never repeats the single row beneath it (DESIGN.md): with one
+    // measured title the panel shows that title's own row and no head figure
+    const { container } = renderOverview([], [movie({ encode: { vmaf: 96.1 } as never })])
     expect(screen.queryByText('MEAN')).toBeNull()
-    expect(screen.getAllByText('MEASURED').length).toBeGreaterThan(0)
+    expect(screen.queryByText('MEASURED')).toBeNull()
+    expect(container.querySelectorAll('.q-row').length).toBe(1)
   })
 
   it('the stat band says where every title went (issue #633)', () => {
