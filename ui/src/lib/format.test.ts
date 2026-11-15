@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -306,6 +306,30 @@ describe('titleBuckets', () => {
       untouched: 0,
       total: 1,
     })
+  })
+})
+
+describe('statusAnswer', () => {
+  // issue #633: the page must answer "is everything OK?" first, in one line
+  it('says what is running, how long is left and what is waiting', () => {
+    expect(
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, watching: true }),
+    ).toBe('● Working — encoding a.mkv, about 1 h 50 min left · 7 files waiting')
+  })
+
+  it('says it is idle when nothing is running, and whether it is watching', () => {
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: true })).toBe(
+      '● Idle — all caught up · watching for new files',
+    )
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: false })).toBe(
+      '● Idle — all caught up · the watcher is off',
+    )
+  })
+
+  it('names one waiting file in the singular', () => {
+    expect(
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: null, queued: 1, watching: true }),
+    ).toBe('● Working — encoding a.mkv · 1 file waiting')
   })
 })
 

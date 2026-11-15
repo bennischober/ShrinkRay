@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, isFailedOutcome, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
-  import { bytes, duration, kindWord, percent, progressLabel, relative, savedPercent, span, titleBuckets, vmaf, verdictWord } from '../format'
+  import { bytes, duration, kindWord, percent, progressLabel, relative, savedPercent, span, statusAnswer, titleBuckets, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
 
@@ -327,6 +327,16 @@
 <div class="page page-in">
   <PageHeader title="Overview" description={`The library at a glance · VMAF target ${targetVmaf}`} />
 
+  <!-- issue #633: the page answers "is everything OK?" before it says
+       anything about its own internals -->
+  <div class="status-line mono" class:work={runningJob !== null}>
+    {statusAnswer({
+      running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
+      etaSeconds: eta,
+      queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
+      watching: status?.watcher === 'running',
+    })}
+  </div>
   <!-- system line: the console's own telemetry (only what's not already
        on the rail badges and the stat band — those carry the counts) -->
   <div class="sysline mono dim">
@@ -677,6 +687,11 @@
   .bad { color: var(--red); }
   .amber { color: var(--amber); }
 
+  .status-line {
+    padding: 2px 14px 10px;
+    color: var(--ink-dim);
+  }
+  .status-line.work { color: var(--amber); }
   .sysline {
     display: flex;
     gap: 16px;
