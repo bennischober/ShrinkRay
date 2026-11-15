@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, timeColumns, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -254,6 +254,32 @@ describe('resultSummary', () => {
 
   it('says nothing when the payload carries no outcomes', () => {
     expect(resultSummary([])).toBe('')
+  })
+})
+
+describe('timeColumns', () => {
+  // issue #632: a row must not print a column it cannot fill. Driven by the
+  // timestamps, so a state the UI has not heard of still shows what it has.
+  it('gives a queued row neither a start nor a duration', () => {
+    expect(timeColumns({ started_at: null, finished_at: null })).toEqual({
+      started: false,
+      duration: false,
+    })
+  })
+
+  it('gives a running row a start but no duration yet', () => {
+    expect(timeColumns({ started_at: '2026-10-24T10:00:01Z', finished_at: null })).toEqual({
+      started: true,
+      duration: false,
+    })
+  })
+
+  it('gives a cancelled-while-running row both, though it is no state of its own', () => {
+    // a cancelled job keeps both timestamps; the old state table dropped them
+    expect(timeColumns({ started_at: '2026-10-24T10:00:01Z', finished_at: '2026-10-24T10:02:00Z' })).toEqual({
+      started: true,
+      duration: true,
+    })
   })
 })
 

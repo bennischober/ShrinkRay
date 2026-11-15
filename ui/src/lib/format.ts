@@ -254,6 +254,21 @@ export function isFailedOutcome(o: JobOutcome): boolean {
   )
 }
 
+/** Which of the time columns a row has (issue #632): a queued row has
+ * no start and no duration, a running row no duration, so the row must not
+ * print a column it cannot fill. Read from the timestamps themselves, not
+ * from a table of states, so a state the UI has not heard of (a cancelled
+ * job keeps both) still shows what it has. */
+export function timeColumns(job: {
+  started_at?: string | null
+  finished_at?: string | null
+}): { started: boolean; duration: boolean } {
+  return {
+    started: job.started_at != null,
+    duration: job.started_at != null && job.finished_at != null,
+  }
+}
+
 const VERDICT_WORDS: Record<string, string> = {
   encode: 'Encode',
   skip: 'Skip',
