@@ -951,6 +951,135 @@ class TestDb(unittest.TestCase):
             app_module.state.shutdown()
             app_module.state = None
 
+    def test_movie_detail_av1_stored_skip_keeps_its_own_reason(self):
+        """A stored SKIP verdict for an AV1 file keeps its own reason on the
+        movie-detail route (issue #650, round 4): an AV1 file can have been
+        skipped by an earlier gate (HDR, duration, resolution, size) before
+        the codec rule existed, and the route must not overwrite the recorded
+        verdict with the codec rule's reason. Only a stored PREDICTION reads
+        the codec rule's reason."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "av1-hdr-movie.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path),
+                    mtime=100.0,
+                    size=1000,
+                    name="av1-hdr-movie",
+                    category="Cat",
+                    codec="av1",
+                ),
+            )
+            db.save_plan(
+                self.connection,
+                file_id,
+                chosen_crf=None,
+                achieved_vmaf=None,
+                crop=None,
+                probes=[],
+                skipped_reason="hdr not supported",
+                estimated_size=None,
+                input_mtime=100.0,
+                input_size=1000,
+                encoder="svt_av1",
+                encoder_preset="5",
+                target_vmaf=96.0,
+                crf_low=14,
+                crf_high=70,
+                sample_count=25,
+                sample_seconds=4.0,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                response = client.get("/api/movie", params={"path": movie_path})
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["plan"]["skipped_reason"], "hdr not supported")
+                self.assertIsNone(body["plan"]["estimated_size"])
+                # a stored skip row falls through to the existing branch, so
+                # its staleness and stored settings come back too
+                self.assertTrue(body["plan"]["stale"])
+                self.assertEqual(body["plan"]["encoder"], "svt_av1")
+                self.assertEqual(body["plan"]["target_vmaf"], 96.0)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_movie_detail_av1_plan_is_never_served_as_a_prediction(self):
+        """The output format is never a source (issue #650): the movie-detail
+        route must not serve a stored plan row for an AV1 file as a
+        prediction - the decision's skip reason and no saving, even when the
+        row is fresh (the staleness check alone would still serve it)."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "av1-movie.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path),
+                    mtime=100.0,
+                    size=1000,
+                    name="av1-movie",
+                    category="Cat",
+                    codec="av1",
+                ),
+            )
+            # a fresh, matching plan row: mtime/size match the file, so the
+            # old staleness-only logic would serve it as a live prediction
+            db.save_plan(
+                self.connection,
+                file_id,
+                chosen_crf=38,
+                achieved_vmaf=96.01,
+                crop=None,
+                probes=[],
+                skipped_reason=None,
+                estimated_size=500,
+                input_mtime=Path(movie_path).stat().st_mtime,
+                input_size=1000,
+                encoder="svt_av1",
+                encoder_preset="5",
+                target_vmaf=96.0,
+                crf_low=14,
+                crf_high=70,
+                sample_count=25,
+                sample_seconds=4.0,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                response = client.get("/api/movie", params={"path": movie_path})
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["plan"]["skipped_reason"], "already AV1 (the output format)")
+                self.assertIsNone(body["plan"]["estimated_size"])
+                self.assertIsNone(body["plan"]["crf"])
+                self.assertIsNone(body["plan"]["achieved_vmaf"])
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
     def test_movie_detail_endpoint(self):
         """GET /api/movie returns the file facts plus the COMPLETE encode
         history (the library list carries only the latest encode), including

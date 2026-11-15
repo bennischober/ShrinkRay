@@ -62,7 +62,12 @@ from shrinkray.tools.vmaf import vmaf_recipe
 # VP9 is newer than H.264 in every sense that matters here (efficiency, decoder
 # support) and was excluded only because the old two-list shape predates the
 # decision that made this a whitelist (issue #233).
-SOURCE_CODECS = ("h264", "hevc", "vp9", "av1")
+# av1 is NOT a candidate (issue #650, the maintainer's decision
+# 2026-11-14): AV1 is the output format and never a source - ShrinkRay must
+# never re-encode its own output, and third-party AV1 files are excluded by
+# the same rule (the docs' "Exclude AV1" option). The config cannot re-add
+# it: the candidate_codecs validator rejects av1 at load.
+SOURCE_CODECS = ("h264", "hevc", "vp9")
 CANDIDATE_CODECS = SOURCE_CODECS
 
 # files shorter than this are not treated as encodable movies
@@ -601,6 +606,27 @@ def decide_quality(
     codec = source_codec(input_file)
 
     allowed = allowed_codecs(candidate_codecs)
+    if codec == "av1":
+        # the output format is never a source (issue #650): a specific
+        # reason, so the dashboard and the plan output say WHY this file is
+        # skipped rather than a generic not-a-candidate
+        log(f"Plan for '{input_file.name}': skip (already AV1 - the output format)")
+        return Decision(
+            input=input_file,
+            eligible=False,
+            error=(
+                "AV1 is the output format and never a source (issue #650): "
+                "re-encoding an AV1 source to AV1 buys no codec generation "
+                "gain"
+            ),
+            skipped_reason="already AV1 (the output format)",
+            identity=identity,
+            crf_range=crf_range,
+            sample_count=sample_count,
+            sample_seconds=sample_seconds,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
     if codec is not None and codec not in allowed:
         log(f"Plan for '{input_file.name}': skip (source codec not a candidate)")
         return Decision(
