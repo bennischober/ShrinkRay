@@ -109,6 +109,22 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(screen.queryByText('96.0')).toBeNull()
   })
 
+  it('does not count a skip record as an encoded title (issue #630, case 6)', () => {
+    // a skip record means nothing was written, so the plan entry is still
+    // open: the summary must say "to encode", never "encoded since"
+    const planJob = job({
+      kind: 'plan',
+      state: 'done',
+      payload: { path: '/m', quality: true, target_vmaf: 96 },
+      result: {
+        plans: [{ movie: 'a.mkv', state: 'encode', crf: 30, vmaf: 97.04, estimated_size: 1024 ** 2, saved_percent: 50 }],
+      },
+    })
+    renderOverview([], [movie({ encode: { preset: 'skipped (no size gain)' } as never })], [planJob])
+    expect(screen.queryByText(/encoded since/)).toBeNull()
+    expect(screen.getAllByText(/to encode/).length).toBeGreaterThan(0)
+  })
+
   it('reads a plan score against the target its job was run with', () => {
     // 95.04 rounds onto 95.0 under the job's 95 target: the display must
     // step up to 95.1, which only the payload target can produce (the live

@@ -233,8 +233,11 @@
         m.path.replace(/[\\/]/g, '').toLowerCase().endsWith(movie.replace(/[\\/]/g, '').toLowerCase()) &&
         m.encode != null &&
         // a discarded attempt is not an encode (issue #625): the title is
-        // still open, the prediction was never realised
-        m.encode.outcome !== 'discarded'
+        // still open, the prediction was never realised; neither is a skip
+        // record, whose preset says skipped (…) because nothing was written
+        // (issue #630, case 6)
+        m.encode.outcome !== 'discarded' &&
+        !(m.encode.preset ?? '').startsWith('skipped')
     )
   /** The library record for a plan entry (path-suffix join, plan entries
    * store bare filenames) — the measured truth an ENCODED row shows. */
