@@ -572,9 +572,10 @@ class JobQueue:
         event = None
         # the gate is taken BEFORE _lock - the order every method uses, so
         # no thread ever holds _lock while waiting for the gate (issue #660
-        # round 10, finding 1) - and the state write, the commit and the pop
-        # all happen with both held: take_next (which now filters QUEUED)
-        # can never hand out a job this method decided about
+        # round 10, finding 1) - and the state write and the pop happen with
+        # both held (the commit runs under the gate alone): take_next (which
+        # now filters QUEUED) can never hand out a job this method decided
+        # about
         with self._conn_gate():
             with self._lock:
                 for job in self._pending:
