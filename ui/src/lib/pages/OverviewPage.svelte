@@ -886,10 +886,6 @@
   .nav-link:hover { text-decoration: underline; }
   .head-tools { display: flex; gap: 12px; align-items: center; }
   .more { padding: 8px 14px; text-align: left; }
-  .setup { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 14px; }
-  .fact { display: flex; justify-content: space-between; gap: 12px; }
-  .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
-  /* the memory sparkline: trend beside the instant figure */
 
   /* measured quality panel */
   .quality { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 4px; }
