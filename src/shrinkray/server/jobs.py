@@ -428,10 +428,15 @@ class JobQueue:
                 )
                 self._connection.commit()
             except Exception:
-                # the take failed: restore QUEUED so the next take_next can
-                # hand it out (the QUEUED filter would otherwise skip the
-                # stale RUNNING mark), and let the caller see the real cause
-                # (issue #660 round 11, finding 1)
+                # the take failed: the failed commit did NOT end the
+                # transaction - the UPDATE is still pending on the shared
+                # connection and the next successful commit would persist
+                # it - so roll the transaction back before restoring (issue
+                # #660 round 17, finding 3), restore QUEUED so the next
+                # take_next can hand it out, and let the caller see the
+                # real cause (issue #660 round 11, finding 1)
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
                 job.state = JobState.QUEUED
                 raise
         with self._lock:
@@ -607,9 +612,14 @@ class JobQueue:
                     self._connection.commit()
                 except Exception:
                     # the commit failed (the observed SystemError's shape):
-                    # the job is NOT cancelled - restore QUEUED so take_next
-                    # can still hand it out, and let the caller see the real
-                    # cause (issue #660 round 10, finding 1)
+                    # the failed commit did NOT end the transaction - the
+                    # CANCELLED UPDATE is still pending and the next
+                    # successful commit would persist it - so roll back
+                    # first (issue #660 round 17, finding 3); the job is NOT
+                    # cancelled - restore QUEUED so take_next can still hand
+                    # it out, and let the caller see the real cause
+                    with contextlib.suppress(Exception):
+                        self._connection.rollback()
                     cancelled.state = JobState.QUEUED
                     raise
                 with self._lock:
