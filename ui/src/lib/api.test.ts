@@ -78,7 +78,7 @@ describe('failedOutcomeNote', () => {
       result: {
         outcomes: [
           { movie: '/m/a', state: 'done' },
-          { movie: '/m/b', state: 'discarded', error: 'the swap was declined' },
+          { movie: '/m/b', state: 'skipped', output_size: null, error: 'the swap was declined: subtitles (the encode is discarded)' },
         ],
       },
     })
