@@ -41,9 +41,10 @@ so stored SDR plans keep matching while historical `hdr=hable` plans never do.
 
 ## CONVENTIONS
 
-- Probe preset and final preset are different facts (`config.py`: 5 and 3). The
-  plan fingerprint keys on the PROBE preset only (`plan.py`, `db.py`): changing
-  the final preset must reuse a stored plan, changing the probe preset must not.
+- Probe preset and final preset are different settings that ship at the same
+  value (`config.py`: both 5, issue #686). The plan fingerprint keys on the
+  PROBE preset only (`plan.py`, `db.py`): changing the final preset must reuse
+  a stored plan, changing the probe preset must not.
 - Plan reuse is the default for an explicit encode; `force_reprobe` (`--replan`,
   `pipeline.py`) bypasses the plan AND the probe cache. The watchdog always
   passes `True` so it stays independent of plan staleness.

@@ -260,10 +260,13 @@ the claim, because `--verify` arrived in v0.11.7.
   and libvmaf's docs say an SDR model on HDR pictures "is not meaningful"; #340 measured the tone-map's own
   footprint at ~2.9 VMAF on a real HDR10 pair. The tone-map chain is removed; support returns with libvmaf's
   HDR models (#519).
-- **Probe samples encode at SVT-AV1 preset 5, the final encode at preset 3** (`config.py`, issue #22):
-  a probe measures the CRF, and a slower preset is believed to be at least as good at the same CRF, so
-  the sample measurement errs safe. **Believed, not measured** — the error direction is recorded, not
-  quantified. ab-av1 encodes probes and final at one preset.
+- **Probe samples and the final encode both use SVT-AV1 preset 5** (`config.py`, issue #686): the
+  sample measurement describes the file that is written, and the plan's size estimate is that same
+  preset. The two settings stay independent (issue #22). An operator who sets the probe faster than
+  the final measures a different CRF→VMAF curve; a slower final preset at the same CRF is believed to
+  be at least as good, so that split errs safe. **Believed, not measured** — the error direction is
+  recorded, not quantified. ab-av1 encodes probes and final at one preset, which is also the shipped
+  default.
 - **The reference is cropped to the encoded geometry** (`tools/vmaf.py:157-167`): bar removal is part
   of every encode, so the distorted output is smaller than the source; scoring it against the uncropped
   reference would measure the bars, not the encode. The crop itself is NOT a deviation: ab-av1's

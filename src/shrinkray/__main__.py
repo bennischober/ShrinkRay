@@ -295,8 +295,9 @@ def encode(
         "--encoder-preset",
         help=(
             "Encoder speed preset for the FINAL encode "
-            "(an output setting; SVT-AV1 speed -1 to 10, higher = faster; a lower preset is slower and better, "
-            "e.g. 3). Default: the handbrake.encoder_preset config value. "
+            "(an output setting; SVT-AV1 speed -1 to 10, higher = faster; "
+            "a lower preset is slower and compresses better). "
+            "Default: the handbrake.encoder_preset config value. "
             "The probes "
             "run --probe-encoder-preset."
         ),

@@ -22,7 +22,12 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH, encode_window_open
+from shrinkray.config import (
+    DEFAULT_ENCODER_PRESET,
+    DEFAULT_MIN_SOURCE_HEIGHT,
+    DEFAULT_MIN_SOURCE_WIDTH,
+    encode_window_open,
+)
 from shrinkray.config import Conf as Conf
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.engine.pause import pause_reason
@@ -817,7 +822,7 @@ def watch(
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     encoder: str = "svt_av1",
     probe_encoder_preset: str = "5",
-    encoder_preset: str = "3",
+    encoder_preset: str = DEFAULT_ENCODER_PRESET,
     poll_interval: float = POLL_INTERVAL,
     once: bool = False,
     max_threads: int | None = None,
