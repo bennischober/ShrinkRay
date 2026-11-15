@@ -134,6 +134,15 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(screen.getAllByText(/POLL ADAPTIVE/).length).toBeGreaterThan(0)
   })
 
+  it('says what needs you before its own internals (issue #633)', () => {
+    // the page's order is the operator's: is everything OK, then what needs
+    // you, then the rest — the poll mode and database path come last
+    const { container } = renderOverview()
+    const text = container.textContent ?? ''
+    expect(text.indexOf('ATTENTION')).toBeGreaterThan(-1)
+    expect(text.indexOf('ATTENTION')).toBeLessThan(text.indexOf('POLL ADAPTIVE'))
+  })
+
   it('the stat band says where every title went (issue #633)', () => {
     // a skip record is neither an encode nor untouched: the band used to
     // account for five of seven titles and say nothing about the rest

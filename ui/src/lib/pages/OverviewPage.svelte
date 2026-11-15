@@ -309,15 +309,6 @@
       watching: status?.watcher === 'running',
     })}
   </div>
-  <!-- system line: the console's own telemetry (only what's not already
-       on the rail badges and the stat band — those carry the counts) -->
-  <div class="sysline mono dim">
-    <span title="adaptive: 1s while work is queued/running, 3s idle, 10s in hidden tabs">POLL ADAPTIVE</span>
-    <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
-    <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
-    <span class="spacer"></span>
-    <span>{scanPaths.length} SOURCE{scanPaths.length === 1 ? '' : 'S'}</span>
-  </div>
 
   <!-- ══ stat band ══ -->
   <div class="stats">
@@ -431,6 +422,15 @@
         {/if}
       {/if}
     </section>
+  <!-- system line: the console's own telemetry (only what's not already
+       on the rail badges and the stat band — those carry the counts) -->
+  <div class="sysline mono dim">
+    <span title="adaptive: 1s while work is queued/running, 3s idle, 10s in hidden tabs">POLL ADAPTIVE</span>
+    <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
+    <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
+    <span class="spacer"></span>
+    <span>{scanPaths.length} SOURCE{scanPaths.length === 1 ? '' : 'S'}</span>
+  </div>
     <!-- ══ missing files ══ -->
     <section class="panel">
       <div class="panel-head">
