@@ -254,7 +254,8 @@ Before either question is asked, a file must be worth touching at all:
   (width 1920 / height 1080; either at class size qualifies) saves too little to be worth
   the work.
 - **Minimum codec: the whitelist.** A source codec outside the candidate list is not
-  re-encoded (h264, hevc, vp9, av1; MPEG-2/VC-1 and older are outside it).
+  re-encoded (h264, hevc, vp9; MPEG-2/VC-1 and older are outside it, and AV1 is the
+  output format and never a source, #650).
 
 Among eligible files, **the CRF search always runs** — and a re-encode happens only when
 that search shows the file would actually get smaller **by at least the minimum saving**

@@ -2906,11 +2906,33 @@ class TestTheCodecRule(unittest.TestCase):
             _ = self._plan(extra_config={"eligibility": {"candidate_codecs": ["av1"]}})
         self.assertIn("never a source", str(ctx.exception))
 
-    def test_a_stored_plan_for_an_av1_source_cannot_encode(self) -> None:
-        """The codec gate runs before plan reuse: a stored plan row for an
-        AV1 source is never consulted, so the plan cannot encode it."""
-        from shrinkray import db
+    def test_the_encode_path_skips_an_av1_source_before_probe_and_reuse(self) -> None:
+        """The encode path enforces the same decision (issue #650): the
+        mirrored codec-gate branch skips an AV1 source with the decision's
+        reason, before any probe and before the encode boundary's plan-reuse
+        lookup - so a stored plan for an AV1 source can never encode. The
+        lookup seam here is the real boundary (the encode and the resident
+        search are the only reuse sites; plan_quality measures fresh)."""
+        from unittest.mock import Mock
 
+        from shrinkray import config as config_helper
+        from shrinkray import db
+        from shrinkray.engine.pipeline import encode_with_quality
+
+        out = Path(self.tmp.name) / "out.mkv"
+        probed = Mock(return_value=(20, 96.0, [], None))
+        raw = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "av1",
+                    "color_transfer": "bt709",
+                    "width": 1920,
+                    "height": 1080,
+                }
+            ]
+        }
+        conf = config_helper.Conf({})
         db_file = Path(self.tmp.name) / "metadata.db"
         connection = db.connect(db_file)
         try:
@@ -2945,11 +2967,22 @@ class TestTheCodecRule(unittest.TestCase):
                 sample_seconds=4.0,
             )
             connection.commit()
-            # the stored plan WOULD match the fingerprint (the row exists):
-            # the codec gate must still skip before the reuse lookup runs
-            result, probed = self._plan(db_file=db_file)
+            with (
+                patch("shrinkray.engine.pipeline._lookup_plan") as lookup,
+                patch("shrinkray.engine.pipeline._probe_movie", probed),
+                patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+                patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
+                patch(
+                    "shrinkray.engine.plan.probe_duration_seconds",
+                    return_value=6000.0,
+                ),
+                patch("shrinkray.engine.plan.is_hdr_file", return_value=False),
+                patch("shrinkray.config.load_config", return_value=conf),
+            ):
+                result = encode_with_quality(self.movie, out, progress=None, db_file=db_file)
             self.assertEqual(result.skipped_reason, "already AV1 (the output format)")
             probed.assert_not_called()
+            lookup.assert_not_called()
         finally:
             connection.close()
 

@@ -109,7 +109,7 @@ path through this table.
 | C | H.264 | below floor | any | skipped at gate 4 |
 | D | HEVC | above floor | yes | probed **with crop** → encoded if smaller |
 | E | HEVC | above floor | none | probed → encoded if smaller |
-| F | AV1 | above floor | any | probed → encoded if smaller *(see the open question)* |
+| F | AV1 | above floor | any | skipped at gate 5 (the output format is never a source) |
 | G | MPEG-2 / VC-1 | any | any | skipped at gate 5 |
 | H | any | below the 1080p class (both dimensions) | any | skipped at gate 3 |
 | I | any | < 90 s | any | skipped at gate 2 |

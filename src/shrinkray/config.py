@@ -102,9 +102,11 @@ DEFAULT_TARGET_VMAF = 96.0
 # so the smallest files have the worst cost/benefit ratio
 DEFAULT_MIN_SOURCE_SIZE_GB = 0.0
 # eligibility: the operator's EXTRA source codecs beyond the product whitelist
-# (SOURCE_CODECS in engine/plan.py: h264, hevc, vp9, av1). The whitelist is a
+# (SOURCE_CODECS in engine/plan.py: h264, hevc, vp9). The whitelist is a
 # product rule and cannot be shrunk from config; an entry here makes one more
-# codec a candidate (e.g. "mpeg4" for a library the operator accepts re-encoding)
+# codec a candidate (e.g. "mpeg4" for a library the operator accepts
+# re-encoding). av1 is rejected below: the output format is never a source
+# (issue #650).
 DEFAULT_CANDIDATE_CODECS: list[str] = []
 
 

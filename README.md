@@ -420,7 +420,7 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 | 2 | Duration | At least 90 s? | fixed | skip — not a movie |
 | 3 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
 | 4 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
-| 5 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
+| 5 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9 (extendable, never shrinkable); av1 is excluded — the output format is never a source ([#650](https://github.com/bennischober/ShrinkRay/issues/650)) | skip — a source codec outside the list is never re-encoded |
 | 6 | Bar detection | Which bars does every sustained segment share? (sampled fallback: only when the pass learned nothing, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
 | 7 | CRF search | Largest CRF (or one step below it) that meets the VMAF target? | 96 | skip — target unreachable |
 | 8 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
@@ -692,8 +692,9 @@ The behaviour, per file:
 - **Eligibility.** A source whose dimensions are both below the 1080p class, or whose
   codec is outside the candidate list, is never re-encoded.
 - **Codec routing.** The CRF search runs on every eligible file; a re-encode happens
-  only when the file would actually get smaller. The candidate list is h264, hevc, vp9 and
-  av1 (extendable in config, never shrinkable); MPEG-2/VC-1 and older never are.
+  only when the file would actually get smaller. The candidate list is h264, hevc, vp9
+  (extendable in config, never shrinkable); MPEG-2/VC-1 and older never are, and neither
+  does AV1 — it is the output format and never a source ([#650](https://github.com/bennischober/ShrinkRay/issues/650)).
 - **Bar removal is part of every re-encode**, not an option: any file that is encoded has
   its bars detected and removed, so a re-encoded file is always clean. There is no flag to
   keep them, and no file is skipped for lacking them. A film whose aspect ratio changes is

@@ -1312,6 +1312,28 @@ def encode_with_quality(
     codec = source_codec(input_file)
 
     allowed = allowed_codecs(candidate_codecs)
+    if codec == "av1":
+        # the output format is never a source (issue #650): mirrored from
+        # decide_quality so the encode path enforces the decision with the
+        # same reason, independent of what the whitelist carries
+        log(f"Encode for '{input_file.name}': skip (already AV1 - the output format)")
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                "AV1 is the output format and never a source (issue #650): "
+                "re-encoding AV1 to AV1 buys no codec generation gain, and a "
+                "second generation's quality would be measured against "
+                "ShrinkRay's own output"
+            ),
+            skipped_reason="already AV1 (the output format)",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
     if codec is not None and codec not in allowed:
         log(f"Encode for '{input_file.name}': skip (source codec not a candidate)")
         return QualityResult(
