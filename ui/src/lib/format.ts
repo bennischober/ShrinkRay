@@ -1,3 +1,5 @@
+import type { JobOutcome } from './api'
+
 const LOCALE = 'en-GB'
 
 const MINUTE = 60
@@ -212,6 +214,44 @@ export function groupJobs<T extends { id: number | null; state: string }>(
     next: queued[0] ?? null,
     history: jobs.filter((j) => j.state !== 'running' && j.state !== 'queued'),
   }
+}
+
+/** What a finished job did, in one line (issue #632): the operator reads
+ * the result instead of clicking DETAIL and parsing raw JSON. Empty when the
+ * payload carries no per-movie outcomes (scans, legacy rows). */
+export function resultSummary(outcomes: readonly JobOutcome[]): string {
+  if (outcomes.length === 0) return ''
+  const encoded = outcomes.filter((o) => o.state === 'encoded')
+  const skipped = outcomes.filter((o) => o.state === 'skipped' && !isFailedOutcome(o))
+  const already = outcomes.filter((o) => o.state === 'already_encoded')
+  const failed = outcomes.filter(isFailedOutcome)
+  const parts: string[] = []
+  if (encoded.length > 0) parts.push(`${encoded.length} encoded`)
+  // the saving comes from the sizes the server actually writes on an encode
+  // outcome (input_size − output_size), not from `saved_percent`, which only
+  // plan entries carry
+  const savings = encoded
+    .filter((o) => typeof o.input_size === 'number' && typeof o.output_size === 'number')
+    .map((o) => ((o.input_size as number) - (o.output_size as number)) / (o.input_size as number) * 100)
+  if (savings.length > 0) {
+    const avg = savings.reduce((sum, p) => sum + p, 0) / savings.length
+    parts.push(`${savedPercent(avg).text} size`)
+  }
+  if (skipped.length > 0) parts.push(`${skipped.length} skipped`)
+  if (already.length > 0) parts.push(`${already.length} already encoded`)
+  if (failed.length > 0) parts.push(`${failed.length} failed`)
+  return parts.join(' · ')
+}
+
+/** A job outcome that is work lost, not work done: a failed movie, or a
+ * swap the operator declined — which the server reports as `skipped` plus a
+ * decline error (`src/shrinkray/server/jobs.py`). A busy or HDR skip is
+ * neither. One definition, so no surface can disagree with another. */
+export function isFailedOutcome(o: JobOutcome): boolean {
+  return (
+    o.state === 'failed' ||
+    (o.state === 'skipped' && (o.error ?? '').includes('declined'))
+  )
 }
 
 const VERDICT_WORDS: Record<string, string> = {

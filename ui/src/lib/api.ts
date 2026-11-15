@@ -43,6 +43,10 @@ export interface JobOutcome {
   error?: string
   crf?: number | null
   vmaf?: number | null
+  /** the sizes the server writes on an encode outcome (`jobs.py`); a
+   * plan entry carries an estimate instead and no sizes */
+  input_size?: number | null
+  output_size?: number | null
   estimated_size?: number | null
   saved_percent?: number | null
   reason?: string
@@ -59,16 +63,11 @@ export function movieOutcome(job: Job, movieName: string): JobOutcome | null {
   return list.find((o) => o.movie === movieName) ?? null
 }
 
-/** A job outcome that is work lost, not work done: a failed movie, or a
- * swap the operator declined — which the server reports as `skipped` plus a
- * decline error (`src/shrinkray/server/jobs.py`). A busy or HDR skip is
- * neither. */
-export function isFailedOutcome(o: JobOutcome): boolean {
-  return (
-    o.state === 'failed' ||
-    (o.state === 'skipped' && (o.error ?? '').includes('declined'))
-  )
-}
+import { isFailedOutcome } from './format'
+
+/** Re-exported so a page keeps importing the vocabulary from one module;
+ * the definition lives in `format.ts` beside the rest of it. */
+export { isFailedOutcome }
 
 /** A DONE job whose per-movie outcomes failed is not a clean done: the
  * lifecycle completed, but the work did not. Shared by the jobs page and
