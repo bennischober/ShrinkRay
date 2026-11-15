@@ -186,6 +186,12 @@ export interface Status {
   /** why the watcher did not start (issue #648): the refusal reason, null
    * while it runs — a stopped watcher is never a silent one */
   watcher_error?: string | null
+  /** the job worker's liveness (issue #649): "running" while the worker
+   * thread is alive, "stopped" once it gave up on repeated failures */
+  worker?: 'running' | 'stopped'
+  /** why the job worker gave up (issue #649): the last fatal error, null
+   * while it works — the dashboard's top-priority attention item */
+  worker_error?: string | null
   database: string
   /** the resident app's own memory (MiB), self-measured every 5 min —
    * staying lean is a measured fact (4534e07); null when unmeasurable */

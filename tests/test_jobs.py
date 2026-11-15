@@ -1313,6 +1313,295 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(reloaded.state, jobs.JobState.FAILED)
         self.assertIn("RuntimeError: engine exploded", reloaded.error)
 
+    def test_repeated_failures_end_the_worker_loudly(self):
+        """Issue #649's AC: a worker that cannot recover ends itself after
+        WORKER_MAX_CONSECUTIVE_FAILURES consecutive failures, with the
+        reason on fatal_error - the server keeps serving and /api/status
+        says the worker is dead and why."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        worker = jobs.JobWorker(self.connection, queue)
+
+        with (
+            mock.patch.object(
+                queue,
+                "take_next",
+                side_effect=RuntimeError("the db is gone"),
+            ),
+            mock.patch.object(queue, "wait_for_work", side_effect=lambda timeout: False),
+        ):
+            worker.start()
+            # the give-up is the signal: a bounded join, no poll fragments
+            worker._thread.join(timeout=10.0)
+            self.assertFalse(worker._thread.is_alive(), "the worker never gave up")
+            self.assertIsNotNone(worker.fatal_error)
+            self.assertIn("5 consecutive", worker.fatal_error or "")
+            self.assertIn("the db is gone", worker.fatal_error or "")
+        # a restarted worker must not report running with the stale error
+        # (issue #660 round 9, finding 3 / round 10, finding 2): the restart
+        # runs OUTSIDE the failing patch - a restarted worker with the same
+        # failing take_next would give up again and re-set the error, racing
+        # the assert (observed on CI's 3.10 leg)
+        worker.start()
+        try:
+            self.assertIsNone(worker.fatal_error)
+            self.assertTrue(worker._thread.is_alive())
+        finally:
+            worker.stop()
+
+    def test_the_queue_takes_the_app_lock_around_its_connection_use(self):
+        """Issue #660 round 1, finding 4: the root-cause fix - the queue's
+        connection use must hold the SAME lock the routes hold (the app's
+        db_lock). The pin: while another thread holds the lock, take_next
+        blocks; after the release it completes. The count assert is the
+        guard: it is the taker's own acquisition, and a gate that ignored
+        the lock would never increment."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        taken = []
+        entered = threading.Event()
+
+        class _CountingGate:
+            # counts the ACQUISITION itself (issue #660 round 5, finding 5):
+            # a gate that ignored the lock would never increment, so the
+            # count check closes the timing hole the event alone had
+            def __init__(self, real):
+                self._real = real
+                self.count = 0
+
+            def acquire(self, *args, **kwargs):
+                self.count += 1
+                entered.set()
+                return self._real.acquire(*args, **kwargs)
+
+            def release(self):
+                return self._real.release()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *args):
+                self.release()
+                return False
+
+        counting = _CountingGate(gate)
+        with counting:  # simulate a route holding the app's database lock
+            taker = threading.Thread(target=lambda: taken.append(queue.take_next()))
+            with mock.patch.object(queue, "_connection_lock", counting):
+                # the test thread's own acquisition already set the event and
+                # counted: reset BOTH, so the taker's acquisition is what the
+                # asserts observe (issue #660 round 6, finding 1)
+                counting.count = 0
+                entered.clear()
+                taker.start()
+                # once acquired, the taker holds the gate and cannot complete
+                # while this thread holds the real lock - state checks only
+                self.assertTrue(entered.wait(5.0), "take_next never took the gate")
+                self.assertEqual(counting.count, 1)
+                self.assertEqual(taken, [], "take_next completed while the lock was held")
+        taker.join(timeout=5.0)
+        self.assertFalse(taker.is_alive(), "take_next stayed blocked after the release")
+        self.assertIsNotNone(taken[0])
+
+    def test_a_job_being_taken_is_not_cancelled_as_queued(self):
+        """Issue #660 round 4, finding 1: take_next marks a job RUNNING
+        under _lock and leaves it in _pending while its gated write runs; a
+        cancel arriving in that window used to pop the job, write
+        CANCELLED, and let the take's UPDATE write RUNNING over it - a row
+        stranded running until the next start's recovery. cancel() now only
+        takes QUEUED jobs."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        # a job being taken (state RUNNING while still in _pending) is not
+        # cancelled as queued
+        job.state = jobs.JobState.RUNNING
+        self.assertFalse(queue.cancel(job.id))
+        self.assertIn(job, queue._pending)
+
+    def test_a_failed_cancel_commit_keeps_the_job_takable(self):
+        """Issue #660 round 9, finding 2: the cancel ordering's pin - a
+        failing gated commit leaves the job in the in-memory queue, and the
+        next take_next returns it (no stranded queued row)."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        class _FlakyCancelCommit:
+            def __init__(self, real):
+                self._real = real
+                self._failed = False
+
+            def execute(self, *args, **kwargs):
+                return self._real.execute(*args, **kwargs)
+
+            def commit(self):
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("the db blinked")
+                return self._real.commit()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        # the commit failure raises through cancel (the caller sees the
+        # real cause); the failed commit RESTORES QUEUED, so the job is
+        # takable again (issue #660 round 11, finding 1)
+        with (
+            mock.patch.object(queue, "_connection", _FlakyCancelCommit(queue._connection)),
+            self.assertRaises(RuntimeError),
+        ):
+            queue.cancel(job.id)
+        # the failed commit's CANCELLED UPDATE must not linger: the rollback
+        # ended the transaction (issue #660 round 18, finding 1)
+        self.assertFalse(queue._connection.in_transaction)
+        self.assertIn(job, queue._pending)
+        self.assertEqual(job.state, jobs.JobState.QUEUED)
+        # a job whose cancel never committed is effectively not cancelled:
+        # the next take still returns it
+        taken = queue.take_next()
+        self.assertIsNotNone(taken, "the job was stranded by the failed cancel")
+        self.assertEqual(taken.id, job.id)
+
+    def test_a_failed_gated_commit_keeps_the_job_takable(self):
+        """Issue #660 round 2, finding 1: the observed SystemError is raised
+        by take_next's commit - the job must stay in the in-memory queue
+        when that write fails, so the next take_next still returns it and
+        nothing is stranded as a queued row nothing runs."""
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)})
+
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        queue.enqueue(job)
+
+        # sqlite3.Connection.commit is read-only: the gated write fails via a
+        # delegating proxy, so the REAL take_next ordering is what runs
+        class _FlakyCommit:
+            def __init__(self, real):
+                self._real = real
+                self._failed = False
+
+            def execute(self, *args, **kwargs):
+                return self._real.execute(*args, **kwargs)
+
+            def commit(self):
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("the db blinked")
+                return self._real.commit()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        # the gated commit raises (the observed SystemError's site): the
+        # job must still be in _pending, so the NEXT take still returns
+        # it - take_next either returns a job or raises, never strands
+        with (
+            mock.patch.object(queue, "_connection", _FlakyCommit(queue._connection)),
+            self.assertRaises(RuntimeError),
+        ):
+            queue.take_next()
+        # the failed commit's UPDATE must not linger on the shared
+        # connection: the rollback ended the transaction (issue #660 round
+        # 18, finding 1 - deleting the rollback fails this)
+        self.assertFalse(queue._connection.in_transaction)
+        second = queue.take_next()
+        self.assertIsNotNone(second, "the job was stranded by the failed commit")
+        self.assertEqual(second.id, job.id)
+
+    def test_a_start_after_a_graceful_stop_actually_runs(self):
+        """Issue #660 round 14, finding 4: start() clears _stop, so a worker
+        restarted after a graceful stop() runs instead of exiting at once
+        (a stopped-with-no-reason worker). The deliberately-negative probe:
+        the buggy code exits in microseconds, so a short bound never
+        misclassifies it as alive."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        worker = jobs.JobWorker(self.connection, queue)
+        worker.start()
+        worker.stop()
+        worker.start()
+        try:
+            worker._thread.join(timeout=0.2)
+            self.assertTrue(worker._thread.is_alive(), "a restarted worker exited at once")
+        finally:
+            worker.stop()
+
+    def test_a_failed_take_next_does_not_kill_the_worker(self):
+        """Issue #649: one failed iteration - ANY exception from take_next -
+        is logged and survived: the worker keeps running and executes the
+        next job. On main the exception kills the thread and nothing says
+        the worker is gone."""
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        # ONE queue for the job, the worker and the test's reads: the worker
+        # must consume the queue the job was enqueued into (issue #660
+        # round 3, finding 6), and the shared lock is the same lock the
+        # worker writes under (round 1, finding 5)
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        real_take_next = queue.take_next
+        calls = {"n": 0}
+
+        def flaky(only_kinds=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("the db blinked")
+            return real_take_next(only_kinds)
+
+        # the shared lock: the test thread reads the queue (get) while the
+        # worker writes it - exactly the unsynchronized shape the root cause
+        # blames, so the test's own reads must hold the same lock (issue
+        # #660 round 1, finding 5)
+        worker = jobs.JobWorker(self.connection, queue)
+        finished = threading.Event()
+        real_finish = queue.finish
+
+        def signalling_finish(job, result):
+            real_finish(job, result)
+            finished.set()
+
+        with (
+            mock.patch.object(queue, "take_next", side_effect=flaky),
+            mock.patch.object(queue, "finish", side_effect=signalling_finish),
+            # the failure branch's back-off must not burn a real second per
+            # failure in a test (the file's own stop_after_first_wait
+            # pattern)
+            mock.patch.object(queue, "wait_for_work", side_effect=lambda timeout: False),
+        ):
+            worker.start()
+            try:
+                # the exact signal: the worker's finish() sets the event - no
+                # row polling, no 50 ms fragments (issue #660 round 1,
+                # finding 9)
+                self.assertTrue(
+                    finished.wait(10.0), "the worker never ran the job after the failure"
+                )
+                self.assertTrue(worker._thread.is_alive())
+                reloaded = queue.get(job.id)
+                self.assertEqual(reloaded.state, jobs.JobState.DONE)
+            finally:
+                worker.stop()
+
     def test_worker_stop_terminates_the_running_job_s_child(self):
         """Issue #431 (review round 2, finding 1): the measurement children run
         with the stall watchdog opted out, so a shutdown must set the running
