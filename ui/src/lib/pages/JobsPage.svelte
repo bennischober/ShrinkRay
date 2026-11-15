@@ -107,10 +107,18 @@
     sessionStorage.setItem('ms.jobsState', stateFilter)
   })
   const isPartial = (j: Job) => j.state === 'done' && failedOutcomeNote(j) !== ''
-  /** The per-movie outcomes a finished row summarises; scans and legacy
-   * rows carry none, so they show no summary. */
-  const outcomesOf = (j: Job) =>
-    (j.result as { outcomes?: JobOutcome[] } | null)?.outcomes ?? []
+  /** The per-movie outcomes a finished row summarises; a plan writes `plans`
+   * where an encode writes `outcomes` (`jobs.py`), and both are the same shape.
+   * Scans and legacy rows carry neither, so they show no summary. */
+  const outcomesOf = (j: Job) => {
+    const r = j.result as { outcomes?: JobOutcome[]; plans?: JobOutcome[] } | null
+    return r?.outcomes ?? r?.plans ?? []
+  }
+
+  /** A scan reports the paths it could not read; without this the only trace
+   * of them was the raw JSON (issue #632 review). */
+  const scanErrorsOf = (j: Job) =>
+    ((j.result as { errors?: string[] } | null)?.errors ?? [])
 
   const filteredHistory = $derived(
     history.filter((j) => {
@@ -247,6 +255,14 @@
                   {/each}
                 </div>
               {/if}
+              {#if scanErrorsOf(job).length > 0}
+                <div class="d-block">
+                  <span class="legend">COULD NOT READ</span>
+                  {#each scanErrorsOf(job) as e}
+                    <div class="mono d-why">{e}</div>
+                  {/each}
+                </div>
+              {/if}
               {#if job.error}
                 <div class="d-block">
                   <span class="legend">ERROR</span>
@@ -257,6 +273,12 @@
                 <span class="legend">TIMESTAMPS</span>
                 <pre class="mono">created {relative(job.created_at)} · started {relative(job.started_at)} · finished {relative(job.finished_at)}</pre>
               </div>
+              <!-- the issue's own wording: the raw payload/result JSON lives behind
+                   a disclosure, for bug reports, not in the operator's way -->
+              <details class="d-block">
+                <summary class="legend">TECHNICAL DETAILS</summary>
+                <pre class="mono">{JSON.stringify({ payload: job.payload, result: job.result }, null, 2)}</pre>
+              </details>
             </div>
           {/if}
         </div>

@@ -95,13 +95,16 @@ describe('JobsPage render', () => {
     const toggle = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
     expect(toggle.textContent?.trim()).toBe('DETAIL')
     fireEvent.click(toggle)
-    await expect.poll(() => screen.queryByText('WHAT IT DID'), { timeout: 1000 }).toBeTruthy()
+    await expect.poll(() => container.querySelector('.d-table'), { timeout: 1000 }).toBeTruthy()
     const detail = container.querySelector('.detail')!
     // the operator reads the outcome, not a JSON dump
     expect(detail.textContent).toContain('CRF 33')
     expect(detail.textContent).toContain('VMAF 96.4')
-    expect(detail.textContent).not.toContain('{"paths"')
-    expect(detail.textContent).not.toContain('"quality": true')
+    expect(detail.querySelector('.d-table')!.textContent).not.toContain('{')
+    // the raw JSON is still reachable, behind the disclosure the issue asks for
+    const raw = detail.querySelector('details')!
+    expect(raw.open).toBe(false)
+    expect(raw.textContent).toContain('"paths"')
     const expandedToggle = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!
     expect(expandedToggle.getAttribute('aria-expanded')).toBe('true')
     expect(expandedToggle.textContent?.trim()).toBe('HIDE')
@@ -121,6 +124,54 @@ describe('JobsPage render', () => {
     expect(dur.textContent).toContain('~1 h 30 min')
     expect(dur.textContent?.trim()).not.toBe('…')
     progressStub = null
+  })
+
+  it('a plan row shows its plans, not an empty table (issue #632 review)', async () => {
+    // a plan writes `plans` where an encode writes `outcomes`; reading only
+    // `outcomes` made every plan's reason unreachable
+    const j = job({
+      kind: 'plan',
+      payload: { paths: ['/media'] },
+      result: {
+        plans: [
+          {
+            movie: 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv',
+            state: 'skipped',
+            reason: 'already efficient',
+            estimated_size: 5_000_000_000,
+          },
+        ],
+      },
+    })
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+    await expect.poll(() => container.querySelector('.d-table'), { timeout: 1000 }).toBeTruthy()
+    const detail = container.querySelector('.detail')!
+    expect(detail.textContent).toContain('already efficient')
+    expect(detail.textContent).toContain('4.66 GiB')
+  })
+
+  it('a scan row lists the paths it could not read (issue #632 review)', async () => {
+    const j = job({
+      kind: 'scan',
+      payload: { paths: ['/media'] },
+      result: {
+        movies: 3,
+        categories: 1,
+        errors: ['/media/broken.mkv: invalid data'],
+        cancelled: false,
+      },
+    })
+    const { container } = render(JobsPage, {
+      history: [j],
+      onopenMovie: () => {},
+    })
+    fireEvent.click(container.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+    await expect.poll(() => screen.queryByText('COULD NOT READ'), { timeout: 1000 }).toBeTruthy()
+    expect(container.querySelector('.detail')!.textContent).toContain('/media/broken.mkv: invalid data')
   })
 
   it('single-movie jobs link to the detail page', () => {
