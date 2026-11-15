@@ -170,3 +170,9 @@ const VERDICT_WORDS: Record<string, string> = {
 export function verdictWord(verdict: string): string {
   return VERDICT_WORDS[verdict] ?? verdict
 }
+
+/** What a rail count counts (issue #630): the number alone says nothing, so
+ * it carries its own words. One job is "1 job", not "1 jobs". */
+export function queueLabel(count: number): string {
+  return `${count} job${count === 1 ? '' : 's'} in the queue`
+}

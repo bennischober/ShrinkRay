@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { queueLabel } from './lib/format'
   import { onMount } from 'svelte'
   import {
     api,
@@ -382,7 +383,7 @@
       </button>
       <button class="rail-item" class:active={page === 'jobs'} onclick={() => goto('jobs')}>
         <span class="rail-label">Jobs</span>
-        {#if runningJobs.length > 0}<span class="rail-badge warn mono">{runningJobs.length}</span>{/if}
+        {#if runningJobs.length > 0}<span class="rail-badge warn mono" title={queueLabel(runningJobs.length)} aria-label={queueLabel(runningJobs.length)}>{runningJobs.length}</span>{/if}
       </button>
       <button class="rail-item" class:active={page === 'retained'} onclick={() => goto('retained')}>
         <span class="rail-label">Retained</span>
