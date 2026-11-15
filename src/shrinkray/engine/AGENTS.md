@@ -28,7 +28,7 @@ then bar detection, then sample extraction, then the CRF search. The only
 difference is the tail: `plan` returns a prediction, `encode` runs the full encode
 and checks the artifact. Sizing permission is a skip, never an error:
 `skipped_reason` is one of `too short`, `resolution too low`, `below min size`,
-`source codec not a candidate`, `hdr not supported` (issue #518: the maintainer's
+`source codec not a candidate`, `already AV1 (the output format)`, `hdr not supported` (issue #518: the maintainer's
 #340 decision — HDR is not supported until libvmaf's HDR models, #519; the gate keys
 on the TRANSFER characteristic, so a bt2020nc SDR master and 10-bit SDR stay eligible),
 `no size gain`, `target unreachable`, `output not smaller` (`pipeline.py`).

@@ -193,7 +193,7 @@ def fields_for(defaults: Conf) -> list[Field]:
             "Extra codecs",
             "list",
             list(defaults.candidate_codecs),
-            "beyond h264, hevc, vp9, av1",
+            "beyond h264, hevc, vp9 (av1 is rejected: the output format)",
         ),
         Field("Library", "file.extensions", "File extensions", "list", list(defaults.extensions)),
         Field(

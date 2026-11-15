@@ -102,9 +102,11 @@ DEFAULT_TARGET_VMAF = 96.0
 # so the smallest files have the worst cost/benefit ratio
 DEFAULT_MIN_SOURCE_SIZE_GB = 0.0
 # eligibility: the operator's EXTRA source codecs beyond the product whitelist
-# (SOURCE_CODECS in engine/plan.py: h264, hevc, vp9, av1). The whitelist is a
+# (SOURCE_CODECS in engine/plan.py: h264, hevc, vp9). The whitelist is a
 # product rule and cannot be shrunk from config; an entry here makes one more
-# codec a candidate (e.g. "mpeg4" for a library the operator accepts re-encoding)
+# codec a candidate (e.g. "mpeg4" for a library the operator accepts
+# re-encoding). av1 is rejected below: the output format is never a source
+# (issue #650).
 DEFAULT_CANDIDATE_CODECS: list[str] = []
 
 
@@ -287,7 +289,17 @@ class EligibilitySection(BaseModel):
     @classmethod
     def _lowercase_codecs(cls, value: Any) -> Any:
         if isinstance(value, list):
-            return [str(c).lower() for c in value]
+            lowered = [str(c).lower() for c in value]
+            # AV1 is the output format and never a source (issue #650, the
+            # maintainer's decision 2026-11-14): a config line cannot
+            # re-enable re-encoding ShrinkRay's own output, so the value
+            # fails loudly at load instead of being silently honored
+            if "av1" in lowered:
+                raise ValueError(
+                    "candidate_codecs cannot contain 'av1': AV1 is the output "
+                    "format and never a source (issue #650)"
+                )
+            return lowered
         return value
 
 

@@ -87,13 +87,13 @@ Every gate is a cheap question asked before the expensive next step.
 | # | Gate | Question | If it fails |
 |---|---|---|---|
 | 1 | **HDR** | Is the source's TRANSFER characteristic HDR (PQ `smpte2084` or HLG `arib-std-b67`) — fixed in code (`HDR_TRANSFERS`, `tools/ffprobe.py:is_hdr`; no config reaches it)? (`is_hdr_file`, `engine/plan.py` + `engine/pipeline.py`) | skip — `hdr not supported`: the tone-mapped SDR measurement is not valid for HDR (the maintainer's #340 decision, 2026-10-31; support returns with libvmaf's HDR models, #519). A bt2020nc SDR master and a 10-bit SDR source stay eligible — bit depth is not the problem, the HDR transfer is. |
-| 2 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS`, `engine/plan.py:59`) | skip — not a movie |
-| 3 | Resolution | At least the 1080p class — width >= 1920 OR height >= 1080? (`is_1080p_class`, `engine/plan.py:244`; the floors may be raised, never lowered — issue #246; the width arm is issue #233) | skip — too few pixels to save |
-| 4 | Size | At least the configured size floor? (`min_source_size_gb`, `engine/plan.py:419`) | skip — payoff below the probe cost |
-| 5 | Codec age | In the candidate codec list? (`SOURCE_CODECS` extended by the config's `candidate_codecs`, `engine/plan.py:55`; the list may be extended, never shrunk — issue #233) | skip — a source codec outside the list is not re-encoded |
+| 2 | Duration | At least 90 s? (`MIN_ENCODE_SECONDS` in `engine/plan.py`) | skip — not a movie |
+| 3 | Resolution | At least the 1080p class — width >= 1920 OR height >= 1080? (`is_1080p_class` in `engine/plan.py`; the floors may be raised, never lowered — issue #246; the width arm is issue #233) | skip — too few pixels to save |
+| 4 | Size | At least the configured size floor? (`min_source_size_gb` in `engine/plan.py`) | skip — payoff below the probe cost |
+| 5 | Codec age | In the candidate codec list? (`SOURCE_CODECS` in `engine/plan.py`, extended by the config's `candidate_codecs` in `config.py`; the list may be extended, never shrunk — issue #233) | skip — a source codec outside the list is not re-encoded |
 | 6 | **Bar detection** | Which bars are common to every sustained timeline reading? (`crop_summary_from_timeline`, `engine/crop.py`, called at `engine/plan.py` and `engine/pipeline.py` through `detect_crop_summary_cached`; `detect_crop_rect` is the sampled fallback, run only when the pass learned nothing). Every cropdetect run measures black at the source's own bit depth: the threshold is 24 for 8-bit and scales with the depth (`cropdetect_limit`: 96 at 10-bit, 384 at 12-bit), because ffmpeg reads an absolute limit in the stream's native range and limited-range 10-bit black is code 64 (issue #637) | the timeline verdict stands: bars common to every sustained reading are cropped; a MEASURED "no common bars" — the full-frame veto, noise-sized bars, or readings with no sustained run — leaves the file uncropped, and the sampled detector never runs over it: ten windows of a variable-aspect film can miss its full-frame sections and cut picture the verdict protected (issue #525). The sampled fallback runs only when the pass learned nothing — the summary is absent (a failed pass; `detect_crop_summary_cached` returns None) or cropdetect produced no readings. A sampled window that yields no reading — ffmpeg fails (any positive exit, including — believed from `fftools/ffmpeg.c`, not run — 255 from a caught signal) or exits 0 without printing a crop line (a window past the stream's end) — leaves the file uncropped and is logged: that window measured nothing, so the common-bars rule cannot be evaluated and the safe direction wins. **Interim rule** (issue #403 carries `needs-decision`; the maintainer's call is open) — the reading this document's own safe-direction principle argues for, applied so the veto cannot be lost silently. The vetoed file is UNCROPPED, not unencoded: the plan's crop field records no-crop, which is indistinguishable from a genuine no-bars measurement in the plans table, so a stored plan reuses the uncropped decision without re-detecting (the plan fingerprint does not carry an unmeasured flag; changing that is a product decision beyond #403). The log line at detection time is the record |
-| 7 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip`, `engine/search.py:794`; the verdict is `target_unreachable`, asked before any size verdict — issue #591; a probe score is recorded at two decimals but never rounded across the target, so the recorded score keeps the search's verdict — `recorded_vmaf`, issue #595) | skip — target unreachable |
-| 8 | **Size gate** | Would the result be smaller **by at least the minimum saving**? (`quality.min_saving_percent`, default 15; 0 = any real shrink, issue #316) — the all-window factor the decision computed (`engine/search.py:872` at the bound CRF, `:925` at the chosen CRF from every window's cached encoded bytes — `check_chosen_crf_shrinks`, the all-window read and return `:1019-1062`, the one-window fallback `:1063`): skipped when `1 - factor < min_saving_percent / 100` | skip — "saving below minimum"; the error names both percentages (`predicted saving 6.2% < required 15%`) |
+| 7 | **CRF search** | Largest CRF that meets the VMAF target? (`find_optimal_crf_and_skip` in `engine/search.py`; the verdict is `target_unreachable`, asked before any size verdict — issue #591; a probe score is recorded at two decimals but never rounded across the target, so the recorded score keeps the search's verdict — `recorded_vmaf`, issue #595) | skip — target unreachable |
+| 8 | **Size gate** | Would the result be smaller **by at least the minimum saving**? (`quality.min_saving_percent`, default 15; 0 = any real shrink, issue #316) — the all-window factor the decision computed (`check_chosen_crf_shrinks` in `engine/search.py`: the factor at the bound CRF and at the chosen CRF from every window's cached encoded bytes, the all-window read and return, the one-window fallback): skipped when `1 - factor < min_saving_percent / 100` | skip — "saving below minimum"; the error names both percentages (`predicted saving 6.2% < required 15%`) |
 | 9 | Encode | One full encode at the chosen CRF, **with the crop** | — |
 
 Note gate 6 cannot fail in the sense of aborting: "no bars found" is a normal outcome and the
@@ -109,7 +109,7 @@ path through this table.
 | C | H.264 | below floor | any | skipped at gate 4 |
 | D | HEVC | above floor | yes | probed **with crop** → encoded if smaller |
 | E | HEVC | above floor | none | probed → encoded if smaller |
-| F | AV1 | above floor | any | probed → encoded if smaller *(see the open question)* |
+| F | AV1 | above floor | any | skipped at gate 5 (the output format is never a source) |
 | G | MPEG-2 / VC-1 | any | any | skipped at gate 5 |
 | H | any | below the 1080p class (both dimensions) | any | skipped at gate 3 |
 | I | any | < 90 s | any | skipped at gate 2 |
@@ -237,15 +237,14 @@ the claim, because `--verify` arrived in v0.11.7.
   aligned - 2882/2882 frames, VMAF 96.10 measured on real content. The procedure in `docs/vmaf-parity.md`
   therefore counts frames before scoring and reports a mismatched pair as unmeasured, and
   `scripts/vmaf_parity.py` fails the run for it rather than printing a number.
-- The per-window score is libvmaf's **pooled mean** (`pooled_metrics.vmaf.mean`, `tools/vmaf.py:207`).
-- The per-CRF decision statistic is the **mean of the per-sample means** (`VMAF_STATISTIC = "mean",
-  `engine/search.py:44`, issue #15) — the same aggregate ab-av1 reports.
+- The per-window score is libvmaf's **pooled mean** (`pooled_metrics.vmaf.mean` in `tools/vmaf.py`).
+- The per-CRF decision statistic is the **mean of the per-sample means** (`VMAF_STATISTIC = "mean"` in `engine/search.py`, issue #15) — the same aggregate ab-av1 reports.
 - The comparison runs inside one ffmpeg invocation with both inputs in a single filtergraph
   (`[0:v][1:v]libvmaf=...`), as ab-av1's does.
 
 **Deliberate deviations, each with its reason:**
 
-- **Sample windows sit between 10% and 90% of the runtime** (`engine/samples.py:61-62`): lead-in and
+- **Sample windows sit between 10% and 90% of the runtime** (`engine/samples.py`): lead-in and
   credits are not representative of the movie's encode difficulty. ab-av1 spaces its windows over the
   whole file.
 - **Windows are 4 s every 240 s, cut by duration** (`DEFAULT_SAMPLE_SECONDS = 4.0`,
@@ -267,7 +266,7 @@ the claim, because `--verify` arrived in v0.11.7.
   be at least as good, so that split errs safe. **Believed, not measured** — the error direction is
   recorded, not quantified. ab-av1 encodes probes and final at one preset, which is also the shipped
   default.
-- **The reference is cropped to the encoded geometry** (`tools/vmaf.py:157-167`): bar removal is part
+- **The reference is cropped to the encoded geometry** (`tools/vmaf.py`): bar removal is part
   of every encode, so the distorted output is smaller than the source; scoring it against the uncropped
   reference would measure the bars, not the encode. The crop itself is NOT a deviation: ab-av1's
   `--reference-vfilter crop=...` is the same mechanism (its help text exists for exactly this), and
@@ -304,7 +303,7 @@ Item 3 also needed a schema migration: a plan stored while the flag existed was 
 *without* a crop when the flag was off, so reusing it would encode the film with its bars kept.
 Migration 15 drops every stored plan rather than reuse one that describes an uncropped output.
 
-## The one open question
+## AV1 sources - decided
 
 **AV1 sources.** Re-encoding AV1 to AV1 buys no codec generation gain, so the only saving would come
 from the crop and from a better encode. That may still be worth it, or it may not. Two options:
@@ -314,5 +313,15 @@ from the crop and from a better encode. That may still be worth it, or it may no
   which the rule forbids as a reason. That makes AV1 a skip at gate 5 alongside MPEG-2.
 
 The second reading is closer to "AV1 is the output format" — re-encoding the same codec is generation
-loss for whatever small gain the crop gives. But the first is defensible and simpler. **Not decided;
-record the choice here before implementing.**
+loss for whatever small gain the crop gives. But the first is defensible and simpler.
+
+**Decided (the maintainer, 2026-11-14, issue #650): the second option — AV1 is the output format and
+never a source.** `av1` is out of `SOURCE_CODECS`, so an AV1 source is skipped at gate 5 with the
+reason `already AV1 (the output format)`. The rule guarantees "never re-encode our own output" at the
+codec level: every ShrinkRay output is AV1, so no readable AV1 source can pass the gate — no identity
+bookkeeping (sizes, encode chains) that breaks when a database is reset or a file is restored. A
+source whose codec cannot be read stays eligible (the "unknown is not a skip" rule above), which is
+the one case this gate cannot cover. The
+config cannot re-add it: `eligibility.candidate_codecs` rejects `av1` at load with a clear error, so
+one config line cannot re-enable re-encoding outputs. A stored plan whose source is AV1 can no longer
+encode: this gate runs before plan reuse, so the stored row is never consulted.

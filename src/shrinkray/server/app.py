@@ -1368,7 +1368,29 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
             (str(p),),
         ).fetchone()
         plan = None
-        if plan_row is not None:
+        if plan_row is not None and row["codec"] == "av1" and plan_row["skipped_reason"] is None:
+            # the output format is never a source (issue #650): a stored
+            # PREDICTION for an AV1 file predates the rule and is never a
+            # prediction - the file cannot be re-encoded, so the dashboard
+            # shows the codec rule's reason and no saving. A stored SKIP
+            # verdict falls through to the branch below: it keeps its own
+            # reason (an AV1 file can have been skipped by an earlier gate
+            # - HDR, duration, resolution, size - before the codec rule
+            # existed), its stored settings and its staleness.
+            plan = {
+                "crf": None,
+                "achieved_vmaf": None,
+                "skipped_reason": "already AV1 (the output format)",
+                "estimated_size": None,
+                "created_at": plan_row["created_at"],
+                "encoder": None,
+                "encoder_preset": None,
+                "probe_encoder_preset": None,
+                "target_vmaf": None,
+                "stale": False,
+                "estimate_note": None,
+            }
+        elif plan_row is not None:
             try:
                 file_ok = (
                     p.is_file()
