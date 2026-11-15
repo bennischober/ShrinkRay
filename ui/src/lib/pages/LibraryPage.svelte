@@ -220,7 +220,7 @@
     </div>
   {:else}
     <div class="bulk-bar idle">
-      <span class="mono dim">{filtered.length} titles — tick checkboxes for bulk work</span>
+      <span class="mono dim">{filtered.length} titles — tick titles to sum their plan estimate</span>
       <span class="spacer"></span>
       <span class="mono dim">the app works through the library on its own — this page only shows where it stands</span>
     </div>
