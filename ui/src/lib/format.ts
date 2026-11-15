@@ -108,6 +108,31 @@ export function eta(seconds: number | null | undefined): string {
   return `about ${duration(seconds)} left`
 }
 
+/** The wall time a running job has left, from the percent it reports and the
+ * time it has been running: the engine sends no ETA, so a proportional estimate
+ * is the only honest one. Null when the percent is unknown or too small to
+ * divide by — a row then says `…` rather than inventing a number. */
+export function remainingSeconds(
+  startedIso: string | null | undefined,
+  percent: number | null | undefined,
+  now: Date = new Date(),
+): number | null {
+  if (!startedIso || percent == null || !(percent > 1)) return null
+  const iso =
+    startedIso.endsWith('Z') || startedIso.includes('+') ? startedIso : `${startedIso}Z`
+  const elapsed = (now.getTime() - Date.parse(iso)) / 1000
+  if (!Number.isFinite(elapsed) || elapsed <= 0) return null
+  const total = elapsed / (percent / 100)
+  return Math.max(0, total - elapsed)
+}
+
+/** The same estimate for a table cell, where the column header already says
+ * what it is: `~9 h 56 min`, never `about ... left`. */
+export function etaShort(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return ''
+  return `~${duration(seconds)}`
+}
+
 export function span(
   startIso: string | null | undefined,
   endIso: string | null | undefined,

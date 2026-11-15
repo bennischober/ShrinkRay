@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, isStageRow, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, etaShort, remainingSeconds, groupJobs, isStageRow, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -353,5 +353,27 @@ describe('queueLabel', () => {
   it('says what the rail count counts, in the right number', () => {
     expect(queueLabel(1)).toBe('1 job in the queue')
     expect(queueLabel(3)).toBe('3 jobs in the queue')
+  })
+})
+
+describe('remainingSeconds', () => {
+  const now = new Date('2026-11-15T12:00:00Z')
+
+  it('scales the elapsed time by the percent done', () => {
+    // 30 min elapsed at 25% implies 2 h total, so 90 min left
+    expect(remainingSeconds('2026-11-15T11:30:00Z', 25, now)).toBe(90 * 60)
+  })
+
+  it('says nothing it cannot estimate', () => {
+    expect(remainingSeconds('2026-11-15T11:30:00Z', null, now)).toBeNull()
+    expect(remainingSeconds('2026-11-15T11:30:00Z', 0, now)).toBeNull()
+    expect(remainingSeconds(null, 40, now)).toBeNull()
+  })
+})
+
+describe('etaShort', () => {
+  it('drops the sentence the column header already carries', () => {
+    expect(etaShort(90 * 60)).toBe('~1 h 30 min')
+    expect(etaShort(null)).toBe('')
   })
 })
