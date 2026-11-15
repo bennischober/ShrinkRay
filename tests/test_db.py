@@ -1008,6 +1008,11 @@ class TestDb(unittest.TestCase):
                 body = response.json()
                 self.assertEqual(body["plan"]["skipped_reason"], "hdr not supported")
                 self.assertIsNone(body["plan"]["estimated_size"])
+                # a stored skip row falls through to the existing branch, so
+                # its staleness and stored settings come back too
+                self.assertTrue(body["plan"]["stale"])
+                self.assertEqual(body["plan"]["encoder"], "svt_av1")
+                self.assertEqual(body["plan"]["target_vmaf"], 96.0)
             finally:
                 app_module.state.shutdown()
                 app_module.state = None
