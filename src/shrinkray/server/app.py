@@ -1380,7 +1380,7 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
             plan = {
                 "crf": None,
                 "achieved_vmaf": None,
-                "skipped_reason": (plan_row["skipped_reason"] or "already AV1 (the output format)"),
+                "skipped_reason": "already AV1 (the output format)",
                 "estimated_size": None,
                 "created_at": plan_row["created_at"],
                 "encoder": None,
