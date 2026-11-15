@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, timeColumns, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, groupJobs, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -279,6 +279,32 @@ describe('timeColumns', () => {
     expect(timeColumns({ started_at: '2026-10-24T10:00:01Z', finished_at: '2026-10-24T10:02:00Z' })).toEqual({
       started: true,
       duration: true,
+    })
+  })
+})
+
+describe('titleBuckets', () => {
+  // issue #633: the band's numbers must add up to the title count
+  it('puts every title in exactly one bucket, so the four add up', () => {
+    const b = titleBuckets([
+      { encode: { outcome: 'encoded' } },
+      { encode: { outcome: 'discarded' } },
+      { encode: { preset: 'skipped (no size gain)' } },
+      { encode: null },
+      { encode: null },
+    ])
+    expect(b).toEqual({ encoded: 1, discarded: 1, skipped: 1, untouched: 2, total: 5 })
+    expect(b.encoded + b.discarded + b.skipped + b.untouched).toBe(b.total)
+  })
+
+  it('counts a skip record as skipped, never as an encode', () => {
+    // the band said 1 encoded against 7 titles: the two skips were in no bucket
+    expect(titleBuckets([{ encode: { preset: 'skipped (hdr not supported)' } }])).toEqual({
+      encoded: 0,
+      discarded: 0,
+      skipped: 1,
+      untouched: 0,
+      total: 1,
     })
   })
 })
