@@ -55,8 +55,8 @@
     if (job.state !== 'queued') return ''
     const p = job.payload as Record<string, unknown>
     const parts: string[] = []
-    if (p.quality) parts.push(`quality · VMAF>${p.target_vmaf ?? 95}`)
-    else parts.push('fixed preset (removed mode)')
+    if (p.quality) parts.push(p.target_vmaf != null ? `quality · VMAF>${p.target_vmaf}` : 'quality')
+    else if (job.kind === 'encode') parts.push('fixed preset')
     if (p.remove_bars) parts.push('bars removed')
     return parts.join(' · ')
   }
@@ -192,7 +192,7 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <ProgressBar percent={p?.percent ?? null} stage={`${p?.movie ? `${p.movie} · ` : ''}${p?.detail ?? 'starting…'}`} />
+            <ProgressBar percent={p?.percent ?? null} stage={`${p?.movie ? `${p.movie} · ` : ''}${p?.detail ?? (p?.percent != null ? 'working' : 'starting…')}`} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}

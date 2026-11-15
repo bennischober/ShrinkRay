@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, percent, relative, kindWord, savedPercent, span, stateWord, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, kindWord, percent, queueLabel, relative, savedPercent, span, stateWord, verdictWord, vmaf } from './format'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -130,6 +130,10 @@ describe('savedPercent', () => {
   it('is an em dash when there is no value', () => {
     expect(savedPercent(null)).toEqual({ text: '—', grew: false })
   })
+
+  it('calls zero zero, not growth (issue #630)', () => {
+    expect(savedPercent(0)).toEqual({ text: '0.0%', grew: false })
+  })
 })
 
 describe('stateWord', () => {
@@ -160,5 +164,12 @@ describe('kindWord and verdictWord', () => {
     expect(verdictWord('skip')).toBe('Skip')
     expect(verdictWord('failed')).toBe('Failed')
     expect(verdictWord('deferred')).toBe('deferred')
+  })
+})
+
+describe('queueLabel', () => {
+  it('says what the rail count counts, in the right number', () => {
+    expect(queueLabel(1)).toBe('1 job in the queue')
+    expect(queueLabel(3)).toBe('3 jobs in the queue')
   })
 })

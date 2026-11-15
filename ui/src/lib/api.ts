@@ -66,7 +66,11 @@ export function failedOutcomeNote(job: Job): string {
   if (job.state !== 'done' || job.kind !== 'encode') return ''
   const r = job.result as { outcomes?: JobOutcome[] } | null
   if (!r?.outcomes) return ''
-  const failed = r.outcomes.filter((o) => o.state === 'failed')
+  const failed = r.outcomes.filter(
+    (o) =>
+      o.state === 'failed' ||
+      (o.state === 'skipped' && (o.error ?? '').includes('declined')),
+  )
   if (failed.length === 0) return ''
   return `__FAILED_OUTCOMES__${failed.length} of ${r.outcomes.length} failed: ${failed
     .map((o) => o.movie)

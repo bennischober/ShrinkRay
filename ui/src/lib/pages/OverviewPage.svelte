@@ -246,9 +246,7 @@
   /** Plan age in honest units — a stale plan must say so. */
   const planAge = $derived.by(() => {
     if (!lastPlan?.finished_at) return ''
-    const elapsed = span(lastPlan.finished_at, new Date().toISOString())
-    if (elapsed === '—') return ''
-    return `finished ${elapsed} ago`
+    return `finished ${relative(lastPlan.finished_at)}`
   })
   /** Head summary in real terms: what happened SINCE the plan ran. */
   const planSummary = $derived.by(() => {
@@ -391,7 +389,7 @@
         <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
       </div>
       <div class="mono dim detail">
-        {runningProgress?.detail ?? 'working…'}
+        {runningProgress?.detail ?? (runningProgress?.percent != null ? 'working' : 'working…')}
         · started {relative(runningJob.started_at)}
         · {fmtEta(eta)}
       </div>

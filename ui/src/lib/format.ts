@@ -122,7 +122,8 @@ export function savedPercent(value: number | null | undefined): {
   grew: boolean
 } {
   if (value == null || !Number.isFinite(value)) return { text: '—', grew: false }
-  if (value <= 0) return { text: `+${Math.abs(value).toFixed(1)}% larger`, grew: true }
+  if (value === 0) return { text: '0.0%', grew: false }
+  if (value < 0) return { text: `+${Math.abs(value).toFixed(1)}% larger`, grew: true }
   return { text: `${value.toFixed(1)}%`, grew: false }
 }
 
@@ -168,4 +169,10 @@ const VERDICT_WORDS: Record<string, string> = {
 /** The screen word for a plan's verdict on one file. */
 export function verdictWord(verdict: string): string {
   return VERDICT_WORDS[verdict] ?? verdict
+}
+
+/** What a rail count counts (issue #630): the number alone says nothing, so
+ * it carries its own words. One job is "1 job", not "1 jobs". */
+export function queueLabel(count: number): string {
+  return `${count} job${count === 1 ? '' : 's'} in the queue`
 }
