@@ -34,6 +34,11 @@
   .value { font-family: var(--font-mono); color: var(--ink); }
   .track { height: 3px; background: var(--seam); border-radius: 2px; overflow: hidden; }
   .fill { height: 100%; background: var(--amber); transition: width 400ms ease; }
+  /* the bar is motion: with reduced motion it snaps instead of animating
+     (WCAG 2.3.3, issue #636) */
+  @media (prefers-reduced-motion: reduce) {
+    .fill { transition: none; }
+  }
   .eta { font-size: var(--fs-data); color: var(--ink-dim); }
   .stale .fill { background: var(--ink-faint); }
   .stale .stage::after { content: ' (stale)'; color: var(--ink-faint); }

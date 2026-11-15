@@ -154,7 +154,9 @@
   })
 
   // ── keyboard layer: 1-5 switch pages, / focuses search ──
-  const SHORTCUT_LEGEND = '1–5: pages · /: search'
+  // the map binds 1-4 (Retained has no shortcut), so the legend must not
+  // promise a fifth (issue #636; ui/AGENTS.md records the mismatch)
+  const SHORTCUT_LEGEND = '1–4: pages · /: search'
   function handleShortcuts(e: KeyboardEvent) {
     // never hijack typing in inputs
     const t = e.target as HTMLElement
