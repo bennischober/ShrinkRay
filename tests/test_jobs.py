@@ -1337,10 +1337,16 @@ class TestJobs(unittest.TestCase):
             self.assertIsNotNone(worker.fatal_error)
             self.assertIn("5 consecutive", worker.fatal_error or "")
             self.assertIn("the db is gone", worker.fatal_error or "")
-            # a restarted worker must not report running with the stale
-            # error (issue #660 round 9, finding 3 / round 10, finding 2)
-            worker.start()
+        # a restarted worker must not report running with the stale error
+        # (issue #660 round 9, finding 3 / round 10, finding 2): the restart
+        # runs OUTSIDE the failing patch - a restarted worker with the same
+        # failing take_next would give up again and re-set the error, racing
+        # the assert (observed on CI's 3.10 leg)
+        worker.start()
+        try:
             self.assertIsNone(worker.fatal_error)
+            self.assertTrue(worker._thread.is_alive())
+        finally:
             worker.stop()
 
     def test_the_queue_takes_the_app_lock_around_its_connection_use(self):
