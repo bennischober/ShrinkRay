@@ -246,9 +246,7 @@
   /** Plan age in honest units — a stale plan must say so. */
   const planAge = $derived.by(() => {
     if (!lastPlan?.finished_at) return ''
-    const elapsed = span(lastPlan.finished_at, new Date().toISOString())
-    if (elapsed === '—') return ''
-    return `finished ${elapsed} ago`
+    return `finished ${relative(lastPlan.finished_at)}`
   })
   /** Head summary in real terms: what happened SINCE the plan ran. */
   const planSummary = $derived.by(() => {

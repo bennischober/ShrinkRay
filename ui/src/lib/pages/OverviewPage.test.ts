@@ -128,7 +128,7 @@ describe('OverviewPage VMAF display (issue #599)', () => {
 
   it('the running card at 30 % says working, not working… (issue #630)', async () => {
     progressStub = { percent: 30.46, movie: 'Titel', detail: null }
-    const running = { id: 4, kind: 'encode', state: 'running', created_at: '2026-10-24T10:00:00Z', started_at: '2026-10-24T10:00:00Z', finished_at: null, payload: {}, result: null, error: null } as unknown as Job
+    const running = { id: 4, kind: 'encode', state: 'running', created_at: '2026-10-24T10:00:00Z', started_at: '2026-10-24T10:00:00Z', finished_at: null, payload: {}, result: { plans: [] }, error: null } as unknown as Job
     const { container } = render(OverviewPage, { movies: [] as Movie[], history: [running], status: null, targetVmaf: 96, savedTotalGb: 0, measuredCount: 0, missingMovies: [], runningJobs: [running], failedJobs: [], scanPaths: [], outputDir: '', ondismiss: () => {}, ongoto: () => {}, onopenmovie: () => {} })
     const text = (container.textContent ?? '').replace(/\s+/g, ' ')
     expect(text).toContain('working')
