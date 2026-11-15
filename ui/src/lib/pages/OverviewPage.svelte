@@ -21,7 +21,6 @@
     failedJobs,
     scanPaths,
     outputDir,
-    sparkSamples = [],
     retainedFiles = [],
     ondismiss,
     ongoto,
@@ -38,10 +37,6 @@
     failedJobs: Job[]
     scanPaths: string[]
     outputDir: string
-    /** resident-memory samples accumulated by the poll (App.svelte) —
-     * the sparkline's buffer lives at app level so it survives page
-     * switches and never writes what it reads */
-    sparkSamples?: number[]
     /** the retention ledger's rows (App.svelte) — the panel totals the
      * present ones; the rows themselves are the Retained page's job */
     retainedFiles?: RetainedFile[]
