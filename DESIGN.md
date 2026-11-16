@@ -405,7 +405,7 @@ The shell derives the state once (`App.svelte`) and passes it down; a page never
 - **Do** express state as density — solid green = done, amber hatch = in progress, coarse amber hatch = skipped, teal hatch = selected/planned, dash-bodied swatch = untouched, dashed red = missing. A state marker must have a visible body; transparency reads as absence, not as a state.
 - **Do** keep every domain one click away in the rail, with badges that carry counts and turn amber/red only when attention is needed. Counts live on exactly one surface each — the rail badges and the stat band; the sysline carries only what neither shows.
 - **Do** separate failure from feedback: errors wear the red `role="alert"` strip; informational notes ("already queued", "select at least one") get the quiet seam-bordered notice. Red is for failure only.
-- **Do** make the keyboard layer discoverable: the rail foot carries the shortcut legend (`1–5 pages · / search`) — invisible shortcuts are no shortcuts.
+- **Do** make the keyboard layer discoverable: the rail foot carries the shortcut legend (`1–4 pages · / search`) — invisible shortcuts are no shortcuts.
 - **Do** let the library answer state questions: a decision filter (all/untouched/planned/encoded/skipped/missing) sits beside the category filter; sort state survives reload.
 - **Do** show the leader-note estimate before any bulk verb, and keep bulk verbs in the bulk bar, per-movie verbs on the provenance page.
 - **Do** make the overview answer failures, missing files and active work in one glance — with honest empty states ("nothing failed", "no active work", "the library is clean").
