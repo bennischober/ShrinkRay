@@ -12,6 +12,7 @@ eligible and a later run decides it again.
 
 import os
 import sqlite3
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -20,7 +21,7 @@ from unittest.mock import patch
 
 from shrinkray.__main__ import app
 from shrinkray.engine.plan import QualityResult
-from shrinkray.engine.watch import STABLE_MIN_AGE, check_stability
+from shrinkray.engine.watch import check_stability
 
 MIB = 1024 * 1024
 
@@ -39,7 +40,9 @@ def _toolchain_present():
         yield
 
 
-def _plan_result(movie: Path, *, success: bool = False, skipped: str | None = None) -> QualityResult:
+def _plan_result(
+    movie: Path, *, success: bool = False, skipped: str | None = None
+) -> QualityResult:
     return QualityResult(
         input=movie,
         output=movie,
@@ -50,6 +53,7 @@ def _plan_result(movie: Path, *, success: bool = False, skipped: str | None = No
     )
 
 
+@unittest.skipIf(sys.platform == "win32", "Windows reports no st_blocks")
 class TestPlanAsksTheWitness(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -63,11 +67,17 @@ class TestPlanAsksTheWitness(unittest.TestCase):
         self.sparse.write_bytes(b"x" * 4096)
         os.truncate(self.sparse, 4 * MIB)
         os.utime(self.sparse, (0, 0))
+        # the same guards the witness's own real-filesystem tests use
+        # (tests/test_file_stability.py, #587's review): without st_blocks
+        # (Windows) or on a filesystem that does not create sparse files,
+        # the fixture's holes are not there and the tests below would
+        # prove nothing
+        if self.sparse.stat().st_blocks * 512 >= self.sparse.stat().st_size:
+            self.skipTest("this filesystem does not create sparse files")
         # a settled file: old and fully allocated
         self.settled = self.root / "settled.mkv"
         self.settled.write_bytes(b"x" * 64)
         os.utime(self.settled, (0, 0))
-
 
     def _scan_cataloguing(self, *movies: Path):
         """A faked scan that writes each movie's file row exactly as a real
@@ -96,7 +106,6 @@ class TestPlanAsksTheWitness(unittest.TestCase):
 
         return fake_scan
 
-
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
@@ -124,7 +133,7 @@ class TestPlanAsksTheWitness(unittest.TestCase):
     def test_a_young_file_is_not_probed_or_recorded(self) -> None:
         """The prediction command reports a copy in progress at once instead
         of predicting from the torn file - and stores no plan row for it."""
-        probed: list[Path] = []
+        probed: list[str] = []
         db_file = self.root / "plans.db"
 
         def fake_plan(movie, **kwargs):
@@ -139,8 +148,12 @@ class TestPlanAsksTheWitness(unittest.TestCase):
             result = self._run("plan", str(self.young), "--db", str(db_file))
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(probed, [], "the young file was probed")
-        self.assertIn("last write", result.output)
-        self.assertIn(f"needs {STABLE_MIN_AGE:g} s", result.output)
+        # the wording itself is pinned on the witness (test_file_stability:
+        # the reason property); the table folds its Note column at 40
+        # characters, so asserting mid-phrase there is fold-fragile
+        self.assertIn("wait", result.output)
+        self.assertIn("not complete", result.output)
+        self.assertIn("1 file(s) not complete yet; plan them again later", result.output)
         connection = sqlite3.connect(db_file)
         try:
             planned = connection.execute(
@@ -154,7 +167,7 @@ class TestPlanAsksTheWitness(unittest.TestCase):
     def test_a_sparse_download_is_not_probed_or_recorded(self) -> None:
         """A stalled download keeps its identity, so a plan recorded from it
         would be reused until the lease of the file changes: none is."""
-        probed: list[Path] = []
+        probed: list[str] = []
         db_file = self.root / "plans.db"
 
         def fake_plan(movie, **kwargs):
@@ -164,7 +177,9 @@ class TestPlanAsksTheWitness(unittest.TestCase):
         with (
             _toolchain_present(),
             patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
-            patch("shrinkray.__main__.scan_movies", side_effect=self._scan_cataloguing(self.sparse)),
+            patch(
+                "shrinkray.__main__.scan_movies", side_effect=self._scan_cataloguing(self.sparse)
+            ),
         ):
             result = self._run("plan", str(self.sparse), "--db", str(db_file))
         self.assertEqual(result.exit_code, 0, result.output)
@@ -184,7 +199,7 @@ class TestPlanAsksTheWitness(unittest.TestCase):
     def test_a_settled_file_is_planned_and_recorded_as_before(self) -> None:
         """The witness costs a settled file nothing: it is probed once and
         its verdict recorded, exactly as before the fix."""
-        probed: list[Path] = []
+        probed: list[str] = []
         db_file = self.root / "plans.db"
 
         def fake_plan(movie, **kwargs):
@@ -216,7 +231,7 @@ class TestPlanAsksTheWitness(unittest.TestCase):
     def test_a_mixed_library_plans_only_its_settled_files(self) -> None:
         """One folder, three files: the wait rows and the plan row must sit
         in the same run, and only the settled file reaches the engine."""
-        probed: list[Path] = []
+        probed: list[str] = []
         db_file = self.root / "plans.db"
 
         def fake_plan(movie, **kwargs):

@@ -828,7 +828,7 @@ def plan(
     of a real encode run.
     """
     from shrinkray.engine.plan import plan_quality
-    from shrinkray.engine.watch import STABLE_MIN_AGE, check_stability
+    from shrinkray.engine.watch import check_stability
 
     config = load_config(config_file=config_file)
     # the flag wins; without it the config's required VMAF applies (issue #252)
@@ -885,6 +885,7 @@ def plan(
         total_input = total_output = 0
         plans: list = []
         errors = 0
+        waits = 0
         cancel = signals.enter_context(_cancel_on_terminal_close())
         for movie in movies:
             # a signal that landed while no child ran (recording the previous
@@ -905,13 +906,19 @@ def plan(
                 errors += 1
                 continue
             if not stability.settled:
-                reason = (
-                    f"last write only {STABLE_MIN_AGE - stability.young_for:.0f} s ago "
-                    f"(needs {STABLE_MIN_AGE:g} s of quiet)"
-                    if stability.young_for > 0
-                    else str(stability.incomplete)
+                # the reason comes from the witness itself (#587's review):
+                # one wording shared with the backlog jobs (#586), so the
+                # same situation reads the same wherever it is reported
+                table.add_row(
+                    movie.name,
+                    "[yellow]wait[/yellow]",
+                    "",
+                    "",
+                    "",
+                    "",
+                    stability.not_settled_reason,
                 )
-                table.add_row(movie.name, "[yellow]wait[/yellow]", "", "", "", "", reason)
+                waits += 1
                 continue
             try:
                 result = plan_quality(
@@ -986,6 +993,13 @@ def plan(
 
         if not no_table:
             console.print(table)
+        if waits:
+            # a wait row is not an error row, but a scripted run (--no-table)
+            # during a copy must still say what it did not decide (#587's
+            # review): without this line the run printed nothing about it
+            console.print(
+                f"[yellow]{waits} file(s) not complete yet; plan them again later.[/yellow]"
+            )
         if errors:
             if plans:
                 console.print(
