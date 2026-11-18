@@ -7,7 +7,6 @@ still overrides it.
 """
 
 import os
-
 import threading
 import unittest
 from pathlib import Path

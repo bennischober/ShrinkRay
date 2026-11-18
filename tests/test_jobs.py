@@ -1,6 +1,7 @@
 """Job queue and API path validation tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -174,6 +175,10 @@ class TestJobs(unittest.TestCase):
         from types import SimpleNamespace as _NS
         from unittest.mock import patch as _patch
 
+        if sys.platform == "win32":
+            # the same guards the witness's own tests use
+            # (tests/test_file_stability.py, #586's review)
+            self.skipTest("Windows reports no st_blocks")
         root = Path(self.tmp.name)
         young = root / "young.mkv"
         young.write_bytes(b"x" * 64)
@@ -181,6 +186,8 @@ class TestJobs(unittest.TestCase):
         sparse.write_bytes(b"x" * 4096)
         os.truncate(sparse, 4 * 1024 * 1024)
         os.utime(sparse, (0, 0))
+        if sparse.stat().st_blocks * 512 >= sparse.stat().st_size:
+            self.skipTest("this filesystem does not create sparse files")
         settled = root / "settled.mkv"
         settled.write_bytes(b"x" * 64)
         os.utime(settled, (0, 0))
@@ -241,15 +248,17 @@ class TestJobs(unittest.TestCase):
             result = jobs.execute_plan(plan_job, self.connection, threading.Event())
         by_movie = {entry["movie"]: entry for entry in result["plans"]}
         self.assertEqual(planned, ["settled.mkv"], "an unsettled file was probed")
-        self.assertEqual(by_movie["young.mkv"]["state"], "skipped")
+        # "skip", not "skipped": the dashboard matches only "skip" for plan
+        # entries (#586's review) - anything else renders as the red failed
+        # chip on the Overview and reads as planned on the detail page
+        self.assertEqual(by_movie["young.mkv"]["state"], "skip")
         self.assertIn("not complete:", by_movie["young.mkv"]["reason"])
         self.assertIn("last write", by_movie["young.mkv"]["reason"])
-        self.assertEqual(by_movie["sparse.mkv"]["state"], "skipped")
+        self.assertEqual(by_movie["sparse.mkv"]["state"], "skip")
         self.assertIn("appears incomplete", by_movie["sparse.mkv"]["reason"])
         self.assertEqual(by_movie["settled.mkv"]["state"], "encode")
         unsettled_rows = self.connection.execute(
-            "SELECT COUNT(*) FROM plans p JOIN files f ON f.id = p.file_id"
-            " WHERE f.path IN (?, ?)",
+            "SELECT COUNT(*) FROM plans p JOIN files f ON f.id = p.file_id WHERE f.path IN (?, ?)",
             (str(young), str(sparse)),
         ).fetchone()[0]
         self.assertEqual(unsettled_rows, 0, "a plan row was recorded for an unsettled file")

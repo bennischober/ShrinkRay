@@ -316,6 +316,30 @@ class Stability:
         """True when the file may be decided on now."""
         return self.young_for == 0.0 and self.incomplete is None
 
+    @property
+    def not_settled_reason(self) -> str:
+        """Why the file may not be decided on yet, worded for the operator.
+
+        The single source of that wording (#587's review): the plan CLI's
+        wait row and the boot backlog's plan and encode jobs (this PR) all
+        report this property, so one situation reads the same wherever it
+        is reported - the jobs used to build their own copy under a
+        "not complete: " prefix and the CLI a second one without it, and
+        the three could drift apart. Only asked of a verdict that is not
+        `settled`: a settled verdict has no reason.
+
+        Returns:
+            str: The witness's reason: `incomplete`'s own wording when the
+                sparse verdict judged the file, otherwise the
+                remaining-age sentence.
+        """
+        if self.incomplete is not None:
+            return self.incomplete
+        return (
+            f"not complete: last write only {STABLE_MIN_AGE - self.young_for:.0f} s ago "
+            f"(needs {STABLE_MIN_AGE:g} s of quiet)"
+        )
+
 
 def _allocated_fraction(stat: os.stat_result) -> float | None:
     """The share of a file's size that is allocated on disk.

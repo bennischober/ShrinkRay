@@ -806,7 +806,7 @@ def execute_plan(
     """
     from shrinkray.config import load_config, refresh_config
     from shrinkray.engine.plan import plan_quality
-    from shrinkray.engine.watch import STABLE_MIN_AGE, check_stability
+    from shrinkray.engine.watch import check_stability
 
     payload = job.payload
     config = load_config()
@@ -838,14 +838,15 @@ def execute_plan(
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
             continue
         if not stability.settled:
-            reason = (
-                f"last write only {STABLE_MIN_AGE - stability.young_for:.0f} s ago "
-                f"(needs {STABLE_MIN_AGE:g} s of quiet)"
-                if stability.young_for > 0
-                else str(stability.incomplete)
-            )
+            # the reason comes from the witness itself (#587's review): one
+            # wording shared with the plan CLI's wait row. The state is the
+            # dashboard's plan-entry vocabulary: execute_plan already
+            # reports a decided skip as "skip" with a reason, and the
+            # dashboard matches only "skip" for plans (a "skipped" entry
+            # renders as the red failed chip and reads as planned on the
+            # detail page), so the witness's skip is a "skip" too
             plans.append(
-                {"movie": movie.name, "state": "skipped", "reason": f"not complete: {reason}"}
+                {"movie": movie.name, "state": "skip", "reason": stability.not_settled_reason}
             )
             continue
         if progress:
@@ -1037,7 +1038,7 @@ def _encode_measured(
     from shrinkray.config import refresh_config
     from shrinkray.engine.lock import EncodeBusyError, guard_encodes
     from shrinkray.engine.pipeline import encode_with_quality
-    from shrinkray.engine.watch import STABLE_MIN_AGE, check_stability
+    from shrinkray.engine.watch import check_stability
     from shrinkray.service import (
         finished_movies,
         record_quality_results,
@@ -1089,14 +1090,12 @@ def _encode_measured(
             outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
             continue
         if not stability.settled:
-            reason = (
-                f"last write only {STABLE_MIN_AGE - stability.young_for:.0f} s ago "
-                f"(needs {STABLE_MIN_AGE:g} s of quiet)"
-                if stability.young_for > 0
-                else str(stability.incomplete)
-            )
+            # the reason comes from the witness itself (#587's review):
+            # one wording shared with the plan CLI's wait row and the plan
+            # job. The encode job's own vocabulary keeps "skipped" - the
+            # dashboard already knows it for encode outcomes
             outcomes.append(
-                {"movie": movie.name, "state": "skipped", "reason": f"not complete: {reason}"}
+                {"movie": movie.name, "state": "skipped", "reason": stability.not_settled_reason}
             )
             continue
         if progress:
