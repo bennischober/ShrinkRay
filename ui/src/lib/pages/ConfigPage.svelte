@@ -1,5 +1,7 @@
 <script lang="ts">
   import { api, type Config } from '../api'
+  import PageHeader from '../components/PageHeader.svelte'
+  import Panel from '../components/Panel.svelte'
   import HintMark from './HintMark.svelte'
 
   /** SHEET: configuration — sources, output, quality target and the tool
@@ -44,19 +46,16 @@
 </script>
 
 <div class="page page-in">
-  <header class="page-head">
-    <h2>Config</h2>
-    <p class="legend">SOURCES, OUTPUT AND TOOL SETTINGS</p>
-  </header>
+  <PageHeader title="Config" description="Sources, output and tool settings" />
 
   {#if configError}
-    <div class="panel config-error">
-      <div class="pad">
+    <Panel>
+      <div class="config-error">
         <strong>config.json has an error and was not applied.</strong>
         <span class="mono dim block">{configError}</span>
         <span class="dim block">ShrinkRay keeps running with the previous settings shown below.</span>
       </div>
-    </div>
+    </Panel>
   {/if}
 
   <!-- ══ sources (read-only, issue #331): the watched roots are the
@@ -212,8 +211,6 @@
        as unfinished (round-5 minor) */
     margin-inline: auto;
   }
-  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
-  .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }
 
   .panel {

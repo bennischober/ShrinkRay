@@ -1,9 +1,11 @@
 """Tests for the dashboard's optional bearer-token authentication (issue #36).
 
 Auth is opt-in: with no token configured the loopback development flow is
-unchanged. With $SHRINKRAY_TOKEN set, every route requires the token - the
-middleware is the guard, so a new route cannot be added unauthenticated by
-forgetting a decorator.
+unchanged. With $SHRINKRAY_TOKEN set, every API route requires the token —
+the middleware is the guard, so a new route cannot be added unauthenticated
+by forgetting a decorator. The one exception is the SPA shell (issue #600):
+the document and its static assets are the login surface, and a browser
+navigation cannot send the header that would fetch them.
 """
 
 import asyncio
@@ -47,7 +49,11 @@ class TestAuthDisabled(unittest.TestCase):
 
 
 class TestAuthEnabled(unittest.TestCase):
-    """A configured token guards every route, SSE included."""
+    """A configured token guards every API route and /metrics.
+
+    The SPA shell is the one GET-only exception (issue #600): the document
+    and its static assets load without a token.
+    """
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -63,23 +69,97 @@ class TestAuthEnabled(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
-    def test_every_route_rejects_a_missing_token(self) -> None:
-        """A route added without auth must fail this test, not the deployment."""
+    def test_every_api_route_rejects_a_missing_token(self) -> None:
+        """A route added without auth must fail this test, not the deployment.
+
+        The SPA shell is deliberately absent from this list (issue #600): the
+        document and its static assets are the login surface, and their
+        serving without a token is pinned by the shell tests below.
+        """
         for method, path in (
-            ("GET", "/"),
-            ("GET", "/favicon.ico"),
-            ("GET", "/favicon.svg"),
-            ("GET", "/apple-touch-icon.png"),
             ("GET", "/api/status"),
             ("GET", "/api/library"),
             ("GET", "/api/jobs"),
+            ("GET", "/api/jobs/x"),
             ("GET", "/api/snapshot"),
             ("GET", "/api/events"),
             ("GET", "/api/config"),
+            ("GET", "/api/movie"),
+            ("GET", "/api/retained"),
+            ("GET", "/metrics"),
+            ("POST", "/api/reveal"),
         ):
             with self.subTest(path=path):
                 response = self.client.request(method, path)
                 self.assertEqual(response.status_code, 401, f"{method} {path} was not guarded")
+
+    def test_the_spa_document_is_not_a_401(self) -> None:
+        """Issue #600: a browser navigation cannot send the Authorization
+        header, so the document must not be rejected — the paste-token
+        prompt (issue #36) lives inside the SPA and can never appear
+        otherwise. This pin does not need a built UI: the route's own 404
+        is still not a 401."""
+        response = self.client.get("/")
+        self.assertNotEqual(response.status_code, 401)
+
+    def test_the_built_spa_document_is_html(self) -> None:
+        """When the UI is built, the unauthenticated document is the app.
+
+        The Python gate does not build ui/dist, so this skips there. The
+        not-401 pin above still runs.
+        """
+        dist = Path(__file__).parent.parent / "ui" / "dist"
+        if not (dist / "index.html").is_file():
+            self.skipTest("UI not built")
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<html", response.text.lower())
+
+    def test_an_asset_traversal_under_auth_is_a_404(self) -> None:
+        """The asset route's containment holds under auth — a traversal
+        attempt is 404, never served and never a 401-shaped fallback.
+        This does not need a built UI."""
+        response = self.client.get("/assets/..%2F..%2Fpyproject.toml")
+        self.assertEqual(response.status_code, 404)
+
+    def test_a_built_shell_asset_serves_without_a_token(self) -> None:
+        """Issue #600: a built static asset loads unauthenticated.
+
+        Skips when ui/dist has no assets, which is the Python gate. The
+        traversal pin above still runs.
+        """
+        dist = Path(__file__).parent.parent / "ui" / "dist" / "assets"
+        if not dist.is_dir():
+            self.skipTest("UI not built")
+        names = sorted(p.name for p in dist.iterdir() if p.is_file())
+        if not names:
+            self.skipTest("UI not built")
+        ok = self.client.get(f"/assets/{names[0]}")
+        self.assertNotEqual(ok.status_code, 401)
+        self.assertEqual(ok.status_code, 200)
+
+    def test_a_nul_byte_in_an_asset_path_is_a_404_not_a_500(self) -> None:
+        """Round-1 review finding 1: the shell is unauthenticated now, so its
+        error paths are public too — a %00 in the asset path must be the
+        route's own 404, never a server error."""
+        response = self.client.get("/assets/%00")
+        self.assertEqual(response.status_code, 404)
+
+    def test_the_shell_exemption_is_get_only(self) -> None:
+        """The shell paths are exempt for safe reads only: a write to them
+        still needs the token."""
+        for method, path in (("POST", "/"), ("PUT", "/assets/x.js")):
+            with self.subTest(path=path):
+                response = self.client.request(method, path)
+                self.assertEqual(response.status_code, 401)
+
+    def test_the_favicon_routes_serve_without_a_token(self) -> None:
+        """Issue #600: the document references the favicon files from the dist
+        root; a browser fetches them during the unauthenticated load."""
+        for path in ("/favicon.ico", "/favicon.svg", "/apple-touch-icon.png"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertNotEqual(response.status_code, 401)
 
     def test_a_valid_token_is_accepted(self) -> None:
         response = self.client.get("/api/status", headers={"Authorization": f"Bearer {TOKEN}"})

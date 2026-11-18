@@ -14,18 +14,23 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from shrinkray.config import (
+    DEFAULT_SAMPLE_COUNT as DEFAULT_SAMPLE_COUNT,
+)
+from shrinkray.config import (
+    DEFAULT_SAMPLE_EVERY as DEFAULT_SAMPLE_EVERY,
+)
+from shrinkray.config import (
+    DEFAULT_SAMPLE_SECONDS as DEFAULT_SAMPLE_SECONDS,
+)
 from shrinkray.logger import log_warning
 from shrinkray.tools.ffprobe import FFPROBE_TIMEOUT
 from shrinkray.tools.process import Cancelled, _run
 
 FFMPEG_BINARY = "ffmpeg"
 
-DEFAULT_SAMPLE_COUNT = 3
-DEFAULT_SAMPLE_SECONDS = 10.0
-# probe density as a duration: one window per N seconds of runtime, so
-# coverage is a fixed fraction (sample_seconds / sample_every) instead of
-# shrinking as the movie gets longer. None keeps the count-based default.
-DEFAULT_SAMPLE_EVERY = 600.0
+# the sampling defaults live in config.py (the one home; the engine imports
+# downward) - issue #651 removed the second definition that used to sit here
 
 # the engine's live-progress callback: stage detail and counters, never persisted
 # (quality.py holds the same alias; the two merge when the engine split finishes)

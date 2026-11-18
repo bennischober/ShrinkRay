@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, fmtSeconds, fmtSpan, fmtWhen, humanizeError, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { humanizeError, isFailedOutcome, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
+  import { bytes, duration, kindWord, percent, progressLabel, relative, savedPercent, span, statusAnswer, titleBuckets, vmaf, verdictWord } from '../format'
+  import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
 
   /** Path equality that survives separator and case differences. */
@@ -19,8 +21,8 @@
     failedJobs,
     scanPaths,
     outputDir,
-    sparkSamples = [],
     retainedFiles = [],
+    stale = false,
     ondismiss,
     ongoto,
     onopenmovie,
@@ -36,20 +38,18 @@
     failedJobs: Job[]
     scanPaths: string[]
     outputDir: string
-    /** resident-memory samples accumulated by the poll (App.svelte) —
-     * the sparkline's buffer lives at app level so it survives page
-     * switches and never writes what it reads */
-    sparkSamples?: number[]
     /** the retention ledger's rows (App.svelte) — the panel totals the
      * present ones; the rows themselves are the Retained page's job */
     retainedFiles?: RetainedFile[]
+    /** The shell's data is no longer current, so no time is derived from the
+     * clock and nothing that moves keeps moving (issue #629). */
+    stale?: boolean
     ondismiss: (id: number | null) => void
     ongoto: (page: 'overview' | 'library' | 'jobs' | 'config' | 'retained') => void
     onopenmovie: (movie: Movie) => void
   } = $props()
 
-  const encodedCount = $derived(movies.filter((m) => m.encode && !m.encode.preset?.startsWith('skipped')).length)
-  const untouchedCount = $derived(movies.filter((m) => !m.encode).length)
+  const buckets = $derived(titleBuckets(movies))
   const totalSizeGb = $derived(movies.reduce((sum, m) => sum + (m.size ?? 0), 0) / 1024 ** 3)
 
   // mean measured VMAF
@@ -109,6 +109,21 @@
     return `~${Math.floor(m / 60)}h ${m % 60}m remaining`
   }
 
+  // the estimate divides a clock, so it is frozen while the data is old rather
+  // than recomputed into a countdown nothing is backing (issue #629)
+  let frozenEta = $state<number | null>(null)
+  $effect(() => {
+    if (!stale) frozenEta = eta
+  })
+  const shownEta = $derived(stale ? frozenEta : eta)
+
+  // every elapsed statement reads the same clock, so none of them keeps
+  // counting up while the data is old (issue #629)
+  let shownClock = $state(Date.now())
+  $effect(() => {
+    if (!stale) shownClock = Date.now()
+  })
+
   // completion moment: the last finished encode run, stated (peak-end)
   interface OutcomeEntry {
     movie: string
@@ -133,16 +148,15 @@
     )
     // adaptive units: a 40 MB win must not read as "−0.0 GB"
     const savedLabel =
-      savedBytes >= 0.1 * 1024 ** 3
-        ? `−${(savedBytes / 1024 ** 3).toFixed(1)} GB`
-        : `−${(savedBytes / 1024 ** 2).toFixed(0)} MB`
+      `−${bytes(savedBytes)}`
     const vmafs = encoded.map((o) => o.vmaf).filter((v) => v != null) as number[]
-    const wall = fmtSpan(lastEncodeRun.started_at, lastEncodeRun.finished_at)
+    const wallSpan = span(lastEncodeRun.started_at, lastEncodeRun.finished_at)
+    const wall = wallSpan === '—' ? '' : wallSpan
     return {
       id: lastEncodeRun.id,
       state: lastEncodeRun.state,
       count: encoded.length,
-      failed: encodeOutcomes.filter((o) => o.state === 'failed').length,
+      failed: encodeOutcomes.filter(isFailedOutcome).length,
       savedLabel,
       minVmaf: vmafs.length ? Math.min(...vmafs) : null,
       wall,
@@ -160,9 +174,9 @@
    * 43 MB win must not print as "−0.0 GB (0%)". Sub-1 GB reads in MB,
    * and a percentage below 1 prints as "<1%" instead of a false zero. */
   function fmtReclaimed(reclaimedGb: number, sizeGb: number): string {
-    const size = reclaimedGb < 1 ? `−${(reclaimedGb * 1024).toFixed(0)} MB` : `−${reclaimedGb >= 10 ? reclaimedGb.toFixed(0) : reclaimedGb.toFixed(1)} GB`
+    const size = `−${bytes(reclaimedGb * 1024 ** 3)}`
     const pct = (reclaimedGb / sizeGb) * 100
-    return `${size} (${pct >= 1 ? pct.toFixed(0) : '<1'}%)`
+    return `${size} (${pct >= 1 ? percent(pct) : '<1%'})`
   }
   const catBars = $derived.by(() => {
     const map = new Map<string, CatBar>()
@@ -170,7 +184,13 @@
       const bar = map.get(m.category) ?? { name: m.category, titles: 0, sizeGb: 0, reclaimedGb: 0 }
       bar.titles += 1
       bar.sizeGb += (m.size ?? 0) / 1024 ** 3
-      if (m.encode?.saved_percent != null && m.encode.saved_percent > 0) {
+      // only an APPLIED encode reclaimed anything (issue #625): a discarded
+      // attempt's sizes describe an artifact that was thrown away
+      if (
+        m.encode?.outcome !== 'discarded' &&
+        m.encode?.saved_percent != null &&
+        m.encode.saved_percent > 0
+      ) {
         bar.reclaimedGb += ((m.encode.input_size ?? 0) - (m.encode.output_size ?? 0)) / 1024 ** 3
       }
       map.set(m.category, bar)
@@ -183,7 +203,11 @@
   // reveals the rest inline — a "more →" that jumps to the library left
   // the chart literally cut off (round-6, user report)
   let showAllCats = $state(false)
-  const visibleCats = $derived(showAllCats ? catBars : catBars.slice(0, 8))
+  // issue #633: a category that holds one title is that title's own file
+  // size, not a category — the panel only earns its place where a category
+  // actually groups several titles
+  const groupedCats = $derived(catBars.filter((b) => b.titles > 1))
+  const visibleCats = $derived(showAllCats ? groupedCats : groupedCats.slice(0, 8))
 
   // plan results of the latest finished plan job
   interface PlanEntry {
@@ -202,6 +226,11 @@
   const planEntries = $derived(
     (lastPlan?.result as { plans?: PlanEntry[] } | null)?.plans ?? []
   )
+  /** The target the last plan was decided against (its job payload), so
+   * a prediction's printed score is read against the target that judged it. */
+  const planTargetVmaf = $derived(
+    typeof lastPlan?.payload?.target_vmaf === 'number' ? lastPlan.payload.target_vmaf : targetVmaf
+  )
   /** A plan entry whose movie has an encode row is history, not a queue:
    * the prediction was overtaken by a measurement (the console must not
    * present "1 to encode" for titles that already encoded). */
@@ -209,7 +238,13 @@
     movies.some(
       (m) =>
         m.path.replace(/[\\/]/g, '').toLowerCase().endsWith(movie.replace(/[\\/]/g, '').toLowerCase()) &&
-        m.encode != null
+        m.encode != null &&
+        // a discarded attempt is not an encode (issue #625): the title is
+        // still open, the prediction was never realised; neither is a skip
+        // record, whose preset says skipped (…) because nothing was written
+        // (issue #630, case 6)
+        m.encode.outcome !== 'discarded' &&
+        !(m.encode.preset ?? '').startsWith('skipped')
     )
   /** The library record for a plan entry (path-suffix join, plan entries
    * store bare filenames) — the measured truth an ENCODED row shows. */
@@ -221,9 +256,7 @@
   /** Plan age in honest units — a stale plan must say so. */
   const planAge = $derived.by(() => {
     if (!lastPlan?.finished_at) return ''
-    const span = fmtSpan(lastPlan.finished_at, new Date().toISOString())
-    if (!span) return ''
-    return `finished ${span} ago`
+    return `finished ${relative(lastPlan.finished_at)}`
   })
   /** Head summary in real terms: what happened SINCE the plan ran. */
   const planSummary = $derived.by(() => {
@@ -277,52 +310,22 @@
   })
 
   // ── resident-memory sparkline: the app watching itself ──
-  // rss_mib arrives live on every snapshot; the client keeps a small
-  // buffer so the SETUP panel shows the trend, not just the instant.
-  // A slow leak becomes visible before it becomes a problem.
-  // Samples accumulate in App.svelte's poll path (an $effect that read
-  // AND wrote rssSamples looped itself to death — Svelte 5 forbids
-  // self-reading effects, round-6.6 lesson).
-  const rssSpark = $derived.by(() => {
-    const samples = sparkSamples
-    if (samples.length < 2) return null
-    const min = Math.min(...samples)
-    const max = Math.max(...samples)
-    const span = Math.max(max - min, 2) // ≥2 MiB span: a flat line stays readable
-    const w = 180
-    const h = 30
-    const pts = samples.map(
-      (v, i) =>
-        `${((i / (samples.length - 1)) * w).toFixed(1)},${(h - 2 - ((v - min) / span) * (h - 4)).toFixed(1)}`
-    )
-    return {
-      points: pts.join(' '),
-      min,
-      max,
-      last: samples[samples.length - 1],
-      n: samples.length,
-      w,
-      h,
-    }
-  })
 
   /** The fail-row error currently expanded (one at a time). */
   let expandedErr = $state<number | null>(null)</script>
 
 <div class="page page-in">
-  <header class="page-head">
-    <h2>Overview</h2>
-    <p class="legend">THE LIBRARY AT A GLANCE · VMAF TARGET {targetVmaf}</p>
-  </header>
+  <PageHeader title="Overview" description={`The library at a glance · VMAF target ${targetVmaf}`} />
 
-  <!-- system line: the console's own telemetry (only what's not already
-       on the rail badges and the stat band — those carry the counts) -->
-  <div class="sysline mono dim">
-    <span title="adaptive: 1s while work is queued/running, 3s idle, 10s in hidden tabs">POLL ADAPTIVE</span>
-    <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
-    <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
-    <span class="spacer"></span>
-    <span>{scanPaths.length} SOURCE{scanPaths.length === 1 ? '' : 'S'}</span>
+  <!-- issue #633: the page answers "is everything OK?" before it says
+       anything about its own internals -->
+  <div class="status-line mono" class:work={runningJob !== null}>
+    {statusAnswer({
+      running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
+      etaSeconds: shownEta,
+      queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
+      watching: status?.watcher === 'running',
+    })}
   </div>
 
   <!-- ══ stat band ══ -->
@@ -330,17 +333,21 @@
     <button class="stat" onclick={() => ongoto('library')}>
       <span class="legend">TITLES</span>
       <span class="stat-v mono">{movies.length}</span>
-      <span class="stat-sub mono dim">{encodedCount} encoded · {untouchedCount} untouched</span>
+      <span class="stat-sub mono dim"
+        >{buckets.encoded} encoded · {buckets.untouched} untouched{buckets.skipped > 0
+          ? ` · ${buckets.skipped} skipped`
+          : ''}{buckets.discarded > 0 ? ` · ${buckets.discarded} discarded` : ''}</span
+      >
     </button>
     <button class="stat" onclick={() => ongoto('library')}>
       <span class="legend">RECLAIMED</span>
-      <span class="stat-v mono">{savedTotalGb.toFixed(1)} GB</span>
-      <span class="stat-sub mono dim">of {totalSizeGb.toFixed(0)} GB library</span>
+      <span class="stat-v mono">{bytes(savedTotalGb * 1024 ** 3)}</span>
+      <span class="stat-sub mono dim">of {bytes(totalSizeGb * 1024 ** 3)} library</span>
     </button>
     {#if reclaimable}
       <button class="stat" onclick={() => ongoto('library')} title="Plan-predicted savings on the {reclaimable.count} titles the last plan queued for encode — realized when they encode. Titles without a measured prediction are excluded, not estimated.">
         <span class="legend">RECLAIMABLE</span>
-        <span class="stat-v mono">{reclaimable.gb.toFixed(1)} GB</span>
+        <span class="stat-v mono">{bytes(reclaimable.gb * 1024 ** 3)}</span>
         <span class="stat-sub mono dim">{reclaimable.count} planned{reclaimable.unmeasured > 0 ? ` · ${reclaimable.unmeasured} unmeasured` : ''} · plan #{lastPlan?.id}</span>
       </button>
     {/if}
@@ -357,17 +364,17 @@
   {#if runningJob}
     <div class="running">
       <div class="running-head">
-        <span class="legend amber">IN WORK · {runningJob.kind.toUpperCase()}</span>
+        <span class="legend amber">Working · {kindWord(runningJob.kind)}</span>
         <span class="mono dim">{runningProgress?.done != null && runningProgress?.total != null ? `${runningProgress.done}/${runningProgress.total} · ` : ''}{runningProgress?.percent != null ? `${runningProgress.percent}%` : ''}</span>
       </div>
-      <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || runningJob.kind}</div>
+      <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || kindWord(runningJob.kind)}</div>
       <div class="trace" role="progressbar" aria-valuenow={runningProgress?.percent ?? undefined} aria-valuemin="0" aria-valuemax="100" aria-label="encode progress">
         <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
       </div>
       <div class="mono dim detail">
-        {runningProgress?.detail ?? 'working…'}
-        · started {fmtWhen(runningJob.started_at)}
-        · {fmtEta(eta)}
+        {progressLabel(runningProgress?.stage, null, runningProgress?.detail, runningProgress?.percent)}
+        · started {relative(runningJob.started_at, new Date(shownClock))}
+        · {fmtEta(shownEta)}
       </div>
     </div>
   {:else}
@@ -375,7 +382,7 @@
       <div class="quiet-strip done-strip">
         <span class="mono">
           <span class="legend">LAST RUN #{runSummary.id}</span>
-          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${runSummary.minVmaf.toFixed(1)}` : ''}{runSummary.minVmaf != null && runSummary.minVmaf < targetVmaf ? ` (target ${targetVmaf})` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
+          {runSummary.count} encoded · {runSummary.savedLabel}{runSummary.minVmaf != null ? ` · min VMAF ${vmaf(runSummary.minVmaf, targetVmaf)}` : ''}{runSummary.minVmaf != null && runSummary.minVmaf < targetVmaf ? ` (target ${targetVmaf})` : ''}{runSummary.wall ? ` · ${runSummary.wall} wall` : ''}
           {#if runSummary.failed > 0}<span class="bad"> · {runSummary.failed} failed</span>{/if}
         </span>
         <button class="nav-link" onclick={() => ongoto('jobs')}>JOBS →</button>
@@ -407,7 +414,7 @@
           {@const errText = rawErr ? humanizeError(null, rawErr) : ''}
           {@const target = movies.find((m) => jobPaths(job).some((jp) => pathEq(m.path, jp)))}
           <div class="fail-row">
-            <span class="mono bad">#{job.id} {job.kind}</span>
+            <span class="mono bad">#{job.id} {kindWord(job.kind)}</span>
             <!-- the error is the diagnosis: a long one becomes a button that
                  expands inline, so keyboard users can actually read it -->
             {#if errText.length > 60}
@@ -454,36 +461,6 @@
       {/if}
     </section>
 
-    <!-- ══ setup ══ -->
-    <section class="panel">
-      <div class="panel-head">
-        <span class="legend">SETUP</span>
-        <button class="nav-link" onclick={() => ongoto('config')}>CONFIG →</button>
-      </div>
-      <div class="setup mono">
-        <div class="fact"><span class="legend">SCAN FROM</span><span class="src">{scanPaths.join(' · ') || '—'}</span></div>
-        <div class="fact"><span class="legend">WRITE TO</span><span class="src">{outputDir || '—'}</span></div>
-        <div class="fact"><span class="legend">DATABASE</span><span class="src">{status?.database ?? '—'}</span></div>
-        <div class="fact"><span class="legend">WATCHER</span><span class="src">{status?.watcher ?? '—'}</span></div>
-        {#if status?.rss_mib != null}
-          <div class="fact rss-fact">
-            <span class="legend">RESIDENT MEMORY</span>
-            {#if rssSpark}
-              <!-- the trend, not just the instant: a leak announces
-                   itself here before the log does -->
-              <span class="rss-wrap" title="resident {rssSpark.last.toFixed(1)} MiB · min {rssSpark.min.toFixed(1)} · max {rssSpark.max.toFixed(1)} MiB · {rssSpark.n} samples this session">
-                <svg viewBox="0 0 {rssSpark.w} {rssSpark.h}" preserveAspectRatio="none" aria-hidden="true">
-                  <polyline points={rssSpark.points} class="rss-line" fill="none"></polyline>
-                </svg>
-                <span class="mono">{rssSpark.last.toFixed(1)} MiB</span>
-              </span>
-            {:else}
-              <span class="src">{status.rss_mib.toFixed(1)} MiB</span>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    </section>
 
     <!-- ══ measured quality: the score that justifies the whole product ══ -->
     <!-- lives in the attention row (4th panel): the user asked for the avg
@@ -496,21 +473,21 @@
         <div class="dim pad">nothing measured yet — plan predicts, encode measures</div>
       {:else}
         <div class="quality mono">
+          {#if measured.length > 1}
           <div class="q-head">
-            <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{meanVmaf?.toFixed(1)}</span>
+            <span class="q-big" class:warn={(minVmaf ?? 100) < targetVmaf}>{vmaf(meanVmaf, targetVmaf)}</span>
             <span class="q-label legend">MEAN</span>
-            {#if measured.length > 1}
-              <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
-                   the single row carrying exactly that) — the sub-line only
-                   earns its place with a spread to summarize -->
-              <span class="q-sub mono dim">min {minVmaf?.toFixed(1)} · {measured.length} measured</span>
-            {/if}
+            <!-- n=1 duplicates its own row ("min 90.3 · 1 measured" over
+                 the single row carrying exactly that) — the sub-line only
+                 earns its place with a spread to summarize -->
+            <span class="q-sub mono dim">min {vmaf(minVmaf, targetVmaf)} · {measured.length} measured</span>
           </div>
+          {/if}
           {#each measured.slice(0, 6) as m (m.path)}
-            <div class="q-row" title="{m.name}: VMAF {m.encode?.vmaf?.toFixed(1)} (target {targetVmaf})">
+            <div class="q-row" title="{m.name}: VMAF {vmaf(m.encode?.vmaf, targetVmaf)} (target {targetVmaf})">
               <span class="q-name">{m.name}</span>
               <span class="q-bar"><span class="q-fill" style="width: {Math.min(100, ((m.encode?.vmaf ?? 0) / 100) * 100)}%"></span></span>
-              <span class="q-v mono" class:warn={(m.encode?.vmaf ?? 100) < targetVmaf}>{m.encode?.vmaf?.toFixed(1)}</span>
+              <span class="q-v mono" class:warn={(m.encode?.vmaf ?? 100) < targetVmaf}>{vmaf(m.encode?.vmaf, targetVmaf)}</span>
             </div>
           {/each}
           {#if measured.length > 6}
@@ -535,14 +512,25 @@
           <button class="nav-link" onclick={() => ongoto('retained')}>RETAINED →</button>
         </div>
         <div class="dim pad mono">
-          {present.length} original{present.length === 1 ? '' : 's'} · {fmtGb(totalBytes)} held aside —
+          {present.length} original{present.length === 1 ? '' : 's'} · {bytes(totalBytes)} held aside —
           each has a verified encode in the library; delete them in your file manager when satisfied
         </div>
       </section>
     {/if}
   </div>
 
+  <!-- system line: the console's own telemetry (only what's not already
+       on the rail badges and the stat band — those carry the counts) -->
+  <div class="sysline mono dim">
+    <span title="adaptive: 1s while work is queued/running, 3s idle, 10s in hidden tabs">POLL ADAPTIVE</span>
+    <span>DB {status?.database?.split(/[\\/]/).pop() ?? '—'}</span>
+    <span>{movies.length} TITLES · {measuredCount} MEASURED</span>
+    <span class="spacer"></span>
+    <span>{scanPaths.length} SOURCE{scanPaths.length === 1 ? '' : 'S'}</span>
+  </div>
+
   <!-- ══ per-category bars: where the bytes live ══ -->
+  {#if groupedCats.length > 0}
   <section class="panel wide">
     <div class="panel-head">
       <span class="legend">LIBRARY BY CATEGORY — SIZE AND RECLAIMED</span>
@@ -555,7 +543,7 @@
       <!-- top-8 cap orders the chart; the expander reveals the rest IN
            PANEL — a "more →" jump left the graph cut off (round-6) -->
       {#each visibleCats as bar (bar.name)}
-        <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bar.sizeGb.toFixed(1)} GB · {bar.reclaimedGb.toFixed(1)} GB reclaimed">
+        <div class="bar-row" title="{bar.name}: {bar.titles} titles · {bytes(bar.sizeGb * 1024 ** 3)} · {bytes(bar.reclaimedGb * 1024 ** 3)} reclaimed">
           <span class="bar-name">{bar.name}</span>
           <div class="bar-track">
             <div class="bar-size" style="width: {bar.sizeGb > 0 ? Math.max((bar.sizeGb / maxCatSize) * 100, 2) : 0}%"></div>
@@ -566,18 +554,19 @@
                  (exact figures live in the nums + row title). -->
             <div class="bar-reclaimed" style="width: {bar.reclaimedGb > 0 ? Math.max((bar.reclaimedGb / maxCatSize) * 100, 1.5) : 0}%"></div>
           </div>
-          <span class="bar-nums mono dim">{bar.titles} · {bar.sizeGb.toFixed(0)} GB{bar.reclaimedGb > 0 ? ` · ${fmtReclaimed(bar.reclaimedGb, bar.sizeGb)}` : ''}</span>
+          <span class="bar-nums mono dim">{bar.titles} · {bytes(bar.sizeGb * 1024 ** 3)}{bar.reclaimedGb > 0 ? ` · ${fmtReclaimed(bar.reclaimedGb, bar.sizeGb)}` : ''}</span>
         </div>
       {:else}
         <div class="dim pad">no titles scanned yet</div>
       {/each}
-      {#if catBars.length > 8}
+      {#if groupedCats.length > 8}
         <button class="link legend more" onclick={() => (showAllCats = !showAllCats)}>
-          {showAllCats ? 'SHOW LESS' : `SHOW ${catBars.length - 8} MORE`}
+          {showAllCats ? 'SHOW LESS' : `SHOW ${groupedCats.length - 8} MORE`}
         </button>
       {/if}
     </div>
   </section>
+  {/if}
 
   <!-- ══ plan results: the prediction, visible ══ -->
   {#if planEntries.length > 0}
@@ -616,34 +605,34 @@
                   ? plannedSaved != null && rec.saved_percent != null
                     ? // fixed-mode rows kept their measured truth dormant —
                       // the juxtaposition must fire for them too (round-6 P3)
-                      `plan ${plannedSaved.toFixed(0)}% → fixed-mode ${rec.saved_percent.toFixed(1)}% (unmeasured)`
+                      `plan ${percent(plannedSaved)} → fixed-mode ${percent(rec.saved_percent)} (unmeasured)`
                     : 'encoded (fixed mode — no VMAF measurement)'
                   : savedDelta != null && savedDelta < -2
-                    ? `plan ${plannedSaved?.toFixed(0)}% → measured ${rec.saved_percent?.toFixed(1)}%`
+                    ? `plan ${percent(plannedSaved)} → measured ${percent(rec.saved_percent)}`
                     : plannedSaved != null
-                      ? `plan ${plannedSaved.toFixed(0)}% · measured ${rec.saved_percent?.toFixed(1)}%`
+                      ? `plan ${percent(plannedSaved)} · measured ${percent(rec.saved_percent)}`
                       : 'measured'
           }
           <div class="plan-row mono" class:plan-done={done} title={done ? 'the prediction has been overtaken by a measurement — the row shows the measured values' : ''}>
             <span class="p-name">{entry.movie}</span>
             <span class="chip {done ? 'done' : entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
-              <span class="swatch"></span>{done ? 'ENCODED' : entry.state.toUpperCase()}
+              <span class="swatch"></span>{done ? 'Encoded' : verdictWord(entry.state)}
             </span>
-            <span class="p-num" class:measured={done && rec?.crf != null} title={done && rec?.crf != null ? 'measured value — the plan predicted ' + (entry.crf ?? '—') : 'planned value'}>
+            <span class="p-num p-crf" class:measured={done && rec?.crf != null} title={done && rec?.crf != null ? 'measured value — the plan predicted ' + (entry.crf ?? '—') : 'planned value'}>
               {#if done}{rec?.crf ?? '—'}{#if crfDelta != null && crfDelta !== 0}<span class="delta-mark"> ({crfDelta > 0 ? '+' : '−'}{Math.abs(crfDelta)})</span>{/if}{:else}{entry.crf ?? '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + (entry.vmaf?.toFixed(1) ?? '—') : 'planned value'}>
-              {#if done}{rec?.vmaf?.toFixed(1) ?? '—'}{:else}{entry.vmaf?.toFixed(1) ?? '—'}{/if}
+            <span class="p-num p-vmaf" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + vmaf(entry.vmaf, planTargetVmaf) : 'planned value'}>
+              {#if done}{vmaf(rec?.vmaf, planTargetVmaf)}{:else}{vmaf(entry.vmaf, planTargetVmaf)}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—') : 'planned value'}>
-              {#if done}{fmtGb(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? fmtGb(entry.estimated_size) : '—'}{/if}
+            <span class="p-num p-size" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? bytes(entry.estimated_size) : '—') : 'planned value'}>
+              {#if done}{bytes(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? bytes(entry.estimated_size) : '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.saved_percent != null ? 'measured value — the plan predicted ' + (plannedSaved != null ? plannedSaved.toFixed(0) + '%' : '—') : 'planned value'}>
+            <span class="p-num p-saved" class:measured={done && rec?.vmaf != null} title={done && rec?.saved_percent != null ? 'measured value — the plan predicted ' + percent(plannedSaved) : 'planned value'}>
               {#if done}
-                {@const saved = fmtSavedHonest(rec?.saved_percent)}
+                {@const saved = savedPercent(rec?.saved_percent)}
                 {saved.text}
               {:else}
-                {plannedSaved != null ? `${plannedSaved.toFixed(0)}%` : '—'}
+                {percent(plannedSaved)}
               {/if}
             </span>
             <span class="dim p-reason">{verdict}</span>
@@ -656,13 +645,16 @@
 
 <style>
   .page { display: flex; flex-direction: column; gap: 14px; }
-  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
-  .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }
   .warn { color: var(--amber); }
   .bad { color: var(--red); }
   .amber { color: var(--amber); }
 
+  .status-line {
+    padding: 2px 14px 10px;
+    color: var(--ink-dim);
+  }
+  .status-line.work { color: var(--amber); }
   .sysline {
     display: flex;
     gap: 16px;
@@ -915,14 +907,6 @@
   .nav-link:hover { text-decoration: underline; }
   .head-tools { display: flex; gap: 12px; align-items: center; }
   .more { padding: 8px 14px; text-align: left; }
-  .setup { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 14px; }
-  .fact { display: flex; justify-content: space-between; gap: 12px; }
-  .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
-  /* the memory sparkline: trend beside the instant figure */
-  .rss-fact { align-items: center; }
-  .rss-wrap { display: inline-flex; align-items: center; gap: 8px; }
-  .rss-wrap svg { width: 90px; height: 16px; }
-  .rss-line { stroke: var(--teal); stroke-width: 1.5; }
 
   /* measured quality panel */
   .quality { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 4px; }
@@ -937,4 +921,29 @@
   .q-fill { display: block; height: 100%; background: var(--teal); }
   .q-v { font-size: 10.5px; text-align: right; }
 
+  /* below 768px the seven-column plan row clips on a phone (its minimum is
+     ~500px): the title spans the card and the five facts sit under it
+     (issue #636) */
+  @media (max-width: 768px) {
+    .plan-head { display: none; }
+    .plan-list { padding: 4px 10px 12px; }
+    .plan-row {
+      grid-template-columns: 1fr auto auto;
+      grid-template-areas:
+        'name name name'
+        'state crf vmaf'
+        'size saved saved'
+        'reason reason reason';
+      gap: 4px 10px;
+      align-items: baseline;
+      padding: 8px 0;
+    }
+    .p-name { grid-area: name; white-space: normal; word-break: break-word; }
+    .plan-row > .chip { grid-area: state; justify-self: start; }
+    .p-crf { grid-area: crf; }
+    .p-vmaf { grid-area: vmaf; }
+    .p-size { grid-area: size; }
+    .p-saved { grid-area: saved; }
+    .p-reason { grid-area: reason; white-space: normal; }
+  }
 </style>

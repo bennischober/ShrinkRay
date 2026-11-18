@@ -1,15 +1,18 @@
 <script lang="ts">
+  import { queueLabel } from './lib/format'
   import { onMount } from 'svelte'
   import {
     api,
-    fmtGb,
     isAuthFailure,
+    isFailedOutcome,
     jobPaths,
     storeToken,
+    storedToken,
     type Movie,
     type RetainedFile,
     type Status,
     type Job,
+    type JobOutcome,
   } from './lib/api'
   import OverviewPage from './lib/pages/OverviewPage.svelte'
   import LibraryPage from './lib/pages/LibraryPage.svelte'
@@ -17,7 +20,8 @@
   import ConfigPage from './lib/pages/ConfigPage.svelte'
   import RetainedPage from './lib/pages/RetainedPage.svelte'
   import MovieDetailPage from './lib/pages/MovieDetailPage.svelte'
-  import { connectEvents, progressFor } from './lib/progress.svelte'
+  import { connectEvents, eventsConnected, progressFor, resetEvents } from './lib/progress.svelte'
+  import { deriveConnection, freshnessText, POLL_ACTIVE, POLL_HIDDEN, POLL_IDLE } from './lib/connection'
 
   type Page = 'overview' | 'library' | 'jobs' | 'retained' | 'config'
 
@@ -29,6 +33,35 @@
   /** The server requires a bearer token and none is stored (issue #36):
    * the UI asks for it instead of showing a red error strip. */
   let needsToken = $state(false)
+  /** when the last snapshot arrived: the freshness indicator and the stale
+   * state both read it (issue #629) */
+  let lastOkAt = $state<number | null>(null)
+  let tokenWrong = $state(false)
+  /** ticks once a second so the freshness text ages without a new snapshot */
+  let clock = $state(Date.now())
+  $effect(() => {
+    const timer = setInterval(() => (clock = Date.now()), 1000)
+    return () => clearInterval(timer)
+  })
+  const connectionState = $derived(
+    deriveConnection({
+      hasSnapshot: status !== null,
+      locked: needsToken,
+      lastOkAt,
+      eventsUp: eventsConnected(),
+      now: clock,
+    }),
+  )
+  // a badge is a count: it is never drawn while the data is unknown or old
+  const showCounts = $derived(connectionState === 'live' || connectionState === 'stale')
+  // the banner names the failure it actually has: a dropped event stream is not
+  // an unreachable server, and blaming the server would send the operator to the
+  // wrong place (issue #629 review)
+  const staleReason = $derived(
+    error !== null
+      ? "Can't reach ShrinkRay — retrying every 3 s. Work on the server continues."
+      : 'Live progress disconnected — the numbers below are from the last update. Reconnecting…',
+  )
   let tokenInput = $state('')
   /** Informational feedback ("already queued") — never red; red is for
    * failure only (the console's own Red Lock Rule). */
@@ -56,6 +89,19 @@
   let detailMovie = $state<Movie | null>(null)
   // where the detail was opened from — the back button returns there
   let detailFrom = $state<'overview' | 'library' | 'jobs'>('overview')
+  /** The title path a `#/movie/<path>` hash carries, or null for a bare
+   * `#/movie`. The path is the page's URL (issue #635): a shared link, a
+   * bookmark and a reload all restore the same title, where sessionStorage
+   * only survived a reload in the same tab. */
+  function moviePathFromHash(): string | null {
+    const prefix = '#/movie/'
+    if (!location.hash.startsWith(prefix)) return null
+    try {
+      return decodeURIComponent(location.hash.slice(prefix.length)) || null
+    } catch {
+      return null
+    }
+  }
   function goto(next: Page) {
     detailMovie = null
     detailPath = null
@@ -63,14 +109,19 @@
     page = next
     location.hash = `/${next}`
   }
+  let pendingDetailFrom: 'overview' | 'library' | 'jobs' = 'library'
   function openDetail(movie: Movie, from: 'overview' | 'library' | 'jobs') {
     detailMovie = movie
     detailFrom = from
+    // the deep-link effect reads pendingDetailFrom, so the click's origin must
+    // ride there too or the effect resets it to 'library' and the back link
+    // says LIBRARY for a title opened from Overview or Jobs (issue #635 review)
+    pendingDetailFrom = from
     detailPath = null
     // deep link: the hash stays routable (#/movie), the path rides in
     // sessionStorage so F5 on a detail page restores the same title
     sessionStorage.setItem('sr.detail', movie.path)
-    location.hash = '/movie'
+    location.hash = '/movie/' + encodeURIComponent(movie.path)
   }
   function closeDetail() {
     detailMovie = null
@@ -92,7 +143,7 @@
     page = 'library'
   }
   let detailPath = $state<string | null>(
-    location.hash === '#/movie' ? sessionStorage.getItem('sr.detail') : null
+    moviePathFromHash() ?? (location.hash === '#/movie' ? sessionStorage.getItem('sr.detail') : null)
   )
 
   // back/forward support: hash is the single source of truth for pages,
@@ -100,6 +151,12 @@
   // the detail — otherwise the hash says library while a detail page is
   // still mounted (a zombie the rail clicks can't explain)
   window.addEventListener('hashchange', () => {
+    const hashPath = moviePathFromHash()
+    if (hashPath !== null) {
+      detailPath = hashPath
+      page = 'library'
+      return
+    }
     if (location.hash === '#/movie') {
       // Forward onto a dead deep link (detail closed, session gone):
       // settle on the overview instead of a zombie hash
@@ -120,8 +177,10 @@
     page = pageFromHash()
   })
 
-  // ── keyboard layer: 1-5 switch pages, / focuses search ──
-  const SHORTCUT_LEGEND = '1–5: pages · /: search'
+  // ── keyboard layer: 1–4 switch pages, / focuses search ──
+  // the map binds 1-4 (Retained has no shortcut), so the legend must not
+  // promise a fifth (issue #636; ui/AGENTS.md records the mismatch)
+  const SHORTCUT_LEGEND = '1–4: pages · /: search'
   function handleShortcuts(e: KeyboardEvent) {
     // never hijack typing in inputs
     const t = e.target as HTMLElement
@@ -193,15 +252,9 @@
   // ── selection (bulk ops live on the library page) ──
   let selectedPaths = $state<Set<string>>(new Set())
 
-  // ── resident-memory samples (the overview's sparkline buffer) ──
-  // Accumulated in the poll path, never in an $effect: an effect that
-  // read AND wrote its buffer looped itself to death (round-6.6). Pure
-  // write-on-new-sample; capped at 40 (the sparkline's window).
-  let rssSamples = $state<number[]>([])
-  function rememberRss(v: number | null | undefined) {
-    if (v == null) return
-    rssSamples = [...rssSamples, v].slice(-40)
-  }
+  // issue #633: the Overview's sparkline is gone, and with it the
+  // resident-memory window that fed it — no panel shows the trend, so no
+  // code accumulates one.
 
   // ── refresh loop ──
   async function refresh() {
@@ -210,14 +263,15 @@
       status = snap.status
       if (snap.jobs !== null) history = snap.jobs // unchanged: keep the current array
       if (snap.library !== null) movies = snap.library // unchanged: keep the current array
-      rememberRss(snap.status?.rss_mib)
       error = null
       needsToken = false
+      lastOkAt = Date.now()
     } catch (e) {
       // a 401 is not an error to report: the server requires a token, so
       // the UI asks for one instead of showing a red strip (issue #36)
       if (isAuthFailure(e)) {
         needsToken = true
+        tokenWrong = storedToken() !== null
         return
       }
       error = e instanceof Error ? e.message : String(e)
@@ -229,6 +283,11 @@
     storeToken(tokenInput.trim())
     tokenInput = ''
     needsToken = false
+    tokenWrong = false
+    // the stream is opened once: without this the first mount's tokenless
+    // connection would never carry the new token (issue #629)
+    resetEvents()
+    connectEvents()
     void refresh()
   }
 
@@ -246,7 +305,6 @@
   // not knowable after a reload — library is the honest default, since a
   // fresh session has no page history to return to. openDetailFromJobs
   // presets the origin it wants ('jobs') before the library arrives.
-  let pendingDetailFrom: 'library' | 'jobs' = 'library'
   $effect(() => {
     if (detailPath && movies.length > 0) {
       const m = movies.find((mv) => mv.path === detailPath)
@@ -259,11 +317,8 @@
     }
   })
 
-  // adaptive polling: one snapshot request per tick, fast (1s) while work
-  // is queued/running, relaxed (3s) when idle, paused entirely while the
-  // tab is hidden (the browser throttles it anyway — this is explicit)
-  const POLL_ACTIVE = 1000
-  const POLL_IDLE = 3000
+  // adaptive polling: one snapshot request per tick, fast while work runs,
+  // relaxed when idle, slow while the tab is hidden
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   async function poll() {
     await refresh()
@@ -272,7 +327,7 @@
     schedule(busy ? POLL_ACTIVE : POLL_IDLE, hidden)
   }
   function schedule(interval: number, hidden: boolean) {
-    pollTimer = setTimeout(poll, hidden ? 10000 : interval)
+    pollTimer = setTimeout(poll, hidden ? POLL_HIDDEN : interval)
   }
 
   // ── the whole-library confirmation ──
@@ -323,8 +378,8 @@
       if (j.id === null || dismissed.has(j.id)) return false
       if (j.state === 'failed') return true
       if (j.state === 'done' && j.kind === 'encode') {
-        const outcomes = (j.result as { outcomes?: { state: string }[] } | null)?.outcomes ?? []
-        return outcomes.some((o) => o.state === 'failed')
+        const outcomes = (j.result as { outcomes?: JobOutcome[] } | null)?.outcomes ?? []
+        return outcomes.some(isFailedOutcome)
       }
       return false
     })
@@ -349,7 +404,10 @@
 
   const savedTotalGb = $derived(
     movies.reduce((sum, m) => {
-      if (!m.encode || m.encode.saved_percent == null) return sum
+      // only an APPLIED encode reclaimed anything (issue #625): a discarded
+      // attempt's sizes describe an artifact that was thrown away
+      if (!m.encode || m.encode.outcome === 'discarded') return sum
+      if (m.encode.saved_percent == null) return sum
       return sum + ((m.encode.input_size ?? 0) - (m.encode.output_size ?? 0))
     }, 0) / 1024 ** 3
   )
@@ -370,25 +428,25 @@
       <p class="legend">LIBRARY CONSOLE</p>
     </div>
     <nav class="rail-nav" aria-label="Sections">
-      <button class="rail-item" class:active={page === 'overview'} onclick={() => goto('overview')}>
+      <button class="rail-item" class:active={page === 'overview'} aria-current={page === 'overview' ? 'page' : undefined} onclick={() => goto('overview')}>
         <span class="rail-label">Overview</span>
-        {#if failedJobs.length > 0}<span class="rail-badge bad mono">{failedJobs.length}</span>{/if}
+        {#if showCounts && failedJobs.length > 0}<span class="rail-badge bad mono">{failedJobs.length}</span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'library'} onclick={() => goto('library')}>
+      <button class="rail-item" class:active={page === 'library'} aria-current={page === 'library' ? 'page' : undefined} onclick={() => goto('library')}>
         <span class="rail-label">Library</span>
-        <span class="rail-badge mono">{movies.length}</span>
+        {#if showCounts}<span class="rail-badge mono">{movies.length}</span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'jobs'} onclick={() => goto('jobs')}>
+      <button class="rail-item" class:active={page === 'jobs'} aria-current={page === 'jobs' ? 'page' : undefined} onclick={() => goto('jobs')}>
         <span class="rail-label">Jobs</span>
-        {#if runningJobs.length > 0}<span class="rail-badge warn mono">{runningJobs.length}</span>{/if}
+        {#if showCounts && runningJobs.length > 0}<span class="rail-badge warn mono" title={queueLabel(runningJobs.length)} aria-label={queueLabel(runningJobs.length)}>{runningJobs.length}</span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'retained'} onclick={() => goto('retained')}>
+      <button class="rail-item" class:active={page === 'retained'} aria-current={page === 'retained' ? 'page' : undefined} onclick={() => goto('retained')}>
         <span class="rail-label">Retained</span>
-        {#if retainedFiles.filter((f) => f.present).length > 0}<span class="rail-badge warn mono">
+        {#if showCounts && retainedFiles.filter((f) => f.present).length > 0}<span class="rail-badge warn mono">
           {retainedFiles.filter((f) => f.present).length}
         </span>{/if}
       </button>
-      <button class="rail-item" class:active={page === 'config'} onclick={() => goto('config')}>
+      <button class="rail-item" class:active={page === 'config'} aria-current={page === 'config' ? 'page' : undefined} onclick={() => goto('config')}>
         <span class="rail-label">Config</span>
       </button>
     </nav>
@@ -398,9 +456,18 @@
         title={theme === 'dark' ? 'Switch to the light working bench' : 'Switch to the dark cinema ground'}>
         {theme === 'dark' ? '◐ DARK' : '◑ LIGHT'}
       </button>
-      <span class="legend watcher" class:on={status?.watcher === 'running'}
-        title={status?.watcher === 'running' ? 'The background watcher is running' : 'The background watcher is stopped'}>
-        {status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER'}
+      {#if showCounts}
+        <span class="legend watcher" class:on={connectionState === 'live' && status?.watcher === 'running'}
+          title={connectionState === 'live' ? (status?.watcher === 'running' ? 'The background watcher is running' : (status?.watcher_error ?? 'The background watcher is stopped')) : 'The watcher state is unknown: the data is not current'}>
+          {connectionState === 'live' ? (status?.watcher === 'running' ? '● WATCHER' : '○ WATCHER') : '? WATCHER'}
+        </span>
+        <span class="legend worker" class:on={connectionState === 'live' && status?.worker === 'running'}
+          title={connectionState === 'live' ? (status?.worker === 'running' ? 'The job worker is running' : (status?.worker_error ?? 'The job worker is stopped')) : 'The worker state is unknown: the data is not current'}>
+          {connectionState === 'live' ? (status?.worker === 'running' ? '● WORKER' : '○ WORKER') : '? WORKER'}
+        </span>
+      {/if}
+      <span class="legend freshness" class:stale={connectionState === 'stale'} class:live={connectionState === 'live'}>
+        {freshnessText(connectionState, lastOkAt, clock)}
       </span>
       <span class="legend shortcut-hint mono">{SHORTCUT_LEGEND}</span>
     </div>
@@ -408,28 +475,59 @@
 
   <!-- ══ main column ══ -->
   <main class="main" id="main-content" tabindex="-1">
-    {#if needsToken}
-      <div class="api-error mono" role="alert">
+    {#if connectionState === 'locked'}
+      <div class="unlock">
         <form
+          class="mono"
           onsubmit={(e) => {
             e.preventDefault()
             submitToken()
           }}>
-          <label for="token-input">this dashboard requires a token (SHRINKRAY_TOKEN):</label>
+          <h2>ShrinkRay needs a token</h2>
+          <p class="dim">
+            The dashboard reads the token the server was started with — <code>/data/token</code> in the container, or
+            <code>$SHRINKRAY_TOKEN</code>.
+          </p>
+          <label for="token-input">Token</label>
           <input
             id="token-input"
             type="password"
             bind:value={tokenInput}
             autocomplete="current-password"
             placeholder="paste the token"
+            aria-describedby={tokenWrong ? 'token-wrong' : undefined}
           />
-          <button type="submit">unlock</button>
+          {#if tokenWrong}
+            <p class="unlock-wrong" id="token-wrong" role="status">That token was refused — check /data/token.</p>
+          {/if}
+          <button type="submit">Unlock</button>
         </form>
       </div>
+    {:else if connectionState === 'loading'}
+      <div class="loading mono dim">Loading library…</div>
+    {:else}
+      {#if connectionState === 'stale'}
+        <div class="api-notice mono" role="status">
+          {staleReason}
+          <span class="dim"> {freshnessText(connectionState, lastOkAt, clock)}</span>
+          <details>
+            <summary>Details</summary>
+            <pre class="mono">{error ?? 'no response'}</pre>
+          </details>
+        </div>
+      {/if}
+    {#if status?.worker_error}
+      <!-- not dismissible: it clears on the worker's next app restart (issue
+        #649): a dead worker means nothing runs - the first thing to see -->
+      <div class="api-error mono" role="alert">{status.worker_error}</div>
     {/if}
     {#if status?.config_error}
       <!-- not dismissible: it clears once the file is fixed (issue #247) -->
       <div class="api-error mono" role="alert">{status.config_error}</div>
+    {/if}
+    {#if status?.watcher_error}
+      <!-- not dismissible: it clears when the watcher starts (issue #648) -->
+      <div class="api-error mono" role="alert">{status.watcher_error}</div>
     {/if}
     {#if status?.encode_window === 'closed'}
       <!-- read-only: the window is set in config.json (issue #434) -->
@@ -439,7 +537,7 @@
       <!-- read-only: pausing and resuming happen in the terminal (issue #250) -->
       <div class="api-notice mono" role="status">Paused — no new file starts: {status.paused}</div>
     {/if}
-    {#if error}
+    {#if error && connectionState !== 'stale'}
       <div class="api-error mono" role="alert">
         {error}
         <button class="dismiss" onclick={() => (error = null)} aria-label="Dismiss error">✕</button>
@@ -477,7 +575,7 @@
           {scanPaths}
           {outputDir}
           {retainedFiles}
-          sparkSamples={rssSamples}
+          stale={connectionState === 'stale'}
           ondismiss={dismissFailed}
           ongoto={goto}
           onopenmovie={(m) => openDetail(m, 'overview')}
@@ -497,6 +595,7 @@
               : [],
           )}
           onopenmovie={(m) => openDetail(m, 'library')}
+          stale={connectionState === 'stale'}
           ontoggle={(path, checked) => {
             const next = new Set(selectedPaths)
             if (checked) next.add(path)
@@ -513,7 +612,7 @@
         />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
-        <JobsPage {history} onopenMovie={(p) => openDetailFromJobs(p)} />
+        <JobsPage {history} stale={connectionState === 'stale'} onopenMovie={(p) => openDetailFromJobs(p)} />
       </div>
       <div class="pages" class:hidden={page !== 'retained'}>
         <RetainedPage files={retainedFiles} onrecover={() => void loadRetained()} />
@@ -521,6 +620,7 @@
       <div class="pages" class:hidden={page !== 'config'}>
         <ConfigPage {scanPaths} {outputDir} {targetVmaf} />
       </div>
+    {/if}
     {/if}
   </main>
 </div>
@@ -542,6 +642,9 @@
     letter-spacing: var(--track-legend);
     text-decoration: none;
     transition: top 0.1s ease;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skip-link { transition: none; }
   }
   .skip-link:focus-visible {
     top: 10px;
@@ -612,7 +715,7 @@
     flex-direction: column;
     gap: 6px;
   }
-  .theme-toggle, .watcher {
+  .theme-toggle, .watcher, .worker {
     background: transparent;
     border: 1px solid var(--seam);
     border-radius: var(--radius);
@@ -626,8 +729,8 @@
     min-height: 24px;
   }
   .theme-toggle:hover { color: var(--ink); border-color: var(--ink-dim); }
-  .watcher.on { color: var(--teal-ink); border-color: var(--teal); }
-  .watcher:not(.on):hover { color: var(--ink); }
+  .watcher.on, .worker.on { color: var(--teal-ink); border-color: var(--teal); }
+  .watcher:not(.on):hover, .worker:not(.on):hover { color: var(--ink); }
   /* the keyboard legend: shortcuts exist since always — this line makes
      them discoverable without an overlay or a help page */
   .shortcut-hint {
@@ -696,21 +799,103 @@
   }
 
   @media (max-width: 900px) {
-    .console { flex-direction: column; }
+    /* the rail becomes a bottom tab bar: thumb reach and one-tap switching fit a
+       status app, and every item is reachable at 320 px instead of scrolling
+       sideways inside the rail (issue #636) */
+    .console { flex-direction: column-reverse; }
     .rail {
       width: 100%;
       height: auto;
-      position: static;
-      flex-direction: row;
-      align-items: center;
-      padding: 10px 14px;
-      gap: 12px;
+      position: sticky;
+      bottom: 0;
+      z-index: 20;
+      flex-direction: column;
+      gap: 6px;
+      padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+      border-right: none;
+      border-top: 1px solid var(--seam);
     }
-    .brand .legend { display: none; }
-    .rail-nav { flex-direction: row; flex: 1; overflow-x: auto; }
-    .rail-item { padding: 6px 10px; white-space: nowrap; }
-    .rail-item.active { box-shadow: inset 0 -2px 0 var(--teal); }
-    .rail-foot { margin-top: 0; flex-direction: row; }
-    .main { padding: 14px; }
+    .brand { display: none; }
+    .rail-nav {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 2px;
+      overflow: visible;
+    }
+    .rail-item {
+      justify-content: center;
+      padding: 8px 2px;
+      white-space: normal;
+      text-align: center;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+    .rail-item.active {
+      background: var(--panel-active);
+      box-shadow: inset 0 2px 0 var(--teal);
+    }
+    .rail-foot {
+      margin-top: 0;
+      flex-direction: row;
+      flex-wrap: wrap;
+      row-gap: 4px;
+      justify-content: space-between;
+      padding: 0;
+      border-top: none;
+      gap: 8px;
+    }
+    /* the freshness line is long and grows with the age ("Updated 27 s ago ·
+       reconnecting…"): on its own row it cannot push the bar past the viewport
+       (issue #636 review) */
+    .rail-foot .freshness {
+      flex: 0 0 100%;
+      margin-left: 0;
+      text-align: right;
+      white-space: normal;
+    }
+    .rail-foot .shortcut-hint { display: none; }
+    .main { padding: 14px 12px 20px; flex: 1; }
+    /* the margin belongs to the element that scrolls into view, not to the
+       container: on .main it changed nothing and a tabbed-to button still landed
+       fully behind the sticky bar (issue #636 review) */
+    :global(.main :is(button, a, input, select, textarea, summary)) {
+      scroll-margin-bottom: 84px;
+    }
   }
+
+  /* a keyboard legend is meaningless without a keyboard (issue #636) */
+  @media (hover: none) {
+    .shortcut-hint { display: none; }
+  }
+
+  /* prose keeps a readable measure on a very wide screen (issue #636) */
+  @media (min-width: 1800px) {
+    .main { padding: 24px 32px; }
+    :global(.page-header .desc) { max-width: 75ch; }
+  }
+  .unlock {
+    max-width: 460px;
+    margin: 14vh auto 0;
+    padding: 26px;
+    border: 1px solid var(--row-line);
+    border-radius: 4px;
+    background: var(--panel);
+  }
+  .unlock h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+  .unlock p { margin: 0 0 14px; font-size: 12px; line-height: 1.55; }
+  .unlock label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  .unlock input { width: 100%; margin-bottom: 12px; }
+  .unlock button { padding: 6px 16px; }
+  .unlock-wrong { color: var(--red); margin: 0 0 12px; font-size: 11px; }
+  .loading { padding: 14vh 0; text-align: center; font-size: 12px; }
+  .freshness { margin-left: auto; }
+  .freshness.live { color: var(--green); }
+  .freshness.stale { color: var(--amber); }
 </style>

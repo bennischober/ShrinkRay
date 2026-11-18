@@ -317,6 +317,7 @@ class TestJobsApplySettingsPerMovie(unittest.TestCase):
             movies = [Path(tmp) / "a.mkv", Path(tmp) / "b.mkv"]
             for movie in movies:
                 movie.write_bytes(b"x" * 16)
+                os.utime(movie, (0, 0))  # old enough for the witness (#586)
             connection = db.connect(Path(tmp) / "test.db")
             try:
                 queue = jobs.JobQueue(connection)

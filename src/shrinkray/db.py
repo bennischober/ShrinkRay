@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 22
 
 if TYPE_CHECKING:
     # engine is ABOVE db in the layer contract; the summary type arrives as
@@ -78,11 +78,20 @@ CREATE TABLE IF NOT EXISTS encodes (
     output_file TEXT,
     generation INTEGER NOT NULL DEFAULT 1,
     tool_versions TEXT,
+    -- legacy columns from the removed full-file VMAF verification (issue
+    -- #605): no longer written or read, kept so no stored measurement is
+    -- destroyed (metadata.db is user data)
     verified_vmaf REAL,
     verified_at TEXT,
     verified_subsample INTEGER,
     crf_source TEXT,
     plan_created_at TEXT,
+    -- what the encode's artifact became: 'applied' (swapped into the
+    -- library), 'discarded' (the swap declined, the artifact thrown away,
+    -- issue #625) or 'skipped' (a skip marker row). The decline reason
+    -- rides outcome_reason so the UI can say WHY nothing was reclaimed.
+    outcome TEXT NOT NULL DEFAULT 'applied',
+    outcome_reason TEXT,
     encoded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -124,6 +133,7 @@ CREATE TABLE IF NOT EXISTS crops (
     ratios TEXT NOT NULL DEFAULT '{}',
     input_mtime REAL NOT NULL,
     input_size INTEGER NOT NULL,
+    detect_limit INTEGER NOT NULL DEFAULT 24,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -267,9 +277,10 @@ MIGRATIONS = {
         "ALTER TABLE encodes ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
     ],
     8: [
-        # full-file VMAF verification (opt-in --verify): the ground truth
-        # companion to the sample-based achieved_vmaf. subsample records the
-        # ffmpeg n_subsample divisor (NULL = full-file, every frame measured)
+        # full-file VMAF verification (opt-in --verify) added these columns;
+        # the feature was removed in v0.8.0 (issue #605) and the columns are
+        # kept UNREAD so no stored measurement is destroyed (metadata.db is
+        # user data). A future decision can drop them with a rebuild migration.
         "ALTER TABLE encodes ADD COLUMN verified_vmaf REAL",
         "ALTER TABLE encodes ADD COLUMN verified_at TEXT",
         "ALTER TABLE encodes ADD COLUMN verified_subsample INTEGER",
@@ -421,6 +432,38 @@ MIGRATIONS = {
         # shrink), so every pre-#316 plan misses the current lookup and is
         # re-probed - fail-safe to re-probe, never guess.
         "ALTER TABLE plans ADD COLUMN min_saving_percent INTEGER NOT NULL DEFAULT 0",
+    ],
+    21: [
+        # cropdetect's blackness threshold follows the source's bit depth
+        # (issue #637): the 8-bit value 24 found no black in limited-range
+        # 10-bit video (black is code 64), so every deeper source read as
+        # bar-free. Every existing crop row was measured at 24 (the constant
+        # never changed), so the column defaults to it: an 8-bit row stays a
+        # hit, a 10-bit row now misses and is measured again.
+        "ALTER TABLE crops ADD COLUMN detect_limit INTEGER NOT NULL DEFAULT 24",
+        # a stored plan carries the crop the encode reuses (pipeline's plan
+        # path), so every measured plan of a deeper-than-8-bit source - the
+        # recipe's analysis format is yuv420p10le exactly for those - encodes
+        # with its bars kept. Dropping the rows re-probes them, as the v15
+        # migration did for plans probed without bars; 8-bit plans are kept.
+        "DELETE FROM plans WHERE vmaf_recipe LIKE '%;fmt=yuv420p10le;%'",
+    ],
+    22: [
+        # an encode's outcome is part of its record (issue #625): a swap that
+        # was declined (lost track, changed source, not smaller, SwapError)
+        # discarded the artifact, but the row kept its sizes and saved_percent
+        # and every surface reported the file as encoded - a reclaimed figure
+        # for space that was never reclaimed. Existing rows are backfilled
+        # from what they can still prove: a skip marker says so in its preset;
+        # a row with a source_file but a nulled output_file was a post-v7
+        # discarded attempt (#232). A row with NEITHER is a pre-v7 applied
+        # encode - v7 introduced the chain columns without a backfill, so its
+        # output_file was never written and proves nothing about the artifact.
+        "ALTER TABLE encodes ADD COLUMN outcome TEXT NOT NULL DEFAULT 'applied'",
+        "ALTER TABLE encodes ADD COLUMN outcome_reason TEXT",
+        "UPDATE encodes SET outcome = 'skipped' WHERE preset LIKE 'skipped%'",
+        "UPDATE encodes SET outcome = 'discarded' "
+        "WHERE output_file IS NULL AND source_file IS NOT NULL AND outcome = 'applied'",
     ],
 }
 
@@ -948,6 +991,8 @@ def save_crop_summary(
     connection: sqlite3.Connection,
     movie: Path,
     summary: CropSummary,
+    *,
+    limit: int,
 ) -> None:
     """Stores (upserts) the timeline detector's summary for one file version.
 
@@ -959,6 +1004,8 @@ def save_crop_summary(
         connection: The database connection.
         movie (Path): The source movie file.
         summary (crop.CropSummary): The timeline detector's result.
+        limit (int): The cropdetect threshold the summary was measured with
+            (issue #637: part of the row's identity).
     """
     row = connection.execute("SELECT id FROM files WHERE path = ?", (str(movie),)).fetchone()
     if row is None:
@@ -974,8 +1021,8 @@ def save_crop_summary(
         """
         INSERT INTO crops (
             file_id, bars, frame_width, frame_height, readings,
-            sustained_readings, ratios, input_mtime, input_size
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            sustained_readings, ratios, input_mtime, input_size, detect_limit
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -987,21 +1034,24 @@ def save_crop_summary(
             ratios,
             stat.st_mtime,
             stat.st_size,
+            limit,
         ),
     )
     connection.commit()
 
 
-def get_crop_row(connection: sqlite3.Connection, movie: Path) -> sqlite3.Row | None:
+def get_crop_row(connection: sqlite3.Connection, movie: Path, *, limit: int) -> sqlite3.Row | None:
     """Returns the file's cached crop row when the file is unchanged.
 
-    Identity is size + mtime (the scan cache's rule): ANY change is a miss,
+    Identity is size + mtime (the scan cache's rule) plus the cropdetect
+    threshold the row was measured with (issue #637): ANY change is a miss,
     fail-safe to recompute. The ROW is returned raw: interpreting it into a
     summary (bars, ratios) is the engine's job — db stores, engine decides.
 
     Args:
         connection: The database connection.
         movie (Path): The source movie file.
+        limit (int): The threshold the caller would measure with now.
 
     Returns:
         sqlite3.Row | None: The raw crops row, or None.
@@ -1014,9 +1064,9 @@ def get_crop_row(connection: sqlite3.Connection, movie: Path) -> sqlite3.Row | N
         SELECT c.bars, c.frame_width, c.frame_height, c.readings,
                c.sustained_readings, c.ratios, c.input_mtime, c.input_size
         FROM crops c JOIN files f ON f.id = c.file_id
-        WHERE f.path = ?
+        WHERE f.path = ? AND c.detect_limit = ?
         """,
-        (str(movie),),
+        (str(movie), limit),
     ).fetchone()
     if row is None:
         return None
@@ -1067,6 +1117,8 @@ def add_encode(
     generation: int = 1,
     crf_source: str | None = None,
     plan_created_at: str | None = None,
+    outcome: str = "applied",
+    outcome_reason: str | None = None,
 ) -> int:
     """Records an encode in the history table.
 
@@ -1097,6 +1149,12 @@ def add_encode(
             when reused from a stored plan, 'probe' when measured now.
         plan_created_at (str | None): When the trusted plan was probed
             ('plan' provenance only).
+        outcome (str): What the artifact became: 'applied' (the swap put it
+            in the library), 'discarded' (the swap declined it) or 'skipped'
+            (a skip marker row, written by add_skip).
+        outcome_reason (str | None): Why the outcome is what it is - the
+            decline's reason for a discarded attempt, the skip's reason for
+            a skip marker.
 
     Returns:
         int: The encode id.
@@ -1110,9 +1168,9 @@ def add_encode(
             probe_count, probe_seconds, hdr, source_width, source_height,
             source_codec, source_bit_depth, source_duration, tool_versions,
             input_bitrate, output_bitrate, source_file, output_file, generation,
-            crf_source, plan_created_at
+            crf_source, plan_created_at, outcome, outcome_reason
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             file_id,
@@ -1142,6 +1200,8 @@ def add_encode(
             generation,
             crf_source,
             plan_created_at,
+            outcome,
+            outcome_reason,
         ),
     )
     connection.commit()
@@ -1149,7 +1209,10 @@ def add_encode(
 
 
 def set_encode_output(
-    connection: sqlite3.Connection, encode_id: int, output_file: str | None
+    connection: sqlite3.Connection,
+    encode_id: int,
+    output_file: str | None,
+    reason: str | None = None,
 ) -> None:
     """Sets (or clears) an encode row's output_file after the fact.
 
@@ -1160,64 +1223,37 @@ def set_encode_output(
     `doctor` reports a vanished file for every declined swap and the
     generation chain links through a path that never held the artifact.
 
+    Clearing the path IS the discard (issue #625): the outcome and its reason
+    are written in the SAME statement, so a crash can never leave a row whose
+    sizes and saved-percent still read as an applied encode. (Two updates
+    committed separately left exactly that state for a kill between them:
+    `('applied', None, None)` with schema already at 21, unrepairable by the
+    backfill.)
+
     Args:
         connection (sqlite3.Connection): The database connection.
         encode_id (int): The encode row to update.
         output_file (str | None): The path that now holds the artifact, or
             None to record that the encode was discarded.
+        reason (str | None): The decline's reason (the discard case).
     """
-    connection.execute(
-        "UPDATE encodes SET output_file = ? WHERE id = ?",
-        (output_file, encode_id),
-    )
+    if output_file is None:
+        # clearing the path IS the discard: one statement, so a crash during
+        # the DECLINE can never leave the sizes reading as an applied encode
+        # (issue #625). The row is written 'applied' BEFORE the swap decides
+        # (#232's design): a crash in that insert-to-swap window is the
+        # pre-existing state doctor's vanished-output check reports.
+        connection.execute(
+            "UPDATE encodes SET output_file = NULL, outcome = 'discarded', "
+            "outcome_reason = ? WHERE id = ?",
+            (reason, encode_id),
+        )
+    else:
+        connection.execute(
+            "UPDATE encodes SET output_file = ? WHERE id = ?",
+            (output_file, encode_id),
+        )
     connection.commit()
-
-
-def record_verification(
-    connection: sqlite3.Connection,
-    encode_id: int,
-    verified_vmaf: float,
-    subsample: int | None,
-) -> None:
-    """Attaches a full-file VMAF verification result to an encode row.
-
-    Args:
-        connection (sqlite3.Connection): The database connection.
-        encode_id (int): The encode row the verification belongs to.
-        verified_vmaf (float): The measured full-file (or sub-sampled) VMAF.
-        subsample (int | None): The ffmpeg n_subsample divisor used
-            (None = every frame measured).
-    """
-    connection.execute(
-        """
-        UPDATE encodes
-        SET verified_vmaf = ?, verified_at = datetime('now'), verified_subsample = ?
-        WHERE id = ?
-        """,
-        (verified_vmaf, subsample, encode_id),
-    )
-    connection.commit()
-
-
-def get_verification(
-    connection: sqlite3.Connection,
-    encode_id: int,
-) -> sqlite3.Row | None:
-    """Returns the verification columns of an encode row.
-
-    Args:
-        connection (sqlite3.Connection): The database connection.
-        encode_id (int): The encode row id.
-
-    Returns:
-        sqlite3.Row | None: The row (verified_vmaf/verified_at/
-            verified_subsample), None when the encode id is unknown.
-    """
-    row = connection.execute(
-        "SELECT verified_vmaf, verified_at, verified_subsample FROM encodes WHERE id = ?",
-        (encode_id,),
-    ).fetchone()
-    return cast("sqlite3.Row | None", row)
 
 
 def add_skip(
@@ -1253,6 +1289,8 @@ def add_skip(
         0.0,
         chosen_crf=chosen_crf,
         achieved_vmaf=achieved_vmaf,
+        outcome="skipped",
+        outcome_reason=reason,
     )
 
 

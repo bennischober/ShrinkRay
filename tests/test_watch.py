@@ -4,6 +4,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -331,14 +332,96 @@ class TestWatch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "watch.lock"
             self.assertTrue(acquire_lock(lock))
-            # second acquire fails (our own pid is alive)
+            # second acquire fails: the OS lock is held on the descriptor
             self.assertFalse(acquire_lock(lock))
             release_lock(lock)
-            self.assertFalse(lock.exists())
-            # stale lock (dead pid) => take over
+            # the file STAYS (issue #648 review, finding 1): a stable inode
+            # is what makes the lock one object - unlinking after release
+            # let a third process create a fresh inode and run alongside
+            self.assertTrue(lock.exists())
+            # a stale lock (a dead pid in the text) => take over: the text
+            # decides nothing, the OS lock does
             lock.write_text("999999999", encoding="utf-8")
             self.assertTrue(acquire_lock(lock))
             release_lock(lock)
+
+    def test_the_own_pid_in_a_stale_lock_does_not_block(self):
+        """Issue #648: a container restart reuses PID 1 by design - the lock
+        file's text naming the current process must not make the watcher
+        refuse to start. The lock's authority is the OS file lock, not the
+        file's contents."""
+
+        from shrinkray.engine.watch import acquire_lock, release_lock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "watch.lock"
+            lock.write_text(str(os.getpid()), encoding="utf-8")
+            self.assertTrue(acquire_lock(lock))
+            release_lock(lock)
+
+    def test_a_symlink_at_the_lock_path_is_refused_loudly(self):
+        """Issue #648 review, finding 4: a symlink planted at the fixed lock
+        path must not make the watcher truncate someone else's file - the
+        open refuses it (O_NOFOLLOW) and the failure is raised, not
+        mistaken for 'another watcher'."""
+        from shrinkray.engine.watch import acquire_lock
+
+        if sys.platform == "win32":
+            self.skipTest("O_NOFOLLOW is POSIX-only")
+        with tempfile.TemporaryDirectory() as tmp:
+            victim = Path(tmp) / "victim.txt"
+            victim.write_text("do not truncate", encoding="utf-8")
+            lock = Path(tmp) / "watch.lock"
+            os.symlink(victim, lock)
+            with self.assertRaises(OSError):
+                acquire_lock(lock)
+            self.assertEqual(victim.read_text(encoding="utf-8"), "do not truncate")
+
+    def test_a_failed_lock_acquisition_names_the_real_cause(self):
+        """Issue #648 round 1, finding 2's watch() half: an infrastructure
+        failure (the lock cannot be acquired at all) records the REAL cause
+        on WATCHER_ERROR - never the 'another watcher' text."""
+
+        from shrinkray.engine import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                watch_mod,
+                "acquire_lock",
+                side_effect=OSError("the lock path is not a regular file"),
+            ):
+                watch_mod.watch([Path(tmp) / "in"], Path(tmp) / "out", once=True, db_file=None)
+            # the module state is reset even when an assertion fails (the
+            # registration must precede them for that to hold)
+            self.addCleanup(setattr, watch_mod, "WATCHER_ERROR", None)
+            self.assertIn("the lock path is not a regular file", watch_mod.WATCHER_ERROR or "")
+            self.assertNotIn("another watcher", watch_mod.WATCHER_ERROR or "")
+
+    def test_a_refused_start_names_the_reason(self):
+        """Issue #648: a stopped watcher is not silent - watch() records the
+        refusal reason and /api/status carries it (watcher_error), so the
+        dashboard can show why the WATCHER chip is dark."""
+
+        from shrinkray.engine import watch as watch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "watch.lock"
+            self.assertTrue(watch_mod.acquire_lock(lock))  # the "other" watcher
+            try:
+                with mock.patch.object(watch_mod, "WATCH_LOCK_FILE", lock):
+                    watch_mod.watch([Path(tmp) / "in"], Path(tmp) / "out", once=True, db_file=None)
+                # the module state is reset even when an assertion fails
+                self.addCleanup(setattr, watch_mod, "WATCHER_ERROR", None)
+                self.assertEqual(
+                    watch_mod.WATCHER_ERROR,
+                    "another watcher holds the single-instance lock",
+                )
+            finally:
+                watch_mod.release_lock(lock)
+            # a clean start clears the reason
+            with mock.patch.object(watch_mod, "WATCH_LOCK_FILE", lock):
+                watch_mod.watch([Path(tmp) / "in"], Path(tmp) / "out", once=True, db_file=None)
+            self.assertIsNone(watch_mod.WATCHER_ERROR)
 
     def test_check_stability_min_age(self):
 
@@ -431,11 +514,6 @@ class TestWatch(unittest.TestCase):
             # into the watch output dir
             self.assertEqual(captured["output"], out / "movie.mkv")
             self.assertIn("encoder_threads", captured["kwargs"])
-            # the resident mode verifies every encode (issue #235): the
-            # watcher is the component that does the real work unattended,
-            # and the full-file VMAF is the only evidence the operator ever
-            # gets that the encode met the target
-            self.assertTrue(captured["kwargs"].get("verify"))
 
     def test_a_second_root_movie_is_scanned_under_its_own_root(self):
         """Issue #404: a movie found under root B is recorded with a category
@@ -762,6 +840,94 @@ class TestScanIntoDbRecords(unittest.TestCase):
             ok = watch_mod._scan_into_db(self.movie, self.root, self.db_file)
         self.assertTrue(ok, "a recording failure must not fail the scan")
         self.assertIsNone(self._recorded())
+
+
+class TestWatcherSwapIdentity(unittest.TestCase):
+    """Issue #585: the watcher's own swap entry declines a source that changed
+    during the encode, exactly as the service path does."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.source = self.root / "movie.mkv"
+        self.source.write_bytes(b"ORIGINAL" * 100)
+        self.output = self.root / "enc.mkv"
+        self.output.write_bytes(b"NEW" * 10)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_a_source_changed_during_the_encode_declines_the_swap(self) -> None:
+        from shrinkray.engine import watch as watch_mod
+
+        before = self.source.stat()
+        self.source.write_bytes(b"CHANGED-DURING-THE-ENCODE" * 10)
+        with patch.object(watch_mod, "log_error") as fake_log:
+            replaced = watch_mod._swap(
+                None,
+                self.source,
+                self.output,
+                None,
+                input_size=before.st_size,
+                input_mtime=before.st_mtime,
+            )
+        self.assertFalse(replaced)
+        self.assertEqual(self.source.read_bytes(), b"CHANGED-DURING-THE-ENCODE" * 10)
+        logged = "".join(str(call.args[0]) for call in fake_log.call_args_list)
+        self.assertIn("the source changed during the encode", logged)
+
+    def test_a_declined_swap_corrects_the_encode_row(self) -> None:
+        """Issue #585 with the #232 contract: the watcher's declined swap
+        discards the encode, so its row must stop pointing at the staging
+        path."""
+        from shrinkray import db
+        from shrinkray.engine import watch as watch_mod
+
+        db_file = self.root / "metadata.db"
+        connection = db.connect(db_file)
+        file_id = db.upsert_file(
+            connection,
+            db.MovieRecord(
+                path=self.source,
+                mtime=self.source.stat().st_mtime,
+                size=self.source.stat().st_size,
+                name="movie",
+                category="Cat",
+            ),
+        )
+        encode_id = db.add_encode(
+            connection,
+            file_id,
+            "VMAF>95",
+            "svt_av1",
+            self.source.stat().st_size,
+            self.output.stat().st_size,
+            96.0,
+            chosen_crf=30,
+            achieved_vmaf=95.2,
+            output_file=str(self.output),
+        )
+        connection.close()
+        before = self.source.stat()
+        self.source.write_bytes(b"CHANGED-DURING-THE-ENCODE" * 10)
+        replaced = watch_mod._swap(
+            db_file,
+            self.source,
+            self.output,
+            encode_id,
+            input_size=before.st_size,
+            input_mtime=before.st_mtime,
+        )
+        self.assertFalse(replaced)
+        self.assertEqual(self.source.read_bytes(), b"CHANGED-DURING-THE-ENCODE" * 10)
+        connection = db.connect(db_file)
+        try:
+            row = connection.execute(
+                "SELECT output_file FROM encodes WHERE id = ?", (encode_id,)
+            ).fetchone()
+        finally:
+            connection.close()
+        self.assertIsNone(row[0])
 
 
 if __name__ == "__main__":

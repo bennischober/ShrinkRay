@@ -254,7 +254,8 @@ Before either question is asked, a file must be worth touching at all:
   (width 1920 / height 1080; either at class size qualifies) saves too little to be worth
   the work.
 - **Minimum codec: the whitelist.** A source codec outside the candidate list is not
-  re-encoded (h264, hevc, vp9, av1; MPEG-2/VC-1 and older are outside it).
+  re-encoded (h264, hevc, vp9; MPEG-2/VC-1 and older are outside it, and AV1 is the
+  output format and never a source, #650).
 
 Among eligible files, **the CRF search always runs** — and a re-encode happens only when
 that search shows the file would actually get smaller **by at least the minimum saving**
@@ -404,7 +405,9 @@ to its quality** and whether its **frame matches its content**.
   decision can be explained and any run repeated.
 - **Authentication: an opt-in shared-secret token** (issue #36). With a token
   configured (`SHRINKRAY_TOKEN`, or the file named by `SHRINKRAY_TOKEN_FILE`) every
-  route requires it; with none, the dashboard is open, which is allowed only on a
+  `/api/*` route and `/metrics` require it. The dashboard document and its static assets
+  load without the header (issue #600), so a browser can open the page and paste the
+  token. With no token configured, the dashboard is open, which is allowed only on a
   loopback bind - a non-loopback bind without a token is refused at startup. The
   container sets `SHRINKRAY_TOKEN_FILE` and generates a token on first start into
   `/data/token` (issue #249). There is no TLS in the app: the token travels in
@@ -434,7 +437,7 @@ decoration per user preference).
   control routes absent), the terminal UI and the encode chain inside Docker, with
   transcripts retained by the operator. Known open defect at that date: the VMAF
   comparison under-scores AV1 output (issues #306-#317, milestone "VMAF measurement
-  matches ab-av1") — until it lands, plan's skip verdicts on AV1 candidates are not
+  matches ab-av1") — until it lands, skip verdicts on plans that would encode to AV1 are not
   trustworthy, and that is stated here rather than hidden.
 - An already-efficient HEVC source is correctly *skipped* rather than re-encoded.
 - Working dashboard (Svelte 5, dark/light) and a per-concern test suite as

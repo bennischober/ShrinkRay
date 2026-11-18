@@ -19,6 +19,9 @@ export interface ProgressData {
   percent?: number
   done?: number
   total?: number | null
+  /** seconds the current STEP has run: a probe reports its own, so an estimate
+   * never divides the job's elapsed time by a probe's fraction (issue #690) */
+  elapsed?: number
 }
 
 let progressByJob = $state<Record<number, ProgressData>>({})
@@ -49,6 +52,17 @@ export function eventsConnected(): boolean {
 function sseTokenParam(): string {
   const token = storedToken()
   return token ? `?token=${encodeURIComponent(token)}` : ''
+}
+
+/** Closes the stream so the next `connectEvents` carries a new token (issue #629):
+ * the stream is opened once, so an unlock after the first mount never reached it. */
+export function resetEvents(): void {
+  if (es !== null) {
+    es.close()
+    es = null
+  }
+  connected = false
+  progressByJob = {}
 }
 
 /** Opens the SSE stream once (idempotent); reconnects are automatic. */

@@ -45,11 +45,15 @@ The resident server has token-based authentication (issue #36). How it works:
   container's interactive console banner. The dashboard is protected without
   operator setup.
 
-When a token is configured, every route - all twelve GET routes and the
-single POST - sits behind the same token middleware. Because it is HTTP
-middleware wrapping the whole app, a NEW route cannot be added
-unauthenticated by accident. `/api/events` additionally accepts the token as `?token=`
-because EventSource cannot set headers - the one documented exception.
+When a token is configured, every `/api/*` route and `/metrics` sit behind
+the same token middleware. Because it is HTTP middleware wrapping the whole
+app, a new route outside the SPA shell cannot be added unauthenticated by
+accident. Two exemptions are deliberate. `/api/events` additionally accepts
+the token as `?token=` because EventSource cannot set headers. The SPA shell
+(`GET /`, `GET /assets/*`, and the favicon routes) loads with no token so
+the paste-token prompt inside the dashboard can appear (issue #600): the
+shell carries no operator data, and a write to those paths still requires
+the header.
 
 The one state-changing route is `POST /api/reveal` (opens a file-manager
 window on the SERVER host for an allowlisted path). It is capability-gated:

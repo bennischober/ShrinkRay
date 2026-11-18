@@ -28,13 +28,13 @@ DEFAULT_BLACK_BAR_MIN_HEIGHT = 100
 DEFAULT_LANGUAGE = "en"
 DEFAULT_MAX_THREADS = 0  # 0 = use all cores
 DEFAULT_IDLE_PRIORITY = True
-# quality mode's encoder speed preset (x264/x265 ladder; see #21 for AV1)
-# quality mode's encoder speed presets (x264/x265 ladder; see #21 for AV1).
+# quality mode's encoder speed presets (SVT-AV1 ladder; see #21).
 # TWO presets since #22: the PROBE preset is a measurement setting (the CRF
 # search's throwaway encodes), the FINAL preset is an output setting (the kept
-# artifact). They are settable - and defaulted - separately on purpose.
+# artifact). They stay settable separately. Both ship at 5 (issue #686), so a
+# probe measures the curve the kept file is encoded on.
 DEFAULT_PROBE_ENCODER_PRESET = "5"
-DEFAULT_ENCODER_PRESET = "3"
+DEFAULT_ENCODER_PRESET = "5"
 # AV1 is the only output codec (issue #21): SVT-AV1 on the CPU, 10-bit for
 # HDR. A config that still names x265 is rejected at load rather than
 # silently producing H.265.
@@ -54,9 +54,9 @@ ENCODER_PRESETS = (
     "veryslow",
     "placebo",
 )
-# per-encoder preset vocabularies and defaults (issue #22: the issue's numeric
-# defaults 5/3 are SVT-AV1 vocabulary; x265 takes names). The SVT-AV1 entry is
-# the shape #21 will activate; no encoder selects it yet.
+# per-encoder preset vocabularies and defaults (issue #22). SVT-AV1 is the
+# live encoder and the numeric defaults are its vocabulary; x264/x265 names
+# stay in the table and are rejected as output codecs.
 ENCODER_PRESET_VOCABULARIES: dict[str, tuple[str, ...]] = {
     "x264": ENCODER_PRESETS,
     "x265": ENCODER_PRESETS,
@@ -68,7 +68,7 @@ ENCODER_PRESET_DEFAULTS: dict[str, tuple[str, str]] = {
     "x264": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
     "x265": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
     "x265_10bit": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
-    "svt_av1": ("5", "3"),
+    "svt_av1": (DEFAULT_PROBE_ENCODER_PRESET, DEFAULT_ENCODER_PRESET),
 }
 # stall watchdog: minutes of child silence before termination (0 = off)
 DEFAULT_STALL_MINUTES = 10.0
@@ -88,9 +88,9 @@ DEFAULT_MIN_SOURCE_WIDTH = 1920
 DEFAULT_CROP_SAMPLE_COUNT = 10
 # probe density as a duration: one window per N seconds of runtime, so
 # coverage is a fixed fraction of the file instead of shrinking with length
-DEFAULT_SAMPLE_EVERY = 600.0
+DEFAULT_SAMPLE_EVERY = 240.0
 DEFAULT_SAMPLE_COUNT = 3
-DEFAULT_SAMPLE_SECONDS = 10.0
+DEFAULT_SAMPLE_SECONDS = 4.0
 # the required VMAF (quality.target_vmaf). 96 is the decided product default
 # (Netflix's 'visually transparent' zone; 93 is their common top-tier floor).
 # VMAF falls monotonically with rising CRF, so a higher target means a larger
@@ -102,9 +102,11 @@ DEFAULT_TARGET_VMAF = 96.0
 # so the smallest files have the worst cost/benefit ratio
 DEFAULT_MIN_SOURCE_SIZE_GB = 0.0
 # eligibility: the operator's EXTRA source codecs beyond the product whitelist
-# (SOURCE_CODECS in engine/plan.py: h264, hevc, vp9, av1). The whitelist is a
+# (SOURCE_CODECS in engine/plan.py: h264, hevc, vp9). The whitelist is a
 # product rule and cannot be shrunk from config; an entry here makes one more
-# codec a candidate (e.g. "mpeg4" for a library the operator accepts re-encoding)
+# codec a candidate (e.g. "mpeg4" for a library the operator accepts
+# re-encoding). av1 is rejected below: the output format is never a source
+# (issue #650).
 DEFAULT_CANDIDATE_CODECS: list[str] = []
 
 
@@ -287,7 +289,17 @@ class EligibilitySection(BaseModel):
     @classmethod
     def _lowercase_codecs(cls, value: Any) -> Any:
         if isinstance(value, list):
-            return [str(c).lower() for c in value]
+            lowered = [str(c).lower() for c in value]
+            # AV1 is the output format and never a source (issue #650, the
+            # maintainer's decision 2026-11-14): a config line cannot
+            # re-enable re-encoding ShrinkRay's own output, so the value
+            # fails loudly at load instead of being silently honored
+            if "av1" in lowered:
+                raise ValueError(
+                    "candidate_codecs cannot contain 'av1': AV1 is the output "
+                    "format and never a source (issue #650)"
+                )
+            return lowered
         return value
 
 
@@ -446,12 +458,10 @@ class Conf:
         self.handbrake_preset: str = model.handbrake.preset
         self.handbrake_encoder: str = model.handbrake.encoder
         # quality mode's TWO encoder speed presets (issue #22): the probe
-        # preset drives the CRF search's throwaway measurement encodes, the
-        # final preset drives the kept artifact - measurement at 'medium',
-        # artifact at 'slow' by default. The probe is a PREDICTION of the
-        # final encode: preset shifts the CRF-to-VMAF curve, so a probe at a
-        # different preset than the final encode measures a different curve
-        # - a deliberate trade-off (documented in the README), not a bug.
+        # preset drives the CRF search, the final preset drives the kept
+        # artifact. Both ship at 5 (issue #686), so the measurement describes
+        # the file that is written. Setting them apart measures a different
+        # CRF-to-VMAF curve (README, docs/encode-decision.md).
         self.handbrake_probe_encoder_preset: str = model.handbrake.probe_encoder_preset
         self.handbrake_encoder_preset: str = model.handbrake.encoder_preset
         self.handbrake_max_threads: int = model.handbrake.max_threads
