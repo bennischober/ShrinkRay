@@ -94,6 +94,23 @@ class TestCheckStability(unittest.TestCase):
         self.assertIn("appears incomplete", verdict.incomplete)
         self.assertIn("41 %", verdict.incomplete)
 
+    def test_the_reason_ownership_is_worded_once_for_every_caller(self) -> None:
+        """#587's review: the plan CLI's wait row and the backlog jobs' skip
+        reasons (#586) all report this property, so the same situation reads
+        the same in every entry point - the jobs used to prefix their own
+        "not complete: " onto a copy of the age sentence."""
+        young = watch.check_stability(_old(100 * MIB, blocks=100 * MIB // 512, age=5.0))
+        assert young.incomplete is None
+        self.assertIn("not complete: last write only 5 s ago", young.not_settled_reason)
+        self.assertIn("(needs 60 s of quiet)", young.not_settled_reason)
+        # the sparse verdict's wording is already operator-facing
+        # (`incomplete`): the property hands it through untouched
+        size = 100 * MIB
+        sparse = watch.check_stability(_old(size, blocks=int(size * 0.41) // 512))
+        assert sparse.incomplete is not None
+        self.assertEqual(sparse.not_settled_reason, sparse.incomplete)
+        self.assertIn("appears incomplete", sparse.not_settled_reason)
+
     def test_a_young_sparse_file_is_young_not_incomplete(self) -> None:
         """A sparse file still being written is a copy in progress: it waits on
         its age like any other, it is not skipped as stalled."""

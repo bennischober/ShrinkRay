@@ -46,6 +46,7 @@ class TestPlanNoTable(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.movie = self.root / "one.mkv"
         self.movie.write_bytes(b"x" * 8)
+        os.utime(self.movie, (0, 0))  # old enough for the witness (#587)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -79,6 +80,27 @@ class TestPlanNoTable(unittest.TestCase):
         ):
             output = self._run("plan", str(self.movie))
         self.assertIn("Encode plan", output, "the default lost its table")
+
+    def test_plan_no_table_names_the_files_it_did_not_decide(self) -> None:
+        """#587's review: a wait row left no trace outside the table, so a
+        scripted `plan --no-table` during a copy printed nothing about the
+        file it did not decide. The one-line summary closes that."""
+        young = self.root / "young.mkv"
+        young.write_bytes(b"x" * 8)  # no utime: the witness must hold it back
+        planned: list[str] = []
+
+        def fake_plan(movie: Path, **kwargs: object) -> QualityResult:
+            planned.append(movie.name)
+            return _encode_plan(movie)
+
+        with (
+            _toolchain_present(),
+            patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
+        ):
+            output = self._run("plan", str(young), "--no-table")
+        self.assertEqual(planned, [], "a young file was probed")
+        self.assertIn("not complete yet; plan them again later", output)
+        self.assertIn("1 file(s)", output)
 
     def test_plan_resolves_the_probe_windows(self) -> None:
         """The plan CLI resolves the probe windows with the one precedence
