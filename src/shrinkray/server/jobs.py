@@ -982,6 +982,7 @@ def execute_plan(
         search_quality,
         skipped_result,
     )
+    from shrinkray.engine.watch import check_stability
 
     payload = job.payload
     config = load_config()
@@ -1002,6 +1003,28 @@ def execute_plan(
         # (issue #247)
         config = refresh_config()
         apply_reloaded_config(config)
+        # the completeness witness (issues #437, #479, #586): the boot
+        # backlog's jobs run on whatever the boot scan catalogued - a copy
+        # a container restart interrupted, or a stalled sparse download,
+        # must not be decided from. Skip-and-leave, like the watcher: the
+        # file stays eligible and a later pass re-decides it once settled.
+        try:
+            stability = check_stability(movie)
+        except OSError as e:
+            plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+            continue
+        if not stability.settled:
+            # the reason comes from the witness itself (#587's review): one
+            # wording shared with the plan CLI's wait row. The state is the
+            # dashboard's plan-entry vocabulary: execute_plan already
+            # reports a decided skip as "skip" with a reason, and the
+            # dashboard matches only "skip" for plans (a "skipped" entry
+            # renders as the red failed chip and reads as planned on the
+            # detail page), so the witness's skip is a "skip" too
+            plans.append(
+                {"movie": movie.name, "state": "skip", "reason": stability.not_settled_reason}
+            )
+            continue
         if progress:
             progress(
                 {
@@ -1320,6 +1343,7 @@ def _encode_measured(
         skipped_result,
         stored_plan_row,
     )
+    from shrinkray.engine.watch import check_stability
     from shrinkray.service import (
         finished_movies,
         record_plan,
@@ -1359,6 +1383,26 @@ def _encode_measured(
         apply_reloaded_config(config)
         if str(movie) in encoded_paths:
             outcomes.append({"movie": movie.name, "state": "already_encoded"})
+            continue
+        # the completeness witness (issues #437, #479, #586): the boot
+        # backlog's encode job runs on whatever the boot scan catalogued,
+        # and the watcher checks ITS submissions before submitting (#479)
+        # but this job also serves the backlog and the UI. Skip-and-leave,
+        # like the watcher: the file stays eligible and a later pass
+        # re-decides it once settled.
+        try:
+            stability = check_stability(movie)
+        except OSError as e:
+            outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
+            continue
+        if not stability.settled:
+            # the reason comes from the witness itself (#587's review):
+            # one wording shared with the plan CLI's wait row and the plan
+            # job. The encode job's own vocabulary keeps "skipped" - the
+            # dashboard already knows it for encode outcomes
+            outcomes.append(
+                {"movie": movie.name, "state": "skipped", "reason": stability.not_settled_reason}
+            )
             continue
         # the per-file stages exist for the RESIDENT pipeline (issue #602): the
         # Jobs page shows a decision row, a CRF-search row and an encode row per
