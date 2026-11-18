@@ -13,6 +13,73 @@ from shrinkray.engine import search as engine_search
 from shrinkray.server import jobs
 
 
+def _eligible_decision(movie, **_kwargs):
+    """A passing eligibility decision for the stage seams (issue #602)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        input=movie,
+        eligible=True,
+        skipped_reason=None,
+        error=None,
+        identity=SimpleNamespace(size=16, mtime=None),
+        hdr=False,
+        encoder="svt_av1",
+        duration=7200.0,
+        width=1920,
+        height=1080,
+        crf_range=engine_search.DEFAULT_CRF_RANGE,
+        sample_count=3,
+        sample_seconds=10.0,
+        bit_depth=None,
+    )
+
+
+def _prediction(movie, **_kwargs):
+    """A passing CRF-search prediction for the stage seams (issue #602)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        input=movie,
+        output=movie,
+        success=True,
+        skipped_reason=None,
+        error=None,
+        chosen_crf=21,
+        achieved_vmaf=95.4,
+        probes=[],
+        input_size=16,
+        output_size=8,
+        crf_range=engine_search.DEFAULT_CRF_RANGE,
+        sample_count=3,
+        sample_seconds=10.0,
+        crop_sample_count=10,
+        vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+        hdr=False,
+        encoder="svt_av1",
+        input_mtime=None,
+        probe_encoder_preset="5",
+        encoder_preset="3",
+        crop=None,
+        vmaf_statistic="mean",
+        target_vmaf=95.0,
+        min_saving_percent=15,
+        saved_percent=50.0,
+        plan_created_at=None,
+        crf_source="probe",
+        encode_seconds=None,
+        probe_seconds=None,
+        input_width=None,
+        input_height=None,
+        input_codec=None,
+        input_duration=None,
+        input_bitrate=None,
+        output_bitrate=None,
+        input_bit_depth=None,
+        tool_versions=None,
+    )
+
+
 class TestJobs(unittest.TestCase):
     def setUp(self):
         import tempfile
@@ -152,7 +219,8 @@ class TestJobs(unittest.TestCase):
             input_mtime=None,  # a duck-typed result without the #436 field
         )
         with (
-            patch("shrinkray.engine.plan.plan_quality", return_value=fake_result),
+            patch("shrinkray.engine.plan.decide_quality", return_value=_eligible_decision(movie)),
+            patch("shrinkray.engine.plan.search_quality", return_value=fake_result),
             patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             result = jobs.execute_plan(job, self.connection, threading.Event())
@@ -163,6 +231,608 @@ class TestJobs(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["chosen_crf"], 21)
         self.assertEqual(row["path"], str(movie))
+
+    def test_a_plan_job_records_the_per_file_stages(self):
+        """Issue #602: a file's pipeline is its own job rows - the decision
+        (the gates) and the CRF search - each with its own state and outcome,
+        so the Jobs page can follow a file stage by stage."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Staged Movie_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job, self.connection, threading.Event(), queue=self.queue)
+        rows = self.connection.execute(
+            "SELECT kind, state, result FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual([row["kind"] for row in rows], ["decision", "crf-search"])
+        self.assertEqual([row["state"] for row in rows], ["done", "done"])
+        self.assertIn('"eligible": true', rows[0]["result"])
+        self.assertIn('"crf": 21', rows[1]["result"])
+
+    def test_a_rejected_file_records_no_search_row(self):
+        """Issue #602: a decision that rejects the file is the whole pipeline
+        for it - the decision row is done with its reason and no search row
+        exists (nothing measured, nothing spent)."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Rejected Movie_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        rejected = _NS(
+            input=movie,
+            eligible=False,
+            skipped_reason="too short",
+            error="duration 12s is below the 90s minimum",
+            identity=_NS(size=16, mtime=None),
+            hdr=False,
+            encoder="svt_av1",
+            crf_range=engine_search.DEFAULT_CRF_RANGE,
+            sample_count=3,
+            sample_seconds=10.0,
+            duration=12.0,
+        )
+        with (
+            _patch("shrinkray.engine.plan.decide_quality", return_value=rejected),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job, self.connection, threading.Event(), queue=self.queue)
+        rows = self.connection.execute(
+            "SELECT kind, state, result FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual([row["kind"] for row in rows], ["decision"])
+        self.assertIn('"reason": "too short"', rows[0]["result"])
+        # the rejection's plans row is written for real (issue #602): a later
+        # encode reuses the verdict instead of re-probing the file
+        plan = self.connection.execute(
+            "SELECT skipped_reason FROM plans p JOIN files f ON f.id = p.file_id"
+        ).fetchone()
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan["skipped_reason"], "too short")
+
+    def test_a_failed_plan_write_still_encodes(self):
+        """Issue #602 review: a plan write that fails must never skip the
+        encode - the encode boundary re-plans when nothing is stored."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Plan Write_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+
+        def fake_encode(movie, output, *args, **kwargs):
+            output.write_bytes(b"y" * 8)
+            return _NS(
+                input_size=16,
+                output_size=8,
+                chosen_crf=21,
+                achieved_vmaf=95.4,
+                error=None,
+                input_mtime=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            _patch(
+                "shrinkray.service.record_plan",
+                side_effect=RuntimeError("database is locked"),
+            ),
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=fake_encode,
+            ) as engine,
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=True, skipped=False, error=None),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        engine.assert_called_once()
+        rows = self.connection.execute(
+            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual(
+            [(row["kind"], row["state"]) for row in rows],
+            [("decision", "done"), ("crf-search", "done"), ("encode", "done")],
+        )
+
+    def test_a_search_stage_failure_skips_the_file(self):
+        """Issue #602 review: a search-stage RuntimeError is a per-file skip -
+        the row fails, the folder job continues, and no encode runs."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Broken Probe_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.stored_plan_row",
+                return_value=None,
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=RuntimeError("ffprobe could not read the sample"),
+            ),
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=AssertionError("a search failure must not encode"),
+            ) as engine,
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            result = jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        engine.assert_not_called()
+        rows = self.connection.execute(
+            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual(
+            [(row["kind"], row["state"]) for row in rows],
+            [("decision", "done"), ("crf-search", "failed")],
+        )
+        self.assertEqual(result["outcomes"][0]["state"], "skipped")
+        self.assertIn("ffprobe could not read", result["outcomes"][0]["error"])
+
+    def test_the_real_stored_plan_lookup_matches_a_recorded_plan(self):
+        """Issue #602 review: the real `stored_plan_row` must find the plan
+        `record_plan` stored - the encode job's reuse depends on it, and a
+        patched lookup would hide a fingerprint drift."""
+        from pathlib import Path as _Path
+
+        from shrinkray.engine.identity import capture_run_identity
+        from shrinkray.engine.plan import Decision, QualityResult, stored_plan_row
+        from shrinkray.engine.search import DEFAULT_CRF_RANGE
+        from shrinkray.service import record_plan
+        from shrinkray.tools.vmaf import vmaf_recipe
+
+        movie = _Path(self.tmp.name) / "Real Plan_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        recipe = vmaf_recipe(crop=None, width=1920, height=1080, bit_depth=10)
+        stored = QualityResult(
+            input=movie,
+            output=movie,
+            success=True,
+            target_vmaf=95.0,
+            min_saving_percent=15,
+            chosen_crf=21,
+            achieved_vmaf=95.4,
+            input_size=16,
+            output_size=8,
+            encoder="svt_av1",
+            probe_encoder_preset="5",
+            encoder_preset="3",
+            crop=None,
+            crf_range=DEFAULT_CRF_RANGE,
+            sample_count=3,
+            sample_seconds=10.0,
+            crop_sample_count=10,
+            vmaf_recipe=recipe.fingerprint(),
+            hdr=False,
+            input_mtime=None,
+        )
+        from shrinkray.config import load_config
+
+        record_plan(self.connection, movie, stored, load_config())
+        decision = Decision(
+            input=movie,
+            eligible=True,
+            identity=capture_run_identity(movie),
+            hdr=False,
+            encoder="svt_av1",
+            duration=7200.0,
+            width=1920,
+            height=1080,
+            crf_range=DEFAULT_CRF_RANGE,
+            sample_count=3,
+            sample_seconds=10.0,
+            bit_depth=10,
+        )
+        self.assertIsNotNone(
+            stored_plan_row(
+                movie,
+                decision,
+                target_vmaf=95.0,
+                min_saving_percent=15,
+                probe_encoder_preset="5",
+                crop_sample_count=10,
+                db_file=Path(self.tmp.name) / "test.db",
+            )
+        )
+
+    def test_the_encode_stage_row_reports_the_live_progress(self):
+        """Issue #639: the stage rows show the folder job's live progress -
+        a row with no events reads "starting..." for the whole stage."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Live Progress_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        bus = jobs.ProgressBus()
+        queue = jobs.JobQueue(self.connection, bus)
+        job = queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+
+        seen: dict[int, dict] = {}
+        folder_events: list[dict] = []
+
+        def fake_search(decision, *args, **kwargs):
+            kwargs["progress"]({"stage": "probe", "percent": 10.0, "movie": decision.input.name})
+            seen.update(bus.latest())
+            return _prediction(movie)
+
+        def fake_encode(movie, output, *args, **kwargs):
+            kwargs["progress"]({"stage": "encode", "percent": 42.5, "movie": movie.name})
+            # the seed cache drops a row's progress when it finishes, so the
+            # event is captured while the encode is still running
+            seen.update(bus.latest())
+            output.write_bytes(b"y" * 8)
+            return _NS(
+                input_size=16,
+                output_size=8,
+                chosen_crf=21,
+                achieved_vmaf=95.4,
+                error=None,
+                input_mtime=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.stored_plan_row",
+                return_value=None,
+            ),
+            _patch("shrinkray.engine.plan.search_quality", side_effect=fake_search),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch("shrinkray.engine.pipeline.encode_with_quality", side_effect=fake_encode),
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=True, skipped=False, error=None),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_encode(
+                job, self.connection, threading.Event(), progress=folder_events.append, queue=queue
+            )
+        rows = self.connection.execute(
+            "SELECT id, kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        search_row = next(row for row in rows if row["kind"] == "crf-search")
+        encode_row = next(row for row in rows if row["kind"] == "encode")
+        # both stage rows receive the engine's events...
+        self.assertIn(search_row["id"], seen)
+        self.assertEqual(seen[search_row["id"]]["percent"], 10.0)
+        self.assertIn(encode_row["id"], seen)
+        self.assertEqual(seen[encode_row["id"]]["percent"], 42.5)
+        # ...and the folder job keeps receiving them too
+        folder_percents = [event.get("percent") for event in folder_events]
+        self.assertIn(10.0, folder_percents)
+        self.assertIn(42.5, folder_percents)
+
+    def test_the_plan_path_search_row_reports_the_live_progress(self):
+        """Issue #639: the plan job's crf-search row shows the search's live
+        progress too - it is usually the longest stage of a plan run."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Plan Progress_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=movie,
+                mtime=movie.stat().st_mtime,
+                size=movie.stat().st_size,
+                name=movie.name,
+                category="Cat",
+            ),
+        )
+        self.connection.commit()
+        bus = jobs.ProgressBus()
+        queue = jobs.JobQueue(self.connection, bus)
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
+        seen: dict[int, dict] = {}
+
+        def fake_search(decision, *args, **kwargs):
+            kwargs["progress"]({"stage": "probe", "percent": 33.0, "movie": decision.input.name})
+            seen.update(bus.latest())
+            return _prediction(movie)
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch("shrinkray.engine.plan.search_quality", side_effect=fake_search),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_plan(job, self.connection, threading.Event(), queue=queue)
+        row = self.connection.execute(
+            "SELECT id, kind FROM jobs WHERE id > ? AND kind = 'crf-search'", (job.id,)
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertIn(row["id"], seen)
+        self.assertEqual(seen[row["id"]]["percent"], 33.0)
+
+    def test_a_stored_plan_skips_the_queue_path_search(self):
+        """Issue #602: a valid stored plan means the search already ran for
+        these bytes, so the encode job must not measure again - the search row
+        reports the reuse and the search is never called."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Reused Plan_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+
+        def fake_encode(movie, output, *args, **kwargs):
+            output.write_bytes(b"y" * 8)
+            return _NS(
+                input_size=16,
+                output_size=8,
+                chosen_crf=21,
+                achieved_vmaf=95.4,
+                error=None,
+                input_mtime=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.stored_plan_row",
+                return_value={"chosen_crf": 21, "achieved_vmaf": 95.4, "skipped_reason": None},
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=AssertionError("the search must not run for a stored plan"),
+            ) as search,
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=fake_encode,
+            ),
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=True, skipped=False, error=None),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        search.assert_not_called()
+        rows = self.connection.execute(
+            "SELECT kind, state, result FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual(
+            [(row["kind"], row["state"]) for row in rows],
+            [("decision", "done"), ("crf-search", "done"), ("encode", "done")],
+        )
+        self.assertIn('"source": "plan"', rows[1]["result"])
+
+    def test_a_cancel_during_the_encode_marks_its_stage_row_cancelled(self):
+        """Issue #602 review: the encode stage row must read cancelled on a
+        graceful stop, not failed - the worker marks the folder job cancelled."""
+        from pathlib import Path as _Path
+        from unittest.mock import patch as _patch
+
+        from shrinkray.tools.process import Cancelled
+
+        movie = _Path(self.tmp.name) / "Cancelled Encode_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=Cancelled("cancelled during the encode"),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            self.assertRaises(Cancelled),
+        ):
+            jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        rows = self.connection.execute(
+            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual(
+            [(row["kind"], row["state"]) for row in rows],
+            [("decision", "done"), ("crf-search", "done"), ("encode", "cancelled")],
+        )
+
+    def test_an_encode_job_records_the_three_stages(self):
+        """Issue #602: the encode pipeline is three consecutive rows - the
+        decision, the CRF search and the encode - so the Jobs page shows each
+        stage with its own state and outcome."""
+        from pathlib import Path as _Path
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        movie = _Path(self.tmp.name) / "Three Stages_t00.mkv"
+        movie.write_bytes(b"x" * 16)
+        out_dir = _Path(self.tmp.name) / "out"
+        out_dir.mkdir()
+        job = self.queue.enqueue(
+            jobs.Job(
+                kind=jobs.JobKind.ENCODE,
+                payload={
+                    "paths": [str(movie)],
+                    "output_dir": str(out_dir),
+                    "quality": True,
+                },
+            )
+        )
+
+        def fake_encode(movie, output, *args, **kwargs):
+            output.write_bytes(b"y" * 8)
+            return _NS(
+                input_size=16,
+                output_size=8,
+                chosen_crf=21,
+                achieved_vmaf=95.4,
+                error=None,
+                input_mtime=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch(
+                "shrinkray.engine.plan.search_quality",
+                return_value=_prediction(movie),
+            ),
+            _patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode),
+            _patch("shrinkray.service.record_plan", lambda *a, **k: None),
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=True, skipped=False, error=None),
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+        ):
+            jobs.execute_encode(job, self.connection, threading.Event(), queue=self.queue)
+        rows = self.connection.execute(
+            "SELECT kind, state FROM jobs WHERE id > ? ORDER BY id", (job.id,)
+        ).fetchall()
+        self.assertEqual([row["kind"] for row in rows], ["decision", "crf-search", "encode"])
+        self.assertEqual([row["state"] for row in rows], ["done", "done", "done"])
 
     def test_plan_job_passes_encoder_preset(self):
         """The plan job threads the preset: a payload override wins, the
@@ -219,7 +889,11 @@ class TestJobs(unittest.TestCase):
             )
         )
         with (
-            _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan,
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch("shrinkray.engine.plan.search_quality", return_value=fake_result) as fake_plan,
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job, self.connection, threading.Event())
@@ -227,11 +901,15 @@ class TestJobs(unittest.TestCase):
         # ...and without one, the config value does
         job2 = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
         with (
-            _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan2,
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch("shrinkray.engine.plan.search_quality", return_value=fake_result) as fake_plan2,
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job2, self.connection, threading.Event())
-        self.assertEqual(fake_plan2.call_args.kwargs.get("encoder_preset"), "3")
+        self.assertEqual(fake_plan2.call_args.kwargs.get("encoder_preset"), "5")
         # the probe preset is a separate payload key (issue #22)
         job3 = self.queue.enqueue(
             jobs.Job(
@@ -240,7 +918,11 @@ class TestJobs(unittest.TestCase):
             )
         )
         with (
-            _patch("shrinkray.engine.plan.plan_quality", return_value=fake_result) as fake_plan3,
+            _patch(
+                "shrinkray.engine.plan.decide_quality",
+                return_value=_eligible_decision(movie),
+            ),
+            _patch("shrinkray.engine.plan.search_quality", return_value=fake_result) as fake_plan3,
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
         ):
             jobs.execute_plan(job3, self.connection, threading.Event())
@@ -278,6 +960,11 @@ class TestJobs(unittest.TestCase):
         from unittest.mock import patch
 
         with (
+            patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
+            patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=lambda movie, *a, **k: _prediction(movie),
+            ),
             patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode_with_quality),
             patch(
                 "shrinkray.service.record_quality_results",
@@ -332,6 +1019,11 @@ class TestJobs(unittest.TestCase):
                 )
             )
             with (
+                _patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
+                _patch(
+                    "shrinkray.engine.plan.search_quality",
+                    side_effect=lambda movie, *a, **k: _prediction(movie),
+                ),
                 _patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode),
                 _patch(
                     "shrinkray.service.record_quality_results",
@@ -343,7 +1035,7 @@ class TestJobs(unittest.TestCase):
                 jobs.execute_encode(job, self.connection, threading.Event())
 
         run(Conf())
-        self.assertEqual(captured["sample_every"], 600.0)
+        self.assertEqual(captured["sample_every"], 240.0)
         self.assertIsNone(captured["sample_count"])
         run(Conf({"quality": {"sample_count": 5}}))
         self.assertEqual(captured["sample_count"], 5)
@@ -380,6 +1072,11 @@ class TestJobs(unittest.TestCase):
             )
 
         with (
+            patch("shrinkray.engine.plan.decide_quality", side_effect=_eligible_decision),
+            patch(
+                "shrinkray.engine.plan.search_quality",
+                side_effect=lambda movie, *a, **k: _prediction(movie),
+            ),
             patch("shrinkray.engine.pipeline.encode_with_quality", fake_encode_with_quality),
             patch(
                 "shrinkray.service.record_quality_results",
@@ -616,6 +1313,295 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(reloaded.state, jobs.JobState.FAILED)
         self.assertIn("RuntimeError: engine exploded", reloaded.error)
 
+    def test_repeated_failures_end_the_worker_loudly(self):
+        """Issue #649's AC: a worker that cannot recover ends itself after
+        WORKER_MAX_CONSECUTIVE_FAILURES consecutive failures, with the
+        reason on fatal_error - the server keeps serving and /api/status
+        says the worker is dead and why."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        worker = jobs.JobWorker(self.connection, queue)
+
+        with (
+            mock.patch.object(
+                queue,
+                "take_next",
+                side_effect=RuntimeError("the db is gone"),
+            ),
+            mock.patch.object(queue, "wait_for_work", side_effect=lambda timeout: False),
+        ):
+            worker.start()
+            # the give-up is the signal: a bounded join, no poll fragments
+            worker._thread.join(timeout=10.0)
+            self.assertFalse(worker._thread.is_alive(), "the worker never gave up")
+            self.assertIsNotNone(worker.fatal_error)
+            self.assertIn("5 consecutive", worker.fatal_error or "")
+            self.assertIn("the db is gone", worker.fatal_error or "")
+        # a restarted worker must not report running with the stale error
+        # (issue #660 round 9, finding 3 / round 10, finding 2): the restart
+        # runs OUTSIDE the failing patch - a restarted worker with the same
+        # failing take_next would give up again and re-set the error, racing
+        # the assert (observed on CI's 3.10 leg)
+        worker.start()
+        try:
+            self.assertIsNone(worker.fatal_error)
+            self.assertTrue(worker._thread.is_alive())
+        finally:
+            worker.stop()
+
+    def test_the_queue_takes_the_app_lock_around_its_connection_use(self):
+        """Issue #660 round 1, finding 4: the root-cause fix - the queue's
+        connection use must hold the SAME lock the routes hold (the app's
+        db_lock). The pin: while another thread holds the lock, take_next
+        blocks; after the release it completes. The count assert is the
+        guard: it is the taker's own acquisition, and a gate that ignored
+        the lock would never increment."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        taken = []
+        entered = threading.Event()
+
+        class _CountingGate:
+            # counts the ACQUISITION itself (issue #660 round 5, finding 5):
+            # a gate that ignored the lock would never increment, so the
+            # count check closes the timing hole the event alone had
+            def __init__(self, real):
+                self._real = real
+                self.count = 0
+
+            def acquire(self, *args, **kwargs):
+                self.count += 1
+                entered.set()
+                return self._real.acquire(*args, **kwargs)
+
+            def release(self):
+                return self._real.release()
+
+            def __enter__(self):
+                self.acquire()
+                return self
+
+            def __exit__(self, *args):
+                self.release()
+                return False
+
+        counting = _CountingGate(gate)
+        with counting:  # simulate a route holding the app's database lock
+            taker = threading.Thread(target=lambda: taken.append(queue.take_next()))
+            with mock.patch.object(queue, "_connection_lock", counting):
+                # the test thread's own acquisition already set the event and
+                # counted: reset BOTH, so the taker's acquisition is what the
+                # asserts observe (issue #660 round 6, finding 1)
+                counting.count = 0
+                entered.clear()
+                taker.start()
+                # once acquired, the taker holds the gate and cannot complete
+                # while this thread holds the real lock - state checks only
+                self.assertTrue(entered.wait(5.0), "take_next never took the gate")
+                self.assertEqual(counting.count, 1)
+                self.assertEqual(taken, [], "take_next completed while the lock was held")
+        taker.join(timeout=5.0)
+        self.assertFalse(taker.is_alive(), "take_next stayed blocked after the release")
+        self.assertIsNotNone(taken[0])
+
+    def test_a_job_being_taken_is_not_cancelled_as_queued(self):
+        """Issue #660 round 4, finding 1: take_next marks a job RUNNING
+        under _lock and leaves it in _pending while its gated write runs; a
+        cancel arriving in that window used to pop the job, write
+        CANCELLED, and let the take's UPDATE write RUNNING over it - a row
+        stranded running until the next start's recovery. cancel() now only
+        takes QUEUED jobs."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        # a job being taken (state RUNNING while still in _pending) is not
+        # cancelled as queued
+        job.state = jobs.JobState.RUNNING
+        self.assertFalse(queue.cancel(job.id))
+        self.assertIn(job, queue._pending)
+
+    def test_a_failed_cancel_commit_keeps_the_job_takable(self):
+        """Issue #660 round 9, finding 2: the cancel ordering's pin - a
+        failing gated commit leaves the job in the in-memory queue, and the
+        next take_next returns it (no stranded queued row)."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        class _FlakyCancelCommit:
+            def __init__(self, real):
+                self._real = real
+                self._failed = False
+
+            def execute(self, *args, **kwargs):
+                return self._real.execute(*args, **kwargs)
+
+            def commit(self):
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("the db blinked")
+                return self._real.commit()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        # the commit failure raises through cancel (the caller sees the
+        # real cause); the failed commit RESTORES QUEUED, so the job is
+        # takable again (issue #660 round 11, finding 1)
+        with (
+            mock.patch.object(queue, "_connection", _FlakyCancelCommit(queue._connection)),
+            self.assertRaises(RuntimeError),
+        ):
+            queue.cancel(job.id)
+        # the failed commit's CANCELLED UPDATE must not linger: the rollback
+        # ended the transaction (issue #660 round 18, finding 1)
+        self.assertFalse(queue._connection.in_transaction)
+        self.assertIn(job, queue._pending)
+        self.assertEqual(job.state, jobs.JobState.QUEUED)
+        # a job whose cancel never committed is effectively not cancelled:
+        # the next take still returns it
+        taken = queue.take_next()
+        self.assertIsNotNone(taken, "the job was stranded by the failed cancel")
+        self.assertEqual(taken.id, job.id)
+
+    def test_a_failed_gated_commit_keeps_the_job_takable(self):
+        """Issue #660 round 2, finding 1: the observed SystemError is raised
+        by take_next's commit - the job must stay in the in-memory queue
+        when that write fails, so the next take_next still returns it and
+        nothing is stranded as a queued row nothing runs."""
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        job = jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)})
+
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        queue.enqueue(job)
+
+        # sqlite3.Connection.commit is read-only: the gated write fails via a
+        # delegating proxy, so the REAL take_next ordering is what runs
+        class _FlakyCommit:
+            def __init__(self, real):
+                self._real = real
+                self._failed = False
+
+            def execute(self, *args, **kwargs):
+                return self._real.execute(*args, **kwargs)
+
+            def commit(self):
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("the db blinked")
+                return self._real.commit()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        # the gated commit raises (the observed SystemError's site): the
+        # job must still be in _pending, so the NEXT take still returns
+        # it - take_next either returns a job or raises, never strands
+        with (
+            mock.patch.object(queue, "_connection", _FlakyCommit(queue._connection)),
+            self.assertRaises(RuntimeError),
+        ):
+            queue.take_next()
+        # the failed commit's UPDATE must not linger on the shared
+        # connection: the rollback ended the transaction (issue #660 round
+        # 18, finding 1 - deleting the rollback fails this)
+        self.assertFalse(queue._connection.in_transaction)
+        second = queue.take_next()
+        self.assertIsNotNone(second, "the job was stranded by the failed commit")
+        self.assertEqual(second.id, job.id)
+
+    def test_a_start_after_a_graceful_stop_actually_runs(self):
+        """Issue #660 round 14, finding 4: start() clears _stop, so a worker
+        restarted after a graceful stop() runs instead of exiting at once
+        (a stopped-with-no-reason worker). The deliberately-negative probe:
+        the buggy code exits in microseconds, so a short bound never
+        misclassifies it as alive."""
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        worker = jobs.JobWorker(self.connection, queue)
+        worker.start()
+        worker.stop()
+        worker.start()
+        try:
+            worker._thread.join(timeout=0.2)
+            self.assertTrue(worker._thread.is_alive(), "a restarted worker exited at once")
+        finally:
+            worker.stop()
+
+    def test_a_failed_take_next_does_not_kill_the_worker(self):
+        """Issue #649: one failed iteration - ANY exception from take_next -
+        is logged and survived: the worker keeps running and executes the
+        next job. On main the exception kills the thread and nothing says
+        the worker is gone."""
+        payload_dir = Path(self.tmp.name) / "movies"
+        payload_dir.mkdir()
+        (payload_dir / "x.mkv").write_bytes(b"junk")
+        # ONE queue for the job, the worker and the test's reads: the worker
+        # must consume the queue the job was enqueued into (issue #660
+        # round 3, finding 6), and the shared lock is the same lock the
+        # worker writes under (round 1, finding 5)
+        gate = threading.RLock()
+        queue = jobs.JobQueue(self.connection, connection_lock=gate)
+        job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"path": str(payload_dir)}))
+
+        real_take_next = queue.take_next
+        calls = {"n": 0}
+
+        def flaky(only_kinds=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("the db blinked")
+            return real_take_next(only_kinds)
+
+        # the shared lock: the test thread reads the queue (get) while the
+        # worker writes it - exactly the unsynchronized shape the root cause
+        # blames, so the test's own reads must hold the same lock (issue
+        # #660 round 1, finding 5)
+        worker = jobs.JobWorker(self.connection, queue)
+        finished = threading.Event()
+        real_finish = queue.finish
+
+        def signalling_finish(job, result):
+            real_finish(job, result)
+            finished.set()
+
+        with (
+            mock.patch.object(queue, "take_next", side_effect=flaky),
+            mock.patch.object(queue, "finish", side_effect=signalling_finish),
+            # the failure branch's back-off must not burn a real second per
+            # failure in a test (the file's own stop_after_first_wait
+            # pattern)
+            mock.patch.object(queue, "wait_for_work", side_effect=lambda timeout: False),
+        ):
+            worker.start()
+            try:
+                # the exact signal: the worker's finish() sets the event - no
+                # row polling, no 50 ms fragments (issue #660 round 1,
+                # finding 9)
+                self.assertTrue(
+                    finished.wait(10.0), "the worker never ran the job after the failure"
+                )
+                self.assertTrue(worker._thread.is_alive())
+                reloaded = queue.get(job.id)
+                self.assertEqual(reloaded.state, jobs.JobState.DONE)
+            finally:
+                worker.stop()
+
     def test_worker_stop_terminates_the_running_job_s_child(self):
         """Issue #431 (review round 2, finding 1): the measurement children run
         with the stall watchdog opted out, so a shutdown must set the running
@@ -649,7 +1635,7 @@ class TestJobs(unittest.TestCase):
             release_gate.wait(timeout=5.0)
             return real_take_next()
 
-        def slow_encode(job, connection, cancel, progress=None):
+        def slow_encode(job, connection, cancel, progress=None, queue=None):
             started.set()
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
@@ -705,7 +1691,7 @@ class TestJobs(unittest.TestCase):
         started = threading.Event()
         observed: dict = {}
 
-        def slow_encode(job, connection, cancel, progress=None):
+        def slow_encode(job, connection, cancel, progress=None, queue=None):
             started.set()
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:

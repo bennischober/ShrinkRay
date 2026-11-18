@@ -22,7 +22,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH
+from shrinkray.config import (
+    DEFAULT_ENCODER_PRESET,
+    DEFAULT_MIN_SOURCE_HEIGHT,
+    DEFAULT_MIN_SOURCE_WIDTH,
+)
 from shrinkray.engine.crop import (
     CROP_DETECT_LIMIT as CROP_DETECT_LIMIT,
 )
@@ -177,16 +181,11 @@ from shrinkray.tools.vmaf import (
     _tool_versions as _tool_versions,
 )
 from shrinkray.tools.vmaf import (
-    measure_vmaf as measure_vmaf,
-)
-from shrinkray.tools.vmaf import (
     vmaf_recipe as vmaf_recipe,
 )
 
-# full-file verification sub-samples above this output size (n_subsample=10:
-# every 10th frame measured) - full decode of a 2-hour 4K movie takes hours,
-# a sub-sampled pass minutes, the score stays honest
-VERIFY_SUBSAMPLE_THRESHOLD_BYTES = 2 * 1024**3
+# full-file verification was removed in v0.8.0 (issue #605): the probe
+# sampling is the quality evidence, and the artifact checks stay
 
 
 def cap_threads(max_threads: int | None) -> int | None:
@@ -1026,12 +1025,20 @@ def _probe_movie(
         # file with no bars simply proceeds uncropped. The timeline detector
         # is the one bar measurement (issue #181), cached per file version;
         # the sampled detector is the fallback for a pass that learned nothing (issue #525).
-        summary = detect_crop_summary_cached(input_file, db_file, cancel=cancel)
+        summary = detect_crop_summary_cached(
+            input_file, db_file, cancel=cancel, bit_depth=source_bit_depth
+        )
         # the measured "no common bars" verdict stands (issue #525): the
         # sampled detector runs only for a pass that learned nothing
         crop = crop_bars_or_fallback(
             summary,
-            lambda: detect_crop_rect(input_file, workdir, count=crop_sample_count, cancel=cancel),
+            lambda: detect_crop_rect(
+                input_file,
+                workdir,
+                count=crop_sample_count,
+                cancel=cancel,
+                bit_depth=source_bit_depth,
+            ),
         )
         if crop is not None:
             log(
@@ -1123,12 +1130,11 @@ def encode_with_quality(
     sample_every: float | None = DEFAULT_SAMPLE_EVERY,
     encoder: str = "svt_av1",
     probe_encoder_preset: str = "5",
-    encoder_preset: str = "3",
+    encoder_preset: str = DEFAULT_ENCODER_PRESET,
     progress: ProgressCallback | None = None,
     cancel: threading.Event | None = None,
     db_file: Path | None = None,
     encoder_threads: int | None = None,
-    verify: bool = False,
     force_reprobe: bool = False,
     use_probe_cache: bool = True,
     min_source_height: int = DEFAULT_MIN_SOURCE_HEIGHT,
@@ -1178,9 +1184,6 @@ def encode_with_quality(
             product whitelist (the config's extras); the gate always applies
             the whitelist too (issue #271).
         crop_sample_count (int): cropdetect windows per movie.
-        verify (bool): Run a full-file VMAF verification after a successful
-            encode (opt-in: hours of decode for a large movie; sub-sampled
-            1/10 above VERIFY_SUBSAMPLE_THRESHOLD_BYTES).
         force_reprobe (bool): Bypass the plan lookup entirely and run the
             normal probing pipeline even when a valid plan exists (CLI:
             --replan). It also bypasses the probe-encode cache: everything
@@ -1313,6 +1316,27 @@ def encode_with_quality(
     codec = source_codec(input_file)
 
     allowed = allowed_codecs(candidate_codecs)
+    if codec == "av1":
+        # the output format is never a source (issue #650): mirrored from
+        # decide_quality so the encode path enforces the decision with the
+        # same reason, independent of what the whitelist carries
+        log(f"Encode for '{input_file.name}': skip (already AV1 - the output format)")
+        return QualityResult(
+            input=input_file,
+            output=output_file,
+            success=False,
+            target_vmaf=target_vmaf,
+            error=(
+                "AV1 is the output format and never a source (issue #650): "
+                "re-encoding an AV1 source to AV1 buys no codec generation "
+                "gain"
+            ),
+            skipped_reason="already AV1 (the output format)",
+            input_size=identity.size,
+            input_mtime=identity.mtime,
+            hdr=hdr,
+            encoder=effective_encoder,
+        )
     if codec is not None and codec not in allowed:
         log(f"Encode for '{input_file.name}': skip (source codec not a candidate)")
         return QualityResult(
@@ -1598,9 +1622,6 @@ def encode_with_quality(
             hdr=hdr,
             encoder=effective_encoder,
         )
-    # success path: skip the verification below (already done)
-    verified_vmaf: float | None = None
-    verified_subsample: int | None = None
     # the 1:1 promise's check (issue #240): every audio and subtitle track
     # the encode must keep survives it. A lost track is reported in the
     # result's error (and the record) - the artifact is NOT deleted: the
@@ -1615,61 +1636,11 @@ def encode_with_quality(
     )
     if not tracks_ok:
         log_error(f"'{input_file.name}': {tracks_detail} (issue #240's 1:1 check).")
-    if verify:
-        # full-file verification: the ground-truth companion to the
-        # sample-based probes. Sub-sample very large files (n_subsample
-        # measures every Nth frame - hours of full decode become minutes)
-        # while keeping the score honest: the sampled frames are still the
-        # COMPLETE movie's frames, not the probe windows the CRF search
-        # already saw. A verification failure does NOT invalidate the
-        # encode (it measured fine at probe time) - it surfaces in the
-        # result and the record, never as a hard error.
-        # the verification re-measures with the SAME recipe the probes used
-        # (issue #308): a full-file score on another model or scale would not
-        # be comparable with the target it is checked against
-        verify_recipe = vmaf_recipe(
-            crop=crop,
-            width=(snapshot or {}).get("width"),
-            height=(snapshot or {}).get("height"),
-            bit_depth=(snapshot or {}).get("bit_depth"),
-        )
-        output_size = output_file.stat().st_size
-        verified_subsample = 10 if output_size > VERIFY_SUBSAMPLE_THRESHOLD_BYTES else None
-        try:
-            verify_workdir = Path(
-                tempfile.mkdtemp(prefix=probe_scratch_prefix(input_file, kind="verify"))
-            )
-            try:
-                verified_vmaf = measure_vmaf(
-                    output_file,
-                    input_file,
-                    verify_workdir,
-                    crop=crop,
-                    cancel=cancel,
-                    db_file=db_file,
-                    subsample=verified_subsample,
-                    recipe=verify_recipe,
-                )
-            finally:
-                shutil.rmtree(verify_workdir, ignore_errors=True)
-            log(
-                f"Verified '{input_file.name}': full-file VMAF "
-                f"{verified_vmaf:.2f}"
-                + (f" (sub-sampled 1/{verified_subsample})" if verified_subsample else "")
-                + f" vs target {target_vmaf}"
-            )
-        except Cancelled:
-            raise
-        except (RuntimeError, ValueError) as e:
-            log_error(f"Verification of '{input_file.name}' failed (non-fatal): {e}")
-            verified_vmaf = None
-            verified_subsample = None
 
     # the encode's outcome line (issue #471): the transcript is silent from
-    # 'chosen CRF' until the verification line hours later without it. A
-    # verification finding is NOT repeated here: the tracks check logs its
-    # own error line above and the finding rides result.error (issue #471
-    # round 3, finding 1 — do not re-add a suffix here)
+    # 'chosen CRF' until this line at the end of the encode. The tracks check
+    # logs its own error line above and the finding rides result.error (issue
+    # #471 round 3, finding 1 — do not re-add a suffix here)
     log(
         f"Encode result for '{input_file.name}': CRF {crf}, output "
         f"{final_output_size / (1024**3):.2f} GB "
@@ -1683,8 +1654,6 @@ def encode_with_quality(
         chosen_crf=crf,
         achieved_vmaf=achieved,
         probes=probes,
-        verified_vmaf=verified_vmaf,
-        verified_subsample=verified_subsample,
         # the encode succeeded against the bytes the run-start recheck
         # verified (issue #436): the input facts are the capture's, one
         # identity, not a post-encode size beside a run-start mtime

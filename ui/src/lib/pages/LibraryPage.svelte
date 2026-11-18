@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { fmtGb, fmtSavedHonest, type Movie } from '../api'
+  import { type Movie } from '../api'
+  import { bytes, savedPercent, vmaf } from '../format'
+  import EmptyState from '../components/EmptyState.svelte'
+  import PageHeader from '../components/PageHeader.svelte'
 
   let {
     movies,
@@ -13,6 +16,7 @@
     ontoggle,
     onselectall,
     onclear,
+    stale = false,
   }: {
     movies: Movie[]
     selectedPaths: Set<string>
@@ -25,6 +29,9 @@
     ontoggle: (path: string, checked: boolean) => void
     onselectall: (checked: boolean, paths: string[]) => void
     onclear: () => void
+    /** The shell's data is no longer current: a live-looking chip would claim
+     * a progress nothing is measuring (issue #629). */
+    stale?: boolean
   } = $props()
 
   // ── search + category (a select, not an exploding chip row) ──
@@ -115,7 +122,16 @@
   const selectedCount = $derived(filtered.filter((m) => selectedPaths.has(m.path)).length)
   const selectedMovies = $derived(filtered.filter((m) => selectedPaths.has(m.path)))
   const selectedBase = $derived(
-    selectedMovies.reduce((sum, m) => sum + (m.encode?.output_size ?? m.size ?? 0), 0)
+    selectedMovies.reduce(
+      // a discarded attempt's output_size describes an artifact that was
+      // thrown away (issue #625): the bytes on disk are the original's
+      (sum, m) =>
+        sum +
+        (m.encode && m.encode.outcome !== 'discarded'
+          ? (m.encode.output_size ?? m.size ?? 0)
+          : (m.size ?? 0)),
+      0,
+    )
   )
   // Measured, not guessed (issue #324): the plan's own predictions are the
   // only source of an estimate. A selection with no plan row, or one whose
@@ -133,10 +149,19 @@
     return sum
   })
 
-  function decisionOf(movie: Movie): { label: string; cls: string; bare?: boolean } {
+  function decisionOf(movie: Movie): { label: string; cls: string; bare?: boolean; title?: string } {
     const preset = movie.encode?.preset
     if (movie.missing) return { label: 'MISSING', cls: 'missing' }
     if (preset?.startsWith('skipped')) return { label: 'SKIPPED', cls: 'skip' }
+    // a declined swap is a measured attempt whose artifact was discarded
+    // (issue #625): it must not read as ENCODED, and the reason is the
+    // operator's information
+    if (preset && movie.encode?.outcome === 'discarded')
+      return {
+        label: 'DISCARDED',
+        cls: 'skip',
+        title: `${movie.encode.outcome_reason ?? 'the swap was declined'} (original untouched)`,
+      }
     if (preset) return { label: 'ENCODED', cls: 'done' }
     if (plannedPaths.includes(movie.path)) return { label: 'PLANNED', cls: 'planned' }
     // the default state renders as a bare swatch: 354 identical bordered
@@ -146,10 +171,7 @@
 </script>
 
 <div class="page page-in">
-  <header class="page-head">
-    <h2>Library</h2>
-    <p class="legend">{filtered.length} OF {movies.length} TITLES · TARGET VMAF {targetVmaf}</p>
-  </header>
+  <PageHeader title="Library" description={`${filtered.length} of ${movies.length} titles · target VMAF ${targetVmaf}`} />
 
   <!-- ══ toolbar: search + category + decision-state (the #539 demotion: no view toggle, no scan control) ══ -->
   <div class="toolbar">
@@ -172,6 +194,7 @@
       <option value="planned">Planned</option>
       <option value="encoded">Encoded</option>
       <option value="skipped">Skipped</option>
+      <option value="discarded">Discarded</option>
       <option value="missing">Missing</option>
     </select>
     <span class="spacer"></span>
@@ -191,7 +214,7 @@
       </span>
       <span class="leader-note mono">
         {#if selectedEstimate > 0}
-          → PLAN-PREDICTED −{(selectedEstimate / 1024 ** 3).toFixed(1)} GB · {fmtGb(selectedBase)} BASE
+          → PLAN-PREDICTED −{bytes(selectedEstimate)} · {bytes(selectedBase)} BASE
         {:else}
           → no estimate (selection already encoded)
         {/if}
@@ -201,7 +224,7 @@
     </div>
   {:else}
     <div class="bulk-bar idle">
-      <span class="mono dim">{filtered.length} titles — tick checkboxes for bulk work</span>
+      <span class="mono dim">{filtered.length} titles — tick titles to sum their plan estimate</span>
       <span class="spacer"></span>
       <span class="mono dim">the app works through the library on its own — this page only shows where it stands</span>
     </div>
@@ -255,18 +278,18 @@
                   aria-label="Select {movie.name}"
                 />
               </td>
-              <td>
+              <td data-label="Title">
                 <button class="name-btn" onclick={() => onopenmovie(movie)}>
                   {movie.name}
                   {#if movie.hdr}<span class="mono hdr">HDR</span>{/if}
                   {#if (movie.encode?.generation ?? 1) >= 2}<span class="mono gen-badge" title="Generation {movie.encode?.generation}: this file is itself the output of a previous encode">GEN {movie.encode?.generation}</span>{/if}
                 </button>
               </td>
-              <td class="dim">{movie.category}</td>
-              <td class="mono num">{fmtGb(movie.size)}</td>
-              <td>
+              <td class="dim" data-label="Category">{movie.category}</td>
+              <td class="mono num" data-label="Size">{bytes(movie.size)}</td>
+              <td data-label="Decision">
                 {#if runningMovie != null && movie.path === runningMovie}
-                  <span class="chip progress"><span class="swatch"></span>IN WORK {runningPercent != null ? `${runningPercent}%` : ''}</span>
+                  <span class="chip progress" class:stale><span class="swatch"></span>Running {runningPercent != null ? `${runningPercent}%` : ''}{stale ? ' (stale)' : ''}</span>
                 {:else}
                   {#if decision.bare}
                     <!-- bare swatch: the state stays visible to sighted users via
@@ -278,15 +301,18 @@
                       title="Untouched"
                     ></span>
                   {:else}
-                    <span class="chip {decision.cls}"><span class="swatch"></span>{decision.label}</span>
+                    <span class="chip {decision.cls}" title={decision.title}><span class="swatch"></span>{decision.label}</span>
                   {/if}
                 {/if}
               </td>
-              <td class="mono num">{movie.encode?.crf ?? '—'}</td>
-              <td class="mono num measured">{movie.encode?.vmaf?.toFixed(1) ?? '—'}</td>
-              <td class="mono num" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
-                {#if movie.encode}
-                  {@const saved = fmtSavedHonest(movie.encode.saved_percent)}
+              <td class="mono num" data-label="CRF">{movie.encode?.crf ?? '—'}</td>
+              <td class="mono num measured" data-label="VMAF">{vmaf(movie.encode?.vmaf, targetVmaf)}</td>
+              <td class="mono num" data-label="Saved" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
+                {#if movie.encode?.outcome === 'discarded'}
+                  {@const reason = movie.encode.outcome_reason ?? 'the swap was declined'}
+                  <span class="bad" title={`${reason} (original untouched)`}>discarded</span>
+                {:else if movie.encode}
+                  {@const saved = savedPercent(movie.encode.saved_percent)}
                   <span title={saved.grew ? 'the re-encode is larger than the source' : ''}>{saved.text}</span>
                 {:else}
                   —
@@ -295,9 +321,9 @@
             </tr>
           {:else}
             {#if movies.length === 0}
-              <tr><td colspan="8" class="empty dim">nothing scanned yet — the resident app's scan fills this library on its own</td></tr>
+              <tr><td colspan="8"><EmptyState title="Nothing scanned yet" hint="the resident app's scan fills this library on its own" /></td></tr>
             {:else}
-              <tr><td colspan="8" class="empty dim">no titles match — adjust the search</td></tr>
+              <tr><td colspan="8"><EmptyState title="No titles match" hint="adjust the search or clear a filter" /></td></tr>
             {/if}
           {/each}
         </tbody>
@@ -307,8 +333,6 @@
 
 <style>
   .page { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
-  .page-head .legend { margin-top: 2px; }
   .dim { color: var(--ink-dim); }
   .warn { color: var(--amber); }
   .bad { color: var(--red); }
@@ -466,5 +490,49 @@
     border: 1px solid var(--teal);
     padding: 0 4px;
     border-radius: 2px;
+  }
+  /* below 768px a row becomes a card: the desktop columns clip on a phone, and
+     only the checkbox and a truncated title were visible (issue #636) */
+  @media (max-width: 768px) {
+    table, thead, tbody, tr, td { display: block; width: auto; }
+    thead { display: none; }
+    tbody tr {
+      border: 1px solid var(--row-line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    tbody td {
+      border: none;
+      padding: 2px 0;
+      white-space: normal;
+      word-break: break-word;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+    }
+    tbody td::before {
+      content: attr(data-label);
+      flex: 0 0 auto;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-dim);
+    }
+    /* the title is the card's heading, not a label/value row: full width, wraps */
+    tbody td[data-label='Title'] {
+      display: block;
+      padding-bottom: 6px;
+    }
+    tbody td[data-label='Title']::before { display: none; }
+    tbody td[data-label='Title'] .name-btn {
+      white-space: normal;
+      word-break: break-word;
+      text-align: left;
+    }
+    tbody td.chk { padding-bottom: 6px; }
+    tbody td.chk::before { content: ''; flex: 0 0 auto; }
   }
 </style>

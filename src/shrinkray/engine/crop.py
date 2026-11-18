@@ -10,8 +10,9 @@ the SAFE union rule: crop only the bars common to every sustained reading
 (docs/black-bar-spike.md Q4 - the naive "largest bars" combine measured at
 keeping 0% of the frame; it must never ship).
 
-The summary is cached in the database (the `crops` table, keyed by size and
-mtime), so the expensive pass runs once per file version: plan/encode read
+The summary is cached in the database (the `crops` table, keyed by size,
+mtime and the cropdetect threshold it was measured at - issue #637), so the
+expensive pass runs once per file version: plan/encode read
 the cache, and the scan's coarse flag stays a separate cheap measurement
 (scan never runs the timeline pass itself).
 """
@@ -35,7 +36,9 @@ FFMPEG_BINARY = "ffmpeg"
 
 # a detected bar smaller than this percentage of the dimension is noise
 MIN_BAR_PERCENT = 2.0
-# blackness threshold for cropdetect (0-255); 24 matches ffmpeg default
+# cropdetect's blackness threshold for an 8-bit source. ffmpeg's own default
+# is the FRACTION 24/255, which it scales to the stream's depth; an absolute
+# 24 is not scaled, so never pass it unscaled: cropdetect_limit() lifts it
 CROP_DETECT_LIMIT = 24
 
 # cropdetect windows per movie: with the bars common to every sample the
@@ -52,6 +55,70 @@ MIN_RUN_SECONDS = 30.0
 # the run's minimum READING count so a sparse keyframe stream cannot satisfy
 # the seconds rule by accident (spike Q2's floor)
 MIN_RUN_READINGS = 3
+
+
+def cropdetect_limit(bit_depth: int | None) -> int:
+    """Returns cropdetect's blackness threshold for a source's bit depth.
+
+    ffmpeg reads an absolute `limit` in the stream's NATIVE sample range:
+    0-255 only for 8-bit, 0-1023 for 10-bit. Limited-range 10-bit black is
+    code 64, so the 8-bit value 24 classified no pixel as black and every
+    10-bit source read as full frame - its bars survived the re-encode
+    (issue #637). Scaling by the depth keeps the 8-bit filter string
+    byte-identical, so every 8-bit measurement already cached stays valid.
+
+    Every ffmpeg ShrinkRay accepts reads the limit this way: cropdetect became
+    bit-depth aware in FFmpeg 2.6 (commit a288d08, December 2014: float limit,
+    native-range scaling), and the libvmaf filter that `doctor` requires
+    (`detect_vmaf_style`) arrived in the release after 3.3 (July 2017). An older
+    cropdetect would read 96 on an 8-bit scale and over-crop; none can pass the
+    toolchain check.
+
+    Args:
+        bit_depth (int | None): The source's bit depth. None reads as 8. The
+            plan/encode passes resolve a caller's unknown depth from the
+            stream first (`_resolved_bit_depth`), after which None is left
+            only for a plain 8-bit pix_fmt (`yuv420p`, no depth suffix,
+            no bits_per_raw_sample) or an unreadable stream, which is logged.
+
+    Returns:
+        int: The threshold in the source's native range (24, 96, 384...).
+    """
+    if bit_depth is None or bit_depth <= 8:
+        return CROP_DETECT_LIMIT
+    return CROP_DETECT_LIMIT << (bit_depth - 8)
+
+
+def _resolved_bit_depth(movie: Path, bit_depth: int | None) -> int | None:
+    """Returns the caller's depth, or the stream's own when the caller has none.
+
+    A caller's None can mean its probe failed (a stale mount, the ffprobe
+    timeout) rather than an 8-bit source; measuring a 10-bit film at the 8-bit
+    threshold would silently keep its bars (issue #637, review round 1). So the
+    pass reads the depth itself, and says so when it cannot.
+
+    Args:
+        movie (Path): The source movie file.
+        bit_depth (int | None): The depth the caller probed (None: unknown).
+
+    Returns:
+        int | None: The depth; None for a plain 8-bit format that names no
+            depth, or when the stream cannot be read (logged).
+    """
+    if bit_depth is not None:
+        return bit_depth
+    from shrinkray.tools.ffprobe import bit_depth as stream_bit_depth
+    from shrinkray.tools.ffprobe import get_video_stream, run_ffprobe
+
+    try:
+        video = get_video_stream(run_ffprobe(movie).get("streams", []))
+    except RuntimeError as e:
+        log(
+            f"The bit depth of '{movie.name}' could not be read ({e}): its bars are "
+            "measured at the 8-bit black threshold, which finds none in deeper video."
+        )
+        return None
+    return None if video is None else stream_bit_depth(video)
 
 
 def parse_crop_line(text: str) -> tuple[int, int, int, int] | None:
@@ -240,7 +307,7 @@ def intersect_crop_rects(
 
 def run_crop_timeline(
     movie: Path,
-    limit: int = CROP_DETECT_LIMIT,
+    limit: int,
     cancel: threading.Event | None = None,
 ) -> tuple[list[CropReading], tuple[int, int] | None]:
     """Runs the keyframe-only cropdetect pass over the whole runtime.
@@ -251,7 +318,9 @@ def run_crop_timeline(
 
     Args:
         movie (Path): The source movie file.
-        limit (int): The cropdetect blackness threshold (0-255).
+        limit (int): The cropdetect blackness threshold in the source's
+            native range (`cropdetect_limit`; no default - an 8-bit value
+            on a 10-bit source finds no bars, issue #637).
         cancel (threading.Event | None): Cooperative cancellation (issue
             #384): a set event kills the pass within a poll tick and the
             caller caches nothing.
@@ -452,7 +521,9 @@ class CropSummary:
         return 1 if bar_w > 0 or bar_h > 0 else 0
 
 
-def get_crop_summary(connection: sqlite3.Connection, movie: Path) -> CropSummary | None:
+def get_crop_summary(
+    connection: sqlite3.Connection, movie: Path, *, bit_depth: int | None
+) -> CropSummary | None:
     """Reads the file's cached summary from the raw crops row.
 
     db stores; the engine interprets: bars back to a tuple, the ratio JSON
@@ -461,13 +532,15 @@ def get_crop_summary(connection: sqlite3.Connection, movie: Path) -> CropSummary
     Args:
         connection: The database connection.
         movie (Path): The source movie file.
+        bit_depth (int | None): The source's bit depth: a row measured with
+            another blackness threshold is a miss (issue #637).
 
     Returns:
         CropSummary | None: The cached summary, or None when absent/stale.
     """
     from shrinkray import db
 
-    row = db.get_crop_row(connection, movie)
+    row = db.get_crop_row(connection, movie, limit=cropdetect_limit(bit_depth))
     if row is None:
         return None
     bars = None
@@ -496,6 +569,8 @@ def detect_crop_summary_cached(
     movie: Path,
     db_file: Path | None,
     cancel: threading.Event | None = None,
+    *,
+    bit_depth: int | None,
 ) -> CropSummary | None:
     """Returns the file's crop summary, computing and caching it on miss.
 
@@ -512,12 +587,16 @@ def detect_crop_summary_cached(
         cancel (threading.Event | None): Cooperative cancellation (issue
             #384): a set event ends the timeline pass within a poll tick and
             caches nothing.
+        bit_depth (int | None): The source's bit depth; it sets the
+            blackness threshold, which keys the cache (issue #637).
 
     Returns:
         CropSummary | None: The summary, or None when the pass failed.
     """
     if not movie.is_file():
         return None
+    bit_depth = _resolved_bit_depth(movie, bit_depth)
+    limit = cropdetect_limit(bit_depth)
     connection: sqlite3.Connection | None = None
     # one finally owns the connection on every exit, the cache hit included
     # (issue #480: the hit returned before the old finally and leaked it)
@@ -527,7 +606,7 @@ def detect_crop_summary_cached(
                 from shrinkray import db
 
                 connection = db.connect(db_file)
-                cached = get_crop_summary(connection, movie)
+                cached = get_crop_summary(connection, movie, bit_depth=bit_depth)
                 if cached is not None:
                     return cached
             except (OSError, RuntimeError, sqlite3.Error) as e:
@@ -537,7 +616,7 @@ def detect_crop_summary_cached(
                 if connection is not None:
                     connection.close()
                     connection = None
-        readings, frame = run_crop_timeline(movie, cancel=cancel)
+        readings, frame = run_crop_timeline(movie, limit, cancel=cancel)
         if frame is None:
             return None
         summary = crop_summary_from_timeline(readings, frame)
@@ -545,7 +624,7 @@ def detect_crop_summary_cached(
             from shrinkray import db
 
             try:
-                db.save_crop_summary(connection, movie, summary)
+                db.save_crop_summary(connection, movie, summary, limit=limit)
             except (OSError, sqlite3.Error) as e:
                 # the measurement stands; only the next run's shortcut is lost
                 # (the uncommitted upsert rolls back when the finally closes)
@@ -590,6 +669,8 @@ def detect_crop_rect(
     workdir: Path,
     count: int = DEFAULT_CROP_SAMPLE_COUNT,
     cancel: threading.Event | None = None,
+    *,
+    bit_depth: int | None,
 ) -> tuple[int, int, int, int] | None:
     """Detects baked-in black bars (letterbox) of a movie via cropdetect.
 
@@ -605,6 +686,8 @@ def detect_crop_rect(
         count (int): The number of segments to probe.
         cancel (threading.Event | None): Cooperative cancellation (issue
             #384): a set event ends the sampled pass within a poll tick.
+        bit_depth (int | None): The source's bit depth, which sets the
+            blackness threshold (issue #637).
 
     Returns:
         tuple | None: The (top, bottom, left, right) bars to crop, or None
@@ -626,6 +709,7 @@ def detect_crop_rect(
     frame = source_frame(movie)
     if frame is None:
         return None
+    limit = cropdetect_limit(_resolved_bit_depth(movie, bit_depth))
 
     from shrinkray.engine.samples import sample_offsets
 
@@ -647,7 +731,7 @@ def detect_crop_rect(
                     "-i",
                     str(movie),
                     "-vf",
-                    f"cropdetect=limit={CROP_DETECT_LIMIT}:round=2:reset=0",
+                    f"cropdetect=limit={limit}:round=2:reset=0",
                     "-f",
                     "null",
                     "-",
@@ -710,6 +794,8 @@ def has_black_bars(
     dimensions: dict[str, Any],
     min_width: int = 100,
     min_height: int = 100,
+    *,
+    bit_depth: int | None,
 ) -> int:
     """Checks if a movie has (relevant) black bars by using the ffmpeg cropdetect filter.
 
@@ -721,6 +807,11 @@ def has_black_bars(
         dimensions (dict): Dictionary with the 'width' and 'height' of the video.
         min_width (int): Minimum width difference to detect black bars.
         min_height (int): Minimum height difference to detect black bars.
+        bit_depth (int | None): The source's bit depth, which sets the
+            blackness threshold. The bare filter used before #637 already
+            measured 10-bit correctly (ffmpeg's default limit is the fraction
+            24/255, scaled to the depth); the explicit limit keeps this probe
+            on the same rule as the plan/encode passes (96 vs ffmpeg's 96.3).
 
     Returns:
         int: 1 if black bars were detected, 0 if not (or it could not be checked).
@@ -739,7 +830,7 @@ def has_black_bars(
                 "-vframes",
                 "10",
                 "-vf",
-                "cropdetect",
+                f"cropdetect=limit={cropdetect_limit(bit_depth)}",
                 "-f",
                 "null",
                 "-",

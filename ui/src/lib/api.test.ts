@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   failedOutcomeNote,
-  fmtSavedHonest,
-  fmtSeconds,
-  fmtSpan,
+  isFailedOutcome,
   humanizeError,
   isAuthFailure,
   jobPaths,
@@ -74,7 +72,47 @@ describe('movieOutcome', () => {
   })
 })
 
+describe('isFailedOutcome', () => {
+  // the rail's roll-up and the note must agree on what counts as work lost
+  it('counts a failed movie and a declined swap, never a busy or HDR skip', () => {
+    expect(isFailedOutcome({ movie: 'a', state: 'failed' })).toBe(true)
+    expect(
+      isFailedOutcome({ movie: 'b', state: 'skipped', error: 'the swap was declined: subtitles' }),
+    ).toBe(true)
+    expect(isFailedOutcome({ movie: 'c', state: 'skipped', error: 'hdr not supported' })).toBe(false)
+    expect(isFailedOutcome({ movie: 'd', state: 'skipped', error: 'the file was busy' })).toBe(false)
+    expect(isFailedOutcome({ movie: 'e', state: 'encoded' })).toBe(false)
+  })
+})
+
 describe('failedOutcomeNote', () => {
+  it('leaves a busy or HDR skip clean, because nothing was thrown away (issue #630)', () => {
+    const j = job({
+      kind: 'encode',
+      result: {
+        outcomes: [
+          { movie: '/m/a', state: 'skipped', error: 'hdr not supported' },
+          { movie: '/m/b', state: 'skipped', error: 'the file was busy' },
+        ],
+      },
+    })
+    expect(failedOutcomeNote(j)).toBe('')
+  })
+
+  it('counts a discarded encode as work thrown away, not a clean done (issue #630)', () => {
+    const j = job({
+      kind: 'encode',
+      result: {
+        outcomes: [
+          { movie: '/m/a', state: 'done' },
+          { movie: '/m/b', state: 'skipped', output_size: null, error: 'the swap was declined: subtitles (the encode is discarded)' },
+        ],
+      },
+    })
+    expect(failedOutcomeNote(j)).toContain('1 of 2')
+    expect(failedOutcomeNote(j)).toContain('/m/b')
+  })
+
   it('names the failed movies of a partially-done encode', () => {
     const j = job({
       kind: 'encode',
@@ -111,39 +149,6 @@ describe('humanizeError', () => {
   it('passes unknown text through untouched', () => {
     const raw = 'something completely unexpected'
     expect(humanizeError(null, raw)).toBe(raw)
-  })
-})
-
-describe('fmtSavedHonest (growth is not a gain)', () => {
-  it('formats savings plainly', () => {
-    expect(fmtSavedHonest(64.3).text).toBe('64.3%')
-    expect(fmtSavedHonest(64.3).grew).toBe(false)
-  })
-
-  it('labels growth as larger, never as a positive saving', () => {
-    const r = fmtSavedHonest(-5)
-    expect(r.text).toBe('+5.0% larger')
-    expect(r.grew).toBe(true)
-  })
-
-  it('renders an em dash for unknown values', () => {
-    expect(fmtSavedHonest(null).text).toBe('—')
-    expect(fmtSavedHonest(undefined).text).toBe('—')
-  })
-})
-
-describe('time formatters', () => {
-  it('fmtSeconds renders human durations', () => {
-    expect(fmtSeconds(null)).toBe('—')
-    expect(fmtSeconds(0)).toBe('—')
-    expect(fmtSeconds(45)).toBe('45s')
-    expect(fmtSeconds(125)).toBe('2m 5s')
-    expect(fmtSeconds(3700)).toBe('1h 1m')
-  })
-
-  it('fmtSpan computes a duration between ISO stamps', () => {
-    expect(fmtSpan('2026-10-24T10:00:00Z', '2026-10-24T10:01:30Z')).toBe('1m 30s')
-    expect(fmtSpan('2026-10-24T10:00:00Z', null)).toBeNull()
   })
 })
 

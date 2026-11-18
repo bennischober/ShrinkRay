@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { fmtGb, type RetainedFile } from '../api'
+  import { type RetainedFile } from '../api'
+  import { bytes } from '../format'
+  import EmptyState from '../components/EmptyState.svelte'
+  import FileName from '../components/FileName.svelte'
+  import PageHeader from '../components/PageHeader.svelte'
+  import Time from '../components/Time.svelte'
   import HintButton from './HintButton.svelte'
 
   let { files, onrecover }: { files: RetainedFile[]; onrecover?: () => void } = $props()
@@ -11,8 +16,7 @@
 </script>
 
 <section class="retained" aria-labelledby="retained-heading">
-  <header class="retained-head">
-    <h1 id="retained-heading">Retained originals</h1>
+  <PageHeader title="Retained originals" description="Originals kept aside by an in-place encode.">
     <HintButton
       label="WHY KEEP THEM?"
       hint="ShrinkRay never deletes a source file. When an encode replaces one in place, the original is renamed aside and kept — it is listed here so you can reclaim the space yourself, in your own file manager, once you are satisfied with the result."
@@ -20,17 +24,17 @@
     {#if onrecover}
       <button class="ghost mono" onclick={onrecover}>refresh</button>
     {/if}
-  </header>
+  </PageHeader>
 
   {#if files.length === 0}
-    <p class="empty">
-      No retained originals. Nothing has been swapped in place yet — encodes written to an
-      output directory never touch the source.
-    </p>
+    <EmptyState
+      title="No retained originals"
+      hint="Nothing has been swapped in place yet — encodes written to an output directory never touch the source."
+    />
   {:else}
     <p class="summary mono">
-      {files.length} retained original{files.length === 1 ? '' : 's'} · {fmtGb(total)} swapped out ·
-      {fmtGb(reclaimable)} reclaimable
+      {files.length} retained original{files.length === 1 ? '' : 's'} · {bytes(total)} swapped out ·
+      {bytes(reclaimable)} reclaimable
     </p>
     <table class="retained-table mono">
       <thead>
@@ -45,14 +49,14 @@
       <tbody>
         {#each files as file (file.retained_path)}
           <tr class:gone={!file.present}>
-            <td class="path" title={file.retained_path}>
-              {file.retained_path}
+            <td class="path">
+              <FileName path={file.retained_path} />
               {#if !file.present}<span class="tag">already removed</span>{/if}
             </td>
-            <td class="path" title={file.source_path}>{file.source_path}</td>
-            <td>{fmtGb(file.size_before)}</td>
-            <td>{fmtGb(file.size_after)}</td>
-            <td>{file.created_at}</td>
+            <td class="path"><FileName path={file.source_path} /></td>
+            <td>{bytes(file.size_before)}</td>
+            <td>{bytes(file.size_after)}</td>
+            <td><Time iso={file.created_at} /></td>
           </tr>
         {/each}
       </tbody>
@@ -68,17 +72,7 @@
   .retained {
     padding: 1.5rem;
   }
-  .retained-head {
-    display: flex;
-    align-items: baseline;
-    gap: 0.75rem;
-    margin-bottom: 1rem;
-  }
-  .retained-head h1 {
-    font-size: 1.1rem;
-    margin: 0;
-  }
-  .ghost {
+      .ghost {
     margin-left: auto;
     background: transparent;
     border: 1px solid currentColor;
@@ -91,13 +85,7 @@
   .ghost:hover {
     opacity: 1;
   }
-  .empty,
-  .summary,
-  .footnote {
-    opacity: 0.75;
-    font-size: 0.8rem;
-  }
-  .retained-table {
+    .retained-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.78rem;

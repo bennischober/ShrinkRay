@@ -8,6 +8,7 @@ logic as the encode/plan commands and encodes them (source stays untouched
 
 import contextlib
 import ctypes
+import errno
 import math
 import os
 import sqlite3
@@ -21,7 +22,12 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from shrinkray.config import DEFAULT_MIN_SOURCE_HEIGHT, DEFAULT_MIN_SOURCE_WIDTH, encode_window_open
+from shrinkray.config import (
+    DEFAULT_ENCODER_PRESET,
+    DEFAULT_MIN_SOURCE_HEIGHT,
+    DEFAULT_MIN_SOURCE_WIDTH,
+    encode_window_open,
+)
 from shrinkray.config import Conf as Conf
 from shrinkray.engine.lock import EncodeBusyError, guard_encodes
 from shrinkray.engine.pause import pause_reason
@@ -497,26 +503,79 @@ def decide(movie: Path, target_vmaf: float, encoder: str) -> str:
 def acquire_lock(lock_file: Path) -> bool:
     """Tries to acquire the single-instance lock.
 
+    The lock's authority is the OS, not the file's text: an exclusive
+    non-blocking file lock (fcntl.flock on POSIX, msvcrt.locking on
+    Windows) held on an open descriptor for the process lifetime. The OS
+    releases it when the process dies, so a stale file - a container
+    restart that reuses PID 1, a crashed run - can never make the watcher
+    refuse to start (issue #648; the PID heuristic it replaces read its
+    own PID from the leftover file and saw a live process). A genuinely
+    live second watcher holds its own descriptor's lock and still blocks.
+    The file is never unlinked while or after holding the lock: a stable
+    inode is what makes "the lock" one object - unlinking it after release
+    let a third process create a fresh inode and run alongside the second
+    (the classic unlink race).
+
     Args:
-        lock_file (Path): The lock file path.
+        lock_file (Path): The lock file path (the owner PID in it is
+            diagnostics only).
 
     Returns:
-        bool: True if the lock was acquired (this is the only watcher).
+        bool: True if the lock was acquired (this is the only watcher);
+            False only when the OS lock is held by someone else.
+
+    Raises:
+        OSError: An infrastructure failure (the directory cannot be
+            created, the path is not a regular file, the lock call failed
+            for a reason other than "held") - the caller records the real
+            cause instead of mistaking it for "another watcher".
     """
+    global _LOCK_FD
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    # O_NOFOLLOW (POSIX): a symlink planted at the fixed lock path must not
+    # make us truncate someone else's file (issue #648 review); %TEMP% is
+    # per-user on Windows, where the flag does not exist
+    fd = os.open(
+        lock_file,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
     try:
-        if lock_file.exists():
-            # stale lock from a crashed run? a pid that does not exist anymore
-            # frees the lock
-            pid = int(lock_file.read_text(encoding="utf-8").strip() or 0)
-            try:
-                os.kill(pid, 0)
-                return False  # process exists => another watcher is running
-            except (OSError, ValueError):
-                pass  # dead process or unparsable => take over
-        lock_file.write_text(str(os.getpid()), encoding="utf-8")
-        return True
-    except OSError:
+        import stat
+
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"the lock path is not a regular file: {lock_file}")
+        if sys.platform == "win32":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        # POSIX: the lock is held by another watcher - the one legitimate
+        # refusal
+        os.close(fd)
         return False
+    except OSError as e:
+        os.close(fd)
+        if e.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+            # Windows: msvcrt.locking reports a held lock as EACCES/EDEADLK
+            return False
+        raise
+    # acquired: keep the descriptor open (the lock lives on it) and record
+    # the owner for diagnostics - a reader can see who holds the file even
+    # though the text decides nothing
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
+    except OSError as e:
+        # the lock is held regardless; the PID text is diagnostics only, but
+        # a reader counting on it should know it may be stale
+        log_error(f"The lock file's owner-PID note could not be written: {e}")
+    _LOCK_FD = fd
+    return True
 
 
 class _FsWaiter:
@@ -545,6 +604,7 @@ class _FsWaiter:
         self._roots = roots
         self._wake: threading.Event | None = None
         self._fd: int | None = None
+        self._thread: threading.Thread | None = None
         self._wd_paths: dict[int, Path] = {}
         self._failed = False
         self._supported = sys.platform in ("linux", "win32")
@@ -611,7 +671,8 @@ class _FsWaiter:
                 continue
             n = libc.read(fd, buf, len(buf))
             if n <= 0:
-                # EINTR or the fd closed by stop(): both mean "no events"
+                # EINTR (stop() no longer closes under a running read: it
+                # joins this thread first, issue #642) means "no events"
                 continue
             offset = 0
             while offset + 16 <= n:
@@ -658,6 +719,13 @@ class _FsWaiter:
         """Tears the watches down (the loop's finally)."""
         if self._wake is not None:
             self._wake.set()
+        # the drain must be out of select() before the descriptor closes
+        # (issue #642): its select is bounded at 0.5 s, so the join is too,
+        # and closing first raced the drain into EBADF - or onto a reused
+        # descriptor number under a still-running read. A drain that never
+        # started (a failed _start_linux) is not alive and needs no join.
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join()
         if self._fd is not None and self._fd >= 0:
             with contextlib.suppress(OSError):
                 os.close(self._fd)
@@ -697,22 +765,53 @@ def _wait_or_stop(
 def release_lock(lock_file: Path) -> None:
     """Releases the single-instance lock if this process holds it.
 
+    The file is left in place on purpose: a stable inode is what makes
+    "the lock" one object (unlinking it after release lets a third process
+    create a fresh inode and run alongside the second), and a leftover
+    file decides nothing - the OS lock does.
+
     Args:
-        lock_file (Path): The lock file path.
+        lock_file (Path): The lock file path (unused by the unlock, which
+            works on the held descriptor; kept for signature stability).
     """
+    global _LOCK_FD
+    fd = _LOCK_FD
+    _LOCK_FD = None
+    if fd is None:
+        return
     try:
-        if lock_file.exists() and lock_file.read_text(encoding="utf-8").strip() == str(os.getpid()):
-            lock_file.unlink()
+        if sys.platform == "win32":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
     except OSError:
-        pass
+        pass  # the close below releases the lock regardless
+    finally:
+        os.close(fd)
 
 
-# the single-instance lock's path: one watcher per machine. A module-level
-# constant so tests can point it at a per-test temp file - a shared /tmp
-# path plus pid reuse made watch() refuse to run in a test run (issue #176
-# follow-up: six watch tests failed with empty results because a leftover
-# lock's pid happened to be alive again).
+# the single-instance lock's path: one watcher per process (per container -
+# the path is the container's own temp dir). A module-level
+# constant so tests can point it at a per-test temp file (issue #176: a
+# shared /tmp path made one test run's lock block another's). The file's
+# text is diagnostics; the OS lock on it decides (issue #648).
 WATCH_LOCK_FILE = Path(tempfile.gettempdir()) / "shrinkray_watch.lock"
+
+# why the last watch() did not run (issue #648): None while the watcher is
+# running; the lock refusal sets it here, and a watch-loop crash is recorded
+# by the server's run_watch wrapper - /api/status carries it so a stopped
+# watcher is never a silent one
+WATCHER_ERROR: str | None = None
+
+# the descriptor the OS lock is held on (issue #648): the lock lives on the
+# open file description, so the descriptor stays open for the process
+# lifetime and the OS releases the lock when the process dies
+_LOCK_FD: int | None = None
 
 
 @dataclass(frozen=True)
@@ -747,7 +846,7 @@ def watch(
     target_vmaf: float = DEFAULT_TARGET_VMAF,
     encoder: str = "svt_av1",
     probe_encoder_preset: str = "5",
-    encoder_preset: str = "3",
+    encoder_preset: str = DEFAULT_ENCODER_PRESET,
     poll_interval: float = POLL_INTERVAL,
     once: bool = False,
     max_threads: int | None = None,
@@ -771,7 +870,7 @@ def watch(
     """Watches the inbox and encodes newly arrived movies.
 
     This function blocks (unless once=True); stop it with Ctrl+C - the stop
-    event ends the pass loop and terminates the running encode/verify child
+    event ends the pass loop and terminates the running encode child
     on the direct-encode route (issue #431; the submit route's running job
     is terminated by the worker's stop), and the process exits cleanly.
 
@@ -795,7 +894,7 @@ def watch(
         max_threads (int | None): Per-encode thread cap (None/0 = all cores).
         stop_event (threading.Event | None): Cooperative stop for the resident
             app: checked between passes AND passed to encode_with_quality as
-            its cancel event, so a stop terminates the running encode/verify
+            its cancel event, so a stop terminates the running encode
             child on the direct-encode route (the submit route's running job
             is terminated by the worker's stop, issue #431).
         db_file (Path | None): The sqlite database file - enables the stall
@@ -887,35 +986,48 @@ def watch(
                 f"must not live inside the inbox): inbox='{roots[0]}', output='{output_dir}'"
             )
 
-    if not acquire_lock(lock_file):
-        log_error("Another watcher seems to be running (lock file exists).")
-        return
-
-    for root in roots:
-        root.mkdir(parents=True, exist_ok=True)
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-    # the watches need the roots to EXIST: _add_recursive walks each root, so
-    # a root created here would otherwise be watched never (os.walk of a
-    # missing directory yields nothing, silently - no events, _failed stays
-    # False, the poll still works but the wake never fires)
-    waiter = _FsWaiter(roots)
-    waiter.start()
-
-    # in place: the encode still needs a real path to write to, so it lands in
-    # a working directory INSIDE the inbox - the same filesystem, so the swap's
-    # two renames stay atomic and cheap. The output directory only says where
-    # the bytes are written; the swap target is always the source.
-    staging: contextlib.AbstractContextManager[str] = (
-        contextlib.nullcontext(str(output_dir))
-        if output_dir is not None
-        else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=roots[0])
-    )
-    disk_target = output_dir if output_dir is not None else roots[0]
-    in_place_mode = output_dir is None
-
+    global WATCHER_ERROR
     try:
+        acquired = acquire_lock(lock_file)
+    except OSError as e:
+        WATCHER_ERROR = f"the single-instance lock could not be acquired: {e}"
+        log_error(f"The watcher did not start: {WATCHER_ERROR}.")
+        return
+    if not acquired:
+        WATCHER_ERROR = "another watcher holds the single-instance lock"
+        log_error(f"The watcher did not start: {WATCHER_ERROR}.")
+        return
+    WATCHER_ERROR = None
+    # the setup below can fail (an unwritable root, a watcher budget): the
+    # try/finally covers it too, so a failure releases the lock instead of
+    # leaving _LOCK_FD set for a later watch() to false-refuse on (issue
+    # #648 round 3)
+    waiter: _FsWaiter | None = None
+    try:
+        for root in roots:
+            root.mkdir(parents=True, exist_ok=True)
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        # the watches need the roots to EXIST: _add_recursive walks each root, so
+        # a root created here would otherwise be watched never (os.walk of a
+        # missing directory yields nothing, silently - no events, _failed stays
+        # False, the poll still works but the wake never fires)
+        waiter = _FsWaiter(roots)
+        waiter.start()
+
+        # in place: the encode still needs a real path to write to, so it lands in
+        # a working directory INSIDE the inbox - the same filesystem, so the swap's
+        # two renames stay atomic and cheap. The output directory only says where
+        # the bytes are written; the swap target is always the source.
+        staging: contextlib.AbstractContextManager[str] = (
+            contextlib.nullcontext(str(output_dir))
+            if output_dir is not None
+            else tempfile.TemporaryDirectory(prefix=STAGING_DIR_PREFIX, dir=roots[0])
+        )
+        disk_target = output_dir if output_dir is not None else roots[0]
+        in_place_mode = output_dir is None
+
         with staging as work_dir:
             target_dir = Path(work_dir)
             while True:
@@ -1080,7 +1192,7 @@ def watch(
                                 target_dir / movie.name,
                                 # the measurement child opts out of the stall
                                 # watchdog (issue #431): without this event a
-                                # hung verify pass is unbounded until the
+                                # hung measurement is unbounded until the
                                 # container stops - the shutdown event is the
                                 # kill path (review on PR #468, finding 1)
                                 cancel=stop_event,
@@ -1093,12 +1205,6 @@ def watch(
                                 # inbox automation must not silently depend on
                                 # plan staleness: watch always measures fresh
                                 force_reprobe=True,
-                                # the resident mode verifies every encode
-                                # (issue #235): nobody watches the log in an
-                                # unattended container, and the full-file VMAF
-                                # is the only evidence the encode met the
-                                # target that the operator will ever get
-                                verify=True,
                                 min_source_height=current.min_source_height,
                                 min_source_width=current.min_source_width,
                                 min_source_size_gb=current.min_source_size_gb,
@@ -1139,7 +1245,13 @@ def watch(
                                 )
                                 if in_place_mode:
                                     if not _swap(
-                                        db_file, movie, result.output, encode_id, error=result.error
+                                        db_file,
+                                        movie,
+                                        result.output,
+                                        encode_id,
+                                        error=result.error,
+                                        input_size=result.input_size,
+                                        input_mtime=getattr(result, "input_mtime", None),
                                     ):
                                         # declined (a verification finding, a grown
                                         # output or a refused rename): _swap said why,
@@ -1206,7 +1318,8 @@ def watch(
     except KeyboardInterrupt:
         log("Watch stopped (current state is kept).")
     finally:
-        waiter.stop()
+        if waiter is not None:
+            waiter.stop()
         release_lock(lock_file)
 
 
@@ -1216,6 +1329,8 @@ def _swap(
     output: Path,
     encode_id: int | None = None,
     error: str | None = None,
+    input_size: int | None = None,
+    input_mtime: float | None = None,
 ) -> bool:
     """Swaps a verified encode into the source's path, retaining the original.
 
@@ -1237,6 +1352,13 @@ def _swap(
         error (str | None): The encode's verification finding (issue #240: a
             lost track, an unverifiable probe). A finding declines the swap
             before any filesystem work: the source is never touched.
+        input_size (int | None): The source's size in the run identity
+            (issue #436), when the watcher carries one. A source whose size
+            or mtime differs at swap time declines the swap (issue #585).
+        input_mtime (float | None): The source's mtime in the run identity
+            (issue #436). Compared strictly, like
+            `engine.identity.ensure_unchanged`; the 1 s tolerance in `db.py`
+            belongs to the plan cache's fingerprint, a different mechanism.
 
     Returns:
         bool: True when the source was replaced, False when the swap was
@@ -1244,33 +1366,52 @@ def _swap(
     """
     from shrinkray import db, replace
 
-    def _discard_row() -> None:
+    def _discard_row(reason: str | None = None) -> None:
         if db_file is not None and encode_id is not None:
             connection = db.connect(db_file)
             try:
-                db.set_encode_output(connection, encode_id, None)
+                # clearing the path IS the discard: one statement records the
+                # outcome and its reason (issue #625)
+                db.set_encode_output(connection, encode_id, None, reason)
             finally:
                 connection.close()
 
     if error is not None:
         log_error(f"Not replacing '{source.name}': {error} => the original is kept.")
-        _discard_row()
+        _discard_row(error)
         return False
+    if input_size is not None and input_mtime is not None:
+        # the swap is the most consequential write (issue #585): a source that
+        # changed since the encode was decided must not be replaced by an encode
+        # of its old bytes (#436's identity, compared at the last code before
+        # the library - strict, like `ensure_unchanged`, because the identity
+        # was captured by a stat of this very file and an unchanged file
+        # re-stats identical; a same-size, mtime-preserved change is #438's
+        # boundary)
+        try:
+            current = source.stat()
+        except OSError:
+            current = None
+        if current is None or current.st_size != input_size or current.st_mtime != input_mtime:
+            log_error(
+                f"Not replacing '{source.name}': the source changed during the "
+                "encode => the original is kept, the encode is discarded."
+            )
+            _discard_row("the source changed during the encode")
+            return False
     size_before = source.stat().st_size
     size_after = output.stat().st_size
     if size_after >= size_before:
-        log_error(
-            f"Not replacing '{source.name}': the output is not smaller "
-            f"({size_before} -> {size_after} bytes)"
-        )
-        _discard_row()
+        reason = f"the output is not smaller ({size_before} -> {size_after} bytes)"
+        log_error(f"Not replacing '{source.name}': {reason}")
+        _discard_row(reason)
         return False
     try:
         staged = replace.stage(output, source)
         retained = replace.swap(source, staged)
     except replace.SwapError as swap_error:
         log_error(f"Not replacing '{source.name}': {swap_error}")
-        _discard_row()
+        _discard_row(str(swap_error))
         return False
     if db_file is not None:
         connection = db.connect(db_file)

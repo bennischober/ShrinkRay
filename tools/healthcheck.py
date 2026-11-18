@@ -7,8 +7,8 @@ usually no token) reports healthy instead of turning `unhealthy` for the hours
 an encode takes. PID 1's argv tells the two apart: the server is the `serve`
 command (or its hidden `app` alias).
 
-The app requires the token on every request of a non-loopback bind (issue
-#36), and the container binds 0.0.0.0, so the check sends it: $SHRINKRAY_TOKEN
+`/api/status` requires the token whenever one is configured (issue #36),
+and the container binds 0.0.0.0, so the check sends it: $SHRINKRAY_TOKEN
 when set, else the token the server generated into $SHRINKRAY_TOKEN_FILE (#249).
 """
 

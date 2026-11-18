@@ -245,6 +245,249 @@ class TestDb(unittest.TestCase):
             self.assertEqual(row["min_saving_percent"], 0)
             migrated.close()
 
+    def test_migration_v20_to_v21_remeasures_deeper_than_8_bit_sources(self):
+        """Issue #637: the crop cache and the 10-bit plans were measured with
+        the 8-bit cropdetect threshold, which finds no bars in 10-bit video.
+
+        The crop rows learn the threshold they were measured at (24, the only
+        value the constant ever had), so an 8-bit row stays a hit and a
+        10-bit row misses. Every measured plan of a deeper-than-8-bit source
+        (analysis format yuv420p10le) is dropped: its stored crop is the
+        'no bars' the encode would reuse. 8-bit and gate-skip plans stay.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v20.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (20);
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    mtime REAL NOT NULL,
+                    size INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL
+                );
+                CREATE TABLE plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    chosen_crf INTEGER,
+                    achieved_vmaf REAL,
+                    crop TEXT,
+                    probes TEXT,
+                    skipped_reason TEXT,
+                    estimated_size INTEGER,
+                    input_mtime REAL NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    encoder TEXT NOT NULL,
+                    encoder_preset TEXT NOT NULL,
+                    target_vmaf REAL NOT NULL,
+                    crf_low INTEGER NOT NULL,
+                    crf_high INTEGER NOT NULL,
+                    sample_count INTEGER NOT NULL,
+                    sample_seconds REAL NOT NULL,
+                    crop_sample_count INTEGER NOT NULL DEFAULT 3,
+                    vmaf_statistic TEXT NOT NULL DEFAULT 'min',
+                    vmaf_recipe TEXT NOT NULL DEFAULT '',
+                    min_saving_percent INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE crops (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    bars TEXT,
+                    frame_width INTEGER NOT NULL,
+                    frame_height INTEGER NOT NULL,
+                    readings INTEGER NOT NULL,
+                    sustained_readings INTEGER NOT NULL,
+                    ratios TEXT NOT NULL DEFAULT '{}',
+                    input_mtime REAL NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                INSERT INTO files (path, mtime, size, name, category) VALUES
+                    ('/tmp/ten.mkv', 1.0, 100, 'ten', 'cat'),
+                    ('/tmp/eight.mkv', 1.0, 100, 'eight', 'cat'),
+                    ('/tmp/hdr.mkv', 1.0, 100, 'hdr', 'cat');
+                INSERT INTO plans (file_id, chosen_crf, achieved_vmaf, skipped_reason,
+                    input_mtime, input_size, encoder, encoder_preset, target_vmaf,
+                    crf_low, crf_high, sample_count, sample_seconds, vmaf_recipe)
+                VALUES
+                    (1, 36, 96.2, NULL, 1.0, 100, 'svt_av1_10bit', '5', 96.0, 14, 70, 4,
+                        10.0, 'vmaf=2;fmt=yuv420p10le;hdr=no'),
+                    (2, 22, 96.0, NULL, 1.0, 100, 'svt_av1', '5', 96.0, 14, 70, 4,
+                        10.0, 'vmaf=2;fmt=yuv420p;hdr=no'),
+                    (3, NULL, NULL, 'hdr not supported', 1.0, 100, 'svt_av1_10bit', '5',
+                        96.0, 14, 70, 4, 10.0, '');
+                INSERT INTO crops (file_id, bars, frame_width, frame_height, readings,
+                    sustained_readings, input_mtime, input_size)
+                VALUES (1, NULL, 1920, 1080, 1335, 1335, 1.0, 100);
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = db.connect(db_path)
+            version = migrated.execute("SELECT version FROM schema_version").fetchone()
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
+            limit = migrated.execute("SELECT detect_limit FROM crops").fetchone()
+            self.assertEqual(limit["detect_limit"], 24)
+            kept = [
+                row["name"]
+                for row in migrated.execute(
+                    "SELECT f.name FROM plans p JOIN files f ON f.id = p.file_id ORDER BY f.id"
+                ).fetchall()
+            ]
+            self.assertEqual(kept, ["eight", "hdr"])
+            migrated.close()
+
+    def test_set_encode_output_clearing_is_the_discard(self):
+        """Issue #625: clearing an encode's output path IS the discard - the
+        outcome and its reason are written in the SAME statement. The contract
+        the replace path relies on: a caller that clears the path can never
+        leave the row reading as an applied encode, and a caller that SETS a
+        path must not touch the outcome."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            connection = db.connect(root / "t.db")
+            file_id = db.upsert_file(
+                connection,
+                db.MovieRecord(path=root / "a.mkv", mtime=1.0, size=100, name="a", category="c"),
+            )
+            encode_id = db.add_encode(
+                connection,
+                file_id,
+                "VMAF>96",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(root / "staged.mkv"),
+            )
+            connection.commit()
+
+            # clearing the path records the discard with its reason
+            db.set_encode_output(connection, encode_id, None, "output lost 2 subtitle track(s)")
+            row = connection.execute(
+                "SELECT output_file, outcome, outcome_reason FROM encodes WHERE id = ?",
+                (encode_id,),
+            ).fetchone()
+            self.assertIsNone(row["output_file"])
+            self.assertEqual(row["outcome"], "discarded")
+            self.assertEqual(row["outcome_reason"], "output lost 2 subtitle track(s)")
+
+            # setting a path does NOT resurrect the outcome: the swap's success
+            # path records its own outcome, this function only moves the path
+            db.set_encode_output(connection, encode_id, str(root / "real.mkv"))
+            row = connection.execute(
+                "SELECT output_file, outcome FROM encodes WHERE id = ?", (encode_id,)
+            ).fetchone()
+            self.assertEqual(row["output_file"], str(root / "real.mkv"))
+            self.assertEqual(row["outcome"], "discarded")
+            connection.close()
+
+    def test_migration_v20_to_v22_outcome(self):
+        """Issue #625: the encodes table gains an explicit outcome; existing
+        rows are backfilled from what they can still prove - a skip marker
+        says so in its preset, a row with a chain source but a nulled
+        output_file was a discarded attempt (#232), and a pre-v7 row has no
+        chain columns and stays applied."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "v20.db"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_version (version INTEGER NOT NULL);
+                INSERT INTO schema_version (version) VALUES (20);
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    mtime REAL NOT NULL,
+                    size INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL
+                );
+                CREATE TABLE crops (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    crop TEXT
+                );
+                CREATE TABLE encodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                    preset TEXT NOT NULL,
+                    encoder TEXT NOT NULL,
+                    input_size INTEGER NOT NULL,
+                    output_size INTEGER NOT NULL,
+                    saved_percent REAL NOT NULL,
+                    chosen_crf INTEGER,
+                    achieved_vmaf REAL,
+                    encoder_preset TEXT,
+                    probe_encoder_preset TEXT,
+                    encode_seconds REAL,
+                    probe_count INTEGER,
+                    probe_seconds REAL,
+                    hdr INTEGER,
+                    source_width INTEGER,
+                    source_height INTEGER,
+                    source_codec TEXT,
+                    source_bit_depth INTEGER,
+                    source_duration REAL,
+                    input_bitrate REAL,
+                    output_bitrate REAL,
+                    source_file TEXT,
+                    output_file TEXT,
+                    generation INTEGER NOT NULL DEFAULT 1,
+                    tool_versions TEXT,
+                    verified_vmaf REAL,
+                    verified_at TEXT,
+                    verified_subsample INTEGER,
+                    crf_source TEXT,
+                    plan_created_at TEXT
+                );
+                INSERT INTO files (path, mtime, size, name, category)
+                VALUES ('/tmp/movie.mkv', 1.0, 100, 'movie', 'cat');
+                -- an applied encode: its artifact stood in the library
+                INSERT INTO encodes (file_id, preset, encoder, input_size,
+                    output_size, saved_percent, output_file)
+                VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0, '/tmp/movie.shrinkray-original');
+                -- a discarded attempt (#232): the swap was declined, the
+                -- output_file was nulled, the sizes stayed. A post-v7 row has
+                -- the chain columns, so its NULL output proves the discard.
+                INSERT INTO encodes (file_id, preset, encoder, input_size,
+                    output_size, saved_percent, source_file, output_file)
+                VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0,
+                        '/tmp/movie.mkv', NULL);
+                -- a skip marker: zero sizes, the verdict in the preset
+                INSERT INTO encodes (file_id, preset, encoder, input_size,
+                    output_size, saved_percent)
+                VALUES (1, 'skipped (no size gain)', 'none', 0, 0, 0.0);
+                -- a pre-v7 applied encode: v7 introduced the chain columns
+                -- without a backfill, so neither is written and proves nothing
+                INSERT INTO encodes (file_id, preset, encoder, input_size,
+                    output_size, saved_percent)
+                VALUES (1, 'VMAF>96', 'svt_av1', 100, 40, 60.0);
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = db.connect(db_path)
+            version = migrated.execute("SELECT version FROM schema_version").fetchone()
+            self.assertEqual(version["version"], db.SCHEMA_VERSION)
+            rows = migrated.execute("SELECT preset, outcome FROM encodes ORDER BY id").fetchall()
+            self.assertEqual(rows[0]["outcome"], "applied")
+            self.assertEqual(rows[1]["outcome"], "discarded")
+            self.assertEqual(rows[2]["outcome"], "skipped")
+            # the pre-v7 shape stays applied: its missing chain columns prove
+            # nothing (the round-3 finding - the old rule misclassified it)
+            self.assertEqual(rows[3]["outcome"], "applied")
+            migrated.close()
+
     def test_migration_v2_to_v3_absolute_paths(self):
         # v2 database with a relative path => migrated to absolute (or dropped)
         import tempfile
@@ -502,7 +745,9 @@ class TestDb(unittest.TestCase):
                     encoder TEXT NOT NULL,
                     input_size INTEGER NOT NULL,
                     output_size INTEGER NOT NULL,
-                    saved_percent REAL NOT NULL
+                    saved_percent REAL NOT NULL,
+                    output_file TEXT,
+                    source_file TEXT
                 );
                 CREATE TABLE plans (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -705,6 +950,135 @@ class TestDb(unittest.TestCase):
         finally:
             app_module.state.shutdown()
             app_module.state = None
+
+    def test_movie_detail_av1_stored_skip_keeps_its_own_reason(self):
+        """A stored SKIP verdict for an AV1 file keeps its own reason on the
+        movie-detail route (issue #650, round 4): an AV1 file can have been
+        skipped by an earlier gate (HDR, duration, resolution, size) before
+        the codec rule existed, and the route must not overwrite the recorded
+        verdict with the codec rule's reason. Only a stored PREDICTION reads
+        the codec rule's reason."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "av1-hdr-movie.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path),
+                    mtime=100.0,
+                    size=1000,
+                    name="av1-hdr-movie",
+                    category="Cat",
+                    codec="av1",
+                ),
+            )
+            db.save_plan(
+                self.connection,
+                file_id,
+                chosen_crf=None,
+                achieved_vmaf=None,
+                crop=None,
+                probes=[],
+                skipped_reason="hdr not supported",
+                estimated_size=None,
+                input_mtime=100.0,
+                input_size=1000,
+                encoder="svt_av1",
+                encoder_preset="5",
+                target_vmaf=96.0,
+                crf_low=14,
+                crf_high=70,
+                sample_count=25,
+                sample_seconds=4.0,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                response = client.get("/api/movie", params={"path": movie_path})
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["plan"]["skipped_reason"], "hdr not supported")
+                self.assertIsNone(body["plan"]["estimated_size"])
+                # a stored skip row falls through to the existing branch, so
+                # its staleness and stored settings come back too
+                self.assertTrue(body["plan"]["stale"])
+                self.assertEqual(body["plan"]["encoder"], "svt_av1")
+                self.assertEqual(body["plan"]["target_vmaf"], 96.0)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_movie_detail_av1_plan_is_never_served_as_a_prediction(self):
+        """The output format is never a source (issue #650): the movie-detail
+        route must not serve a stored plan row for an AV1 file as a
+        prediction - the decision's skip reason and no saving, even when the
+        row is fresh (the staleness check alone would still serve it)."""
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "av1-movie.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path),
+                    mtime=100.0,
+                    size=1000,
+                    name="av1-movie",
+                    category="Cat",
+                    codec="av1",
+                ),
+            )
+            # a fresh, matching plan row: mtime/size match the file, so the
+            # old staleness-only logic would serve it as a live prediction
+            db.save_plan(
+                self.connection,
+                file_id,
+                chosen_crf=38,
+                achieved_vmaf=96.01,
+                crop=None,
+                probes=[],
+                skipped_reason=None,
+                estimated_size=500,
+                input_mtime=Path(movie_path).stat().st_mtime,
+                input_size=1000,
+                encoder="svt_av1",
+                encoder_preset="5",
+                target_vmaf=96.0,
+                crf_low=14,
+                crf_high=70,
+                sample_count=25,
+                sample_seconds=4.0,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                response = client.get("/api/movie", params={"path": movie_path})
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["plan"]["skipped_reason"], "already AV1 (the output format)")
+                self.assertIsNone(body["plan"]["estimated_size"])
+                self.assertIsNone(body["plan"]["crf"])
+                self.assertIsNone(body["plan"]["achieved_vmaf"])
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
 
     def test_movie_detail_endpoint(self):
         """GET /api/movie returns the file facts plus the COMPLETE encode
@@ -1423,68 +1797,6 @@ class TestDb(unittest.TestCase):
                 finished = service.finished_movies(self.connection, [movie], out_dir)
             self.assertEqual(finished, {str(movie)})
 
-    def test_verification_recorded_in_db(self):
-        """record_quality_results persists verified_vmaf/subsample on the
-        encode row (schema v8 columns)."""
-
-        from shrinkray import service
-        from shrinkray.engine.plan import QualityResult
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
-            movie = root / "movie.mkv"
-            movie.write_bytes(b"x")
-            result = QualityResult(
-                input=movie,
-                output=root / "enc" / "movie.mkv",
-                success=True,
-                target_vmaf=95.0,
-                chosen_crf=22,
-                achieved_vmaf=95.4,
-                input_size=1000,
-                output_size=400,
-                verified_vmaf=94.9,
-                verified_subsample=10,
-            )
-            outcome = service.record_quality_results(
-                self.connection, movie, result, config_helper.Conf()
-            )
-            self.assertTrue(outcome.encoded)
-            file_id = self.connection.execute(
-                "SELECT id FROM files WHERE path = ?", (str(movie),)
-            ).fetchone()["id"]
-            row = self.connection.execute(
-                "SELECT verified_vmaf, verified_at, verified_subsample FROM encodes "
-                "WHERE file_id = ?",
-                (file_id,),
-            ).fetchone()
-            self.assertIsNotNone(row)
-            self.assertAlmostEqual(row["verified_vmaf"], 94.9)
-            self.assertEqual(row["verified_subsample"], 10)
-            self.assertIsNotNone(row["verified_at"])
-
-    def test_verification_without_data_is_noop(self):
-        """A result without verification data must not touch the row (every
-        non-verify encode goes through the same record path)."""
-
-        from shrinkray import service
-        from shrinkray.engine.plan import QualityResult
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
-            movie = root / "movie.mkv"
-            movie.write_bytes(b"x")
-            result = QualityResult(
-                input=movie,
-                output=root / "enc" / "movie.mkv",
-                success=True,
-                input_size=1000,
-                output_size=400,
-            )
-            service.record_quality_results(self.connection, movie, result, config_helper.Conf())
-            row = self.connection.execute("SELECT verified_vmaf FROM encodes").fetchone()
-            self.assertIsNone(row["verified_vmaf"])
-
     def test_records_effective_target_vmaf(self):
         """The preset column carries the engine's EFFECTIVE target (what the
         encode was actually decided against), never the caller's — regression:
@@ -1803,23 +2115,6 @@ class TestDb(unittest.TestCase):
                     [],
                 )
                 self.assertTrue(live_verify.is_dir())
-
-    def test_the_verify_site_passes_its_kind_to_the_grammar_owner(self):
-        """The producer pin: the pipeline's verification workdir must ask the
-        grammar owner for the verify kind - deleting the argument keeps every
-        behavioral test green (their fixtures pass it themselves) while the
-        6 h floor silently stops applying to real runs (round-3's defect,
-        closed only when THIS pin exists)."""
-
-        import inspect
-
-        from shrinkray.engine import pipeline as pipeline_mod
-
-        source = inspect.getsource(pipeline_mod)
-        # the verify site's call carries the kind argument
-        self.assertIn('probe_scratch_prefix(input_file, kind="verify")', source)
-        # ...exactly once (the probe sites pass no kind)
-        self.assertEqual(source.count('kind="verify"'), 1)
 
     def test_the_historical_verify_grammar_keeps_its_floor(self):
         """The short-lived shrinkray_verify_ name (#435's first shape) still

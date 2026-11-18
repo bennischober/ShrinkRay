@@ -18,14 +18,14 @@ import sqlite3
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
 from shrinkray.config import Conf, encode_window_open, refresh_config
 from shrinkray.engine.pipeline import cap_threads
-from shrinkray.logger import file_scope, log
+from shrinkray.logger import file_scope, log, log_error
 from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
 
@@ -67,6 +67,8 @@ class JobKind(str, Enum):
 
     SCAN = "scan"
     PLAN = "plan"
+    DECISION = "decision"
+    CRF_SEARCH = "crf-search"
     ENCODE = "encode"
     LEGACY = "legacy"
 
@@ -238,21 +240,58 @@ class JobQueue:
     the UI and the CLI). The worker thread consumes one job at a time.
     """
 
-    def __init__(self, connection: sqlite3.Connection, bus: "ProgressBus | None" = None) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        bus: "ProgressBus | None" = None,
+        connection_lock: "threading.RLock | None" = None,
+    ) -> None:
         """Initializes the queue on an open database connection.
 
         Args:
             connection (sqlite3.Connection): The database connection.
             bus (ProgressBus | None): The live-progress bus (None in
                 CLI/tests without a resident app — progress is dropped).
+            connection_lock (threading.RLock | None): The lock every OTHER
+                user of this connection holds (the resident app's database
+                lock). Every queue method takes it around its connection
+                use: the queue's connection calls ran with no lock while
+                the routes read the same connection under the app's lock -
+                the unsynchronized-access shape behind the observed
+                ``SystemError: commit returned NULL`` (issue #649).
+                Re-entrant, so a route that already holds it and calls into
+                the queue nests safely. None (tests without the app lock)
+                uses the connection bare; the CLI never builds a queue.
         """
         self._connection = connection
         self._bus = bus
+        self._connection_lock = connection_lock
         self._lock = threading.Lock()
         self._pending: list[Job] = []
         self._cancel_events: dict[int, threading.Event] = {}
         self._wake = threading.Event()
         self._load_pending()
+
+    def _conn_gate(self) -> "contextlib.AbstractContextManager[None]":
+        """Serializes this queue's connection use with its other users.
+
+        See __init__'s connection_lock: the shared connection's queue calls
+        ran with NO lock (only cancel held _lock) while the routes read the
+        same connection under the app's database lock - the
+        unsynchronized-access shape that produced the observed
+        ``SystemError: commit returned NULL without setting an exception``
+        (issue #649). The lock is re-entrant, so nesting is safe.
+        """
+        lock = self._connection_lock
+        if lock is None:
+            return contextlib.nullcontext()
+
+        @contextlib.contextmanager
+        def _held() -> Iterator[None]:
+            with lock:
+                yield
+
+        return _held()
 
     def _load_pending(self) -> None:
         """Loads queued jobs from the database (after a restart).
@@ -262,24 +301,25 @@ class JobQueue:
         being executed: the operator sees why it never ran rather than a
         queue that silently cannot drain.
         """
-        rows = self._connection.execute(
-            "SELECT * FROM jobs WHERE state = ? ORDER BY id", (JobState.QUEUED.value,)
-        ).fetchall()
-        pending: list[Job] = []
-        retired = 0
-        for row in rows:
-            job = _row_to_job(row)
-            if job.kind is JobKind.LEGACY:
-                self._connection.execute(
-                    "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') "
-                    "WHERE id = ?",
-                    (JobState.FAILED.value, "job kind removed in this version", job.id),
-                )
-                retired += 1
-            else:
-                pending.append(job)
-        if retired:
-            self._connection.commit()
+        with self._conn_gate():
+            rows = self._connection.execute(
+                "SELECT * FROM jobs WHERE state = ? ORDER BY id", (JobState.QUEUED.value,)
+            ).fetchall()
+            pending: list[Job] = []
+            retired = 0
+            for row in rows:
+                job = _row_to_job(row)
+                if job.kind is JobKind.LEGACY:
+                    self._connection.execute(
+                        "UPDATE jobs SET state = ?, error = ?, finished_at = datetime('now') "
+                        "WHERE id = ?",
+                        (JobState.FAILED.value, "job kind removed in this version", job.id),
+                    )
+                    retired += 1
+                else:
+                    pending.append(job)
+            if retired:
+                self._connection.commit()
         with self._lock:
             self._pending = pending
 
@@ -292,16 +332,61 @@ class JobQueue:
         Returns:
             Job: The job with its database id set.
         """
-        cursor = self._connection.execute(
-            "INSERT INTO jobs (kind, payload, state) VALUES (?, ?, ?)",
-            (job.kind.value, json.dumps(job.payload), JobState.QUEUED.value),
-        )
-        self._connection.commit()
+        with self._conn_gate():
+            cursor = self._connection.execute(
+                "INSERT INTO jobs (kind, payload, state) VALUES (?, ?, ?)",
+                (job.kind.value, json.dumps(job.payload), JobState.QUEUED.value),
+            )
+            self._connection.commit()
         job.id = int(cursor.lastrowid or 0)
         with self._lock:
             self._pending.append(job)
         self._wake.set()
         return job
+
+    def stage(self, kind: JobKind, payload: dict) -> Job:
+        """Records one per-file stage row a running folder job executes.
+
+        The folder job stays the runner (issue #602): the decision, the CRF
+        search and the encode of one file are rows of their own so the Jobs
+        page can follow each stage, but the worker already holds the folder
+        job - the row is written RUNNING directly instead of being queued
+        and picked up a second time.
+
+        Args:
+            kind (JobKind): The stage's kind (decision, crf-search, encode).
+            payload (dict): The stage's payload (the file it is about).
+
+        Returns:
+            Job: The stage row, with its database id set.
+        """
+        job = Job(kind=kind, payload=payload, state=JobState.RUNNING)
+        with self._conn_gate():
+            cursor = self._connection.execute(
+                "INSERT INTO jobs (kind, payload, state, started_at) VALUES (?, ?, ?, datetime('now'))",
+                (kind.value, json.dumps(payload), JobState.RUNNING.value),
+            )
+            self._connection.commit()
+        job.id = int(cursor.lastrowid or 0)
+        return job
+
+    def finish_stage(self, job: Job, result: dict) -> None:
+        """Marks a per-file stage row done with its outcome.
+
+        Args:
+            job (Job): The stage row from stage().
+            result (dict): The stage's outcome (JSON-able).
+        """
+        self.finish(job, result)
+
+    def fail_stage(self, job: Job, error: str) -> None:
+        """Marks a per-file stage row failed with its reason.
+
+        Args:
+            job (Job): The stage row from stage().
+            error (str): The failure message.
+        """
+        self.fail(job, error)
 
     def take_next(self, only_kinds: set[JobKind] | None = None) -> Job | None:
         """Returns the next queued job and marks it running.
@@ -320,18 +405,42 @@ class JobQueue:
                 return None
             index = None
             for i, job in enumerate(self._pending):
-                if only_kinds is None or job.kind in only_kinds:
+                # only QUEUED jobs are taken: a job a concurrent cancel
+                # marked CANCELLED (its commit may still be in flight) is
+                # not handed out (issue #660 round 11, finding 1)
+                if (only_kinds is None or job.kind in only_kinds) and job.state is JobState.QUEUED:
                     index = i
                     break
             if index is None:
                 return None
-            job = self._pending.pop(index)
+            job = self._pending[index]
             job.state = JobState.RUNNING
-        self._connection.execute(
-            "UPDATE jobs SET state = ?, started_at = datetime('now') WHERE id = ?",
-            (JobState.RUNNING.value, job.id),
-        )
-        self._connection.commit()
+        # the row is marked running and committed BEFORE the job leaves the
+        # in-memory queue (issue #660 round 1, finding 2): the observed
+        # SystemError is raised by exactly this commit - if it fails, the
+        # job must still be in _pending for the next take_next, or a queued
+        # row exists that nothing will ever run
+        with self._conn_gate():
+            try:
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, started_at = datetime('now') WHERE id = ?",
+                    (JobState.RUNNING.value, job.id),
+                )
+                self._connection.commit()
+            except Exception:
+                # the take failed: the failed commit did NOT end the
+                # transaction - the UPDATE is still pending on the shared
+                # connection and the next successful commit would persist
+                # it - so roll the transaction back before restoring (issue
+                # #660 round 17, finding 3), restore QUEUED so the next
+                # take_next can hand it out, and let the caller see the
+                # real cause (issue #660 round 11, finding 1)
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                job.state = JobState.QUEUED
+                raise
+        with self._lock:
+            self._pending.remove(job)
         return job
 
     def report_progress(self, job: Job, progress: dict) -> None:
@@ -359,14 +468,15 @@ class JobQueue:
         """
         job.state = JobState.DONE
         job.result = result
-        self._connection.execute(
-            "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
-            (JobState.DONE.value, json.dumps(result), job.id),
-        )
-        self._prune_history()
-        if self._bus is not None and job.id is not None:
-            self._bus.forget(job.id)
-        self._connection.commit()
+        with self._conn_gate():
+            self._connection.execute(
+                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                (JobState.DONE.value, json.dumps(result), job.id),
+            )
+            self._prune_history()
+            if self._bus is not None and job.id is not None:
+                self._bus.forget(job.id)
+            self._connection.commit()
 
     def _prune_history(self) -> None:
         """Hard-deletes terminated jobs beyond the retention cap.
@@ -378,19 +488,20 @@ class JobQueue:
         — nothing outside the app reads it, and the library's own history
         lives in ``encodes``/``files``, not here.
         """
-        self._connection.execute(
-            """
-            DELETE FROM jobs
-             WHERE state IN ('done', 'failed', 'cancelled')
-               AND id NOT IN (
-                   SELECT id FROM jobs
-                    WHERE state IN ('done', 'failed', 'cancelled')
-                    ORDER BY id DESC
-                    LIMIT ?
-               )
-            """,
-            (JOB_RETENTION,),
-        )
+        with self._conn_gate():
+            self._connection.execute(
+                """
+                DELETE FROM jobs
+                 WHERE state IN ('done', 'failed', 'cancelled')
+                   AND id NOT IN (
+                       SELECT id FROM jobs
+                        WHERE state IN ('done', 'failed', 'cancelled')
+                        ORDER BY id DESC
+                        LIMIT ?
+                   )
+                """,
+                (JOB_RETENTION,),
+            )
 
     def fail(self, job: Job, error: str) -> None:
         """Marks a job as failed and stores the error.
@@ -405,15 +516,16 @@ class JobQueue:
         """
         job.state = JobState.FAILED
         job.error = error
-        self._connection.execute(
-            "UPDATE jobs SET state = ?, error = ?, result = NULL, "
-            "finished_at = datetime('now') WHERE id = ?",
-            (JobState.FAILED.value, error, job.id),
-        )
-        self._prune_history()
-        if self._bus is not None and job.id is not None:
-            self._bus.forget(job.id)
-        self._connection.commit()
+        with self._conn_gate():
+            self._connection.execute(
+                "UPDATE jobs SET state = ?, error = ?, result = NULL, "
+                "finished_at = datetime('now') WHERE id = ?",
+                (JobState.FAILED.value, error, job.id),
+            )
+            self._prune_history()
+            if self._bus is not None and job.id is not None:
+                self._bus.forget(job.id)
+            self._connection.commit()
 
     def mark_cancelled(self, job: Job, result: dict | None = None) -> None:
         """Marks a job as cancelled (user request, not a failure).
@@ -428,39 +540,93 @@ class JobQueue:
             result (dict | None): The engine's partial result, if any.
         """
         job.state = JobState.CANCELLED
-        self._connection.execute(
-            "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
-            (JobState.CANCELLED.value, json.dumps(result) if result is not None else None, job.id),
-        )
-        self._prune_history()
-        if self._bus is not None and job.id is not None:
-            self._bus.forget(job.id)
-        self._connection.commit()
+        with self._conn_gate():
+            self._connection.execute(
+                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                (
+                    JobState.CANCELLED.value,
+                    json.dumps(result) if result is not None else None,
+                    job.id,
+                ),
+            )
+            self._prune_history()
+            if self._bus is not None and job.id is not None:
+                self._bus.forget(job.id)
+            self._connection.commit()
 
     def cancel(self, job_id: int) -> bool:
         """Requests cancellation of a queued job (or signals a running one).
 
         Queued jobs are removed from the queue directly; running jobs get
-        their cancel event set (the engine checks it between movies).
+        their cancel event set (the engine checks it between movies). A job
+        in the TAKE window (marked RUNNING while its gated write runs, still
+        in the pending list) is found but NOT cancellable as queued: cancel
+        returns False for it, and the running job's own cancel event (the
+        one _execute registers) is the way to stop it.
+
+        The connection gate is taken BEFORE _lock, and `_lock` is never
+        held while waiting for the gate (`take_next` releases it before
+        taking the gate for its commit) - no lock cycle is possible (issue
+        #660 round 9, finding 1 / round 15, finding 2). The row is
+        committed CANCELLED before the job leaves _pending (the ordering
+        take_next got, round 5, finding 4): a failed commit leaves the job
+        takable instead of stranding a queued row.
 
         Args:
             job_id (int): The job to cancel.
 
         Returns:
-            bool: True if a job was found for the id.
+            bool: True if a queued job was cancelled or a running job's
+                cancel event was signalled; False for a job in the take
+                window (not cancellable as queued) or an unknown id.
         """
-        with self._lock:
-            for index, job in enumerate(self._pending):
-                if job.id == job_id:
-                    job.state = JobState.CANCELLED
-                    self._pending.pop(index)
+        cancelled = None
+        event = None
+        # the gate is taken BEFORE _lock, and _lock is never held while
+        # waiting for the gate (take_next releases _lock before taking the
+        # gate for its commit, issue #660 round 10, finding 1 / round 14,
+        # finding 5) - so no lock cycle is possible; the state write and the
+        # pop happen with both held (the commit runs under the gate alone):
+        # take_next (which now filters QUEUED) can never hand out a job this
+        # method decided about
+        with self._conn_gate():
+            with self._lock:
+                for job in self._pending:
+                    if job.id == job_id:
+                        # only a QUEUED job is cancelled here: a job being
+                        # taken (RUNNING) or already running is not
+                        # cancelled as queued (issue #660 round 4, finding 1)
+                        if job.state is not JobState.QUEUED:
+                            break
+                        job.state = JobState.CANCELLED
+                        cancelled = job
+                        break
+                else:
+                    event = self._cancel_events.get(job_id)
+            if cancelled is not None:
+                try:
                     self._connection.execute(
                         "UPDATE jobs SET state = ?, finished_at = datetime('now') WHERE id = ?",
                         (JobState.CANCELLED.value, job_id),
                     )
                     self._connection.commit()
-                    return True
-            event = self._cancel_events.get(job_id)
+                except Exception:
+                    # the commit failed (the observed SystemError's shape):
+                    # the failed commit did NOT end the transaction - the
+                    # CANCELLED UPDATE is still pending and the next
+                    # successful commit would persist it - so roll back
+                    # first (issue #660 round 17, finding 3); the job is NOT
+                    # cancelled - restore QUEUED so take_next can still hand
+                    # it out, and let the caller see the real cause
+                    with contextlib.suppress(Exception):
+                        self._connection.rollback()
+                    cancelled.state = JobState.QUEUED
+                    raise
+                with self._lock:
+                    if cancelled in self._pending:
+                        self._pending.remove(cancelled)
+        if cancelled is not None:
+            return True
         if event is not None:
             event.set()
             return True
@@ -519,9 +685,10 @@ class JobQueue:
         Returns:
             list[Job]: The recent jobs.
         """
-        rows = self._connection.execute(
-            "SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
+        with self._conn_gate():
+            rows = self._connection.execute(
+                "SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
         return [_row_to_job(row) for row in rows]
 
     def get(self, job_id: int) -> Job | None:
@@ -533,7 +700,8 @@ class JobQueue:
         Returns:
             Job | None: The job, or None if not found.
         """
-        row = self._connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        with self._conn_gate():
+            row = self._connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return _row_to_job(row) if row is not None else None
 
 
@@ -792,6 +960,7 @@ def execute_plan(
     connection: sqlite3.Connection,
     cancel: threading.Event,
     progress: ProgressCallback | None = None,
+    queue: "JobQueue | None" = None,
 ) -> dict:
     """Executes a plan job (probing only, no encodes).
 
@@ -800,12 +969,19 @@ def execute_plan(
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
         progress (callable | None): Callback progress(dict) for live updates.
+        queue (JobQueue | None): The queue that records the per-file stage
+            rows (issue #602); None for a direct executor call.
 
     Returns:
         dict: The per-movie plan summary.
     """
     from shrinkray.config import load_config, refresh_config
-    from shrinkray.engine.plan import plan_quality
+    from shrinkray.engine.plan import (
+        decide_quality,
+        plan_quality,
+        search_quality,
+        skipped_result,
+    )
 
     payload = job.payload
     config = load_config()
@@ -840,38 +1016,153 @@ def execute_plan(
         # job reads the same keys as the CLI - an unset count leaves density
         # (sample_every) in charge instead of the old fixed default of 3
         sample_every, sample_count, sample_seconds = config.probe_settings()
-        try:
-            # the [i/N] prefix on this file's decision lines (issue #471)
-            with file_scope(index + 1, total):
-                result = plan_quality(
-                    movie,
-                    target_vmaf=payload.get("target_vmaf", config.target_vmaf),
-                    min_saving_percent=config.min_saving_percent,
-                    encoder=config.handbrake_encoder,
-                    probe_encoder_preset=payload.get(
-                        "probe_encoder_preset", config.handbrake_probe_encoder_preset
-                    ),
-                    encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    cancel=cancel,
-                    db_file=_db_file_of(connection),
-                    encoder_threads=cap_threads(config.handbrake_max_threads),
-                    progress=progress,
-                    min_source_height=config.min_source_height,
-                    min_source_width=config.min_source_width,
-                    min_source_size_gb=config.min_source_size_gb,
-                    candidate_codecs=tuple(config.candidate_codecs),
-                    crop_sample_count=config.crop_sample_count,
-                    # one precedence for every entry point (issue #526): the
-                    # resident job reads the same keys as the CLI, so a
-                    # configured count overrides density and an unset count
-                    # leaves density (sample_every) in charge
-                    sample_every=sample_every,
-                    sample_count=sample_count,
-                    sample_seconds=sample_seconds,
+        # the per-file pipeline is its own job rows (issue #602): the
+        # decision (the gates) and the CRF search are separate kinds, so the
+        # Jobs page can follow each file stage by stage. This folder job stays
+        # their runner; a direct executor call (the CLI, tests) has no queue
+        # and keeps the single-call shape.
+        if queue is not None:
+            decision_row = queue.stage(
+                JobKind.DECISION, {"paths": [str(movie)], "pipeline": "plan"}
+            )
+            try:
+                # the [i/N] prefix on this file's decision lines (issue #471)
+                with file_scope(index + 1, total):
+                    decision = decide_quality(
+                        movie,
+                        min_source_height=config.min_source_height,
+                        min_source_width=config.min_source_width,
+                        min_source_size_gb=config.min_source_size_gb,
+                        candidate_codecs=tuple(config.candidate_codecs),
+                        # one precedence for every entry point (issue #526):
+                        # the resident job reads the same keys as the CLI
+                        sample_every=sample_every,
+                        sample_count=sample_count,
+                        sample_seconds=sample_seconds,
+                    )
+            except (RuntimeError, FileNotFoundError) as e:
+                queue.fail_stage(decision_row, str(e))
+                plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+                continue
+            queue.finish_stage(
+                decision_row,
+                {
+                    "eligible": decision.eligible,
+                    "reason": decision.skipped_reason,
+                    "duration": decision.duration,
+                },
+            )
+            if not decision.eligible:
+                # a gate skip is still recorded (issue #602): the skip verdict
+                # rides the plans row so a later encode reuses it instead of
+                # re-probing the file. Best-effort, exactly as before.
+                from shrinkray.service import record_plan
+
+                try:
+                    record_plan(
+                        connection,
+                        movie,
+                        skipped_result(decision, payload.get("target_vmaf", config.target_vmaf)),
+                        config,
+                    )
+                except (RuntimeError, FileNotFoundError) as e:
+                    plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+                    continue
+                plans.append(
+                    {
+                        "movie": movie.name,
+                        "state": "skip",
+                        "crf": None,
+                        "vmaf": None,
+                        "estimated_size": 0,
+                        "saved_percent": 0.0,
+                        "reason": decision.skipped_reason,
+                    }
                 )
-        except (RuntimeError, FileNotFoundError) as e:
-            plans.append({"movie": movie.name, "state": "error", "error": str(e)})
-            continue
+                continue
+            search_row = queue.stage(
+                JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "plan"}
+            )
+            # the plan path's search row shows the same live progress as the
+            # folder job (issue #639): the search is usually the longest stage
+            plan_queue = queue
+            plan_row: list[Job | None] = [search_row]
+
+            def report_plan_search(
+                data: dict,
+                row_ref: list[Job | None] = plan_row,
+                job_queue: JobQueue = plan_queue,
+            ) -> None:
+                if progress is not None:
+                    progress(data)
+                row = row_ref[0]
+                if row is not None:
+                    job_queue.report_progress(row, data)
+
+            try:
+                with file_scope(index + 1, total):
+                    result = search_quality(
+                        decision,
+                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                        min_saving_percent=config.min_saving_percent,
+                        probe_encoder_preset=payload.get(
+                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                        ),
+                        encoder_preset=payload.get(
+                            "encoder_preset", config.handbrake_encoder_preset
+                        ),
+                        cancel=cancel,
+                        db_file=_db_file_of(connection),
+                        encoder_threads=cap_threads(config.handbrake_max_threads),
+                        progress=report_plan_search,
+                        crop_sample_count=config.crop_sample_count,
+                    )
+            except Cancelled:
+                queue.mark_cancelled(search_row)
+                raise
+            except (RuntimeError, FileNotFoundError) as e:
+                queue.fail_stage(search_row, str(e))
+                plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+                continue
+            queue.finish_stage(
+                search_row,
+                {
+                    "crf": result.chosen_crf,
+                    "vmaf": result.achieved_vmaf,
+                    "reason": result.skipped_reason,
+                },
+            )
+        else:
+            # a direct executor call (the one-shot CLI, tests): no queue, so
+            # the single-call engine path keeps the old shape
+            try:
+                with file_scope(index + 1, total):
+                    result = plan_quality(
+                        movie,
+                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                        min_saving_percent=config.min_saving_percent,
+                        probe_encoder_preset=payload.get(
+                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                        ),
+                        encoder_preset=payload.get(
+                            "encoder_preset", config.handbrake_encoder_preset
+                        ),
+                        cancel=cancel,
+                        db_file=_db_file_of(connection),
+                        encoder_threads=cap_threads(config.handbrake_max_threads),
+                        progress=progress,
+                        min_source_height=config.min_source_height,
+                        min_source_width=config.min_source_width,
+                        min_source_size_gb=config.min_source_size_gb,
+                        candidate_codecs=tuple(config.candidate_codecs),
+                        crop_sample_count=config.crop_sample_count,
+                        sample_every=sample_every,
+                        sample_count=sample_count,
+                        sample_seconds=sample_seconds,
+                    )
+            except (RuntimeError, FileNotFoundError) as e:
+                plans.append({"movie": movie.name, "state": "error", "error": str(e)})
+                continue
         # persist the decision for later encodes ("quicksave"): chosen CRF
         # AND skip verdicts short-circuit a future encode's probing when
         # the fingerprint matches. Best-effort: an unscanned movie has no
@@ -906,6 +1197,7 @@ def execute_encode(
     connection: sqlite3.Connection,
     cancel: threading.Event,
     progress: ProgressCallback | None = None,
+    queue: "JobQueue | None" = None,
 ) -> dict:
     """Executes an encode job (the measured quality path - the only mode).
 
@@ -915,6 +1207,8 @@ def execute_encode(
         connection (sqlite3.Connection): The database connection.
         cancel (threading.Event): Cooperative cancellation signal.
         progress (callable | None): Callback progress(dict) for live updates.
+        queue (JobQueue | None): The queue that records the per-file stage
+            rows (issue #602); None for a direct executor call.
 
     Returns:
         dict: The per-movie outcome summary.
@@ -973,6 +1267,7 @@ def execute_encode(
         # job writes into - the user's output_dir in two-directory mode,
         # the per-run staging directory in place.
         outcomes = _encode_measured(
+            job,
             connection,
             cancel,
             progress,
@@ -980,11 +1275,13 @@ def execute_encode(
             payload,
             output_dir=write_dir,
             in_place=output_dir is None,
+            queue=queue,
         )
     return outcomes
 
 
 def _encode_measured(
+    job: Job,
     connection: sqlite3.Connection,
     cancel: threading.Event,
     progress: ProgressCallback | None,
@@ -992,6 +1289,7 @@ def _encode_measured(
     payload: dict,
     output_dir: Path,
     in_place: bool,
+    queue: "JobQueue | None" = None,
 ) -> dict:
     """Runs one encode job's body (the measured quality path) against write_dir.
 
@@ -999,6 +1297,7 @@ def _encode_measured(
     job, excluding the directory the job writes into.
 
     Args:
+        job (Job): The folder job that runs the per-file stages.
         connection: The worker's database connection.
         cancel: Cooperative cancellation signal.
         progress: Callback progress(dict) for live updates.
@@ -1015,8 +1314,15 @@ def _encode_measured(
     from shrinkray.config import refresh_config
     from shrinkray.engine.lock import EncodeBusyError, guard_encodes
     from shrinkray.engine.pipeline import encode_with_quality
+    from shrinkray.engine.plan import (
+        decide_quality,
+        search_quality,
+        skipped_result,
+        stored_plan_row,
+    )
     from shrinkray.service import (
         finished_movies,
+        record_plan,
         record_quality_results,
         swap_encode_into_place,
     )
@@ -1054,6 +1360,155 @@ def _encode_measured(
         if str(movie) in encoded_paths:
             outcomes.append({"movie": movie.name, "state": "already_encoded"})
             continue
+        # the per-file stages exist for the RESIDENT pipeline (issue #602): the
+        # Jobs page shows a decision row, a CRF-search row and an encode row per
+        # file. A direct executor call (the one-shot CLI, tests) has no queue
+        # and keeps the single-call shape below.
+        encode_row: Job | None = None
+        # every stage row shows the same live progress as the folder job
+        # (issue #639): a row that receives no events reads "starting..." for
+        # the whole stage. The holder names the row that is running now; the
+        # default argument binds it per iteration (ruff's B rules reject a direct
+        # loop-variable capture in a closure).
+        active_row: list[Job | None] = [None]
+
+        def report_stage_progress(data: dict, row_ref: list[Job | None] = active_row) -> None:
+            if progress is not None:
+                progress(data)
+            row = row_ref[0]
+            if queue is not None and row is not None:
+                queue.report_progress(row, data)
+
+        sample_every, sample_count, sample_seconds = config.probe_settings()
+        if queue is not None:
+            decision_row = queue.stage(
+                JobKind.DECISION, {"paths": [str(movie)], "pipeline": "encode"}
+            )
+            try:
+                decision = decide_quality(
+                    movie,
+                    min_source_height=config.min_source_height,
+                    min_source_width=config.min_source_width,
+                    min_source_size_gb=config.min_source_size_gb,
+                    candidate_codecs=tuple(config.candidate_codecs),
+                    sample_every=sample_every,
+                    sample_count=sample_count,
+                    sample_seconds=sample_seconds,
+                )
+            except (RuntimeError, FileNotFoundError) as e:
+                queue.fail_stage(decision_row, str(e))
+                outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
+                continue
+            queue.finish_stage(
+                decision_row,
+                {
+                    "eligible": decision.eligible,
+                    "reason": decision.skipped_reason,
+                    "duration": decision.duration,
+                },
+            )
+            if not decision.eligible:
+                # a gate skip is recorded exactly as before the split: the skip
+                # verdict rides the encodes row through the same recorder
+                skipped = record_quality_results(
+                    connection,
+                    movie,
+                    skipped_result(decision, payload.get("target_vmaf", config.target_vmaf)),
+                    config,
+                    final_output=movie if in_place else None,
+                )
+                outcomes.append({"movie": movie.name, "state": "skipped", "error": skipped.error})
+                continue
+            search_row = queue.stage(
+                JobKind.CRF_SEARCH, {"paths": [str(movie)], "pipeline": "encode"}
+            )
+            active_row[0] = search_row
+            # a valid stored plan means the folder job's search already
+            # measured these bytes and these settings (issue #602's
+            # no-double-probe rule): the search stage reports the reuse
+            # and the encode boundary below reuses the same plan.
+            stored = stored_plan_row(
+                movie,
+                decision,
+                target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                min_saving_percent=config.min_saving_percent,
+                probe_encoder_preset=payload.get(
+                    "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                ),
+                crop_sample_count=config.crop_sample_count,
+                db_file=_db_file_of(connection),
+            )
+            if stored is not None:
+                queue.finish_stage(
+                    search_row,
+                    {
+                        "crf": stored["chosen_crf"],
+                        "vmaf": stored["achieved_vmaf"],
+                        "reason": stored["skipped_reason"],
+                        "source": "plan",
+                    },
+                )
+            else:
+                try:
+                    prediction = search_quality(
+                        decision,
+                        target_vmaf=payload.get("target_vmaf", config.target_vmaf),
+                        min_saving_percent=config.min_saving_percent,
+                        probe_encoder_preset=payload.get(
+                            "probe_encoder_preset", config.handbrake_probe_encoder_preset
+                        ),
+                        encoder_preset=payload.get(
+                            "encoder_preset", config.handbrake_encoder_preset
+                        ),
+                        cancel=cancel,
+                        db_file=_db_file_of(connection),
+                        encoder_threads=cap_threads(config.handbrake_max_threads),
+                        progress=report_stage_progress,
+                        crop_sample_count=config.crop_sample_count,
+                    )
+                except Cancelled:
+                    queue.mark_cancelled(search_row)
+                    raise
+                except (RuntimeError, FileNotFoundError) as e:
+                    queue.fail_stage(search_row, str(e))
+                    outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
+                    continue
+                queue.finish_stage(
+                    search_row,
+                    {
+                        "crf": prediction.chosen_crf,
+                        "vmaf": prediction.achieved_vmaf,
+                        "reason": prediction.skipped_reason,
+                    },
+                )
+                # the prediction is recorded so the encode below REUSES it instead of
+                # measuring again (issue #602); the encode boundary still
+                # re-validates the gates and the fingerprint, so a stale search never
+                # encodes. Best-effort like the plan job's write.
+                try:
+                    record_plan(connection, movie, prediction, config)
+                except (RuntimeError, FileNotFoundError) as e:
+                    # best-effort exactly as before the split: a failed plan write
+                    # must never stop the encode (the boundary re-plans when no
+                    # plan is stored), so the search row stays done and the
+                    # failure is only reported
+                    log(f"could not record the plan for '{movie.name}': {e}")
+                if prediction.skipped_reason is not None:
+                    # the search's own skip (no size gain, target unreachable,
+                    # saving below the threshold) is recorded as before the split
+                    skipped = record_quality_results(
+                        connection,
+                        movie,
+                        prediction,
+                        config,
+                        final_output=movie if in_place else None,
+                    )
+                    outcomes.append(
+                        {"movie": movie.name, "state": "skipped", "error": skipped.error}
+                    )
+                    continue
+            encode_row = queue.stage(JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"})
+            active_row[0] = encode_row
         if progress:
             progress(
                 {
@@ -1073,9 +1528,6 @@ def _encode_measured(
             # Two-directory mode keys on the output directory it writes into.
             # Per movie, never nested.
             lock_target = movie.parent if in_place else output_dir
-            # one precedence for every entry point (issue #526): the resident
-            # encode reads the same keys as the CLI and the plan job
-            sample_every, sample_count, sample_seconds = config.probe_settings()
             # the [i/N] prefix covers the record and swap lines too (issue
             # #471 round 1, finding 4): they are per-file lines
             with (
@@ -1092,17 +1544,10 @@ def _encode_measured(
                         "probe_encoder_preset", config.handbrake_probe_encoder_preset
                     ),
                     encoder_preset=payload.get("encoder_preset", config.handbrake_encoder_preset),
-                    progress=progress,
+                    progress=report_stage_progress,
                     cancel=cancel,
                     db_file=_db_file_of(connection),
                     encoder_threads=cap_threads(config.handbrake_max_threads),
-                    # the resident mode verifies every encode (issue
-                    # #235): the job worker is Mode B's other arm, same
-                    # reasoning as the watcher - nobody watches the log,
-                    # the verification number is the only evidence the
-                    # encode met the target. A payload can still opt out
-                    # with verify=false explicitly.
-                    verify=payload.get("verify", True),
                     min_source_height=config.min_source_height,
                     min_source_width=config.min_source_width,
                     min_source_size_gb=config.min_source_size_gb,
@@ -1139,13 +1584,43 @@ def _encode_measured(
                         # a verification finding (issue #240: a lost track, an
                         # unverifiable probe) declines the swap
                         error=result.error,
+                        # a source that changed during the encode declines it
+                        # too (issue #585): the run identity is the swap's
+                        # last comparison before the library
+                        input_size=result.input_size,
+                        input_mtime=getattr(result, "input_mtime", None),
                     )
                     declined = not swap.replaced
                 else:
                     declined = False
         except EncodeBusyError as e:
+            # a busy slot is routine contention, not a failure (issue #602):
+            # the row reads done with the skip, like the folder outcome
+            if queue is not None and encode_row is not None:
+                queue.finish_stage(encode_row, {"skipped": True, "error": str(e)})
             outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
             continue
+        except Cancelled:
+            # a stop must not leave the stage row running (issue #602): the
+            # worker marks the folder job cancelled, this row too
+            if queue is not None and encode_row is not None:
+                queue.mark_cancelled(encode_row)
+            raise
+        except Exception as e:
+            # an unexpected failure must not leave the stage row RUNNING: the
+            # folder job fails too, and the row carries the same reason
+            if queue is not None and encode_row is not None:
+                queue.fail_stage(encode_row, str(e))
+            raise
+        if queue is not None and encode_row is not None:
+            queue.finish_stage(
+                encode_row,
+                {
+                    "encoded": outcome.encoded,
+                    "declined": declined,
+                    "error": outcome.error,
+                },
+            )
         entry = {
             "movie": movie.name,
             "state": (
@@ -1181,6 +1656,13 @@ def _encode_measured(
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 
 
+# a failed iteration is survived (logged, backed off, retried); only this
+# many CONSECUTIVE failures end the worker, with the reason recorded for
+# /api/status (issue #649: an unattended server must never stop working
+# silently - and must not keep serving as if healthy either)
+WORKER_MAX_CONSECUTIVE_FAILURES = 5
+
+
 class JobWorker:
     """The background worker executing jobs from the queue, one at a time.
 
@@ -1202,13 +1684,24 @@ class JobWorker:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         # the running job's cancel event: a shutdown must terminate the
-        # encode/verify child, not leave it running unattended (issue #431
+        # encode child, not leave it running unattended (issue #431
         # review, round 2 finding 1 - the measurement path has opted out of
         # the stall watchdog, so the cancel event is its only kill path)
         self._running_cancel: threading.Event | None = None
+        # why the worker gave up (issue #649): None while it runs; the
+        # reason after it ended itself on repeated failed iterations -
+        # /api/status carries it so a dead worker is never a silent one
+        self.fatal_error: str | None = None
 
     def start(self) -> None:
         """Starts the worker thread."""
+        # a restarted worker must not render running with a previous
+        # give-up's error strip (issue #660 round 9, finding 3), and a
+        # restart after a graceful stop() must actually run: _stop is the
+        # loop's exit flag, so it is cleared here too (issue #660 round 13,
+        # finding 1)
+        self.fatal_error = None
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="job-worker", daemon=True)
         self._thread.start()
 
@@ -1216,7 +1709,7 @@ class JobWorker:
         """Signals the worker to stop and joins it.
 
         The running job's cancel event is set too (issue #431): a shutdown
-        must terminate the running encode/verify child, not wait out a
+        must terminate the running encode child, not wait out a
         multi-hour measurement the watchdog no longer bounds. The default
         join covers the child's kill window (terminate_tree's 5 s SIGTERM +
         5 s SIGKILL and the pipe drainers' joins) plus the job's unwinding,
@@ -1259,28 +1752,62 @@ class JobWorker:
         self.queue._wake.set()
 
     def _run(self) -> None:
-        """Consumes jobs until stopped."""
+        """Consumes jobs until stopped.
+
+        A failed iteration is survived: it is logged and backed off, and
+        the next iteration still runs (issue #649's observed
+        ``SystemError`` from sqlite3's commit killed the whole worker -
+        the web server kept serving a queue nothing drained). Only
+        WORKER_MAX_CONSECUTIVE_FAILURES consecutive failures end the
+        loop, and the reason is recorded on fatal_error for /api/status:
+        the server keeps serving, and the dashboard says the worker is
+        dead and why.
+        """
+        consecutive_failures = 0
         while not self._stop.is_set():
-            # the cancel event exists before the job is taken (review round 3,
-            # finding 3): a stop landing between take_next and _execute's
-            # publish would otherwise miss a multi-hour job entirely
-            cancel = threading.Event()
-            self._running_cancel = cancel
-            # the daily encode window (issue #434): plan and encode jobs are
-            # held back while outside it - scan jobs (cheap cataloging)
-            # proceed, and an in-flight job always runs to completion. The
-            # config is re-read each tick, so the queue resumes when the
-            # window opens.
-            conf = refresh_config()
-            if not encode_window_open(conf.encode_window_start, conf.encode_window_end):
-                job = self.queue.take_next(only_kinds={JobKind.SCAN})
-            else:
-                job = self.queue.take_next()
-            if job is None:
-                self._running_cancel = None
+            try:
+                self._run_one()
+            except Exception as e:
+                consecutive_failures += 1
+                if consecutive_failures >= WORKER_MAX_CONSECUTIVE_FAILURES:
+                    self.fatal_error = (
+                        f"the worker gave up after {consecutive_failures} consecutive "
+                        f"failed iterations; the last: {e}"
+                    )
+                    log_error(f"Job worker: {self.fatal_error}")
+                    return
+                log_error(f"Job worker iteration failed ({consecutive_failures} consecutive): {e}")
+                # a real back-off: a stale wake (an enqueue during the failed
+                # iteration) would otherwise return immediately and the
+                # "back off" would be no delay at all (issue #660 round 1,
+                # finding 6)
+                self.queue._wake.clear()
                 self.queue.wait_for_work(timeout=1.0)
-                continue
-            self._execute(job, cancel)
+            else:
+                consecutive_failures = 0
+
+    def _run_one(self) -> None:
+        """Runs one consume iteration (take a job, or wait for work)."""
+        # the cancel event exists before the job is taken (review round 3,
+        # finding 3): a stop landing between take_next and _execute's
+        # publish would otherwise miss a multi-hour job entirely
+        cancel = threading.Event()
+        self._running_cancel = cancel
+        # the daily encode window (issue #434): plan and encode jobs are
+        # held back while outside it - scan jobs (cheap cataloging)
+        # proceed, and an in-flight job always runs to completion. The
+        # config is re-read each tick, so the queue resumes when the
+        # window opens.
+        conf = refresh_config()
+        if not encode_window_open(conf.encode_window_start, conf.encode_window_end):
+            job = self.queue.take_next(only_kinds={JobKind.SCAN})
+        else:
+            job = self.queue.take_next()
+        if job is None:
+            self._running_cancel = None
+            self.queue.wait_for_work(timeout=1.0)
+            return
+        self._execute(job, cancel)
 
     def _execute(self, job: Job, cancel: threading.Event | None = None) -> None:
         """Runs one job and records its outcome.
@@ -1316,9 +1843,13 @@ class JobWorker:
             if job.kind == JobKind.SCAN:
                 result = execute_scan(job, self.connection, cancel, progress=progress)
             elif job.kind == JobKind.PLAN:
-                result = execute_plan(job, self.connection, cancel, progress=progress)
+                result = execute_plan(
+                    job, self.connection, cancel, progress=progress, queue=self.queue
+                )
             elif job.kind == JobKind.ENCODE:
-                result = execute_encode(job, self.connection, cancel, progress=progress)
+                result = execute_encode(
+                    job, self.connection, cancel, progress=progress, queue=self.queue
+                )
             else:
                 self.queue.fail(job, f"unknown job kind: {job.kind}")
                 return

@@ -1,7 +1,7 @@
 /** Typed client for the resident app's API. */
 
 export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-export type JobKind = 'scan' | 'plan' | 'encode' | 'legacy'
+export type JobKind = 'scan' | 'plan' | 'decision' | 'crf-search' | 'encode' | 'legacy'
 
 export interface Job {
   id: number | null
@@ -43,6 +43,10 @@ export interface JobOutcome {
   error?: string
   crf?: number | null
   vmaf?: number | null
+  /** the sizes the server writes on an encode outcome (`jobs.py`); a
+   * plan entry carries an estimate instead and no sizes */
+  input_size?: number | null
+  output_size?: number | null
   estimated_size?: number | null
   saved_percent?: number | null
   reason?: string
@@ -59,6 +63,12 @@ export function movieOutcome(job: Job, movieName: string): JobOutcome | null {
   return list.find((o) => o.movie === movieName) ?? null
 }
 
+import { isFailedOutcome } from './format'
+
+/** Re-exported so a page keeps importing the vocabulary from one module;
+ * the definition lives in `format.ts` beside the rest of it. */
+export { isFailedOutcome }
+
 /** A DONE job whose per-movie outcomes failed is not a clean done: the
  * lifecycle completed, but the work did not. Shared by the jobs page and
  * the detail trail — two audit trails must speak one language. */
@@ -66,7 +76,7 @@ export function failedOutcomeNote(job: Job): string {
   if (job.state !== 'done' || job.kind !== 'encode') return ''
   const r = job.result as { outcomes?: JobOutcome[] } | null
   if (!r?.outcomes) return ''
-  const failed = r.outcomes.filter((o) => o.state === 'failed')
+  const failed = r.outcomes.filter(isFailedOutcome)
   if (failed.length === 0) return ''
   return `__FAILED_OUTCOMES__${failed.length} of ${r.outcomes.length} failed: ${failed
     .map((o) => o.movie)
@@ -88,15 +98,15 @@ export interface EncodeInfo {
   probe_count?: number | null
   probe_seconds?: number | null
   tool_versions?: string | null
-  /** the full-file verification measurement (issue #235): VMAF of the kept
-   * artifact against its source, measured after the encode; null when the
-   * run had verify off or the measurement failed non-fatally */
-  verified_vmaf?: number | null
   /** schema v7 drift fields (null for pre-v7 rows); present in the
    * library list, snapshot and /api/movie alike since 3f77d08 */
   generation?: number | null
   input_bitrate?: number | null
   output_bitrate?: number | null
+  /** what the artifact became (issue #625): 'applied' | 'discarded' | 'skipped'.
+   * A discarded attempt keeps its measurements but reclaimed nothing. */
+  outcome?: string
+  outcome_reason?: string | null
 }
 
 /** One historical encode of a movie (GET /api/movie history entry).
@@ -173,6 +183,15 @@ export interface RetainedFile {
 export interface Status {
   queue: Job[]
   watcher: 'running' | 'stopped'
+  /** why the watcher did not start (issue #648): the refusal reason, null
+   * while it runs — a stopped watcher is never a silent one */
+  watcher_error?: string | null
+  /** the job worker's liveness (issue #649): "running" while the worker
+   * thread is alive, "stopped" once it gave up on repeated failures */
+  worker?: 'running' | 'stopped'
+  /** why the job worker gave up (issue #649): the last fatal error, null
+   * while it works — the dashboard's top-priority attention item */
+  worker_error?: string | null
   database: string
   /** the resident app's own memory (MiB), self-measured every 5 min —
    * staying lean is a measured fact (4534e07); null when unmeasurable */
@@ -248,9 +267,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** The dashboard's bearer token (issue #36).
  *
- * Auth is opt-in on the server: with $SHRINKRAY_TOKEN set, every route
- * requires the token, and the operator pastes it once — it is kept in
- * localStorage so the prompt appears once per browser, not per request.
+ * Auth is opt-in on the server: with $SHRINKRAY_TOKEN set, every API route
+ * requires the token. The dashboard document loads without it (issue #600),
+ * and the operator pastes the token once — it is kept in localStorage so
+ * the prompt appears once per browser, not per request.
  * With no token stored the header is omitted entirely, which is the
  * loopback development flow (the server does not ask for one). */
 const TOKEN_KEY = 'shrinkray.token'
@@ -414,57 +434,4 @@ export const api = {
   config: () => request<Config>('/api/config'),
   reveal: (path: string) =>
     request<{ revealed: string }>('/api/reveal', { method: 'POST', body: JSON.stringify({ path }) }),
-}
-
-/** Formats a byte count as a GB string ('—' for empty). */
-export function fmtGb(bytes: number | null | undefined): string {
-  if (!bytes || bytes <= 0) return '—'
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
-}
-
-/** Formats a saved percentage ('—' for none, +X% for growth). */
-/** Formats an ISO timestamp as a short "when" (time today, date+time before).
- * The backend stores UTC ('datetime now' in sqlite is UTC); naive strings
- * get Z appended here at the API boundary — the one place that decides. */
-export function fmtWhen(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z')
-  if (Number.isNaN(d.getTime())) return '—'
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  if (d.toDateString() === new Date().toDateString()) return time
-  return `${d.toLocaleDateString([], { day: '2-digit', month: 'short' })} ${time}`
-}
-
-/** Formats the span between two ISO timestamps as a human duration. */
-export function fmtSpan(startIso: string | null | undefined, endIso: string | null | undefined): string | null {
-  if (!startIso || !endIso) return null
-  const s = Date.parse(startIso.endsWith('Z') || startIso.includes('+') ? startIso : startIso + 'Z')
-  const e = Date.parse(endIso.endsWith('Z') || endIso.includes('+') ? endIso : endIso + 'Z')
-  if (Number.isNaN(s) || Number.isNaN(e)) return null
-  const seconds = Math.max(0, Math.round((e - s) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const m = Math.floor(seconds / 60)
-  if (m < 60) return `${m}m ${seconds % 60}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
-
-/** Formats a duration in seconds as a human string ('—' for none). */
-export function fmtSeconds(seconds: number | null | undefined): string {
-  if (seconds == null || seconds <= 0) return '—'
-  if (seconds < 60) return `${seconds.toFixed(0)}s`
-  const m = Math.floor(seconds / 60)
-  const s = Math.round(seconds % 60)
-  if (m < 60) return `${m}m ${s}s`
-  const h = Math.floor(m / 60)
-  return `${h}h ${m % 60}m`
-}
-
-/** Formats a saved-percentage-like value honestly: growth is not a gain. */
-export function fmtSavedHonest(percent: number | null | undefined): {
-  text: string
-  grew: boolean
-} {
-  if (percent === null || percent === undefined) return { text: '—', grew: false }
-  if (percent <= 0) return { text: `+${Math.abs(percent).toFixed(1)}% larger`, grew: true }
-  return { text: `${percent.toFixed(1)}%`, grew: false }
 }

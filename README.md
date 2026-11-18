@@ -237,9 +237,9 @@ other services keep their cores.
    (`--crop-samples` windows, bars common to every window) runs only when the
    pass learned nothing — a failed pass, or no readings at all
    ([#525](https://github.com/bennischober/ShrinkRay/issues/525)).
-4. **Quality search** — 10-second samples are encoded at a few CRF values and
-   scored with VMAF against their source: one window per 10 minutes of runtime
-   (12 for a 2-hour film) in every mode — `encode`, `plan` and the resident app
+4. **Quality search** — 4-second samples are encoded at a few CRF values and
+   scored with VMAF against their source: one window per 4 minutes of runtime
+   (30 for a 2-hour film) in every mode — `encode`, `plan` and the resident app
    resolve the count the same way; a configured `quality.sample_count` pins a fixed
    number instead (issue #526). The search
    interpolates between a passing and a failing probe and settles on the largest
@@ -275,12 +275,11 @@ removed it: an unmeasured encode can take a library file's path).
 |---|---|
 | `--target-vmaf N` | quality floor (default: `96`) |
 | `--probe-encoder-preset N` | the PROBES' encoder speed preset (default: the `handbrake.probe_encoder_preset` config value, shipped as `5`; SVT-AV1 speed -1 to 10, higher = faster (a lower preset is slower and compresses better); a measurement setting — changing it invalidates stored plans) |
-| `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `3`; an output setting — the probes run `--probe-encoder-preset`) |
+| `--encoder-preset N` | the FINAL encode's speed preset (default: the `handbrake.encoder_preset` config value, shipped as `5`; an output setting — the probes run `--probe-encoder-preset`) |
 | `--replace` | with an output directory: also swap the verified output into the source's path, renaming the original aside (never deleted). Implied when no output directory is given |
 | `--crop-samples N` | cropdetect windows for the sampled fallback detector (more samples can only shrink the crop) |
 | `--sample-count N` | the number of probe windows (default: unset — density from `quality.sample_every` applies; set `quality.sample_count` to pin a fixed number; plans stored under the old encode-mode fingerprint re-probe once) |
-| `--sample-every S` | seconds of runtime per probe window — the default (`quality.sample_every`, 600 s, i.e. one per 10 minutes); a configured `quality.sample_count` overrides it ([#526](https://github.com/bennischober/ShrinkRay/issues/526)) |
-| `--verify` | after each encode, measure VMAF on the FULL output against the source (slow; ground truth beyond the samples) |
+| `--sample-every S` | seconds of runtime per probe window — the default (`quality.sample_every`, 240 s, i.e. one per 4 minutes); a configured `quality.sample_count` overrides it ([#526](https://github.com/bennischober/ShrinkRay/issues/526)) |
 | `--replan` | ignore stored plans and re-probe every movie |
 | `--threads N` | per-encode thread cap; 0 or omitted uses `handbrake.max_threads`, whose 0 means all cores |
 | `--db PATH` | keep a database (scan cache, plans, history); omitted, the run is stateless |
@@ -332,7 +331,7 @@ backlog-on-start switch; and, where the resident app keeps its data (the contain
 `/data`, or `--db`), a pause/resume switch. Values go through the same schema as a config
 file loaded from disk, so a value the app would refuse is shown and never written (the 1080p
 floor, for example, can be raised but not lowered). A change to a setting that is part of
-every stored plan (the VMAF, the probe preset, the probe density) says that it re-measures
+every stored plan (the VMAF, the probe preset, the probe density, the probe window length) says that it re-measures
 the library before you save it. The resident app applies a save at its next file. The
 dashboard cannot do any of this: it only observes.
 
@@ -365,9 +364,11 @@ SHRINKRAY_TOKEN='a-long-random-secret' uv run shrinkray serve --host 0.0.0.0
 ```
 
 The token lives in the environment, never in `config.json` (which is a tracked file).
-With it set, every route requires `Authorization: Bearer <token>`; the dashboard asks
-for it once and keeps it in the browser. The SSE stream (`/api/events`) also accepts
-`?token=` because an `EventSource` cannot send a header. With no token set the
+With it set, every `/api/*` route and `/metrics` require `Authorization: Bearer <token>`.
+The dashboard's document and its static assets (`GET /`, `/assets/*`, the favicon routes)
+load without the header, so the page can ask for the token once and keep it in the browser
+(issue #600). The SSE stream (`/api/events`) also accepts `?token=` because an `EventSource`
+cannot send a header. With no token set the
 loopback development flow is unchanged — no token, no prompt. TLS is deliberately
 left to a reverse proxy. Stop with Ctrl+C; the running job's state is recovered on
 the next start.
@@ -419,7 +420,7 @@ last fork). A gate that fails skips the file cheaply; no later gate runs.
 | 2 | Duration | At least 90 s? | fixed | skip — not a movie |
 | 3 | Resolution | At least the 1080p class — width 1920 OR height 1080? (`is_1080p_class`; `eligibility.min_source_width`/`min_source_height`) | 1920x1080 (each floor may be raised, e.g. `2160` for 4K only; a lower value is rejected at load) | skip — a lower-resolution source saves too little |
 | 4 | Size | At least the configured floor? (`eligibility.min_source_size_gb`) | off (`0`) | skip — payoff below the probe cost |
-| 5 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9, av1 (extendable, never shrinkable) | skip — a source codec outside the list is never re-encoded |
+| 5 | Codec age | In the candidate codec list? (`SOURCE_CODECS` + `eligibility.candidate_codecs`) | h264, hevc, vp9 (extendable, never shrinkable); av1 is excluded — the output format is never a source ([#650](https://github.com/bennischober/ShrinkRay/issues/650)) | skip — a source codec outside the list is never re-encoded |
 | 6 | Bar detection | Which bars does every sustained segment share? (sampled fallback: only when the pass learned nothing, [#525](https://github.com/bennischober/ShrinkRay/issues/525)) | — | never skips — "no bars" is a normal outcome |
 | 7 | CRF search | Largest CRF (or one step below it) that meets the VMAF target? | 96 | skip — target unreachable |
 | 8 | Size gate | Would the result actually be smaller? | measured | skip — "would not shrink" |
@@ -501,7 +502,7 @@ Example [config.json](config.json):
         "preset": "Fast 1080p30",        // legacy: unread by the measured pipeline
         "encoder": "svt_av1",
         "probe_encoder_preset": "5", // the PROBES' speed preset
-        "encoder_preset": "3",         // the FINAL encode's preset
+        "encoder_preset": "5",         // the FINAL encode's preset
         "max_threads": 0                  // per-encode thread cap (0 = all cores)
     },
     "quality": {
@@ -530,23 +531,23 @@ Three keys named "preset" with different meanings — the distinction:
 `handbrake.preset` is a legacy key the measured pipeline no longer reads
 (it named the removed fixed mode's HandBrake preset *name*). The other two
 are the encoder *speed* presets — the SVT-AV1 ladder. **`probe_encoder_preset` is a measurement
-setting**: the CRF search's throwaway probe encodes run at it (default
-`5` — cheap, and representative of what the final encode will look
-like). **`encoder_preset` is an output setting**: the final encode — the
-artifact that gets kept — runs at it (default `3`, slower and better).
+setting**: the CRF search's throwaway probe encodes run at it.
+**`encoder_preset` is an output setting**: the final encode — the
+artifact that gets kept — runs at it. Both ship at `5`.
 
-**The measured-at-5 / encoded-at-3 trade-off is deliberate** (issue
-#22): the probe predicts the final encode, and preset shifts the CRF→VMAF
-curve, so a probe at a different preset measures a slightly different curve
-than the final encode runs — the chosen CRF can miss the target a little in
-either direction. That is accepted so the search stays cheap; if a drift
-investigation ever shows it matters on real titles, the fallback is to probe
-at the final preset and pay the time. The plan's size estimate comes from a
-probe-preset encode, so it describes a preset-`5` file, not the
-preset-`3` file that gets written. Both presets are recorded on every
-encode row (`encoder_preset`, `probe_encoder_preset`) so the provenance
-page shows which number produced which measurement. A change to the PROBE
-preset invalidates stored plans (they are re-probed); a change to the FINAL
+**The two settings stay independent** (issue #22, and both at `5` since
+issue #686). The shipped defaults match, so a probe measures the CRF→VMAF
+curve the kept file is encoded on, and the plan's size estimate describes
+that same preset. Setting the probe faster than the final measures a
+different curve: the search keeps the largest CRF whose probe still meets
+the target, so a less efficient probe picks a lower CRF and the final
+encode is believed to land above that score. That direction is believed,
+not measured (`docs/encode-decision.md`). The size estimate still comes
+from the probe preset, so a split describes the probe file, not the file
+that gets written. Both presets are recorded on every encode row
+(`encoder_preset`, `probe_encoder_preset`) so the provenance page shows
+which number produced which measurement. A change to the PROBE preset
+invalidates stored plans (they are re-probed); a change to the FINAL
 preset does not (a plan is a probe result). Values outside the encoder's
 vocabulary are rejected at load, never passed to HandBrake.
 
@@ -691,8 +692,9 @@ The behaviour, per file:
 - **Eligibility.** A source whose dimensions are both below the 1080p class, or whose
   codec is outside the candidate list, is never re-encoded.
 - **Codec routing.** The CRF search runs on every eligible file; a re-encode happens
-  only when the file would actually get smaller. The candidate list is h264, hevc, vp9 and
-  av1 (extendable in config, never shrinkable); MPEG-2/VC-1 and older never are.
+  only when the file would actually get smaller. The candidate list is h264, hevc, vp9
+  (extendable in config, never shrinkable); MPEG-2/VC-1 and older never are, and neither
+  does AV1 — it is the output format and never a source ([#650](https://github.com/bennischober/ShrinkRay/issues/650)).
 - **Bar removal is part of every re-encode**, not an option: any file that is encoded has
   its bars detected and removed, so a re-encoded file is always clean. There is no flag to
   keep them, and no file is skipped for lacking them. A film whose aspect ratio changes is

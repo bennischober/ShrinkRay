@@ -70,6 +70,35 @@ class TestQuality(unittest.TestCase):
             )
             self.assertIsNone(bundle)
 
+    def test_telemetry_without_a_db_file_writes_nothing(self):
+        """db_file=None is the stateless caller's shape (the probe path passes
+        it when no database is in play): telemetry has no home it may use, so
+        nothing is written - in particular never a logs/ directory in the
+        process's working directory (the old fallback that leaked into the repo
+        root)."""
+        from shrinkray.telemetry import save_failure
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp) / "work"
+            workdir.mkdir()
+            (workdir / "vmaf.json").write_text("{}", encoding="utf-8")
+            before = set(Path.cwd().glob("logs/*"))
+            bundle = save_failure(
+                db_file=None,
+                kind="vmaf-measure",
+                command=["ffmpeg", "-i", "x.mkv"],
+                stderr="boom",
+                workdir=workdir,
+                artifacts=["vmaf.json"],
+                context={"returncode": 1},
+            )
+            self.assertIsNone(bundle)
+            self.assertEqual(
+                set(Path.cwd().glob("logs/*")) - before,
+                set(),
+                "a stateless failure created a telemetry bundle in the working directory",
+            )
+
     def test_the_decided_vmaf_default_is_96(self):
         """Issue #103: VMAF 96 is the decided default, and nothing repeats it.
 
@@ -458,8 +487,8 @@ class TestPlanReuse(unittest.TestCase):
             probe_encoder_preset="5",
             crop=None,
             crf_range=overrides.pop("crf_range", engine_search.DEFAULT_CRF_RANGE),
-            sample_count=engine_search.sample_count_for(600.0, engine_plan.DEFAULT_SAMPLE_EVERY),
-            sample_seconds=10.0,
+            sample_count=engine_search.sample_count_for(240.0, engine_plan.DEFAULT_SAMPLE_EVERY),
+            sample_seconds=engine_plan.DEFAULT_SAMPLE_SECONDS,
             hdr=False,
             encoder=overrides.pop("encoder", "svt_av1"),
             # the fingerprint's crop-independent recipe part (the tests'
@@ -488,7 +517,7 @@ class TestPlanReuse(unittest.TestCase):
             )
 
         with (
-            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
                 engine_pipeline,
@@ -587,7 +616,7 @@ class TestPlanReuse(unittest.TestCase):
             return ["hb", "--quality", str(crf), "--encoder-preset", preset]
 
         with (
-            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
                 engine_pipeline,
@@ -745,7 +774,7 @@ class TestPlanReuse(unittest.TestCase):
             )
 
         with (
-            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+            patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
             patch("shrinkray.engine.pipeline.check_disk_space", return_value=(True, "")),
             patch.object(
                 engine_pipeline,
@@ -774,7 +803,6 @@ class TestPlanReuse(unittest.TestCase):
         result, _output = self._encode_growing(movie, factor=1.5)
         self.assertFalse(result.success)
         self.assertEqual(result.skipped_reason, "output not smaller")
-        self.assertIsNone(result.verified_vmaf)
 
     def test_a_grown_encode_names_both_sizes(self):
         """The reason must carry the numbers, so the operator can see how far
@@ -2192,7 +2220,7 @@ class TestMinSavingThreshold(unittest.TestCase):
     def _plan(self, min_saving_percent: int, factor: float):
         """Runs plan_quality with the search mocked to the given factor."""
         with (
-            patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+            patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
             patch.object(
                 engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
             ),
@@ -2395,7 +2423,7 @@ class TestUnreachableIsDecidedBeforeSize(unittest.TestCase):
                 ("find_optimal_crf", {"return_value": (chosen, achieved, [])}),
                 ("check_chosen_crf_shrinks", {"side_effect": fake_check}),
                 ("extract_samples", {"return_value": [(self.sample, 10.0)]}),
-                ("probe_duration_seconds", {"return_value": 600.0}),
+                ("probe_duration_seconds", {"return_value": 240.0}),
             ):
                 stack.enter_context(patch.object(engine_search, target, **value))
             yield stack
@@ -2403,7 +2431,7 @@ class TestUnreachableIsDecidedBeforeSize(unittest.TestCase):
     def _plan(self, chosen: int, achieved: float, chosen_factor: float, checked: list):
         with self._measured(chosen, achieved, chosen_factor, checked) as stack:
             for name, value in (
-                ("probe_duration_seconds", 600.0),
+                ("probe_duration_seconds", 240.0),
                 ("_source_dimensions", {"width": 1920, "height": 1080}),
                 ("source_codec", "h264"),
                 ("source_bit_depth", None),
@@ -2505,6 +2533,180 @@ class TestUnreachableIsDecidedBeforeSize(unittest.TestCase):
         self.assertEqual((crf, achieved), (30, 96.4))
 
 
+class TestRecordedScoreKeepsTheSearchVerdict(unittest.TestCase):
+    """Issue #595: the search judges each probe on the unrounded score, but the
+    recorded score (the probe list, `achieved`, the plan row, the log) is
+    rounded to two decimals, and `target_unreachable` re-derives the verdict
+    from it. A floor score just below the target (95.996 against 96) must not
+    be recorded as the target itself: it was a miss, so the file is
+    unreachable, and no plan or encode may claim it met the target.
+
+    The real `find_optimal_crf` and `bisect_crf` run in every test; only the
+    probe measurement (`probe_crf`) and the size seams are faked.
+    """
+
+    FLOOR, TOP = engine_search.DEFAULT_CRF_RANGE
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.movie = root / "movie.mkv"
+        self.movie.write_bytes(b"x" * 1000)
+        self.sample = root / "sample.mkv"
+        self.sample.write_bytes(b"y" * 100)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _scores(self, floor_score: float):
+        """A curve that scores `floor_score` at the CRF floor and 0.1 less per
+        CRF step above it, so every CRF above the floor misses a target the
+        floor score sits near."""
+
+        def fake_probe(samples, crf, *args, **kwargs):
+            return floor_score - 0.1 * (crf - self.FLOOR)
+
+        return fake_probe
+
+    @contextlib.contextmanager
+    def _measured(self, probe):
+        with contextlib.ExitStack() as stack:
+            for target, value in (
+                ("probe_crf", {"side_effect": probe}),
+                ("estimate_size_factor", {"return_value": 0.5}),
+                ("check_chosen_crf_shrinks", {"return_value": 0.5}),
+                ("extract_samples", {"return_value": [(self.sample, 10.0)]}),
+                ("probe_duration_seconds", {"return_value": 240.0}),
+            ):
+                stack.enter_context(patch.object(engine_search, target, **value))
+            yield stack
+
+    def _search(self, probe, target_vmaf: float):
+        with self._measured(probe):
+            return engine_search.find_optimal_crf(
+                self.movie,
+                Path(self.tmp.name),
+                "hb",
+                target_vmaf=target_vmaf,
+                samples=[(self.sample, 10.0)],
+            )
+
+    def _plan(self, floor_score: float):
+        with self._measured(self._scores(floor_score)) as stack:
+            for name, value in (
+                ("probe_duration_seconds", 240.0),
+                ("_source_dimensions", {"width": 1920, "height": 1080}),
+                ("source_codec", "h264"),
+                ("source_bit_depth", None),
+                ("find_handbrake", "hb"),
+                ("detect_crop_summary_cached", None),
+                ("detect_crop_rect", None),
+                ("extract_samples", [(self.sample, 10.0)]),
+            ):
+                stack.enter_context(patch.object(engine_plan, name, return_value=value))
+            return engine_plan.plan_quality(
+                self.movie, target_vmaf=96.0, min_saving_percent=15, db_file=None
+            )
+
+    def _probe(self, floor_score: float):
+        from shrinkray.engine.pipeline import _probe_movie
+
+        with self._measured(self._scores(floor_score)) as stack:
+            stack.enter_context(patch.object(engine_pipeline, "find_handbrake", return_value="hb"))
+            for name in ("detect_crop_summary_cached", "detect_crop_rect"):
+                stack.enter_context(patch.object(engine_pipeline, name, return_value=None))
+            return _probe_movie(
+                self.movie,
+                96.0,
+                15,
+                engine_search.DEFAULT_CRF_RANGE,
+                1,
+                10.0,
+                "svt_av1",
+                "5",
+                cancel=None,
+                db_file=None,
+                encoder_threads=None,
+                progress=None,
+                use_probe_cache=False,
+                crop_sample_count=3,
+                source_width=1920,
+                source_height=1080,
+                source_bit_depth=None,
+            )
+
+    def test_a_floor_miss_just_below_the_target_is_unreachable(self) -> None:
+        """The issue's case: 95.996 at the floor fails inside the search; the
+        recorded score must say so (95.99), so the verdict is unreachable."""
+        chosen, achieved, probes = self._search(self._scores(95.996), 96.0)
+        self.assertEqual(chosen, self.FLOOR)
+        self.assertEqual(achieved, 95.99)
+        self.assertTrue(
+            engine_search.target_unreachable(
+                chosen, achieved, 96.0, engine_search.DEFAULT_CRF_RANGE
+            )
+        )
+        self.assertEqual([p.vmaf for p in probes if p.crf == self.FLOOR], [95.99])
+
+    def test_plan_reports_a_floor_miss_as_unreachable(self) -> None:
+        result = self._plan(95.996)
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "target unreachable")
+        self.assertIn(f"best 95.99 at CRF {self.FLOOR}", result.error)
+        self.assertEqual(result.achieved_vmaf, 95.99)
+
+    def test_encode_reports_a_floor_miss_as_unreachable(self) -> None:
+        from shrinkray.engine.search import SkipEncode
+
+        with self.assertRaises(SkipEncode) as ctx:
+            self._probe(95.996)
+        self.assertIn("unreachable", str(ctx.exception))
+        self.assertIn(f"best 95.99 at CRF {self.FLOOR}", str(ctx.exception))
+
+    def test_a_floor_pass_just_above_the_target_still_encodes(self) -> None:
+        """The guard: 96.004 met the target, records as 96.0 and goes on to
+        the encode at the floor CRF."""
+        crf, achieved, _probes, _crop = self._probe(96.004)
+        self.assertEqual((crf, achieved), (self.FLOOR, 96.0))
+
+    def test_a_floor_pass_of_a_finer_target_is_not_unreachable(self) -> None:
+        """The reverse crossing: against a three-decimal target, 95.5541 at the
+        floor passes inside the search; plain rounding recorded 95.55, which
+        the verdict read as a miss and skipped a file that met its target."""
+        chosen, achieved, _probes = self._search(self._scores(95.5541), 95.554)
+        self.assertEqual((chosen, achieved), (self.FLOOR, 95.56))
+        self.assertFalse(
+            engine_search.target_unreachable(
+                chosen, achieved, 95.554, engine_search.DEFAULT_CRF_RANGE
+            )
+        )
+
+    def test_every_recorded_score_keeps_the_search_verdict(self) -> None:
+        """For any target (also a finer one than the two recorded decimals),
+        every recorded probe lies on the side of the target the search judged
+        it on, within 0.01 of the measurement; outside the half-hundredth
+        window around the target it is the plain two-decimal rounding. The
+        scores one float step either side of the target guard the arithmetic:
+        scaling such a score by 100 rounds it onto a whole hundredth."""
+        for target in (96.0, 95.5, 90.0, 95.554, 95.556):
+            offsets = (-0.3, -0.006, -0.005, -0.004, -0.001, 0.0, 0.001, 0.004, 0.006)
+            scores = [target + offset for offset in offsets]
+            scores += [math.nextafter(target, 0.0), math.nextafter(target, 100.0)]
+            for score in scores:
+
+                def flat(samples, crf, *args, _score=score, **kwargs):
+                    return _score
+
+                with self.subTest(target=target, score=score):
+                    _chosen, _achieved, probes = self._search(flat, target)
+                    for probe in probes:
+                        self.assertEqual(probe.vmaf < target, score < target)
+                        self.assertLessEqual(abs(probe.vmaf - score), 0.01 + 1e-9)
+                        self.assertEqual(probe.vmaf, round(probe.vmaf, 2))
+                        if (round(score, 2) < target) == (score < target):
+                            self.assertEqual(probe.vmaf, round(score, 2))
+
+
 class TestPlanReportsTheDecisionFactor(unittest.TestCase):
     """Issue #388 (the maintainer's 2026-10-31 decision): the plan's savings
     estimate is the factor the size decision already computed — the same
@@ -2525,7 +2727,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         """Runs plan_quality with the plan's non-search seams mocked to a
         small h264 file plus the caller's extra patches."""
         patches = [
-            patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+            patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
             patch.object(
                 engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
             ),
@@ -2613,7 +2815,7 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         key = engine_search.probe_cache_key(
             self.movie,
             10.0,
-            10.0,
+            4.0,
             22,
             "svt_av1",
             "5",
@@ -2643,6 +2845,189 @@ class TestPlanReportsTheDecisionFactor(unittest.TestCase):
         self.assertEqual(result.output_size, int(self.movie.stat().st_size * 0.4))
 
 
+class TestTheCodecRule(unittest.TestCase):
+    """Issue #650, the maintainer's decision (2026-11-14, relayed by Zef-X;
+    confirmed 2026-11-15): AV1 is the output format and never a source. An
+    AV1 source is skipped at the codec gate with a reason that says why, the
+    config cannot re-add av1, and the gate runs before any plan reuse - so a
+    stored plan for an AV1 source can never encode."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.movie = Path(self.tmp.name) / "movie.mkv"
+        self.movie.write_bytes(b"x" * 800)
+
+    def _plan(self, db_file=None, extra_config=None):
+        from unittest.mock import Mock
+
+        from shrinkray import config as config_helper
+        from shrinkray.engine.plan import plan_quality
+
+        probed = Mock(return_value=(20, 96.0, [], False, 0.5))
+        raw = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "av1",
+                    "color_transfer": "bt709",
+                    "width": 1920,
+                    "height": 1080,
+                }
+            ]
+        }
+        conf = config_helper.Conf(extra_config or {})
+        with (
+            patch("shrinkray.engine.plan.find_handbrake", return_value="hb"),
+            patch("shrinkray.engine.plan.extract_samples", return_value=[]),
+            patch("shrinkray.config.load_config", return_value=conf),
+            patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
+            patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
+            patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
+        ):
+            result = plan_quality(self.movie, target_vmaf=95.0, db_file=db_file)
+        return result, probed
+
+    def test_an_av1_source_is_skipped_at_the_codec_gate(self) -> None:
+        """Fails on main: av1 was in SOURCE_CODECS, so an AV1 source was
+        eligible and got probed (the observed CRF 38 re-encode plan)."""
+        result, probed = self._plan()
+        self.assertFalse(result.success)
+        self.assertEqual(result.skipped_reason, "already AV1 (the output format)")
+        self.assertIn("never a source", result.error)
+        probed.assert_not_called()
+
+    def test_the_config_cannot_re_add_av1(self) -> None:
+        """The candidate_codecs validator rejects av1 at load with a clear
+        error - one config line must not re-enable re-encoding outputs."""
+        import pydantic
+
+        with self.assertRaises((pydantic.ValidationError, ValueError)) as ctx:
+            _ = self._plan(extra_config={"eligibility": {"candidate_codecs": ["av1"]}})
+        self.assertIn("never a source", str(ctx.exception))
+
+    def _encode_with_stored_plan(self, codec_name: str):
+        """Runs encode_with_quality against a stored plan row whose
+        fingerprint matches the encode boundary's lookup (the same target,
+        threshold, crop-sample count, sample settings, encoder and recipe
+        fingerprint the lookup compares), with every subprocess seam mocked.
+        Returns (result, lookup, probed)."""
+        from unittest.mock import Mock
+
+        from shrinkray import config as config_helper
+        from shrinkray import db
+        from shrinkray.engine.pipeline import encode_with_quality
+        from shrinkray.tools.vmaf import vmaf_recipe
+
+        out = Path(self.tmp.name) / "out.mkv"
+        recipe = vmaf_recipe(width=1920, height=1080, bit_depth=8).fingerprint()
+        probed = Mock(return_value=(20, 96.0, [], None))
+        raw = {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": codec_name,
+                    "color_transfer": "bt709",
+                    "width": 1920,
+                    "height": 1080,
+                }
+            ]
+        }
+        conf = config_helper.Conf({})
+        db_file = Path(self.tmp.name) / "metadata.db"
+        connection = db.connect(db_file)
+        try:
+            db.upsert_file(
+                connection,
+                db.MovieRecord(
+                    path=self.movie,
+                    mtime=self.movie.stat().st_mtime,
+                    size=self.movie.stat().st_size,
+                    name=self.movie.name,
+                    category="Cat",
+                ),
+            )
+            connection.commit()
+            db.save_plan(
+                connection,
+                connection.execute("SELECT id FROM files").fetchone()["id"],
+                chosen_crf=38,
+                achieved_vmaf=96.01,
+                crop=None,
+                probes=[],
+                skipped_reason=None,
+                estimated_size=100,
+                input_mtime=self.movie.stat().st_mtime,
+                input_size=self.movie.stat().st_size,
+                encoder="svt_av1",
+                encoder_preset="5",
+                target_vmaf=95.0,
+                crf_low=14,
+                crf_high=70,
+                sample_count=25,
+                sample_seconds=4.0,
+                crop_sample_count=10,
+                vmaf_recipe=recipe,
+                min_saving_percent=15,
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        snapshot = {
+            "width": 1920,
+            "height": 1080,
+            "codec": codec_name,
+            "duration": 6000.0,
+            "bitrate": 1.0,
+            "bit_depth": 8,
+        }
+        with (
+            patch("shrinkray.engine.pipeline._lookup_plan") as lookup,
+            patch("shrinkray.engine.pipeline._probe_movie", probed),
+            patch("shrinkray.engine.pipeline.find_handbrake", return_value="hb"),
+            patch(
+                "shrinkray.engine.pipeline._source_snapshot",
+                return_value=snapshot,
+            ),
+            patch("shrinkray.engine.pipeline.durations_match", return_value=True),
+            patch("shrinkray.engine.pipeline.disk_free_bytes", return_value=None),
+            patch("shrinkray.tools.ffprobe.run_ffprobe", return_value=raw),
+            patch(
+                "shrinkray.tools.ffprobe.probe_duration_seconds",
+                return_value=6000.0,
+            ),
+            patch("shrinkray.engine.plan.is_hdr_file", return_value=False),
+            patch("shrinkray.config.load_config", return_value=conf),
+        ):
+            result = encode_with_quality(
+                self.movie, out, progress=None, db_file=db_file, target_vmaf=95.0
+            )
+        return result, lookup, probed
+
+    def test_the_encode_path_skips_an_av1_source_before_probe_and_reuse(self) -> None:
+        """The encode path enforces the same decision (issue #650): the
+        mirrored codec-gate branch skips an AV1 source with the decision's
+        reason, before the CRF probe and before the encode boundary's
+        plan-reuse lookup. The stored row's fingerprint carries the fields
+        the lookup compares (the same target, threshold, crop-sample count,
+        sample settings, encoder and recipe), but the lookup itself is
+        mocked: the pin proves the ORDER - the gate returns before the
+        lookup seam is ever reached - not the fingerprint comparison."""
+        result, lookup, probed = self._encode_with_stored_plan("av1")
+        self.assertEqual(result.skipped_reason, "already AV1 (the output format)")
+        probed.assert_not_called()
+        lookup.assert_not_called()
+
+    def test_the_encode_path_reaches_the_lookup_for_a_non_av1_source(self) -> None:
+        """The positive control for the pin above: the same stored row and
+        the same seams, but a hevc source - the gate passes and the encode
+        boundary's reuse lookup RUNS. Without this control the not-called
+        assertion could pass vacuously."""
+        result, lookup, _probed = self._encode_with_stored_plan("hevc")
+        self.assertNotEqual(result.skipped_reason, "already AV1 (the output format)")
+        lookup.assert_called_once()
+
+
 class TestSubprocessTimeouts(unittest.TestCase):
     """The short-lived ffprobe/ffmpeg calls turn a TimeoutExpired into their
     documented failure path instead of hanging the thread forever (issue
@@ -2661,7 +3046,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         vmaf_tools._vmaf_style = None
         try:
             with (
-                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=240.0),
                 patch(
                     "shrinkray.tools.vmaf.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffmpeg", timeout=60),
@@ -2684,7 +3069,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 "shrinkray.engine.crop.subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
             ) as mocked:
-                self.assertIsNone(engine_crop.detect_crop_rect(movie, None, count=3))
+                self.assertIsNone(engine_crop.detect_crop_rect(movie, None, count=3, bit_depth=8))
             # exactly the ffprobe frame-size call was made (not the
             # cropdetect _run); the duration probe inside uses -show_format
             self.assertIn("-show_format", mocked.call_args.args[0])
@@ -2699,17 +3084,17 @@ class TestSubprocessTimeouts(unittest.TestCase):
         sample_every keeps the probed fraction at sample_seconds /
         sample_every regardless of length (issue #14).
         """
-        # a 20-minute short: one window per 10 minutes => 2
-        self.assertEqual(engine_search.sample_count_for(1200.0, 600.0), 2)
-        # a 2-hour film => 12
-        self.assertEqual(engine_search.sample_count_for(7200.0, 600.0), 12)
-        # a 4-hour film => 24 (coverage stays the same fraction)
-        self.assertEqual(engine_search.sample_count_for(14400.0, 600.0), 24)
+        # a 20-minute short: one window per 4 minutes => 5
+        self.assertEqual(engine_search.sample_count_for(1200.0, 240.0), 5)
+        # a 2-hour film => 30 (the decided default's own example, issue #651)
+        self.assertEqual(engine_search.sample_count_for(7200.0, 240.0), 30)
+        # a 4-hour film => 60 (coverage stays the same fraction)
+        self.assertEqual(engine_search.sample_count_for(14400.0, 240.0), 60)
 
     def test_sample_count_for_short_input_yields_one(self):
         """An input shorter than the density still yields one window."""
-        self.assertEqual(engine_search.sample_count_for(300.0, 600.0), 1)
-        self.assertEqual(engine_search.sample_count_for(1.0, 600.0), 1)
+        self.assertEqual(engine_search.sample_count_for(120.0, 240.0), 1)
+        self.assertEqual(engine_search.sample_count_for(1.0, 240.0), 1)
 
     def test_sample_count_for_explicit_count_overrides(self):
         """An explicit sample_count wins over the density knob.
@@ -2717,7 +3102,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
         A latency-sensitive caller (watch mode) must still be able to pin a
         fixed probe budget.
         """
-        self.assertEqual(engine_search.sample_count_for(7200.0, 600.0, sample_count=3), 3)
+        self.assertEqual(engine_search.sample_count_for(7200.0, 240.0, sample_count=3), 3)
 
     def test_sample_count_for_disabled_density_uses_default(self):
         """A disabled density falls back to the count-based default."""
@@ -2725,7 +3110,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             engine_search.sample_count_for(7200.0, 0.0), engine_plan.DEFAULT_SAMPLE_COUNT
         )
         self.assertEqual(
-            engine_search.sample_count_for(None, 600.0), engine_plan.DEFAULT_SAMPLE_COUNT
+            engine_search.sample_count_for(None, 240.0), engine_plan.DEFAULT_SAMPLE_COUNT
         )
 
     def test_plan_records_derived_sample_count(self):
@@ -2733,7 +3118,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
 
         The plan fingerprint keys on the sample count, so a plan recorded with
         three windows must not be reused by a run whose density derives
-        twelve (issue #14).
+        thirty (issue #14).
         """
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "movie.mkv"
@@ -2756,11 +3141,11 @@ class TestSubprocessTimeouts(unittest.TestCase):
                     engine_search, "probe_crf", return_value=engine_search.DEFAULT_TARGET_VMAF
                 ),
             ):
-                result = engine_plan.plan_quality(src, sample_every=600.0)
+                result = engine_plan.plan_quality(src, sample_every=240.0)
         self.assertTrue(result.success)
-        self.assertEqual(result.sample_count, 12)
+        self.assertEqual(result.sample_count, 30)
         # the extraction was asked for the derived count
-        self.assertEqual(fake_extract.call_args.args[2], 12)
+        self.assertEqual(fake_extract.call_args.args[2], 30)
 
     def test_detect_crop_rect_defaults_to_ten_samples(self):
         """The crop detector samples ten windows by default.
@@ -2780,7 +3165,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
-                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=240.0),
                 patch(
                     "shrinkray.engine.crop.subprocess.run",
                     return_value=type(
@@ -2794,7 +3179,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch("shrinkray.engine.crop._run", side_effect=fake_run),
             ):
-                engine_crop.detect_crop_rect(movie, Path(tmp))
+                engine_crop.detect_crop_rect(movie, Path(tmp), bit_depth=8)
         self.assertEqual(len(commands), 10)
 
     def test_crop_samples_are_configurable(self):
@@ -2813,7 +3198,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
-                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=240.0),
                 patch(
                     "shrinkray.engine.crop.subprocess.run",
                     return_value=type(
@@ -2827,7 +3212,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                 ),
                 patch("shrinkray.engine.crop._run", side_effect=fake_run),
             ):
-                engine_crop.detect_crop_rect(movie, Path(tmp), count=4)
+                engine_crop.detect_crop_rect(movie, Path(tmp), count=4, bit_depth=8)
         self.assertEqual(len(commands), 4)
 
     def test_plan_fingerprint_records_crop_sample_count(self):
@@ -2900,7 +3285,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -2926,7 +3311,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -2956,7 +3341,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                     src = Path(tmp) / "movie.mkv"
                     src.write_bytes(b"x" * 8)
                     with (
-                        patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                        patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                         patch.object(
                             engine_plan,
                             "_source_dimensions",
@@ -2984,7 +3369,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                             return_value={"width": 1920, "height": 1080},
                         ),
                         patch.object(engine_plan, "is_hdr_file", return_value=False),
-                        patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+                        patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
                         patch.object(engine_pipeline, "source_codec", return_value=codec),
                         patch.object(
                             engine_pipeline,
@@ -3009,7 +3394,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -3023,7 +3408,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             ):
                 extended = engine_plan.plan_quality(src, candidate_codecs=(*SOURCE_CODECS, "mpeg4"))
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -3042,7 +3427,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 1080}
                 ),
@@ -3073,7 +3458,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3106,7 +3491,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3140,7 +3525,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3167,7 +3552,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)  # a few bytes: far below 5 GB
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3191,7 +3576,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 2160}
                 ),
@@ -3220,7 +3605,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1280, "height": 720}
                 ),
@@ -3245,7 +3630,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1920, "height": 800}
                 ),
@@ -3265,13 +3650,13 @@ class TestSubprocessTimeouts(unittest.TestCase):
                         "width": 1920,
                         "height": 800,
                         "codec": "h264",
-                        "duration": 600.0,
+                        "duration": 240.0,
                         "bitrate": None,
                         "bit_depth": None,
                     },
                 ),
                 patch.object(engine_plan, "is_hdr_file", return_value=False),
-                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
                 patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
                 patch.object(engine_pipeline, "check_disk_space", return_value=(True, "")),
                 patch.object(
@@ -3309,7 +3694,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1440, "height": 1080}
                 ),
@@ -3335,7 +3720,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1280, "height": None}
                 ),
@@ -3358,7 +3743,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 1280, "height": 720}
                 ),
@@ -3380,7 +3765,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": 3840, "height": 2160}
                 ),
@@ -3396,7 +3781,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
                     return_value={"width": 3840, "height": 2160},
                 ),
                 patch.object(engine_plan, "is_hdr_file", return_value=False),
-                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=600.0),
+                patch.object(tools_ffprobe, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_pipeline, "_probe_movie", return_value=(20, 95.47, [], None)
                 ) as fake_probe,
@@ -3420,7 +3805,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             src = Path(tmp) / "movie.mkv"
             src.write_bytes(b"x" * 8)
             with (
-                patch.object(engine_plan, "probe_duration_seconds", return_value=600.0),
+                patch.object(engine_plan, "probe_duration_seconds", return_value=240.0),
                 patch.object(
                     engine_plan, "_source_dimensions", return_value={"width": None, "height": None}
                 ),
@@ -3506,7 +3891,7 @@ class TestSubprocessTimeouts(unittest.TestCase):
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x")
             with (
-                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=600.0),
+                patch("shrinkray.engine.pipeline.probe_duration_seconds", return_value=240.0),
                 patch(
                     "shrinkray.engine.samples.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=60),
@@ -3605,7 +3990,7 @@ class TestHdrSkip(unittest.TestCase):
             patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
             patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
         ):
-            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+            result = plan_quality(self.movie, target_vmaf=95.0, db_file=None)
         return result, probed
 
     def test_a_pq_source_is_skipped_without_a_probe(self) -> None:
@@ -3709,6 +4094,6 @@ class TestHdrSkip(unittest.TestCase):
             patch("shrinkray.engine.plan.probe_duration_seconds", return_value=6000.0),
             patch("shrinkray.engine.plan.find_optimal_crf_and_skip", probed),
         ):
-            result = plan_quality(self.movie, target_vmaf=95.0, encoder="svt_av1", db_file=None)
+            result = plan_quality(self.movie, target_vmaf=95.0, db_file=None)
         self.assertEqual(result.skipped_reason, "hdr not supported")
         probed.assert_not_called()

@@ -471,7 +471,7 @@ class TestPresetConfigFallback(unittest.TestCase):
                     ["encode", str(movie), str(root / "out"), "--config", str(cfg)],
                 )
             self.assertEqual(result.exit_code, 0, result.output)
-            # the CONFIG values reached the engine (not the code constants 5/3)
+            # the CONFIG values reached the engine (not the shipped defaults, both 5)
             self.assertEqual(captured["encoder_preset"], "7")
             self.assertEqual(captured["probe_encoder_preset"], "8")
 

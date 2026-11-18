@@ -1,6 +1,13 @@
 <script lang="ts">
-  import { fmtGb, fmtWhen, fmtSpan, humanizeError, failedOutcomeNote, type Job } from '../api'
+  import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
+  import { bytes, crf, elapsedSeconds, etaShort, groupJobs, isStageRow, kindWord, progressLabel, relative, remainingSeconds, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
   import { progressFor } from '../progress.svelte'
+  import EmptyState from '../components/EmptyState.svelte'
+  import FileName from '../components/FileName.svelte'
+  import PageHeader from '../components/PageHeader.svelte'
+  import ProgressBar from '../components/ProgressBar.svelte'
+  import StatusBadge from '../components/StatusBadge.svelte'
+  import type { Tone } from '../components/tone'
 
   /** The run log as an event log: every job with its timestamps, wall
    * duration, and expandable payload/result — the tool's audit trail. */
@@ -8,10 +15,14 @@
   let {
     history,
     onopenMovie,
+    stale = false,
   }: {
     history: Job[]
     /** Open a movie's detail page (single-movie jobs link to their title). */
     onopenMovie: (path: string) => void
+    /** The shell's data is no longer current: the clock stops so a frozen
+     * elapsed time and ETA cannot keep looking live (issue #629). */
+    stale?: boolean
   } = $props()
 
   /** True when the job targeted exactly one movie FILE (the UI's
@@ -25,8 +36,19 @@
 
   const progress = (job: Job) => progressFor(job.id)
 
+  /** How much of the job's work is done, as a fraction: the final encode reports
+   * a frame percent, a CRF search reports a sample count (`done`/`total`, #690).
+   * Null when neither is known, so the row states no estimate. */
+  function workFraction(p: { percent?: number; done?: number; total?: number | null } | null): number | null {
+    if (!p) return null
+    if (p.done != null && p.total != null && p.total > 0) return p.done / p.total
+    if (p.percent != null) return p.percent / 100
+    return null
+  }
+
   let now = $state(Date.now())
   $effect(() => {
+    if (stale) return
     if (!history.some((j) => j.state === 'running')) return
     const timer = setInterval(() => (now = Date.now()), 1000)
     return () => clearInterval(timer)
@@ -48,8 +70,8 @@
     if (job.state !== 'queued') return ''
     const p = job.payload as Record<string, unknown>
     const parts: string[] = []
-    if (p.quality) parts.push(`quality · VMAF>${p.target_vmaf ?? 95}`)
-    else parts.push('fixed preset (removed mode)')
+    if (p.quality) parts.push(p.target_vmaf != null ? `quality · VMAF>${p.target_vmaf}` : 'quality')
+    else if (job.kind === 'encode') parts.push('fixed preset')
     if (p.remove_bars) parts.push('bars removed')
     return parts.join(' · ')
   }
@@ -83,12 +105,12 @@
   // (round-5 H7) — two selects, the same pattern as the library toolbar.
   // Filter state persists per session (library sort persists; the jobs
   // filters resetting on F5 was the round-6 granularity inconsistency)
-  type KindFilter = 'all' | 'scan' | 'plan' | 'encode' | 'legacy'
+  type KindFilter = 'all' | 'scan' | 'plan' | 'decision' | 'crf-search' | 'encode' | 'legacy'
   type StateFilter = 'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled'
   const storedKind = sessionStorage.getItem('ms.jobsKind')
   const storedState = sessionStorage.getItem('ms.jobsState')
   let kindFilter = $state<KindFilter>(
-    ['all', 'scan', 'plan', 'encode', 'legacy'].includes(storedKind ?? '') ? (storedKind as KindFilter) : 'all'
+    ['all', 'scan', 'plan', 'decision', 'crf-search', 'encode', 'legacy'].includes(storedKind ?? '') ? (storedKind as KindFilter) : 'all'
   )
   let stateFilter = $state<StateFilter>(
     ['all', 'running', 'queued', 'done', 'partial', 'failed', 'cancelled'].includes(storedState ?? '')
@@ -100,6 +122,19 @@
     sessionStorage.setItem('ms.jobsState', stateFilter)
   })
   const isPartial = (j: Job) => j.state === 'done' && failedOutcomeNote(j) !== ''
+  /** The per-movie outcomes a finished row summarises; a plan writes `plans`
+   * where an encode writes `outcomes` (`jobs.py`), and both are the same shape.
+   * Scans and legacy rows carry neither, so they show no summary. */
+  const outcomesOf = (j: Job) => {
+    const r = j.result as { outcomes?: JobOutcome[]; plans?: JobOutcome[] } | null
+    return r?.outcomes ?? r?.plans ?? []
+  }
+
+  /** A scan reports the paths it could not read; without this the only trace
+   * of them was the raw JSON (issue #632 review). */
+  const scanErrorsOf = (j: Job) =>
+    ((j.result as { errors?: string[] } | null)?.errors ?? [])
+
   const filteredHistory = $derived(
     history.filter((j) => {
       if (kindFilter !== 'all' && j.kind !== kindFilter) return false
@@ -111,67 +146,73 @@
       return true
     })
   )
+
+  // issue #632: two lists, not one dump — what is running above, what
+  // happened below. A per-file stage row is the running folder job's own work
+  // (#602): the folder job shows its progress, so the stage row is not a job of
+  // its own and must not appear as a second one doing the same thing.
+  // The order inside ACTIVE stays the operator's: running first, then the queue
+  // oldest-first, because the snapshot is newest-first.
+  const groups = $derived(groupJobs(filteredHistory.filter((j) => !isStageRow(j))))
+  const activeRows = $derived([...groups.running, ...groups.queued])
+  const pastRows = $derived(groups.history)
 </script>
 
 <div class="page page-in">
-  <header class="page-head">
-    <h2>Jobs</h2>
-    <p class="legend">{filteredHistory.length} OF {history.length} ENTRIES · THE FULL AUDIT TRAIL</p>
+  <PageHeader
+    title="Jobs"
+    description={`${filteredHistory.length} of ${history.length} entries · the full audit trail${history.length !== filteredHistory.length ? ` · stage rows are the running job's own work, not jobs` : ''}`}
+  >
     {#if history.length > 0}
       <div class="filters">
         <select class="mono" bind:value={kindFilter} aria-label="Filter by kind">
           <option value="all">all kinds</option>
-          <option value="scan">scan</option>
-          <option value="plan">plan</option>
-          <option value="encode">encode</option>
-          <option value="legacy">legacy</option>
+          <option value="scan">{kindWord('scan')}</option>
+          <option value="plan">{kindWord('plan')}</option>
+          <option value="decision">{kindWord('decision')}</option>
+          <option value="crf-search">{kindWord('crf-search')}</option>
+          <option value="encode">{kindWord('encode')}</option>
+          <option value="legacy">{kindWord('legacy')}</option>
         </select>
         <select class="mono" bind:value={stateFilter} aria-label="Filter by state">
           <option value="all">all states</option>
-          <option value="running">running</option>
-          <option value="queued">queued</option>
-          <option value="done">done</option>
-          <option value="partial">partial</option>
-          <option value="failed">failed</option>
-          <option value="cancelled">cancelled</option>
+          <option value="running">{stateWord('running')}</option>
+          <option value="queued">{stateWord('queued')}</option>
+          <option value="done">{stateWord('done')}</option>
+          <option value="partial">{stateWord('partial')}</option>
+          <option value="failed">{stateWord('failed')}</option>
+          <option value="cancelled">{stateWord('cancelled')}</option>
         </select>
       </div>
     {/if}
-  </header>
+  </PageHeader>
 
   {#if history.length === 0}
-    <div class="empty dim">no jobs yet — the resident app fills this page as it works</div>
+    <EmptyState title="No jobs yet" hint="the resident app fills this page as it works" />
   {:else if filteredHistory.length === 0}
-    <div class="empty dim">no entries match this filter</div>
+    <EmptyState title="No entries match this filter" hint="clear a filter to see the rest of the trail" />
   {:else}
-    <div class="log">
-      <div class="log-head legend">
-        <span>#</span>
-        <span>KIND</span>
-        <span>STATE</span>
-        <span>STARTED</span>
-        <span>DURATION</span>
-        <span></span>
-      </div>
-      {#each filteredHistory as job (job.id)}
+    {#snippet jobRow(job: Job)}
+      {@const cols = timeColumns(job)}
         <div class="entry" class:running={job.state === 'running'} class:failed={job.state === 'failed'} class:partial={job.state === 'done' && failedOutcomeNote(job) !== ''} class:open={job.id !== null && expanded.has(job.id)}>
           <div class="row mono">
             <span class="id">{job.id}</span>
-            <span class="kind">
-              {job.kind}
+            <span class="kind">{kindWord(job.kind)}</span>
+            <span class="file">
               {#if singleMoviePath(job)}
                 <!-- single-movie jobs link to the title: the two audit
                      trails reference each other -->
                 <button class="movie-link" onclick={() => onopenMovie(singleMoviePath(job)!)} title="Open the movie's detail page">
-                  {(job.payload.paths as string[])[0].split(/[\\/]/).pop()}
+                  <FileName path={(job.payload.paths as string[])[0]} />
                 </button>
               {/if}
             </span>
-            <span class="state {stateClass(job)}">
-              {job.state.toUpperCase()}{#if job.state === 'done' && failedOutcomeNote(job) !== ''} · PARTIAL{/if}{#if liveElapsed(job)} · {liveElapsed(job)}{/if}
-            </span>
-            <span class="when" title={job.started_at ?? ''}>{fmtWhen(job.started_at ?? job.created_at)}</span>
-            <span class="dur">{job.state === 'done' ? fmtSpan(job.started_at, job.finished_at) ?? '—' : job.state === 'running' ? '…' : '—'}</span>
+            <span class="state"><StatusBadge
+              label={`${stateWord(job.state)}${job.state === 'done' && failedOutcomeNote(job) !== '' ? ' · Partial' : ''}${liveElapsed(job) ? ` · ${liveElapsed(job)}` : ''}`}
+              tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
+            /></span>
+            <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
+            <span class="dur" title={job.state === 'running' ? 'time left, estimated from the work done in this step' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(progress(job)?.elapsed ?? elapsedSeconds(job.started_at, new Date(now)), workFraction(progress(job)))) || '…') : ''}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}
@@ -181,12 +222,7 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <div class="trace" role="progressbar" aria-valuenow={p?.percent ?? undefined} aria-valuemin="0" aria-valuemax="100" aria-label="{job.kind} progress">
-              <div class="fill" style="width: {p?.percent ?? 2}%"></div>
-              <span class="mono reading">
-                {p?.movie ? `${p.movie} · ` : ''}{p?.detail ?? 'starting…'}{p?.percent != null ? ` · ${p.percent}%` : ''}
-              </span>
-            </div>
+            <ProgressBar percent={p?.percent ?? null} stale={stale} stage={progressLabel(p?.stage, p?.movie, p?.detail, p?.percent)} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}
@@ -194,6 +230,8 @@
             <div class="mono error">
               {note.replace('__FAILED_OUTCOMES__', '')}
             </div>
+          {:else if job.state === 'done' && resultSummary(outcomesOf(job))}
+            <div class="mono dim note">{resultSummary(outcomesOf(job))}</div>
           {:else if job.error}
             <!-- translated for the row (the operator's language); the raw
                  exception stays in the DETAIL expansion for diagnosis -->
@@ -202,33 +240,122 @@
 
           {#if job.id !== null && expanded.has(job.id)}
             <div class="detail">
-              <div class="d-block">
-                <span class="legend">PAYLOAD</span>
-                <pre class="mono">{JSON.stringify(job.payload, null, 2)}</pre>
-              </div>
-              {#if job.result}
+              {#if outcomesOf(job).length > 0}
                 <div class="d-block">
-                  <span class="legend">RESULT</span>
-                  <pre class="mono">{JSON.stringify(job.result, null, 2)}</pre>
+                  <span class="legend">WHAT IT DID</span>
+                  <div class="d-table">
+                    {#each outcomesOf(job) as o (o.movie)}
+                      <div class="d-row mono">
+                        <span class="d-file" title={o.movie}>{o.movie}</span>
+                        <span class="d-state">{stateWord(o.state)}</span>
+                        {#if o.crf != null}<span class="d-num">CRF {crf(o.crf)}</span>{/if}
+                        {#if o.vmaf != null}<span class="d-num">VMAF {vmaf(o.vmaf)}</span>{/if}
+                        {#if typeof o.input_size === 'number' && typeof o.output_size === 'number'}
+                          <span class="d-num">{bytes(o.input_size)} → {bytes(o.output_size)}</span>
+                        {:else if typeof o.estimated_size === 'number'}
+                          <span class="d-num">≈ {bytes(o.estimated_size)}</span>
+                        {/if}
+                        {#if o.reason}<span class="d-why">{o.reason}</span>{/if}
+                        {#if o.error}<span class="d-why">{humanizeError(null, o.error)}</span>{/if}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+              {#if ((job.payload.paths as string[] | undefined) ?? []).length > 0}
+                <div class="d-block">
+                  <span class="legend">TARGET</span>
+                  {#each (job.payload.paths as string[] | undefined) ?? [] as path (path)}
+                    <div class="mono d-path">{path}</div>
+                  {/each}
+                </div>
+              {/if}
+              {#if scanErrorsOf(job).length > 0}
+                <div class="d-block">
+                  <span class="legend">COULD NOT READ</span>
+                  {#each scanErrorsOf(job) as e}
+                    <div class="mono d-why">{e}</div>
+                  {/each}
+                </div>
+              {/if}
+              {#if job.error}
+                <div class="d-block">
+                  <span class="legend">ERROR</span>
+                  <pre class="mono error">{job.error}</pre>
                 </div>
               {/if}
               <div class="d-block">
                 <span class="legend">TIMESTAMPS</span>
-                <pre class="mono">created {fmtWhen(job.created_at)} · started {fmtWhen(job.started_at)} · finished {fmtWhen(job.finished_at)}</pre>
+                <pre class="mono">created {relative(job.created_at)} · started {relative(job.started_at)} · finished {relative(job.finished_at)}</pre>
               </div>
+              <!-- the issue's own wording: the raw payload/result JSON lives behind
+                   a disclosure, for bug reports, not in the operator's way -->
+              <details class="d-block">
+                <summary class="legend">TECHNICAL DETAILS</summary>
+                <pre class="mono">{JSON.stringify({ payload: job.payload, result: job.result }, null, 2)}</pre>
+              </details>
             </div>
           {/if}
         </div>
-      {/each}
-    </div>
+    {/snippet}
+
+    <!-- ACTIVE: what is running now and what comes next (issue #632). -->
+    <section class="section">
+      <div class="section-head legend">
+        <span>ACTIVE</span>
+        <span class="section-count mono">{activeRows.length} running or waiting</span>
+      </div>
+      {#if activeRows.length === 0}
+        <div class="dim pad">nothing running — the watcher is idle</div>
+      {:else}
+        <div class="log">
+          <div class="log-head legend">
+            <span>#</span>
+            <span>KIND</span>
+            <span>FILE</span>
+            <span>STATE</span>
+            <span>STARTED</span>
+            <span>DURATION</span>
+            <span></span>
+          </div>
+          {#each activeRows as job (job.id)}
+            {@render jobRow(job)}
+          {/each}
+        </div>
+      {/if}
+    </section>
+
+    <!-- HISTORY: what happened, newest first, on its own. -->
+    <section class="section">
+      <div class="section-head legend">
+        <span>HISTORY</span>
+        <span class="section-count mono">{pastRows.length} finished</span>
+      </div>
+      {#if pastRows.length === 0}
+        <div class="dim pad">nothing finished yet</div>
+      {:else}
+        <div class="log">
+          <div class="log-head legend">
+            <span>#</span>
+            <span>KIND</span>
+            <span>FILE</span>
+            <span>STATE</span>
+            <span>STARTED</span>
+            <span>DURATION</span>
+            <span></span>
+          </div>
+          {#each pastRows as job (job.id)}
+            {@render jobRow(job)}
+          {/each}
+        </div>
+      {/if}
+    </section>
   {/if}
 </div>
 
 <style>
   .page { display: flex; flex-direction: column; gap: 12px; }
-  .page-head h2 { font-size: var(--fs-page); font-weight: 700; }
-  .page-head .legend { margin-top: 2px; }
-  .filters { display: flex; gap: 8px; margin-top: 8px; }
+      .filters { display: flex; gap: 8px; margin-top: 8px; }
   .filters select {
     background: var(--panel);
     color: var(--ink);
@@ -237,9 +364,17 @@
     padding: 3px 8px;
     font-size: 11px;
   }
+  .section { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 0 14px;
+    color: var(--ink-dim);
+  }
+  .section-count { margin-left: auto; color: var(--ink-faint); }
   .dim { color: var(--ink-dim); }
-  .ok { color: var(--teal-ink); }
-  .movie-link {
+    .movie-link {
     background: transparent;
     border: none;
     padding: 0;
@@ -248,16 +383,7 @@
     font: inherit;
   }
   .movie-link:hover { text-decoration: underline; }
-  .partial { color: var(--amber); }
-  .bad { color: var(--red); }
-  .run { color: var(--amber); }
-  .empty {
-    padding: 60px 20px;
-    text-align: center;
-    border: 1px dashed var(--seam);
-    border-radius: var(--radius);
-  }
-  .log {
+        .log {
     border: 1px solid var(--seam);
     border-radius: var(--radius);
     background: var(--panel);
@@ -265,7 +391,7 @@
   }
   .log-head {
     display: grid;
-    grid-template-columns: 44px 130px 150px 90px 80px 1fr;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 112px 92px;
     gap: 10px;
     padding: 8px 14px;
     border-bottom: 1px solid var(--seam);
@@ -286,15 +412,19 @@
   .entry.open { background: var(--panel-raised); }
   .row {
     display: grid;
-    grid-template-columns: 44px 130px 150px 90px 80px 1fr;
+    grid-template-columns: 44px 104px minmax(120px, 1fr) 150px 90px 112px 92px;
     gap: 10px;
     align-items: baseline;
     padding: 7px 0;
   }
   .id { color: var(--ink-faint); }
   .kind { font-weight: 600; }
+  /* issue #632: the filename has its own cell, so it can neither wrap
+     character by character inside KIND nor draw over the start time;
+     min-width 0 lets it shrink instead of widening the row */
+  .file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .when { color: var(--ink-dim); }
-  .dur { color: var(--ink-dim); }
+  .dur { color: var(--ink-dim); white-space: nowrap; }
   .ops { display: flex; gap: 6px; justify-content: flex-end; }
   .mini {
     background: transparent;
@@ -309,29 +439,6 @@
     min-width: 24px;
   }
   .mini:hover { color: var(--ink); border-color: var(--ink-dim); }
-  .trace {
-    position: relative;
-    height: 18px;
-    margin: 2px 0 8px;
-    background: var(--hatch-work);
-    border: 1px solid var(--seam);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  .fill {
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    background: var(--hatch-progress);
-    border-right: 2px solid var(--amber);
-  }
-  .reading {
-    position: absolute;
-    right: 6px; top: 2px;
-    color: var(--ink);
-    max-width: 85%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
   .note { padding: 2px 0 8px; }
   .error { padding: 2px 0 8px; color: var(--red); white-space: normal; word-break: break-word; }
   .detail {
@@ -342,6 +449,13 @@
     border-top: 1px solid var(--row-line);
   }
   .d-block .legend { display: block; margin: 8px 0 4px; }
+  .d-table { display: flex; flex-direction: column; gap: 6px; }
+  .d-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; font-size: 10.5px; }
+  .d-file { color: var(--ink); }
+  .d-state { color: var(--ink-dim); }
+  .d-num { color: var(--ink); }
+  .d-why { color: var(--ink-dim); }
+  .d-path { font-size: 10.5px; color: var(--ink-dim); padding: 1px 0; }
   .d-block pre {
     margin: 0;
     padding: 8px 10px;
@@ -354,5 +468,35 @@
     max-height: 200px;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+  /* below 768px a job becomes a card: the desktop columns clip on a phone and
+     the filename wrapped into a 3-4 line column (issue #636) */
+  @media (max-width: 768px) {
+    .log-head { display: none; }
+    .log { overflow-x: visible; }
+    .entry { padding: 0 10px; }
+    .row {
+      grid-template-columns: auto 1fr auto;
+      grid-template-areas:
+        'id kind ops'
+        'file file file'
+        'state when dur';
+      gap: 6px 10px;
+      align-items: center;
+      padding: 10px 0;
+    }
+    .id { grid-area: id; }
+    .kind { grid-area: kind; }
+    .file {
+      grid-area: file;
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+      word-break: break-word;
+    }
+    .state { grid-area: state; }
+    .when { grid-area: when; }
+    .dur { grid-area: dur; }
+    .ops { grid-area: ops; justify-self: end; }
   }
 </style>

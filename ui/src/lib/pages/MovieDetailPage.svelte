@@ -1,9 +1,6 @@
 <script lang="ts">
   import {
     api,
-    fmtGb,
-    fmtSeconds,
-    fmtWhen,
     humanizeError,
     jobPaths,
     failedOutcomeNote,
@@ -13,6 +10,10 @@
     type EncodeRecord,
     type MoviePlan,
   } from '../api'
+  import { bytes, duration, relative, vmaf } from '../format'
+  import { kindWord, stateWord } from '../format'
+  import FileName from '../components/FileName.svelte'
+  import Time from '../components/Time.svelte'
 
   /** The provenance page: everything recorded about one title — source
    * facts, the latest encode with every schema-v5 metric, the COMPLETE
@@ -119,11 +120,19 @@
     return h > 0 ? `${h}h ${m}m` : `${m}m ${parts[2]}s`
   }
   const est = $derived(
-    encode?.saved_percent != null
-      ? encode.saved_percent <= 0
-        ? { text: `+${Math.abs(encode.saved_percent).toFixed(1)}% larger`, grew: true }
-        : { text: `${encode.saved_percent.toFixed(1)}% saved`, grew: false }
-      : null
+    encode?.outcome === 'discarded'
+      ? // a declined swap discarded the artifact (issue #625): nothing was
+        // reclaimed, and the reason is what the operator needs
+        {
+          text: 'Discarded',
+          grew: true,
+          title: `${encode.outcome_reason ?? 'the swap was declined'} (original untouched)`,
+        }
+      : encode?.saved_percent != null
+        ? encode.saved_percent <= 0
+          ? { text: `+${Math.abs(encode.saved_percent).toFixed(1)}% larger`, grew: true }
+          : { text: `${encode.saved_percent.toFixed(1)}% saved`, grew: false }
+        : null,
   )
 
   /** The stored plan's predicted saving vs the current source size —
@@ -147,9 +156,13 @@
    * predicted size against the latest encode's real output. Signed like
    * every delta in this console. */
   const planVsEncode = $derived.by(() => {
-    if (!plan?.estimated_size || !encode?.output_size || plan.skipped_reason) return null
-    const diff = plan.estimated_size - encode.output_size
-    const pct = (diff / encode.output_size) * 100
+    if (!plan?.estimated_size || plan.skipped_reason) return null
+    // a discarded attempt's output_size describes an artifact that was
+    // thrown away (issue #625): the honest base is the bytes on disk
+    const base = encode?.outcome === 'discarded' ? movie.size : encode?.output_size
+    if (!base) return null
+    const diff = plan.estimated_size - base
+    const pct = (diff / base) * 100
     return { text: `${diff <= 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% vs encode`, good: diff <= 0 }
   })
 
@@ -304,7 +317,7 @@
   <section class="hero">
     <div class="hero-main">
       <h2>{movie.name}</h2>
-      <p class="mono dim path">{movie.path}</p>
+      <p class="dim path"><FileName path={movie.path} /></p>
       <div class="chips">
         <span class="chip neutral"><span class="swatch"></span>{movie.category.toUpperCase()}</span>
         {#if fileGeneration > 1}<span class="chip progress" title="This file is itself the output of a previous encode (generation chain)"><span class="swatch"></span>GENERATION {fileGeneration}</span>{/if}
@@ -330,7 +343,7 @@
         <div class="fact"><span class="legend">RESOLUTION</span><span class="mono">{movie.resolution?.join('×') ?? '—'}</span></div>
         <div class="fact"><span class="legend">DURATION</span><span class="mono">{fmtDuration(movie.duration) ?? '-'}</span></div>
         <div class="fact"><span class="legend">CODEC</span><span class="mono">{movie.codec ?? '—'}</span></div>
-        <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)}</span></div>
+        <div class="fact"><span class="legend">SIZE</span><span class="mono">{bytes(movie.size)}</span></div>
         {#if bitrateMbps(movie.size, movie.duration) != null}
           <div class="fact">
             <span class="legend">SOURCE BITRATE</span>
@@ -366,7 +379,7 @@
               {#if plan.achieved_vmaf != null && plan.crf != null}
                 <div class="fact">
                   <span class="legend">BEST FOUND</span>
-                  <span class="mono">CRF {plan.crf} · VMAF {plan.achieved_vmaf.toFixed(1)} (samples)</span>
+                  <span class="mono">CRF {plan.crf} · VMAF {vmaf(plan.achieved_vmaf, plan.target_vmaf ?? targetVmaf)} (samples)</span>
                 </div>
               {/if}
             {:else}
@@ -377,7 +390,7 @@
                 </span>
               </div>
               {#if plan.estimated_size != null && planEst != null}
-                <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(movie.size)} → {fmtGb(plan.estimated_size)} (est.)</span></div>
+                <div class="fact"><span class="legend">SIZE</span><span class="mono">{bytes(movie.size)} → {bytes(plan.estimated_size)} (est.)</span></div>
                 {#if plan.estimate_note}
                   <div class="fact"><span class="legend">NOTE</span><span class="mono dim">{plan.estimate_note}</span></div>
                 {/if}
@@ -388,14 +401,14 @@
               {#if plan.achieved_vmaf != null}
                 <div class="fact">
                   <span class="legend">VMAF</span>
-                  <span class="mono measured">{plan.achieved_vmaf.toFixed(1)}</span>
+                  <span class="mono measured">{vmaf(plan.achieved_vmaf, plan.target_vmaf ?? targetVmaf)}</span>
                   <span class="dim">samples — encode will confirm</span>
                 </div>
               {/if}
             {/if}
             <div class="fact">
               <span class="legend">PROBED</span>
-              <span class="mono">{fmtWhen(plan.created_at)}</span>
+              <Time iso={plan.created_at} />
               {#if plan.stale}<span class="mono warn">FILE CHANGED SINCE</span>{/if}
             </div>
             <div class="fact">
@@ -410,17 +423,21 @@
         <div class="facts">
           <div class="fact big">
             <span class="legend">RESULT</span>
-            <span class="mono result" class:bad={est?.grew}>{est?.text ?? '—'}</span>
+            <span class="mono result" class:bad={est?.grew} title={est?.title}>{est?.text ?? '—'}</span>
           </div>
-          <div class="fact"><span class="legend">SIZE</span><span class="mono">{fmtGb(encode.input_size)} → {fmtGb(encode.output_size)}</span></div>
+          {#if encode.outcome === 'discarded'}
+            <div class="fact"><span class="legend">SIZE</span><span class="mono" title={encode.outcome_reason ?? 'the swap was declined'}>{bytes(movie.size)} (original untouched)</span></div>
+          {:else}
+            <div class="fact"><span class="legend">SIZE</span><span class="mono">{bytes(encode.input_size)} → {bytes(encode.output_size)}</span></div>
+          {/if}
           <div class="fact">
             <span class="legend">VMAF</span>
             {#if encode.vmaf != null}
-              <span class="gauge" role="img" aria-label="VMAF {encode.vmaf.toFixed(1)} of target {targetVmaf}">
+              <span class="gauge" role="img" aria-label="VMAF {vmaf(encode.vmaf, targetVmaf)} of target {targetVmaf}">
                 <span class="gauge-fill" style="width: {Math.min(100, encode.vmaf)}%"></span>
                 <span class="gauge-target" style="left: {targetVmaf}%"></span>
               </span>
-              <span class="mono measured">{encode.vmaf.toFixed(1)}</span>
+              <span class="mono measured">{vmaf(encode.vmaf, targetVmaf)}</span>
             {:else}
               <!-- no gauge for an unmeasured row: an empty instrument track
                    next to the dash read as a broken meter (round-5) -->
@@ -433,7 +450,7 @@
             <div class="fact"><span class="legend">ENCODER PRESET</span><span class="mono">{encode.encoder_preset}</span></div>
           {/if}
           {#if encode.encode_seconds != null}
-            <div class="fact"><span class="legend">ENCODE TIME</span><span class="mono">{fmtSeconds(encode.encode_seconds)}</span></div>
+            <div class="fact"><span class="legend">ENCODE TIME</span><span class="mono">{duration(encode.encode_seconds)}</span></div>
           {/if}
           {#if bitrateMbps(encode.output_size, movie.duration) != null}
             <div class="fact"><span class="legend">OUTPUT BITRATE</span><span class="mono">{bitrateMbps(encode.output_size, movie.duration)?.toFixed(1)} Mbps</span></div>
@@ -441,7 +458,7 @@
           {#if encode.probe_count != null}
             <div class="fact">
               <span class="legend">PROBES</span>
-              <span class="mono">{encode.probe_count} · {fmtSeconds(encode.probe_seconds)}</span>
+              <span class="mono">{encode.probe_count} · {duration(encode.probe_seconds)}</span>
             </div>
           {/if}
           {#if encode.tool_versions}
@@ -451,7 +468,7 @@
             <!-- case 2: encode measured AND a plan exists — the next
                  encode's prediction, comparable against the real row -->
             <div class="fact plan-next">
-              <span class="legend">NEXT PLAN · {fmtWhen(plan.created_at)}{plan.stale ? ' · FILE CHANGED SINCE' : ''}</span>
+              <span class="legend">NEXT PLAN · {relative(plan.created_at)}{plan.stale ? ' · FILE CHANGED SINCE' : ''}</span>
               <span class="mono" class:good={planVsEncode.good} class:bad={!planVsEncode.good}>{planVsEncode.text}</span>
               {#if plan.crf != null}<span class="mono dim">· CRF {plan.crf}</span>{/if}
             </div>
@@ -539,7 +556,6 @@
             <span class="num">BITRATE</span>
             <span class="num">SIZE</span>
             <span class="num">SAVED</span>
-            <span class="num">VERIFIED</span>
             <span class="num">TIME</span>
             <span class="delta"></span>
           </div>
@@ -553,9 +569,9 @@
                 title={producedThis ? 'this row produced the file being viewed' : (rec.generation ?? 1) === 1 ? 'encode of the original source' : `encode of generation ${(rec.generation ?? 1) - 1}`}
                 aria-label={producedThis ? `generation ${rec.generation ?? 1}: this row produced the file being viewed` : `generation ${rec.generation ?? 1}`}
               >{rec.generation ?? 1}</span>
-              <span class="dim">{fmtWhen(rec.encoded_at)}{fromElsewhere ? ` · ${rec.file_name}` : ''}</span>
+              <span class="dim">{relative(rec.encoded_at)}{fromElsewhere ? ` · ${rec.file_name}` : ''}</span>
               <span class="num">{rec.crf ?? '—'}</span>
-              <span class="num" class:measured={rec.vmaf != null}>{rec.vmaf?.toFixed(1) ?? '—'}</span>
+              <span class="num" class:measured={rec.vmaf != null}>{vmaf(rec.vmaf, targetVmaf)}</span>
               <!-- the drift signal: measured in→out MBit/s (v7); the derived
                    fallback keeps pre-v7 rows honest without pretending -->
               <span
@@ -571,17 +587,21 @@
                   —
                 {/if}
               </span>
-              <span class="num">{fmtGb(rec.output_size)}</span>
-              <span class="num" class:bad={(rec.saved_percent ?? 0) <= 0}>{rec.saved_percent != null ? `${rec.saved_percent.toFixed(0)}%` : '—'}</span>
-              <!-- the full-file verification measurement (issue #235): the
-                   kept artifact measured against its source after the
-                   encode; '—' when the run had verify off -->
+              <span class="num">{bytes(rec.output_size)}</span>
               <span
                 class="num"
-                class:measured={rec.verified_vmaf != null}
-                title={rec.verified_vmaf != null ? 'full-file VMAF of the kept output, measured against the source after the encode' : 'not verified (the run had verification off or it failed)'}
-              >{rec.verified_vmaf?.toFixed(1) ?? '—'}</span>
-              <span class="num">{rec.encode_seconds != null ? fmtSeconds(rec.encode_seconds) : '—'}</span>
+                class:bad={rec.outcome === 'discarded' || (rec.saved_percent ?? 0) <= 0}
+                title={rec.outcome === 'discarded'
+                  ? `discarded — ${rec.outcome_reason ?? 'the swap was declined'} (original untouched)`
+                  : undefined}
+              >
+                {rec.outcome === 'discarded'
+                  ? 'discarded'
+                  : rec.saved_percent != null
+                    ? `${rec.saved_percent.toFixed(0)}%`
+                    : '—'}
+              </span>
+              <span class="num">{rec.encode_seconds != null ? duration(rec.encode_seconds) : '—'}</span>
               <span class="delta" title="delta vs the previous run (a comparison between consecutive encodes — siblings of one generation are two runs of the same source)">
                 {#if i < encodesDesc.length - 1}
                   {#each deltaParts(rec, encodesDesc[i + 1]) as part, pi (pi)}
@@ -605,18 +625,21 @@
       {:else}
         {#each jobs as job (job.id)}
           {@const outcome = job.id != null ? movieOutcome(job, movie.name) : null}
+          {@const jobTarget = typeof job.payload.target_vmaf === 'number' ? job.payload.target_vmaf : targetVmaf}
           {@const partial = failedOutcomeNote(job) !== ''}
           <div class="hist-row mono">
             <span class="dim">#{job.id}</span>
-            <span>{job.kind}</span>
+            <span>{kindWord(job.kind)}</span>
             <!-- the job's lifecycle state, plus what THIS movie's slice of
                  it did: a batch DONE can hold this movie's failure (the
                  watchdog case read as green 'done' here), a plan DONE
                  holds this movie's verdict -->
             <span class={partial ? 'partial' : job.state === 'done' ? 'ok' : job.state === 'failed' ? 'bad' : 'dim'}>
-              {job.state}{#if partial} · partial{/if}
+              {stateWord(job.state)}{#if partial} · Partial{/if}
             </span>
-            <span class="dim">{fmtWhen(job.finished_at ?? job.started_at)}</span>
+            <span class="dim when">
+              {#if job.finished_at}finished {relative(job.finished_at)}{:else if job.started_at}started {relative(job.started_at)}{:else}—{/if}
+            </span>
             <!-- the movie's own outcome first (it names the real failure),
                  then the job-level error as fallback -->
             <span
@@ -636,7 +659,7 @@
                 {humanizeError(null, job.error)}
               {:else if job.kind === 'plan' && outcome}
                 {#if outcome.crf != null}
-                  CRF {outcome.crf}{#if outcome.vmaf != null} · VMAF {outcome.vmaf.toFixed(1)}{/if}
+                  CRF {outcome.crf}{#if outcome.vmaf != null} · VMAF {vmaf(outcome.vmaf, jobTarget)}{/if}
                 {:else}
                   done
                 {/if}
@@ -829,7 +852,7 @@
   .drift-legend .sw-enc { background: var(--teal); opacity: 0.85; }
   .drift-legend .sw-vmaf { border-radius: 50%; background: var(--teal); }  .enc-row {
     display: grid;
-    grid-template-columns: 34px 90px 40px 50px 110px 80px 50px 70px 1fr;
+    grid-template-columns: 34px 90px 40px 50px 110px 80px 50px 1fr;
     gap: 10px;
     align-items: center;
     padding: 4px 0;
@@ -859,5 +882,16 @@
     /* same min-content clamp as the overview's 640px rule (round-6 P1
        class): a bare `1fr` track lets nowrap content set the track width */
     .cols { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* below 768px the five-part trail row cannot fit: the outcome gets its own
+     line instead of running off the panel (issue #636) */
+  @media (max-width: 768px) {
+    .hist-row {
+      flex-wrap: wrap;
+      gap: 4px 10px;
+      padding: 8px 12px;
+      align-items: baseline;
+    }
+    .hist-row > .err { flex: 0 0 100%; white-space: normal; word-break: break-word; }
   }
 </style>
