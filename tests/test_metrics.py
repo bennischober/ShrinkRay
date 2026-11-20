@@ -75,10 +75,13 @@ class TestMetrics(unittest.TestCase):
     def test_reclaimed_gauge_row_sums_corroborated_rows(self) -> None:
         """The gauge row-sums the applied rows the records corroborate: a
         NULL-output_file row (no in-place claim) counts, so two such rows
-        both count where the dashboard's latest-row total counts one. (An
-        IN-PLACE chain does not diverge: only the latest row is corroborated,
-        the same row the dashboard sums.) What bytes reclaimed means across
-        a chain is #646's question; this test pins the gauge's own rule."""
+        both count where the dashboard's latest-row total counts one. (A
+        reachable in-place state can also corroborate an EARLIER row - a
+        restore to an older generation's retained original followed by a
+        re-encode at that generation's output size - so even the in-place
+        row sum is not always the latest row alone.) What bytes reclaimed
+        means across a chain is #646's question; this test pins the
+        gauge's own rule."""
         file_id = self._add_file()
         for before, after in ((1000, 400), (500, 100)):
             self.connection.execute(

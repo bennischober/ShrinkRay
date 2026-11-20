@@ -562,8 +562,9 @@ def finished_movies(
             from shrinkray.logger import log_warning
 
             log_warning(
-                f"Output of '{movie.name}' exists but is truncated (interrupted "
-                "encode?) => it will be re-encoded."
+                f"Output of '{movie.name}' exists at the recorded size but its "
+                "duration does not verify (a replaced or corrupt file?) => it "
+                "will be re-encoded."
             )
     return finished
 
