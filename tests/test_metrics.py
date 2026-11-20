@@ -73,6 +73,10 @@ class TestMetrics(unittest.TestCase):
         return int(cursor.lastrowid or 0)
 
     def test_reclaimed_bytes_sum_the_encode_rows(self) -> None:
+        """The identity rule (issue #647): an applied encode's saving counts
+        while the file IS at the row's recorded output size. For a chained
+        title only the generation the file currently carries counts - the
+        definition of bytes reclaimed across a chain is #646's question."""
         file_id = self._add_file()
         for before, after in ((1000, 400), (500, 100)):
             self.connection.execute(
@@ -80,12 +84,43 @@ class TestMetrics(unittest.TestCase):
                 " VALUES (?, 'p', 'e', ?, ?, 0.0)",
                 (file_id, before, after),
             )
+        # the scan's record: the file sits at the LATEST generation's output
+        self.connection.execute("UPDATE files SET size = 100 WHERE id = ?", (file_id,))
         self.connection.commit()
         body = self._render()
         self.assertEqual(self._sample(body, "shrinkray_encodes_total"), "shrinkray_encodes_total 2")
         self.assertEqual(
             self._sample(body, "shrinkray_bytes_reclaimed_total"),
-            "shrinkray_bytes_reclaimed_total 1000",
+            "shrinkray_bytes_reclaimed_total 400",
+        )
+
+    def test_reclaimed_excludes_a_restored_original(self) -> None:
+        """The identity rule (issue #647): reclaimed bytes are what is ON
+        DISK. An applied encode whose file no longer matches the recorded
+        output size (the restore path: the retained original is back at the
+        path) reclaims nothing, and the record itself stays in the totals."""
+
+        file_id = self._add_file()
+        # the scan's record: the file is back to its ORIGINAL size
+        self.connection.execute("UPDATE files SET size = 1000 WHERE id = ?", (file_id,))
+        self.connection.execute(
+            "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
+            " saved_percent, outcome) VALUES (?, 'p', 'e', 1000, 500, 50.0, 'applied')",
+            (file_id,),
+        )
+        self.connection.commit()
+        body = self._render()
+        self.assertEqual(
+            self._sample(body, "shrinkray_bytes_reclaimed_total"),
+            "shrinkray_bytes_reclaimed_total 0",
+        )
+        # the encoded state back on disk: the record counts again
+        self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (file_id,))
+        self.connection.commit()
+        body = self._render()
+        self.assertEqual(
+            self._sample(body, "shrinkray_bytes_reclaimed_total"),
+            "shrinkray_bytes_reclaimed_total 500",
         )
 
     def test_a_stalled_encode_is_counted_from_the_job_result(self) -> None:

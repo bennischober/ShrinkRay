@@ -1043,7 +1043,7 @@ def snapshot(
                            e.outcome, e.outcome_reason
                     FROM files f
                     LEFT JOIN encodes e ON e.id = (
-                        SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
+                        SELECT id FROM encodes WHERE file_id = f.id AND (outcome != 'applied' OR output_file IS NULL OR output_file != f.path OR output_size = f.size) ORDER BY id DESC LIMIT 1
                     )
                     ORDER BY f.category, f.name
                     """
@@ -1215,7 +1215,7 @@ def library(
                    e.probe_count, e.probe_seconds, e.tool_versions
             FROM files f
             LEFT JOIN encodes e ON e.id = (
-                SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
+                SELECT id FROM encodes WHERE file_id = f.id AND (outcome != 'applied' OR output_file IS NULL OR output_file != f.path OR output_size = f.size) ORDER BY id DESC LIMIT 1
             )
             ORDER BY f.category, f.name
             """

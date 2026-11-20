@@ -101,7 +101,9 @@ def render_metrics(connection: sqlite3.Connection, library_root: Path | None = N
 
     reclaimed = connection.execute(
         "SELECT COALESCE(SUM(input_size - output_size), 0) AS b FROM encodes"
-        " WHERE outcome = 'applied'"
+        " WHERE outcome = 'applied' AND EXISTS ("
+        "SELECT 1 FROM files f WHERE f.id = encodes.file_id"
+        " AND f.size = encodes.output_size)"
     ).fetchone()["b"]
     out += _family(
         "shrinkray_bytes_reclaimed_total",

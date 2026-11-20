@@ -303,6 +303,30 @@ Item 3 also needed a schema migration: a plan stored while the flag existed was 
 *without* a crop when the flag was off, so reusing it would encode the film with its bars kept.
 Migration 15 drops every stored plan rather than reuse one that describes an uncropped output.
 
+## The already-encoded resume rule and the identity rule
+
+A movie counts as **already encoded** (the batch resume check, the encode job's
+`already_encoded` outcome) when the database holds a real encode — not a skip
+marker — AND the file at the recorded output path **is that output**: it exists,
+is non-empty, and its size matches the row's `output_size` (issue #647). The
+identity rule exists because in-place encoding (#232) made the output path equal
+the source path: without it, a restored original — the documented recovery path,
+delete the AV1 output and rename the retained `<name>.shrinkray-original` back —
+passes a bare existence check, the surfaces keep claiming savings that are no
+longer on disk, and the file silently drops out of the pipeline for good.
+
+The same rule governs the surfaces that present an encode as the file's CURRENT
+state: `/api/snapshot` and `/api/library` attach an applied encode to a library
+entry only when the row claims the file's own path (`output_file`) and the
+scan's recorded size matches the row's `output_size`; an encode recorded for an
+output-directory run (its artifact lives elsewhere) and every non-applied row
+(the #625 attempts and the skip markers) stay visible. `/metrics`' reclaimed
+gauge counts an applied row only while the file's recorded size is at the row's
+`output_size` — the savings that are still on disk. A restored original is
+re-decided by the watcher and, if eligible, encoded again: a new row, the old
+one staying in the history. The definition of bytes reclaimed across a CHAIN
+(a re-encoded file's earlier generations) is issue #646's.
+
 ## AV1 sources - decided
 
 **AV1 sources.** Re-encoding AV1 to AV1 buys no codec generation gain, so the only saving would come

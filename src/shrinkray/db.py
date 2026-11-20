@@ -1349,7 +1349,13 @@ def has_output_for_latest_encode(
         return False
     if latest["output_size"] <= 0:
         return False  # a skip marker, not a real encode
-    return output_file.is_file() and output_file.stat().st_size > 0
+    # the identity rule (issue #647): the file at the path must BE the
+    # recorded output. In-place encoding (#232) made the output path equal
+    # the source path, so a restored original passes a bare existence check -
+    # the record is history, not the state, and the movie must be re-decided.
+    if not (output_file.is_file() and output_file.stat().st_size > 0):
+        return False
+    return int(output_file.stat().st_size) == int(latest["output_size"])
 
 
 def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
