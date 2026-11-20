@@ -964,7 +964,11 @@ def snapshot(
                    -- an encode's outcome is written by an UPDATE (issue #625):
                    -- MAX(id) does not move, so the count of non-applied rows is
                    -- the change signal the library ETag needs
-                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0)
+                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0),
+                   -- the identity rule (issue #647): a restore rewrites the file's
+                   -- size without touching any encode row, and the restored
+                   -- original's mtime is typically not the library maximum
+                   COALESCE((SELECT GROUP_CONCAT(e.id) FROM files f JOIN encodes e ON e.file_id = f.id WHERE e.outcome = 'applied' AND e.output_file = f.path AND e.output_size != f.size), '')
             FROM files f
             """
         ).fetchone()
@@ -1028,7 +1032,18 @@ def snapshot(
                         "outcome": r["outcome"],
                         "outcome_reason": r["outcome_reason"],
                     }
+                    # the identity rule (issue #647): the LATEST row is the
+                    # one judged - an applied row claiming this path whose
+                    # recorded output no longer matches the scan's size is
+                    # history (a restored original), and an older row must
+                    # not fall back in as the current state
                     if r["preset"]
+                    and (
+                        r["outcome"] != "applied"
+                        or r["output_file"] is None
+                        or r["output_file"] != r["path"]
+                        or r["output_size"] == r["size"]
+                    )
                     else None,
                 }
                 for r in c.execute(
@@ -1040,7 +1055,7 @@ def snapshot(
                            e.encode_seconds,
                            e.probe_count, e.probe_seconds, e.tool_versions,
                            e.generation, e.input_bitrate, e.output_bitrate,
-                           e.outcome, e.outcome_reason
+                           e.outcome, e.outcome_reason, e.output_file
                     FROM files f
                     LEFT JOIN encodes e ON e.id = (
                         SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
@@ -1176,8 +1191,11 @@ def library(
 
     Supports ETag-based conditional requests: the ETag is a fingerprint
     over the library contents (file count, max rowid, latest encode id,
-    max mtime), so an unchanged library answers 304 without a payload -
-    the UI's 3-second poll becomes nearly free.
+    max mtime, the missing-file count, the non-applied encode count, and
+    the identity rule's mismatching-row id set - issue #647: a restore
+    moves no encode row and may not move the max mtime), so an unchanged
+    library answers 304 without a payload - the UI's 3-second poll becomes
+    nearly free.
 
     Args:
         conn: The database connection (db_access dependency).
@@ -1196,7 +1214,11 @@ def library(
                    COALESCE((SELECT MAX(id) FROM encodes), 0),
                    COALESCE((SELECT MAX(mtime) FROM files), 0),
                    COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0),
-                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0)
+                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0),
+                   -- the identity rule (issue #647): a restore rewrites the file's
+                   -- size without touching any encode row, and the restored
+                   -- original's mtime is typically not the library maximum
+                   COALESCE((SELECT GROUP_CONCAT(e.id) FROM files f JOIN encodes e ON e.file_id = f.id WHERE e.outcome = 'applied' AND e.output_file = f.path AND e.output_size != f.size), '')
             FROM files f
             """
         ).fetchone()
@@ -1211,7 +1233,7 @@ def library(
                    f.size, f.hdr, f.missing_scans, f.missing_since,
                    e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                    e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
-                   e.encode_seconds, e.outcome, e.outcome_reason,
+                   e.encode_seconds, e.outcome, e.outcome_reason, e.output_file,
                    e.probe_count, e.probe_seconds, e.tool_versions
             FROM files f
             LEFT JOIN encodes e ON e.id = (
@@ -1251,7 +1273,17 @@ def library(
                 "outcome": r["outcome"],
                 "outcome_reason": r["outcome_reason"],
             }
+            # the identity rule (issue #647): the LATEST row is the one
+            # judged - an applied row claiming this path whose recorded
+            # output no longer matches the scan's size is history (a
+            # restored original), and an older row must not fall back in
             if r["preset"]
+            and (
+                r["outcome"] != "applied"
+                or r["output_file"] is None
+                or r["output_file"] != r["path"]
+                or r["output_size"] == r["size"]
+            )
             else None,
         }
         for r in rows
@@ -1343,14 +1375,9 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
         ]
         # the movie's own generation: its path as a previous row's output
         # means this file IS that encode's output (generation N+1)
-        gen_row = s.connection.execute(
-            """
-            SELECT generation FROM encodes
-            WHERE output_file = ?
-            ORDER BY id DESC LIMIT 1
-            """,
-            (str(p),),
-        ).fetchone()
+        # the identity rule (issue #647): the ancestry claim must match the
+        # file the path now carries (the same rule the surfaces use)
+        gen_row = db.latest_ancestry(s.connection, str(p), row["size"])
         generation = int(gen_row["generation"]) + 1 if gen_row is not None else 1
 
         # the stored plan ("quicksave"): what a future encode would do —

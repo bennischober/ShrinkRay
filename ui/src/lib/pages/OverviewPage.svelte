@@ -185,8 +185,11 @@
       bar.titles += 1
       bar.sizeGb += (m.size ?? 0) / 1024 ** 3
       // only an APPLIED encode reclaimed anything (issue #625): a discarded
-      // attempt's sizes describe an artifact that was thrown away
+      // attempt's sizes describe an artifact that was thrown away. A file
+      // the scans report missing has nothing on disk (issue #647) - the
+      // bar agrees with /metrics' gauge
       if (
+        !m.missing &&
         m.encode?.outcome !== 'discarded' &&
         m.encode?.saved_percent != null &&
         m.encode.saved_percent > 0

@@ -1325,16 +1325,55 @@ def get_latest_encode_output(connection: sqlite3.Connection, file_id: int) -> Pa
     return Path(latest["output_file"])
 
 
+def latest_ancestry(
+    connection: sqlite3.Connection, output_file: str, size: int
+) -> sqlite3.Row | None:
+    """Returns the latest encode row whose output the file at `output_file`
+    carries (the identity rule, issue #647).
+
+    The encodes table chains generations via `output_file`: a row's
+    `output_file` is the path of the file it produced. A path claim alone is
+    not enough - in-place encoding (#232) made the output path equal the
+    source path, so a restored original still carries the stale row's path
+    claim. The row counts as ancestry only when it is APPLIED (a discarded
+    attempt is history even when it carries a path claim) and its recorded
+    `output_size` matches the file's size; anything else is history, not the
+    current state, and the file's generation starts at 1 again.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        output_file (str): The path whose ancestry is asked about.
+        size (int): The file's size (the identity half) - the actual stat
+            when the caller holds the file, the scan's record when it holds
+            a file row.
+
+    Returns:
+        sqlite3.Row | None: The latest ancestry row, or None.
+    """
+    row = connection.execute(
+        """
+        SELECT * FROM encodes
+        WHERE output_file = ? AND output_size = ? AND outcome = 'applied'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (output_file, size),
+    ).fetchone()
+    return cast("sqlite3.Row | None", row)
+
+
 def has_output_for_latest_encode(
     connection: sqlite3.Connection,
     file_id: int,
     output_file: Path,
 ) -> bool:
-    """Checks whether the latest encode entry produced a still-existing output.
+    """Checks whether the latest encode entry produced the file at the path.
 
     Used for batch resume: a movie whose encode was recorded AND whose output
-    file still exists is considered finished; anything else (no record,
-    deleted output) must be (re-)encoded.
+    file still exists AT THE RECORDED SIZE is considered finished (issue
+    #647's identity rule: the record is history, not the state - in-place
+    encoding (#232) made the output path equal the source path, so a restored
+    original must not pass); anything else (no record, deleted output, a
+    different file at the path) must be (re-)encoded.
 
     Args:
         connection (sqlite3.Connection): The database connection.
@@ -1347,9 +1386,17 @@ def has_output_for_latest_encode(
     latest = get_latest_encode(connection, file_id)
     if latest is None:
         return False
+    if latest["outcome"] != "applied":
+        return False  # a skip marker or a discarded attempt: not an encode
     if latest["output_size"] <= 0:
         return False  # a skip marker, not a real encode
-    return output_file.is_file() and output_file.stat().st_size > 0
+    # the identity rule (issue #647): the file at the path must BE the
+    # recorded output. In-place encoding (#232) made the output path equal
+    # the source path, so a restored original passes a bare existence check -
+    # the record is history, not the state, and the movie must be re-decided.
+    if not (output_file.is_file() and output_file.stat().st_size > 0):
+        return False
+    return int(output_file.stat().st_size) == int(latest["output_size"])
 
 
 def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
