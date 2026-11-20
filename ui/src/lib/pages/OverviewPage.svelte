@@ -22,6 +22,7 @@
     scanPaths,
     outputDir,
     retainedFiles = [],
+    stale = false,
     ondismiss,
     ongoto,
     onopenmovie,
@@ -40,6 +41,9 @@
     /** the retention ledger's rows (App.svelte) — the panel totals the
      * present ones; the rows themselves are the Retained page's job */
     retainedFiles?: RetainedFile[]
+    /** The shell's data is no longer current, so no time is derived from the
+     * clock and nothing that moves keeps moving (issue #629). */
+    stale?: boolean
     ondismiss: (id: number | null) => void
     ongoto: (page: 'overview' | 'library' | 'jobs' | 'config' | 'retained') => void
     onopenmovie: (movie: Movie) => void
@@ -104,6 +108,21 @@
     if (m < 60) return `~${m}m remaining`
     return `~${Math.floor(m / 60)}h ${m % 60}m remaining`
   }
+
+  // the estimate divides a clock, so it is frozen while the data is old rather
+  // than recomputed into a countdown nothing is backing (issue #629)
+  let frozenEta = $state<number | null>(null)
+  $effect(() => {
+    if (!stale) frozenEta = eta
+  })
+  const shownEta = $derived(stale ? frozenEta : eta)
+
+  // every elapsed statement reads the same clock, so none of them keeps
+  // counting up while the data is old (issue #629)
+  let shownClock = $state(Date.now())
+  $effect(() => {
+    if (!stale) shownClock = Date.now()
+  })
 
   // completion moment: the last finished encode run, stated (peak-end)
   interface OutcomeEntry {
@@ -306,7 +325,7 @@
   <div class="status-line mono" class:work={runningJob !== null}>
     {statusAnswer({
       running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
-      etaSeconds: eta,
+      etaSeconds: shownEta,
       queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
       watching: status?.watcher === 'running',
     })}
@@ -357,8 +376,8 @@
       </div>
       <div class="mono dim detail">
         {progressLabel(runningProgress?.stage, null, runningProgress?.detail, runningProgress?.percent)}
-        · started {relative(runningJob.started_at)}
-        · {fmtEta(eta)}
+        · started {relative(runningJob.started_at, new Date(shownClock))}
+        · {fmtEta(shownEta)}
       </div>
     </div>
   {:else}
@@ -602,16 +621,16 @@
             <span class="chip {done ? 'done' : entry.state === 'encode' ? 'planned' : entry.state === 'skip' ? 'skip' : 'failed'}">
               <span class="swatch"></span>{done ? 'Encoded' : verdictWord(entry.state)}
             </span>
-            <span class="p-num" class:measured={done && rec?.crf != null} title={done && rec?.crf != null ? 'measured value — the plan predicted ' + (entry.crf ?? '—') : 'planned value'}>
+            <span class="p-num p-crf" class:measured={done && rec?.crf != null} title={done && rec?.crf != null ? 'measured value — the plan predicted ' + (entry.crf ?? '—') : 'planned value'}>
               {#if done}{rec?.crf ?? '—'}{#if crfDelta != null && crfDelta !== 0}<span class="delta-mark"> ({crfDelta > 0 ? '+' : '−'}{Math.abs(crfDelta)})</span>{/if}{:else}{entry.crf ?? '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + vmaf(entry.vmaf, planTargetVmaf) : 'planned value'}>
+            <span class="p-num p-vmaf" class:measured={done && rec?.vmaf != null} title={done && rec?.vmaf != null ? 'measured value — the plan predicted ' + vmaf(entry.vmaf, planTargetVmaf) : 'planned value'}>
               {#if done}{vmaf(rec?.vmaf, planTargetVmaf)}{:else}{vmaf(entry.vmaf, planTargetVmaf)}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? bytes(entry.estimated_size) : '—') : 'planned value'}>
+            <span class="p-num p-size" class:measured={done && rec?.output_size != null} title={done && rec?.output_size != null ? 'measured value — the plan predicted ' + (entry.estimated_size != null ? bytes(entry.estimated_size) : '—') : 'planned value'}>
               {#if done}{bytes(rec?.output_size ?? null)}{:else}{entry.estimated_size != null ? bytes(entry.estimated_size) : '—'}{/if}
             </span>
-            <span class="p-num" class:measured={done && rec?.vmaf != null} title={done && rec?.saved_percent != null ? 'measured value — the plan predicted ' + percent(plannedSaved) : 'planned value'}>
+            <span class="p-num p-saved" class:measured={done && rec?.vmaf != null} title={done && rec?.saved_percent != null ? 'measured value — the plan predicted ' + percent(plannedSaved) : 'planned value'}>
               {#if done}
                 {@const saved = savedPercent(rec?.saved_percent)}
                 {saved.text}
@@ -905,4 +924,29 @@
   .q-fill { display: block; height: 100%; background: var(--teal); }
   .q-v { font-size: 10.5px; text-align: right; }
 
+  /* below 768px the seven-column plan row clips on a phone (its minimum is
+     ~500px): the title spans the card and the five facts sit under it
+     (issue #636) */
+  @media (max-width: 768px) {
+    .plan-head { display: none; }
+    .plan-list { padding: 4px 10px 12px; }
+    .plan-row {
+      grid-template-columns: 1fr auto auto;
+      grid-template-areas:
+        'name name name'
+        'state crf vmaf'
+        'size saved saved'
+        'reason reason reason';
+      gap: 4px 10px;
+      align-items: baseline;
+      padding: 8px 0;
+    }
+    .p-name { grid-area: name; white-space: normal; word-break: break-word; }
+    .plan-row > .chip { grid-area: state; justify-self: start; }
+    .p-crf { grid-area: crf; }
+    .p-vmaf { grid-area: vmaf; }
+    .p-size { grid-area: size; }
+    .p-saved { grid-area: saved; }
+    .p-reason { grid-area: reason; white-space: normal; }
+  }
 </style>

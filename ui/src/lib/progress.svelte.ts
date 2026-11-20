@@ -54,6 +54,17 @@ function sseTokenParam(): string {
   return token ? `?token=${encodeURIComponent(token)}` : ''
 }
 
+/** Closes the stream so the next `connectEvents` carries a new token (issue #629):
+ * the stream is opened once, so an unlock after the first mount never reached it. */
+export function resetEvents(): void {
+  if (es !== null) {
+    es.close()
+    es = null
+  }
+  connected = false
+  progressByJob = {}
+}
+
 /** Opens the SSE stream once (idempotent); reconnects are automatic. */
 export function connectEvents(): void {
   if (es !== null) return
