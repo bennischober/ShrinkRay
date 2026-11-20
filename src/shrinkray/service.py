@@ -521,13 +521,14 @@ def finished_movies(
     skip marker), the file at the output path IS that output (issue #647's
     identity rule: the file's size matches the row's `output_size` - a
     restored original is a different file), and its duration verifies against
-    the source. The identity check is the first line of defence; the duration
-    check catches the debris the identity rule cannot see: a file at the
-    RECORDED size whose CONTENT does not verify (a same-size foreign or
-    corrupt file) must be re-encoded, not skipped (an unverifiable file stays
-    conservatively "finished" - never delete on a guess). A crash mid-write
-    leaves no row at all - the row is written only after the encode returns -
-    so a crash cannot produce the state this check sees.
+    the source. The duration check's scope: for an OUT-OF-PLACE row it
+    compares the artifact at its own path with the source and catches a
+    truncated or replaced artifact; for an IN-PLACE row the row's output path
+    is the movie itself, so the comparison is vacuous and the size identity
+    is the whole check (a same-size foreign file at an in-place path is not
+    detectable here - a named limit). A crash mid-write leaves no row at all
+    - the row is written only after the encode returns - so a crash cannot
+    produce the state this check sees.
 
     Args:
         connection: The database connection.

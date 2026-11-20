@@ -74,6 +74,28 @@ describe('MovieDetailPage provenance badge (issue #647)', () => {
     )
   })
 
+  it('marks only the LATEST matching row when two rows carry a coinciding claim', async () => {
+    // the restore + a re-encode at the same size: both rows satisfy the
+    // path+size condition, but only the newest row produced the file being
+    // viewed - the older row is history (issue #647, round 8)
+    vi.mocked(api.movie).mockResolvedValue({
+      file: movie(),
+      history: [encodeRec(500), { ...encodeRec(500), id: 2, generation: 1 }] as never,
+      plan: null,
+    })
+    const { container } = render(MovieDetailPage, {
+      movie: movie({ size: 500 }),
+      targetVmaf: 96,
+      allJobs: [],
+      onclose: () => {},
+      onjobs: () => {},
+    })
+    await waitFor(() => expect(container.querySelectorAll('.gen').length).toBe(2))
+    const gens = [...container.querySelectorAll('.gen')]
+    expect(gens[0].classList.contains('current')).toBe(true)
+    expect(gens[1].classList.contains('current')).toBe(false)
+  })
+
   it('leaves the badge off when the row\u2019s output size no longer matches', async () => {
     vi.mocked(api.movie).mockResolvedValue({
       file: movie(),

@@ -309,11 +309,14 @@ A movie counts as **already encoded** (the batch resume check, the encode job's
 `already_encoded` outcome) when the database holds an APPLIED encode — not a skip
 marker and not a #625-discarded attempt — AND the file at the recorded output
 path **is that output**: it exists, is non-empty, and its size matches the row's
-`output_size`, AND the duration verifies against the source (the second line of
-defence: a same-size foreign or corrupt file is re-encoded, not skipped). A
-legacy row with no path claim (`output_file` IS NULL) falls back to the run's
-output directory. The identity and duration checks together decide (issue
-#647). The
+`output_size`, AND the duration verifies (for an OUT-OF-PLACE row: the
+artifact at its own path against the source — the check that catches a
+truncated or replaced artifact; for an IN-PLACE row the file would be compared
+with itself, so the size identity is the whole check there — a same-size
+foreign file at an in-place path is not detectable by these two checks, a named
+limit). A legacy row with no path claim (`output_file` IS NULL) falls back to
+the run's output directory, where the duration check does compare two different
+files (issue #647). The
 identity rule exists because in-place encoding (#232) made the output path equal
 the source path: without it, a restored original — the documented recovery path,
 delete the AV1 output and rename the retained `<name>.shrinkray-original` back —
