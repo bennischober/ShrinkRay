@@ -187,11 +187,12 @@
    * viewed (the identity rule, issue #647): only that row produced the
    * file - an older row with a coinciding claim is history. The history is
    * generation-ordered, so a restored original's re-encode (generation 1
-   * again) sorts before the older rows: the record's id, not the display
-   * position, says which row is the latest. */
+   * again) does NOT sort last - it lands among the older rows: the
+   * record's id, not the display position, says which row is the latest. */
   const currentEncodeId = $derived.by(() => {
     const matches = encodesDesc.filter(
       (r) =>
+        r.outcome === 'applied' &&
         r.output_file != null &&
         normPath(r.output_file) === normPath(movie.path) &&
         r.output_size === movie.size,

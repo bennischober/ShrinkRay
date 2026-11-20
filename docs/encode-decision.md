@@ -332,8 +332,9 @@ generation derivation (`db.latest_ancestry`, shared by `derive_generation` and
 the movie route) refuses a path claim whose recorded output is not the file the
 path now carries — a restored original is generation 1 again — and the movie
 page's provenance badge marks the most recent RECORD whose claim matches (the
-history is generation-ordered, so a re-encode of a restored original sorts
-before the older rows; the record id, not the display position, decides). Every
+history is generation-ordered, so a re-encode of a restored original does NOT
+sort last - it lands among the older rows, before an older generation-2 row;
+the record id, not the display position, decides). Every
 other row stays visible exactly as it was: the #625 attempts and the skip
 markers (their `outcome` names them), rows whose artifact lives elsewhere (an
 output-directory run), and rows with no path claim (`output_file` IS NULL).

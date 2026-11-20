@@ -146,8 +146,9 @@ class TestMetrics(unittest.TestCase):
         """The identity rule (issue #647): the gauge counts only what the
         library's records corroborate. An applied IN-PLACE encode whose file
         no longer matches the recorded output size (the restore path: the
-        retained original is back at the path) reclaims nothing, and the
-        record itself stays in the totals."""
+        retained original is back at the path) reclaims nothing - the record
+        stays in the encode history and on the surfaces, not in the gauge's
+        sum."""
 
         file_id = self._add_file()
         # the scan's record: the file is back to its ORIGINAL size

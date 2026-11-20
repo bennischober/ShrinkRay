@@ -52,6 +52,7 @@ describe('MovieDetailPage provenance badge (issue #647)', () => {
     output_size: outputSize,
     output_file: '/m/a.mkv',
     generation: 1,
+    outcome: 'applied',
   })
 
   it('marks the row that produced the file being viewed only when the size matches', async () => {
@@ -72,6 +73,29 @@ describe('MovieDetailPage provenance badge (issue #647)', () => {
     await waitFor(() =>
       expect(container.querySelector('.gen.current')).not.toBeNull(),
     )
+  })
+
+  it('never marks a discarded row as the file\u2019s producer', async () => {
+    // the outcome half of the identity rule (issue #647, round 11): a
+    // discarded attempt can carry a path claim (set_encode_output's
+    // contract) whose size matches - the row is history, and the badge
+    // must use the same rule db.latest_ancestry uses
+    vi.mocked(api.movie).mockResolvedValue({
+      file: movie({ size: 400 }),
+      history: [
+        { ...encodeRec(400), id: 1, generation: 1, outcome: 'discarded' },
+      ] as never,
+      plan: null,
+    })
+    const { container } = render(MovieDetailPage, {
+      movie: movie({ size: 400 }),
+      targetVmaf: 96,
+      allJobs: [],
+      onclose: () => {},
+      onjobs: () => {},
+    })
+    await waitFor(() => expect(container.querySelector('.gen')).not.toBeNull())
+    expect(container.querySelector('.gen.current')).toBeNull()
   })
 
   it('marks the most recent RECORD when the generation order hides it', async () => {
