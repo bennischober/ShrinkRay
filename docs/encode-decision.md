@@ -306,9 +306,10 @@ Migration 15 drops every stored plan rather than reuse one that describes an unc
 ## The already-encoded resume rule and the identity rule
 
 A movie counts as **already encoded** (the batch resume check, the encode job's
-`already_encoded` outcome) when the database holds a real encode — not a skip
-marker — AND the file at the recorded output path **is that output**: it exists,
-is non-empty, and its size matches the row's `output_size` (issue #647). The
+`already_encoded` outcome) when the database holds an APPLIED encode — not a skip
+marker and not a #625-discarded attempt — AND the file at the recorded output
+path **is that output**: it exists, is non-empty, and its size matches the row's
+`output_size` (issue #647). The
 identity rule exists because in-place encoding (#232) made the output path equal
 the source path: without it, a restored original — the documented recovery path,
 delete the AV1 output and rename the retained `<name>.shrinkray-original` back —

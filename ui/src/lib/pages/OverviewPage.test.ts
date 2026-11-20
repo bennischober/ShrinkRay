@@ -150,7 +150,9 @@ describe('OverviewPage VMAF display (issue #599)', () => {
   it('excludes a missing file from the category bar (issue #647)', () => {
     // the identity rule's UI half: a file the scans report missing has
     // nothing on disk - its record reclaims nothing, so the bar agrees
-    // with /metrics' gauge (the same rule App.svelte's savedTotalGb uses)
+    // with /metrics' gauge (the same rule App.svelte's savedTotalGb uses).
+    // TWO titles chart the category at all (a single title is never
+    // charted), and only the present title's bytes may appear.
     const encode = {
       preset: 'VMAF>95',
       crf: 21,
@@ -166,13 +168,18 @@ describe('OverviewPage VMAF display (issue #599)', () => {
         path: '/m/gone.mkv',
         name: 'gone.mkv',
         category: 'C',
+        size: 1000,
         missing: true,
         encode,
       }),
+      movie({ path: '/m/here.mkv', name: 'here.mkv', category: 'C', size: 900 }),
     ]
     const { container } = renderOverview([], movies)
     const nums = container.querySelector('.bar-nums')?.textContent ?? ''
-    expect(nums).not.toContain('\u2212')
+    // the reclaimed figure prints with a minus (fmtReclaimed): the missing
+    // title's 600 B (1000 -> 400) must not appear - only the sizes do
+    expect(nums).toContain('1.86 KiB')
+    expect(nums).not.toContain('−')
   })
 
   it('does not repeat a single title\u2019s value as a mean (issue #633)', () => {

@@ -260,27 +260,37 @@ def ensure_file_row(connection: sqlite3.Connection, movie: Path) -> int:
     return db.upsert_file(connection, record)
 
 
-def derive_generation(connection: sqlite3.Connection, movie: Path) -> int:
+def derive_generation(connection: sqlite3.Connection, movie: Path, size: int | None = None) -> int:
     """Determines the generation of a movie by its encode ancestry.
 
     The encodes table chains generations via output_file: a row's
     output_file is the path of the file it produced. When the movie's path
-    appears as a previous row's output_file, the movie IS that encode's
-    output — generation N+1. A file with no ancestry is generation 1.
+    appears as a previous row's output_file AND that row's recorded output
+    is the size the file carries now (the identity rule, issue #647 - only
+    an applied row counts), the movie IS that encode's output - generation
+    N+1. A file with no ancestry is generation 1.
 
     Args:
         connection: The database connection.
         movie (Path): The movie file to classify.
+        size (int | None): The file's size as the encode read it (the run
+            identity), when the caller has it; None stats the file, and a
+            vanished file has no ancestry (generation 1).
 
     Returns:
         int: The generation number (>= 1).
     """
     path_str = str(movie.resolve())
+    if size is None:
+        try:
+            size = movie.stat().st_size
+        except OSError:
+            return 1
     # the identity rule (issue #647): a path claim counts as ancestry only
     # when the row's recorded output is the file the path now carries - a
     # restored original is generation 1 again, and its re-encode starts a
     # fresh chain instead of writing a false link
-    row = db.latest_ancestry(connection, path_str, movie.stat().st_size)
+    row = db.latest_ancestry(connection, path_str, size)
     if row is not None:
         return int(row["generation"]) + 1
     return 1
@@ -440,7 +450,12 @@ def save_encode(
     file_id = ensure_file_row(connection, movie)
     saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
     if generation is None:
-        generation = derive_generation(connection, movie)
+        # the identity input is the size the encode actually READ (the run
+        # identity), not a fresh stat: the row is written before the swap,
+        # and a source that vanished or changed during a multi-hour encode
+        # must reach the swap's own "source changed" decline, not crash here
+        # (issue #647, round 5)
+        generation = derive_generation(connection, movie, size=input_size)
     return db.add_encode(
         connection,
         file_id,

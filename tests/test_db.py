@@ -872,6 +872,65 @@ class TestDb(unittest.TestCase):
             # and the resume rule does not call the file finished
             self.assertFalse(db.has_output_for_latest_encode(self.connection, file_id, movie))
 
+    def test_a_vanished_source_does_not_crash_the_recording(self):
+        """The designed "source changed during the encode" outcome (issue
+        #647, round 5): the row is recorded BEFORE the swap, so the ancestry
+        input is the size the encode read - not a fresh stat. A source that
+        vanished during a multi-hour encode reaches the swap's own decline
+        (the original is untouched) instead of crashing the job."""
+
+        from shrinkray import service
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 1000)
+            db.upsert_file(self.connection, self._record(str(movie)))
+            result = service.record_quality_results(
+                self.connection,
+                movie,
+                QualityResult(
+                    input=movie,
+                    output=root / ".shrinkray-x/movie.mkv",
+                    success=True,
+                    target_vmaf=96.0,
+                    chosen_crf=21,
+                    achieved_vmaf=95.5,
+                    input_size=1000,
+                    output_size=400,
+                ),
+                config_helper.Conf(),
+                final_output=movie,
+            )
+            self.assertTrue(result.encoded)
+            # the swap: the artifact took the source's path
+            movie.write_bytes(b"x" * 400)
+            # the SECOND encode reads the file (400) - and the source
+            # vanishes during it; the result carries the size as read
+            second = service.record_quality_results(
+                self.connection,
+                movie,
+                QualityResult(
+                    input=movie,
+                    output=root / ".shrinkray-y/movie.mkv",
+                    success=True,
+                    target_vmaf=96.0,
+                    chosen_crf=20,
+                    achieved_vmaf=95.8,
+                    input_size=400,
+                    output_size=300,
+                ),
+                config_helper.Conf(),
+                final_output=movie,
+            )
+            self.assertTrue(second.encoded)
+            row = self.connection.execute(
+                "SELECT generation FROM encodes ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            # the file (as the encode read it) WAS the first row's output
+            self.assertEqual(row["generation"], 2)
+
     def test_derive_generation_restored_original_is_generation_1(self):
         """The identity rule on the write side (issue #647, round 3): a path
         claim counts as ancestry only when the row's recorded output is the
@@ -1249,8 +1308,8 @@ class TestDb(unittest.TestCase):
         the restored original's mtime is typically not the library maximum -
         so the max-mtime term alone would serve a 304 / library:null and the
         dashboard would keep the stale ENCODED entry (the #625 stale-cache
-        class). The fingerprint carries the count of in-place rows whose
-        recorded output no longer matches the file."""
+        class). The fingerprint carries the exact SET of mismatching in-place
+        row ids."""
 
         from fastapi.testclient import TestClient
 
@@ -1304,6 +1363,16 @@ class TestDb(unittest.TestCase):
                 self.assertEqual(second.status_code, 200)
                 entry = next(e for e in second.json() if e["name"] == "b")
                 self.assertIsNone(entry["encode"])
+                # the SNAPSHOT's fingerprint carries the same term: the
+                # restore must move it too, or the dashboard's poll keeps a
+                # stale library behind an unchanged fingerprint
+                # the snapshot's payload carries the library etag the UI's
+                # poll compares (the same fingerprint term)
+                fp_before = client.get("/api/snapshot").json()["library_etag"]
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (b_id,))
+                self.connection.commit()
+                fp_after = client.get("/api/snapshot").json()["library_etag"]
+                self.assertNotEqual(fp_before, fp_after)
             finally:
                 app_module.state.shutdown()
                 app_module.state = None
@@ -3007,10 +3076,22 @@ class TestInPlaceAuditTrail(unittest.TestCase):
         # the swap: the artifact took the source's path (the mocked encode
         # skips it; the real flow's file IS the recorded output now)
         self.movie.write_bytes(b"x" * 400)
+        # the second encode reads the file at its post-swap size
+        from shrinkray.engine.plan import QualityResult
+
         second = service.record_quality_results(
             self.connection,
             self.movie,
-            self._result(self.root / ".shrinkray-y/movie.mkv"),
+            QualityResult(
+                input=self.movie,
+                output=self.root / ".shrinkray-y/movie.mkv",
+                success=True,
+                target_vmaf=96.0,
+                chosen_crf=20,
+                achieved_vmaf=95.8,
+                input_size=400,
+                output_size=300,
+            ),
             config_helper.Conf(),
             final_output=self.movie,
         )

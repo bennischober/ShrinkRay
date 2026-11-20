@@ -1335,8 +1335,9 @@ def latest_ancestry(
     `output_file` is the path of the file it produced. A path claim alone is
     not enough - in-place encoding (#232) made the output path equal the
     source path, so a restored original still carries the stale row's path
-    claim. The row counts as ancestry only when its recorded `output_size`
-    matches the file's actual size; anything else is history, not the
+    claim. The row counts as ancestry only when it is APPLIED (a discarded
+    attempt is history even when it carries a path claim) and its recorded
+    `output_size` matches the file's size; anything else is history, not the
     current state, and the file's generation starts at 1 again.
 
     Args:

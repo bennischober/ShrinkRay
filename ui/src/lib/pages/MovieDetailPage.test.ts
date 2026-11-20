@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
-import { afterEach } from 'vitest'
 import MovieDetailPage from './MovieDetailPage.svelte'
 import { api, type Job, type Movie } from '../api'
 
