@@ -523,7 +523,8 @@ def finished_movies(
     restored original is a different file), and its duration verifies against
     the source. The duration check's scope: for an OUT-OF-PLACE row it
     compares the artifact at its own path with the source and catches a
-    truncated or replaced artifact; for an IN-PLACE row the row's output path
+    same-size replaced or corrupt artifact (a truncated one is smaller and
+    fails the identity check first); for an IN-PLACE row the row's output path
     is the movie itself, so the comparison is vacuous and the size identity
     is the whole check (a same-size foreign file at an in-place path is not
     detectable here - a named limit). A crash mid-write leaves no row at all

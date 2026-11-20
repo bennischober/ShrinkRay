@@ -311,10 +311,11 @@ marker and not a #625-discarded attempt — AND the file at the recorded output
 path **is that output**: it exists, is non-empty, and its size matches the row's
 `output_size`, AND the duration verifies (for an OUT-OF-PLACE row: the
 artifact at its own path against the source — the check that catches a
-truncated or replaced artifact; for an IN-PLACE row the file would be compared
-with itself, so the size identity is the whole check there — a same-size
-foreign file at an in-place path is not detectable by these two checks, a named
-limit). A legacy row with no path claim (`output_file` IS NULL) falls back to
+same-size replaced or corrupt artifact; a TRUNCATED artifact is smaller than
+the record and fails the size identity first; for an IN-PLACE row the file
+would be compared with itself, so the size identity is the whole check there —
+a same-size foreign file at an in-place path is not detectable by these two
+checks, a named limit). A legacy row with no path claim (`output_file` IS NULL) falls back to
 the run's output directory, where the duration check does compare two different
 files (issue #647). The
 identity rule exists because in-place encoding (#232) made the output path equal
@@ -329,7 +330,10 @@ entry when the row claims the file's own path (`output_file` = the entry's path)
 and the scan's recorded size no longer matches the row's `output_size`, and the
 generation derivation (`db.latest_ancestry`, shared by `derive_generation` and
 the movie route) refuses a path claim whose recorded output is not the file the
-path now carries — a restored original is generation 1 again. Every
+path now carries — a restored original is generation 1 again — and the movie
+page's provenance badge marks the most recent RECORD whose claim matches (the
+history is generation-ordered, so a re-encode of a restored original sorts
+before the older rows; the record id, not the display position, decides). Every
 other row stays visible exactly as it was: the #625 attempts and the skip
 markers (their `outcome` names them), rows whose artifact lives elsewhere (an
 output-directory run), and rows with no path claim (`output_file` IS NULL).

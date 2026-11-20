@@ -152,7 +152,8 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     // nothing on disk - its record reclaims nothing, so the bar agrees
     // with /metrics' gauge (the same rule App.svelte's savedTotalGb uses).
     // TWO titles chart the category at all (a single title is never
-    // charted), and only the present title's bytes may appear.
+    // charted). The bar's SIZE total still includes the missing title's
+    // size - only the reclaimed figure is excluded.
     const encode = {
       preset: 'VMAF>95',
       crf: 21,

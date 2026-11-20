@@ -2329,13 +2329,13 @@ class TestDb(unittest.TestCase):
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
 
-    def test_finished_movies_excludes_truncated_output(self):
+    def test_finished_movies_excludes_a_same_size_foreign_file(self):
         """The quality-mode resume set excludes debris the identity rule
         cannot see (issue #647): the file carries the RECORDED size but the
-        duration does not verify - a same-size foreign or corrupt file (a
-        crash mid-write leaves no row at all, so it cannot produce this
-        state) - so the duration check stays the second line of defence =>
-        re-encode instead of skip-forever."""
+        duration does not verify - a same-size replaced or corrupt file (a
+        truncated one is smaller and fails the identity check first; a crash
+        mid-write leaves no row at all) - so the duration check stays the
+        second line of defence => re-encode instead of skip-forever."""
 
         from shrinkray import service
 

@@ -74,6 +74,39 @@ describe('MovieDetailPage provenance badge (issue #647)', () => {
     )
   })
 
+  it('marks the most recent RECORD when the generation order hides it', async () => {
+    // a chain (gen1 1000->500, gen2 500->400), the restore of the gen1
+    // retained original, then a re-encode: the new row is generation 1
+    // AGAIN and the generation-ordered history sorts it BEFORE the gen2
+    // row - the badge must follow the record id (the most recent), not
+    // the display position (issue #647, round 9). API order: id1/gen1,
+    // id3/gen1, id2/gen2; displayed: id2, id3, id1.
+    const rec = (id: number, gen: number, outSize: number) => ({
+      ...encodeRec(outSize),
+      id,
+      generation: gen,
+      output_file: '/m/a.mkv',
+    })
+    vi.mocked(api.movie).mockResolvedValue({
+      file: movie({ size: 400 }),
+      history: [rec(1, 1, 500), rec(3, 1, 400), rec(2, 2, 400)] as never,
+      plan: null,
+    })
+    const { container } = render(MovieDetailPage, {
+      movie: movie({ size: 400 }),
+      targetVmaf: 96,
+      allJobs: [],
+      onclose: () => {},
+      onjobs: () => {},
+    })
+    await waitFor(() => expect(container.querySelectorAll('.gen').length).toBe(3))
+    const gens = [...container.querySelectorAll('.gen')]
+    // displayed order: id2 (gen2), id3 (gen1 - the re-encode), id1 (gen1)
+    expect(gens[0].classList.contains('current')).toBe(false)
+    expect(gens[1].classList.contains('current')).toBe(true)
+    expect(gens[2].classList.contains('current')).toBe(false)
+  })
+
   it('marks only the LATEST matching row when two rows carry a coinciding claim', async () => {
     // the restore + a re-encode at the same size: both rows satisfy the
     // path+size condition, but only the newest row produced the file being
