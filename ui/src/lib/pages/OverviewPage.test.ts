@@ -147,6 +147,34 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(names).not.toContain('Alone')
   })
 
+  it('excludes a missing file from the category bar (issue #647)', () => {
+    // the identity rule's UI half: a file the scans report missing has
+    // nothing on disk - its record reclaims nothing, so the bar agrees
+    // with /metrics' gauge (the same rule App.svelte's savedTotalGb uses)
+    const encode = {
+      preset: 'VMAF>95',
+      crf: 21,
+      vmaf: 95.5,
+      input_size: 1000,
+      output_size: 400,
+      saved_percent: 60,
+      outcome: 'applied',
+      outcome_reason: null,
+    }
+    const movies = [
+      movie({
+        path: '/m/gone.mkv',
+        name: 'gone.mkv',
+        category: 'C',
+        missing: true,
+        encode,
+      }),
+    ]
+    const { container } = renderOverview([], movies)
+    const nums = container.querySelector('.bar-nums')?.textContent ?? ''
+    expect(nums).not.toContain('\u2212')
+  })
+
   it('does not repeat a single title\u2019s value as a mean (issue #633)', () => {
     // the head never repeats the single row beneath it (DESIGN.md): with one
     // measured title the panel shows that title's own row and no head figure

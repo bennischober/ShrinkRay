@@ -140,10 +140,11 @@ class TestMetrics(unittest.TestCase):
         )
 
     def test_reclaimed_excludes_a_restored_original(self) -> None:
-        """The identity rule (issue #647): reclaimed bytes are what is ON
-        DISK. An applied encode whose file no longer matches the recorded
-        output size (the restore path: the retained original is back at the
-        path) reclaims nothing, and the record itself stays in the totals."""
+        """The identity rule (issue #647): the gauge counts only what the
+        library's records corroborate. An applied IN-PLACE encode whose file
+        no longer matches the recorded output size (the restore path: the
+        retained original is back at the path) reclaims nothing, and the
+        record itself stays in the totals."""
 
         file_id = self._add_file()
         # the scan's record: the file is back to its ORIGINAL size

@@ -114,7 +114,8 @@ def render_metrics(connection: sqlite3.Connection, library_root: Path | None = N
         " corroborate (issue #647: an in-place encode counts while the"
         " file's size matches the record and the file is not missing; an"
         " output-dir encode counts - its artifact lives outside the library"
-        " and is not verifiable from the database; issue #625: a discarded"
+        " and is not verifiable from the database; a legacy row with no"
+        " path claim counts; issue #625: a discarded"
         " attempt reclaims nothing). The value can FALL on a decline or a"
         " restore.",
         [f"shrinkray_bytes_reclaimed_total {int(reclaimed)}"],

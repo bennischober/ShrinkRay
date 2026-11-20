@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
+import { afterEach } from 'vitest'
 import MovieDetailPage from './MovieDetailPage.svelte'
 import { api, type Job, type Movie } from '../api'
 
@@ -41,6 +42,56 @@ function job(overrides: Partial<Job> = {}): Job {
     ...overrides,
   }
 }
+
+describe('MovieDetailPage provenance badge (issue #647)', () => {
+  afterEach(() => cleanup())
+  const encodeRec = (outputSize: number) => ({
+    id: 1,
+    preset: 'VMAF>95',
+    encoded_at: '2026-11-20T10:00:00Z',
+    input_size: 1000,
+    output_size: outputSize,
+    output_file: '/m/a.mkv',
+    generation: 1,
+  })
+
+  it('marks the row that produced the file being viewed only when the size matches', async () => {
+    // the identity rule's UI half: the path alone still matched after a
+    // restore - the badge requires the size identity too
+    vi.mocked(api.movie).mockResolvedValue({
+      file: movie(),
+      history: [encodeRec(1000)] as never,
+      plan: null,
+    })
+    const { container } = render(MovieDetailPage, {
+      movie: movie({ size: 1000 }),
+      targetVmaf: 96,
+      allJobs: [],
+      onclose: () => {},
+      onjobs: () => {},
+    })
+    await waitFor(() =>
+      expect(container.querySelector('.gen.current')).not.toBeNull(),
+    )
+  })
+
+  it('leaves the badge off when the row\u2019s output size no longer matches', async () => {
+    vi.mocked(api.movie).mockResolvedValue({
+      file: movie(),
+      history: [encodeRec(500)] as never,
+      plan: null,
+    })
+    const { container } = render(MovieDetailPage, {
+      movie: movie({ size: 1000 }),
+      targetVmaf: 96,
+      allJobs: [],
+      onclose: () => {},
+      onjobs: () => {},
+    })
+    await waitFor(() => expect(container.querySelector('.gen')).not.toBeNull())
+    expect(container.querySelector('.gen.current')).toBeNull()
+  })
+})
 
 describe('MovieDetailPage job trail (issue #616)', () => {
   it('states whether a trail time is a start or a finish', async () => {

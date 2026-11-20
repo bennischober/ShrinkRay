@@ -1342,7 +1342,9 @@ def latest_ancestry(
     Args:
         connection (sqlite3.Connection): The database connection.
         output_file (str): The path whose ancestry is asked about.
-        size (int): The file's actual size on disk (the identity half).
+        size (int): The file's size (the identity half) - the actual stat
+            when the caller holds the file, the scan's record when it holds
+            a file row.
 
     Returns:
         sqlite3.Row | None: The latest ancestry row, or None.
@@ -1350,7 +1352,7 @@ def latest_ancestry(
     row = connection.execute(
         """
         SELECT * FROM encodes
-        WHERE output_file = ? AND output_size = ?
+        WHERE output_file = ? AND output_size = ? AND outcome = 'applied'
         ORDER BY id DESC LIMIT 1
         """,
         (output_file, size),
@@ -1383,6 +1385,8 @@ def has_output_for_latest_encode(
     latest = get_latest_encode(connection, file_id)
     if latest is None:
         return False
+    if latest["outcome"] != "applied":
+        return False  # a skip marker or a discarded attempt: not an encode
     if latest["output_size"] <= 0:
         return False  # a skip marker, not a real encode
     # the identity rule (issue #647): the file at the path must BE the

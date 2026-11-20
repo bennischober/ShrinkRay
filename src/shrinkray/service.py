@@ -509,10 +509,10 @@ def finished_movies(
     the source. The identity check is the first line of defence; the duration
     check catches the debris the identity rule cannot see: a file at the
     RECORDED size whose CONTENT does not verify (a same-size foreign or
-    corrupt file, or a crash that damaged content without changing the size)
-    must be re-encoded, not skipped (an unverifiable file stays
+    corrupt file) must be re-encoded, not skipped (an unverifiable file stays
     conservatively "finished" - never delete on a guess). A crash mid-write
-    leaves no row at all: the row is written only after the encode returns.
+    leaves no row at all - the row is written only after the encode returns -
+    so a crash cannot produce the state this check sees.
 
     Args:
         connection: The database connection.

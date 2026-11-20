@@ -827,6 +827,51 @@ class TestDb(unittest.TestCase):
             other.write_bytes(b"x")
             self.assertEqual(service.derive_generation(self.connection, other), 1)
 
+    def test_a_discarded_attempt_is_never_ancestry_or_finished(self):
+        """The outcome filter (issue #647, round 4): a discarded attempt can
+        carry a path claim (`set_encode_output` sets the path without
+        touching the outcome - the contract the decline path pins). The row
+        is history: it is neither ancestry for the generation derivation nor
+        a finished encode for the resume rule."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "a.mkv"
+            movie.write_bytes(b"x" * 400)
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            encode_id = db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(movie),
+            )
+            # the decline discards the outcome; the path claim remains (the
+            # contract set_encode_output pins: setting a path never
+            # resurrects a discarded row)
+            connection = self.connection
+            connection.execute(
+                "UPDATE encodes SET outcome = 'discarded' WHERE id = ?",
+                (encode_id,),
+            )
+            db.set_encode_output(self.connection, encode_id, str(movie))
+            self.connection.commit()
+            row = self.connection.execute(
+                "SELECT outcome, output_file, output_size FROM encodes WHERE id = ?",
+                (encode_id,),
+            ).fetchone()
+            self.assertEqual(row["outcome"], "discarded")
+            # the path claim matches the file's size - and still is not ancestry
+            self.assertIsNone(db.latest_ancestry(self.connection, str(movie), 400))
+            self.assertEqual(service.derive_generation(self.connection, movie), 1)
+            # and the resume rule does not call the file finished
+            self.assertFalse(db.has_output_for_latest_encode(self.connection, file_id, movie))
+
     def test_derive_generation_restored_original_is_generation_1(self):
         """The identity rule on the write side (issue #647, round 3): a path
         claim counts as ancestry only when the row's recorded output is the
@@ -2213,10 +2258,10 @@ class TestDb(unittest.TestCase):
     def test_finished_movies_excludes_truncated_output(self):
         """The quality-mode resume set excludes debris the identity rule
         cannot see (issue #647): the file carries the RECORDED size but the
-        duration does not verify - a same-size foreign or corrupt file, or a
-        crash that damaged content without changing the size - so the
-        duration check stays the second line of defence => re-encode instead
-        of skip-forever."""
+        duration does not verify - a same-size foreign or corrupt file (a
+        crash mid-write leaves no row at all, so it cannot produce this
+        state) - so the duration check stays the second line of defence =>
+        re-encode instead of skip-forever."""
 
         from shrinkray import service
 
