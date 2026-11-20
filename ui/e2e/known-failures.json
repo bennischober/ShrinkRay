@@ -1,0 +1,3 @@
+{
+  "overview · busy · desktop": "the overview's scroll width is 1445 px in a 1440 px window; no element's border box crosses the edge, and the merged overview page (#633) still measures this"
+}

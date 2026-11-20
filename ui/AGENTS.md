@@ -47,6 +47,17 @@ ui/
   from `src/lib/format.ts` and the DESIGN.md Glossary (#655 tracks the sites still to move); a page never formats a value it
   shows with a hand-rolled `toFixed`/`toLocale*`/`1024 **`. Values that feed geometry
   rather than text — SVG coordinates, bar widths, axis positions — stay numbers.
+- **Fixtures and the browser check**: `ui/fixtures/*.json` are invented scenarios
+  (`empty`, `busy`, `nasty-names`; `busy` and `huge` are generated in
+  `fixtures/generated.ts`) served by `fixtureMock.ts`, a `serve`-only Vite plugin, so
+  `npm run dev -- ?fixture=<name>` renders a page with no resident app. `npm run test:e2e`
+  (Playwright, `e2e/`) renders every page at 1440 px and fails on a page that scrolls
+  sideways, an element outside the viewport, a console error, or a serious axe violation.
+  The phone width is `npm run test:e2e:phone` and is not part of that command: its verdict
+  does not repeat. axe sees the shell and the first rows of a repeated list — the busy
+  fixture mounts every page, and a scan of all of it does not return. `e2e/known-failures.json`
+  lists the cases that fail today; it fails when a listed case starts passing, so it can only
+  shrink. Adding a scenario is adding its JSON plus one line in `src/lib/fixtures.ts`.
 - **One network boundary**: every `fetch` lives in `api.ts`; `progress.svelte.ts` owns the
   only `EventSource` (token as `?token=` — it cannot set a header).
 - **Flow is not state**: SSE carries progress only; the snapshot poll is the state channel.

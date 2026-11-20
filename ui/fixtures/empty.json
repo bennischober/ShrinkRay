@@ -1,0 +1,19 @@
+{
+  "status": {
+    "queue": [],
+    "watcher": "running",
+    "database": "/data/metadata.db",
+    "rss_mib": 48.2,
+    "config_error": null,
+    "paused": null,
+    "encode_window": null,
+    "reveal_available": false
+  },
+  "library": [],
+  "jobs": [],
+  "retained": [],
+  "config": { "quality": { "target_vmaf": 96 } },
+  "movie": null,
+  "job": null,
+  "events": []
+}

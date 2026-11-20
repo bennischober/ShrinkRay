@@ -1,0 +1,136 @@
+{
+  "status": {
+    "queue": [],
+    "watcher": "running",
+    "database": "/data/metadata.db",
+    "rss_mib": 51.4,
+    "config_error": null,
+    "paused": null,
+    "encode_window": null,
+    "reveal_available": false
+  },
+  "library": [
+    {
+      "path": "/media/Filme/Lang/Ein sehr langer Filmtitel mit Untertitel und Jahreszahl (2019) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay x265 10bit HDR DTS-HD MA 7.1-GRP.mkv",
+      "name": "Ein sehr langer Filmtitel mit Untertitel und Jahreszahl (2019) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay x265 10bit HDR DTS-HD MA 7.1-GRP",
+      "category": "Filme/Lang",
+      "duration": "02:00:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2400000000,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Ohne Leerzeichen/Kein.einzelnes.Leerzeichen.und.ein.sehr.langer.Name.der.die.Spalte.umbricht.2021.1080p.WEB-DL.x264-GRP.mkv",
+      "name": "Kein.einzelnes.Leerzeichen.und.ein.sehr.langer.Name.der.die.Spalte.umbricht.2021.1080p.WEB-DL.x264-GRP",
+      "category": "Filme/Ohne Leerzeichen",
+      "duration": "02:01:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2401000000,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Asien/東京物語 (1953) 1080p BluRay x264-GRP.mkv",
+      "name": "東京物語 (1953) 1080p BluRay x264-GRP",
+      "category": "Filme/Asien",
+      "duration": "02:02:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2402000000,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Arabisch/فيلم عربي طويل جدا (2018) 1080p WEB-DL.mkv",
+      "name": "فيلم عربي طويل جدا (2018) 1080p WEB-DL",
+      "category": "Filme/Arabisch",
+      "duration": "02:03:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2403000000,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Emoji/🎬 emoji title 🍿 (2020) 1080p.mkv",
+      "name": "🎬 emoji title 🍿 (2020) 1080p",
+      "category": "Filme/Emoji",
+      "duration": "02:04:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2404000000,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Quadrat/Supercalifragilisticexpialidocious² (2019) 1080p.mkv",
+      "name": "Supercalifragilisticexpialidocious² (2019) 1080p",
+      "category": "Filme/Quadrat",
+      "duration": "02:05:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2405000000,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Kurz/Zwei Wörter (2017) 1080p.mkv",
+      "name": "Zwei Wörter (2017) 1080p",
+      "category": "Filme/Kurz",
+      "duration": "02:06:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2406000000,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Kurz/A B C (2016) 1080p.mkv",
+      "name": "A B C (2016) 1080p",
+      "category": "Filme/Kurz",
+      "duration": "02:07:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2407000000,
+      "hdr": false,
+      "encode": null
+    }
+  ],
+  "jobs": [],
+  "retained": [],
+  "config": {
+    "quality": {
+      "target_vmaf": 96
+    }
+  },
+  "movie": null,
+  "job": null,
+  "events": []
+}
