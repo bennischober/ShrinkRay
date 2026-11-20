@@ -322,10 +322,11 @@ and the scan's recorded size no longer matches the row's `output_size`. Every
 other row stays visible exactly as it was: the #625 attempts and the skip
 markers (their `outcome` names them), rows whose artifact lives elsewhere (an
 output-directory run), and rows with no path claim (`output_file` IS NULL).
-`/metrics`' reclaimed gauge counts an applied row while its saving is on disk —
-an in-place row while the file's recorded size matches the record, an
-output-directory row while its artifact exists — and never a file the scans
-report missing. A restored original is re-decided by the watcher and, if
+`/metrics`' reclaimed gauge counts an applied row while the library's records
+still corroborate it: an in-place row while the file's recorded size matches
+the record, an output-directory row always (its artifact lives outside the
+library and the database cannot verify it), and never a file the scans report
+missing. A restored original is re-decided by the watcher and, if
 eligible, encoded again: a new row, the old one staying in the history. The
 definition of bytes reclaimed across a CHAIN (a re-encoded file's earlier
 generations) is issue #646's.

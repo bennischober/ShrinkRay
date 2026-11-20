@@ -1032,7 +1032,18 @@ def snapshot(
                         "outcome": r["outcome"],
                         "outcome_reason": r["outcome_reason"],
                     }
+                    # the identity rule (issue #647): the LATEST row is the
+                    # one judged - an applied row claiming this path whose
+                    # recorded output no longer matches the scan's size is
+                    # history (a restored original), and an older row must
+                    # not fall back in as the current state
                     if r["preset"]
+                    and (
+                        r["outcome"] != "applied"
+                        or r["output_file"] is None
+                        or r["output_file"] != r["path"]
+                        or r["output_size"] == r["size"]
+                    )
                     else None,
                 }
                 for r in c.execute(
@@ -1044,10 +1055,10 @@ def snapshot(
                            e.encode_seconds,
                            e.probe_count, e.probe_seconds, e.tool_versions,
                            e.generation, e.input_bitrate, e.output_bitrate,
-                           e.outcome, e.outcome_reason
+                           e.outcome, e.outcome_reason, e.output_file
                     FROM files f
                     LEFT JOIN encodes e ON e.id = (
-                        SELECT id FROM encodes WHERE file_id = f.id AND (outcome != 'applied' OR output_file IS NULL OR output_file != f.path OR output_size = f.size) ORDER BY id DESC LIMIT 1
+                        SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
                     )
                     ORDER BY f.category, f.name
                     """
@@ -1219,11 +1230,11 @@ def library(
                    f.size, f.hdr, f.missing_scans, f.missing_since,
                    e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                    e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
-                   e.encode_seconds, e.outcome, e.outcome_reason,
+                   e.encode_seconds, e.outcome, e.outcome_reason, e.output_file,
                    e.probe_count, e.probe_seconds, e.tool_versions
             FROM files f
             LEFT JOIN encodes e ON e.id = (
-                SELECT id FROM encodes WHERE file_id = f.id AND (outcome != 'applied' OR output_file IS NULL OR output_file != f.path OR output_size = f.size) ORDER BY id DESC LIMIT 1
+                SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
             )
             ORDER BY f.category, f.name
             """
@@ -1259,7 +1270,17 @@ def library(
                 "outcome": r["outcome"],
                 "outcome_reason": r["outcome_reason"],
             }
+            # the identity rule (issue #647): the LATEST row is the one
+            # judged - an applied row claiming this path whose recorded
+            # output no longer matches the scan's size is history (a
+            # restored original), and an older row must not fall back in
             if r["preset"]
+            and (
+                r["outcome"] != "applied"
+                or r["output_file"] is None
+                or r["output_file"] != r["path"]
+                or r["output_size"] == r["size"]
+            )
             else None,
         }
         for r in rows

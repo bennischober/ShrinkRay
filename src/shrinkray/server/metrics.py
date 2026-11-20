@@ -110,11 +110,13 @@ def render_metrics(connection: sqlite3.Connection, library_root: Path | None = N
     out += _family(
         "shrinkray_bytes_reclaimed_total",
         "gauge",
-        "Bytes the applied encodes saved that are still on disk (issue"
-        " #647: an in-place encode counts while the file's size matches the"
-        " record; an output-dir encode counts while its artifact exists;"
-        " issue #625: a discarded attempt reclaims nothing). The value can"
-        " FALL on a decline or a restore.",
+        "Bytes the applied encodes saved that the library's records still"
+        " corroborate (issue #647: an in-place encode counts while the"
+        " file's size matches the record and the file is not missing; an"
+        " output-dir encode counts - its artifact lives outside the library"
+        " and is not verifiable from the database; issue #625: a discarded"
+        " attempt reclaims nothing). The value can FALL on a decline or a"
+        " restore.",
         [f"shrinkray_bytes_reclaimed_total {int(reclaimed)}"],
     )
 

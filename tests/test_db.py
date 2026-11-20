@@ -1079,6 +1079,74 @@ class TestDb(unittest.TestCase):
                 app_module.state.shutdown()
                 app_module.state = None
 
+    def test_the_latest_row_is_the_one_the_identity_rule_judges(self):
+        """The visibility rule applies to the LATEST encode row, not to the
+        latest row that happens to pass a filter (issue #647, round 2): a
+        library with an earlier out-of-place encode (E1, its artifact at its
+        own output path) and a later in-place encode (E2) whose file was
+        restored must show NO current encode - the latest row is what
+        changed, and an older row is not the file's current state."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "chained.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path), mtime=100.0, size=1000, name="chained", category="Cat"
+                ),
+            )
+            # E1: an out-of-place encode (its artifact at its own path)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(Path(media_tmp) / "elsewhere.mkv"),
+            )
+            # E2: a later in-place encode (its output took the file's path)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>90",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=movie_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                # the encoded state: E2 is the current encode
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "chained")
+                self.assertEqual(entry["encode"]["saved_percent"], 50.0)
+                # the restore: E2's identity fails - and E1 must NOT fall
+                # back in as the current encode
+                self.connection.execute("UPDATE files SET size = 1000 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "chained")
+                self.assertIsNone(entry["encode"])
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
     def test_a_restore_busts_the_library_etag(self):
         """The identity signal is part of the ETag fingerprints (issue #647):
         a restore rewrites a file's size WITHOUT touching any encode row, and

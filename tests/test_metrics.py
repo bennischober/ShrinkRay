@@ -73,10 +73,12 @@ class TestMetrics(unittest.TestCase):
         return int(cursor.lastrowid or 0)
 
     def test_reclaimed_bytes_count_the_savings_on_disk(self) -> None:
-        """The gauge agrees with the dashboard: every applied row the
-        surfaces present counts. A NULL-output_file row (no in-place claim)
-        counts; the definition of bytes reclaimed across a CHAIN (a
-        re-encoded file's earlier generations) is #646's question."""
+        """The gauge row-sums the applied rows the surfaces present: a
+        NULL-output_file row (no in-place claim) counts. For a CHAIN this
+        diverges from the dashboard's latest-row total on purpose - the
+        definition of bytes reclaimed across a chain is #646's question,
+        and this test pins the gauge's own rule (the row sum), not the
+        dashboard's."""
         file_id = self._add_file()
         for before, after in ((1000, 400), (500, 100)):
             self.connection.execute(
