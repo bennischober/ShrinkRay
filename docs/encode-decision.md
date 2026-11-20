@@ -309,7 +309,11 @@ A movie counts as **already encoded** (the batch resume check, the encode job's
 `already_encoded` outcome) when the database holds an APPLIED encode — not a skip
 marker and not a #625-discarded attempt — AND the file at the recorded output
 path **is that output**: it exists, is non-empty, and its size matches the row's
-`output_size` (issue #647). The
+`output_size`, AND the duration verifies against the source (the second line of
+defence: a same-size foreign or corrupt file is re-encoded, not skipped). A
+legacy row with no path claim (`output_file` IS NULL) falls back to the run's
+output directory. The identity and duration checks together decide (issue
+#647). The
 identity rule exists because in-place encoding (#232) made the output path equal
 the source path: without it, a restored original — the documented recovery path,
 delete the AV1 output and rename the retained `<name>.shrinkray-original` back —
@@ -319,7 +323,10 @@ longer on disk, and the file silently drops out of the pipeline for good.
 The same rule governs the surfaces that present an encode as the file's CURRENT
 state: `/api/snapshot` and `/api/library` hide an applied encode from a library
 entry when the row claims the file's own path (`output_file` = the entry's path)
-and the scan's recorded size no longer matches the row's `output_size`. Every
+and the scan's recorded size no longer matches the row's `output_size`, and the
+generation derivation (`db.latest_ancestry`, shared by `derive_generation` and
+the movie route) refuses a path claim whose recorded output is not the file the
+path now carries — a restored original is generation 1 again. Every
 other row stays visible exactly as it was: the #625 attempts and the skip
 markers (their `outcome` names them), rows whose artifact lives elsewhere (an
 output-directory run), and rows with no path claim (`output_file` IS NULL).

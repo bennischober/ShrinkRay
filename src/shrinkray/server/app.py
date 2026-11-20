@@ -1191,8 +1191,11 @@ def library(
 
     Supports ETag-based conditional requests: the ETag is a fingerprint
     over the library contents (file count, max rowid, latest encode id,
-    max mtime), so an unchanged library answers 304 without a payload -
-    the UI's 3-second poll becomes nearly free.
+    max mtime, the missing-file count, the non-applied encode count, and
+    the identity rule's mismatching-row id set - issue #647: a restore
+    moves no encode row and may not move the max mtime), so an unchanged
+    library answers 304 without a payload - the UI's 3-second poll becomes
+    nearly free.
 
     Args:
         conn: The database connection (db_access dependency).
