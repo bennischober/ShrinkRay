@@ -276,14 +276,11 @@ def derive_generation(connection: sqlite3.Connection, movie: Path) -> int:
         int: The generation number (>= 1).
     """
     path_str = str(movie.resolve())
-    row = connection.execute(
-        """
-        SELECT generation FROM encodes
-        WHERE output_file = ?
-        ORDER BY id DESC LIMIT 1
-        """,
-        (path_str,),
-    ).fetchone()
+    # the identity rule (issue #647): a path claim counts as ancestry only
+    # when the row's recorded output is the file the path now carries - a
+    # restored original is generation 1 again, and its re-encode starts a
+    # fresh chain instead of writing a false link
+    row = db.latest_ancestry(connection, path_str, movie.stat().st_size)
     if row is not None:
         return int(row["generation"]) + 1
     return 1
@@ -510,10 +507,12 @@ def finished_movies(
     identity rule: the file's size matches the row's `output_size` - a
     restored original is a different file), and its duration verifies against
     the source. The identity check is the first line of defence; the duration
-    check catches the debris the identity rule cannot see: a crashed HandBrake
-    can leave a truncated file at the RECORDED size, which must be re-encoded,
-    not skipped (an unverifiable file stays conservatively "finished" - never
-    delete on a guess).
+    check catches the debris the identity rule cannot see: a file at the
+    RECORDED size whose CONTENT does not verify (a same-size foreign or
+    corrupt file, or a crash that damaged content without changing the size)
+    must be re-encoded, not skipped (an unverifiable file stays
+    conservatively "finished" - never delete on a guess). A crash mid-write
+    leaves no row at all: the row is written only after the encode returns.
 
     Args:
         connection: The database connection.

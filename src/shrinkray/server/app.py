@@ -968,7 +968,7 @@ def snapshot(
                    -- the identity rule (issue #647): a restore rewrites the file's
                    -- size without touching any encode row, and the restored
                    -- original's mtime is typically not the library maximum
-                   COALESCE((SELECT COUNT(*) FROM files f JOIN encodes e ON e.file_id = f.id WHERE e.outcome = 'applied' AND e.output_file = f.path AND e.output_size != f.size), 0)
+                   COALESCE((SELECT GROUP_CONCAT(e.id) FROM files f JOIN encodes e ON e.file_id = f.id WHERE e.outcome = 'applied' AND e.output_file = f.path AND e.output_size != f.size), '')
             FROM files f
             """
         ).fetchone()
@@ -1215,7 +1215,7 @@ def library(
                    -- the identity rule (issue #647): a restore rewrites the file's
                    -- size without touching any encode row, and the restored
                    -- original's mtime is typically not the library maximum
-                   COALESCE((SELECT COUNT(*) FROM files f JOIN encodes e ON e.file_id = f.id WHERE e.outcome = 'applied' AND e.output_file = f.path AND e.output_size != f.size), 0)
+                   COALESCE((SELECT GROUP_CONCAT(e.id) FROM files f JOIN encodes e ON e.file_id = f.id WHERE e.outcome = 'applied' AND e.output_file = f.path AND e.output_size != f.size), '')
             FROM files f
             """
         ).fetchone()
@@ -1372,14 +1372,9 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
         ]
         # the movie's own generation: its path as a previous row's output
         # means this file IS that encode's output (generation N+1)
-        gen_row = s.connection.execute(
-            """
-            SELECT generation FROM encodes
-            WHERE output_file = ?
-            ORDER BY id DESC LIMIT 1
-            """,
-            (str(p),),
-        ).fetchone()
+        # the identity rule (issue #647): the ancestry claim must match the
+        # file the path now carries (the same rule the surfaces use)
+        gen_row = db.latest_ancestry(s.connection, str(p), row["size"])
         generation = int(gen_row["generation"]) + 1 if gen_row is not None else 1
 
         # the stored plan ("quicksave"): what a future encode would do —

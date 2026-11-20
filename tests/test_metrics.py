@@ -72,7 +72,7 @@ class TestMetrics(unittest.TestCase):
         self.connection.commit()
         return int(cursor.lastrowid or 0)
 
-    def test_reclaimed_bytes_count_the_savings_on_disk(self) -> None:
+    def test_reclaimed_gauge_row_sums_corroborated_rows(self) -> None:
         """The gauge row-sums the applied rows the surfaces present: a
         NULL-output_file row (no in-place claim) counts. For a CHAIN this
         diverges from the dashboard's latest-row total on purpose - the
