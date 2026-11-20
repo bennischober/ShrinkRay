@@ -316,16 +316,19 @@ passes a bare existence check, the surfaces keep claiming savings that are no
 longer on disk, and the file silently drops out of the pipeline for good.
 
 The same rule governs the surfaces that present an encode as the file's CURRENT
-state: `/api/snapshot` and `/api/library` attach an applied encode to a library
-entry only when the row claims the file's own path (`output_file`) and the
-scan's recorded size matches the row's `output_size`; an encode recorded for an
-output-directory run (its artifact lives elsewhere) and every non-applied row
-(the #625 attempts and the skip markers) stay visible. `/metrics`' reclaimed
-gauge counts an applied row only while the file's recorded size is at the row's
-`output_size` — the savings that are still on disk. A restored original is
-re-decided by the watcher and, if eligible, encoded again: a new row, the old
-one staying in the history. The definition of bytes reclaimed across a CHAIN
-(a re-encoded file's earlier generations) is issue #646's.
+state: `/api/snapshot` and `/api/library` hide an applied encode from a library
+entry when the row claims the file's own path (`output_file` = the entry's path)
+and the scan's recorded size no longer matches the row's `output_size`. Every
+other row stays visible exactly as it was: the #625 attempts and the skip
+markers (their `outcome` names them), rows whose artifact lives elsewhere (an
+output-directory run), and rows with no path claim (`output_file` IS NULL).
+`/metrics`' reclaimed gauge counts an applied row while its saving is on disk —
+an in-place row while the file's recorded size matches the record, an
+output-directory row while its artifact exists — and never a file the scans
+report missing. A restored original is re-decided by the watcher and, if
+eligible, encoded again: a new row, the old one staying in the history. The
+definition of bytes reclaimed across a CHAIN (a re-encoded file's earlier
+generations) is issue #646's.
 
 ## AV1 sources - decided
 

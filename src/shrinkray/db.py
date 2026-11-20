@@ -1330,11 +1330,14 @@ def has_output_for_latest_encode(
     file_id: int,
     output_file: Path,
 ) -> bool:
-    """Checks whether the latest encode entry produced a still-existing output.
+    """Checks whether the latest encode entry produced the file at the path.
 
     Used for batch resume: a movie whose encode was recorded AND whose output
-    file still exists is considered finished; anything else (no record,
-    deleted output) must be (re-)encoded.
+    file still exists AT THE RECORDED SIZE is considered finished (issue
+    #647's identity rule: the record is history, not the state - in-place
+    encoding (#232) made the output path equal the source path, so a restored
+    original must not pass); anything else (no record, deleted output, a
+    different file at the path) must be (re-)encoded.
 
     Args:
         connection (sqlite3.Connection): The database connection.

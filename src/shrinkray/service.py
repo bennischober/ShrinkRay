@@ -506,11 +506,14 @@ def finished_movies(
     """Determines which movies are already encoded (batch resume check).
 
     A movie counts as finished when the database holds a real encode (not a
-    skip marker) AND its output file still exists, is non-empty AND its
-    duration verifies against the source. The duration check catches debris
-    from interrupted encodes: a crashed HandBrake leaves a non-empty but
-    truncated file which must be re-encoded, not skipped (an unverifiable
-    file stays conservatively "finished" - never delete on a guess).
+    skip marker), the file at the output path IS that output (issue #647's
+    identity rule: the file's size matches the row's `output_size` - a
+    restored original is a different file), and its duration verifies against
+    the source. The identity check is the first line of defence; the duration
+    check catches the debris the identity rule cannot see: a crashed HandBrake
+    can leave a truncated file at the RECORDED size, which must be re-encoded,
+    not skipped (an unverifiable file stays conservatively "finished" - never
+    delete on a guess).
 
     Args:
         connection: The database connection.

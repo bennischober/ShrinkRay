@@ -874,7 +874,7 @@ class TestDb(unittest.TestCase):
             db.MovieRecord(
                 path=Path("D:/x/metrics.mkv"),
                 mtime=100.0,
-                size=300,
+                size=1000,
                 name="metrics",
                 category="Cat",
             ),
@@ -1075,6 +1075,71 @@ class TestDb(unittest.TestCase):
                 entry = next(e for e in body if e["name"] == "restored")
                 self.assertIsNotNone(entry["encode"])
                 self.assertEqual(entry["encode"]["saved_percent"], 50.0)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_a_restore_busts_the_library_etag(self):
+        """The identity signal is part of the ETag fingerprints (issue #647):
+        a restore rewrites a file's size WITHOUT touching any encode row, and
+        the restored original's mtime is typically not the library maximum -
+        so the max-mtime term alone would serve a 304 / library:null and the
+        dashboard would keep the stale ENCODED entry (the #625 stale-cache
+        class). The fingerprint carries the count of in-place rows whose
+        recorded output no longer matches the file."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            # file A carries the library's max mtime and never changes
+            a_path = str(Path(media_tmp) / "a.mkv")
+            Path(a_path).write_bytes(b"x" * 100)
+            # file B is encoded in place, then restored by hand
+            b_path = str(Path(media_tmp) / "b.mkv")
+            Path(b_path).write_bytes(b"x" * 1000)
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(a_path), mtime=900.0, size=100, name="a", category="Cat"),
+            )
+            b_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(b_path), mtime=100.0, size=500, name="b", category="Cat"),
+            )
+            db.add_encode(
+                self.connection,
+                b_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=b_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                first = client.get("/api/library")
+                etag = first.headers["ETag"]
+                cached = client.get("/api/library", headers={"If-None-Match": etag})
+                self.assertEqual(cached.status_code, 304)
+                # the restore: the file is back to the ORIGINAL size, its
+                # mtime stays BELOW file A's maximum
+                self.connection.execute(
+                    "UPDATE files SET size = 1000, mtime = 150.0 WHERE id = ?",
+                    (b_id,),
+                )
+                self.connection.commit()
+                second = client.get("/api/library", headers={"If-None-Match": etag})
+                self.assertEqual(second.status_code, 200)
+                entry = next(e for e in second.json() if e["name"] == "b")
+                self.assertIsNone(entry["encode"])
             finally:
                 app_module.state.shutdown()
                 app_module.state = None
@@ -1843,9 +1908,11 @@ class TestDb(unittest.TestCase):
             )
 
     def test_finished_movies_excludes_truncated_output(self):
-        """The quality-mode resume set excludes truncated outputs (debris):
-        the db says encoded and the file is non-empty, but the duration does
-        not verify => re-encode instead of skip-forever."""
+        """The quality-mode resume set excludes debris the identity rule
+        cannot see (issue #647): the file carries the RECORDED size but the
+        duration does not verify - a crash can truncate content without
+        changing the size, so the duration check stays the second line of
+        defence => re-encode instead of skip-forever."""
 
         from shrinkray import service
 

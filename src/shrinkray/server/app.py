@@ -964,7 +964,11 @@ def snapshot(
                    -- an encode's outcome is written by an UPDATE (issue #625):
                    -- MAX(id) does not move, so the count of non-applied rows is
                    -- the change signal the library ETag needs
-                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0)
+                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0),
+                   -- the identity rule (issue #647): a restore rewrites the file's
+                   -- size without touching any encode row, and the restored
+                   -- original's mtime is typically not the library maximum
+                   COALESCE((SELECT COUNT(*) FROM files f JOIN encodes e ON e.file_id = f.id WHERE e.outcome = 'applied' AND e.output_file = f.path AND e.output_size != f.size), 0)
             FROM files f
             """
         ).fetchone()
@@ -1196,7 +1200,11 @@ def library(
                    COALESCE((SELECT MAX(id) FROM encodes), 0),
                    COALESCE((SELECT MAX(mtime) FROM files), 0),
                    COALESCE((SELECT COUNT(*) FROM files WHERE missing_scans > 0), 0),
-                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0)
+                   COALESCE((SELECT COUNT(*) FROM encodes WHERE outcome != 'applied'), 0),
+                   -- the identity rule (issue #647): a restore rewrites the file's
+                   -- size without touching any encode row, and the restored
+                   -- original's mtime is typically not the library maximum
+                   COALESCE((SELECT COUNT(*) FROM files f JOIN encodes e ON e.file_id = f.id WHERE e.outcome = 'applied' AND e.output_file = f.path AND e.output_size != f.size), 0)
             FROM files f
             """
         ).fetchone()

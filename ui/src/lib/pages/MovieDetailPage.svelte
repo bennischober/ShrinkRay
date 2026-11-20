@@ -560,7 +560,7 @@
             <span class="delta"></span>
           </div>
           {#each encodesDesc as rec, i (rec.id ?? `${rec.encoded_at}-${i}`)}
-            {@const producedThis = rec.output_file != null && normPath(rec.output_file) === normPath(movie.path)}
+            {@const producedThis = rec.output_file != null && normPath(rec.output_file) === normPath(movie.path) && rec.output_size === movie.size}
             {@const fromElsewhere = rec.file_path != null && normPath(rec.file_path) !== normPath(movie.path)}
             <div class="enc-row">
               <span

@@ -72,11 +72,11 @@ class TestMetrics(unittest.TestCase):
         self.connection.commit()
         return int(cursor.lastrowid or 0)
 
-    def test_reclaimed_bytes_sum_the_encode_rows(self) -> None:
-        """The identity rule (issue #647): an applied encode's saving counts
-        while the file IS at the row's recorded output size. For a chained
-        title only the generation the file currently carries counts - the
-        definition of bytes reclaimed across a chain is #646's question."""
+    def test_reclaimed_bytes_count_the_savings_on_disk(self) -> None:
+        """The gauge agrees with the dashboard: every applied row the
+        surfaces present counts. A NULL-output_file row (no in-place claim)
+        counts; the definition of bytes reclaimed across a CHAIN (a
+        re-encoded file's earlier generations) is #646's question."""
         file_id = self._add_file()
         for before, after in ((1000, 400), (500, 100)):
             self.connection.execute(
@@ -91,7 +91,50 @@ class TestMetrics(unittest.TestCase):
         self.assertEqual(self._sample(body, "shrinkray_encodes_total"), "shrinkray_encodes_total 2")
         self.assertEqual(
             self._sample(body, "shrinkray_bytes_reclaimed_total"),
-            "shrinkray_bytes_reclaimed_total 400",
+            "shrinkray_bytes_reclaimed_total 1000",
+        )
+
+    def test_reclaimed_counts_an_output_dir_encode(self) -> None:
+        """The read-only deployment (SHRINKRAY_WATCH_OUTPUT, docs/docker.md)
+        never swaps: the source's recorded size stays at the input size, so
+        the identity rule must not exclude an applied encode whose artifact
+        lives at its own output path - the dashboard counts those rows, and
+        the gauge must agree."""
+
+        file_id = self._add_file()
+        self.connection.execute(
+            "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
+            " saved_percent, outcome, output_file) VALUES"
+            " (?, 'p', 'e', 1000, 400, 60.0, 'applied', '/output/a.mkv')",
+            (file_id,),
+        )
+        self.connection.commit()
+        body = self._render()
+        self.assertEqual(
+            self._sample(body, "shrinkray_bytes_reclaimed_total"),
+            "shrinkray_bytes_reclaimed_total 600",
+        )
+
+    def test_reclaimed_excludes_a_missing_file(self) -> None:
+        """A file the scans report missing keeps its last recorded size, but
+        nothing is on disk - its record reclaims nothing (issue #647)."""
+
+        file_id = self._add_file()
+        self.connection.execute(
+            "UPDATE files SET size = 400, missing_scans = 2 WHERE id = ?",
+            (file_id,),
+        )
+        self.connection.execute(
+            "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
+            " saved_percent, outcome, output_file) VALUES"
+            " (?, 'p', 'e', 1000, 400, 60.0, 'applied', '/lib/a.mkv')",
+            (file_id,),
+        )
+        self.connection.commit()
+        body = self._render()
+        self.assertEqual(
+            self._sample(body, "shrinkray_bytes_reclaimed_total"),
+            "shrinkray_bytes_reclaimed_total 0",
         )
 
     def test_reclaimed_excludes_a_restored_original(self) -> None:
@@ -103,9 +146,11 @@ class TestMetrics(unittest.TestCase):
         file_id = self._add_file()
         # the scan's record: the file is back to its ORIGINAL size
         self.connection.execute("UPDATE files SET size = 1000 WHERE id = ?", (file_id,))
+        # an in-place encode: the row claims the file's own path
         self.connection.execute(
             "INSERT INTO encodes (file_id, preset, encoder, input_size, output_size,"
-            " saved_percent, outcome) VALUES (?, 'p', 'e', 1000, 500, 50.0, 'applied')",
+            " saved_percent, outcome, output_file) VALUES"
+            " (?, 'p', 'e', 1000, 500, 50.0, 'applied', '/lib/a.mkv')",
             (file_id,),
         )
         self.connection.commit()
