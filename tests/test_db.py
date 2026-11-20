@@ -907,7 +907,9 @@ class TestDb(unittest.TestCase):
             # the swap: the artifact took the source's path
             movie.write_bytes(b"x" * 400)
             # the SECOND encode reads the file (400) - and the source
-            # vanishes during it; the result carries the size as read
+            # vanishes during it; the result carries the size as read.
+            # THE SOURCE IS GONE: recording must not stat it.
+            movie.unlink()
             second = service.record_quality_results(
                 self.connection,
                 movie,
@@ -930,6 +932,9 @@ class TestDb(unittest.TestCase):
             ).fetchone()
             # the file (as the encode read it) WAS the first row's output
             self.assertEqual(row["generation"], 2)
+            # the size=None stat path: a vanished file has no ancestry and
+            # never raises
+            self.assertEqual(service.derive_generation(self.connection, movie), 1)
 
     def test_derive_generation_restored_original_is_generation_1(self):
         """The identity rule on the write side (issue #647, round 3): a path
