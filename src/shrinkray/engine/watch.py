@@ -326,23 +326,26 @@ class Stability:
     def not_settled_reason(self) -> str:
         """Why the file may not be decided on yet, worded for the operator.
 
-        The single source of that wording (#587's review): the plan CLI's
-        wait row and the boot backlog's plan and encode jobs (this PR) all
-        report this property, so one situation reads the same wherever it
-        is reported - the jobs used to build their own copy under a
-        "not complete: " prefix and the CLI a second one without it, and
-        the three could drift apart. Only asked of a verdict that is not
+        The single source of that wording (#587's review): the boot
+        backlog's plan and encode jobs (#586) report this property
+        instead of building their own sentence, so the wording lives with
+        the verdict it explains. Only asked of a verdict that is not
         `settled`: a settled verdict has no reason.
 
         Returns:
             str: The witness's reason: `incomplete`'s own wording when the
-                sparse verdict judged the file, otherwise the
-                remaining-age sentence.
+                sparse verdict judged the file, otherwise the sentence
+                naming the time since the last write.
         """
         if self.incomplete is not None:
             return self.incomplete
+        # clamped at 0 for a clock-skewed future mtime (a file written by a
+        # fast clock must not read "only -3600 s ago") and floored, never
+        # rounded, so the sentence cannot claim the file is old enough at
+        # the very threshold it says it needs
+        age = max(0.0, STABLE_MIN_AGE - self.young_for)
         return (
-            f"not complete: last write only {STABLE_MIN_AGE - self.young_for:.0f} s ago "
+            f"not complete: last write only {math.floor(age):.0f} s ago "
             f"(needs {STABLE_MIN_AGE:g} s of quiet)"
         )
 

@@ -249,7 +249,7 @@ class TestJobs(unittest.TestCase):
             self.skipTest("Windows reports no st_blocks")
         root = Path(self.tmp.name)
         young = root / "young.mkv"
-        young.write_bytes(b"x" * 64)
+        young.write_bytes(b"x" * 64)  # fresh mtime: the witness must hold it back
         sparse = root / "sparse.mkv"
         sparse.write_bytes(b"x" * 4096)
         os.truncate(sparse, 4 * 1024 * 1024)
@@ -312,6 +312,16 @@ class TestJobs(unittest.TestCase):
         with (
             _patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan_quality),
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            # the young file reads as young by the frozen clock, not by
+            # wall-clock luck (the independent review's closing note): the
+            # same freeze the witness's own suite applies around a real
+            # mtime (tests/test_file_stability.py) - a loaded CI runner may
+            # sit between the fixture write and the job's stat() for more
+            # than STABLE_MIN_AGE
+            _patch(
+                "shrinkray.engine.watch.time.time",
+                return_value=young.stat().st_mtime + 5.0,
+            ),
         ):
             result = jobs.execute_plan(plan_job, self.connection, threading.Event())
         by_movie = {entry["movie"]: entry for entry in result["plans"]}
@@ -364,6 +374,12 @@ class TestJobs(unittest.TestCase):
                 side_effect=fake_encode_with_quality,
             ),
             _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            # the same frozen clock as the plan job above: the witness
+            # must still hold the young file back
+            _patch(
+                "shrinkray.engine.watch.time.time",
+                return_value=young.stat().st_mtime + 5.0,
+            ),
             _patch(
                 "shrinkray.service.record_quality_results",
                 lambda *a, **k: _NS(encoded=False, skipped=True),
@@ -372,10 +388,12 @@ class TestJobs(unittest.TestCase):
             result = jobs.execute_encode(encode_job, self.connection, threading.Event())
         outcomes = {entry["movie"]: entry for entry in result["outcomes"]}
         self.assertEqual(encoded, ["settled.mkv"], "an unsettled file was probed or encoded")
+        # the text rides "error" like every other skipped outcome of the
+        # encode loop, so the movie detail page's hover shows it
         self.assertEqual(outcomes["young.mkv"]["state"], "skipped")
-        self.assertIn("not complete:", outcomes["young.mkv"]["reason"])
+        self.assertIn("not complete:", outcomes["young.mkv"]["error"])
         self.assertEqual(outcomes["sparse.mkv"]["state"], "skipped")
-        self.assertIn("appears incomplete", outcomes["sparse.mkv"]["reason"])
+        self.assertIn("appears incomplete", outcomes["sparse.mkv"]["error"])
 
     def test_a_plan_job_records_the_per_file_stages(self):
         """Issue #602: a file's pipeline is its own job rows - the decision

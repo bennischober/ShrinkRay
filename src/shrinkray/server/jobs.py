@@ -1014,13 +1014,14 @@ def execute_plan(
             plans.append({"movie": movie.name, "state": "error", "error": str(e)})
             continue
         if not stability.settled:
-            # the reason comes from the witness itself (#587's review): one
-            # wording shared with the plan CLI's wait row. The state is the
+            # the reason comes from the witness itself (#587's review): the
+            # wording lives with the verdict it explains. The state is the
             # dashboard's plan-entry vocabulary: execute_plan already
             # reports a decided skip as "skip" with a reason, and the
             # dashboard matches only "skip" for plans (a "skipped" entry
             # renders as the red failed chip and reads as planned on the
             # detail page), so the witness's skip is a "skip" too
+            log(f"Plan for '{movie.name}': skip ({stability.not_settled_reason})")
             plans.append(
                 {"movie": movie.name, "state": "skip", "reason": stability.not_settled_reason}
             )
@@ -1397,11 +1398,14 @@ def _encode_measured(
             continue
         if not stability.settled:
             # the reason comes from the witness itself (#587's review):
-            # one wording shared with the plan CLI's wait row and the plan
-            # job. The encode job's own vocabulary keeps "skipped" - the
-            # dashboard already knows it for encode outcomes
+            # one wording with the plan job, so the same situation reads
+            # the same in both. The encode job's own vocabulary keeps
+            # "skipped" and carries the text in "error" like every other
+            # `skipped` outcome of this loop, so the movie detail page's
+            # hover (title={outcome?.error}) shows it
+            log(f"Skipping '{movie.name}': {stability.not_settled_reason}")
             outcomes.append(
-                {"movie": movie.name, "state": "skipped", "reason": stability.not_settled_reason}
+                {"movie": movie.name, "state": "skipped", "error": stability.not_settled_reason}
             )
             continue
         # the per-file stages exist for the RESIDENT pipeline (issue #602): the
