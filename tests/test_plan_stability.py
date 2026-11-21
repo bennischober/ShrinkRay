@@ -78,6 +78,17 @@ class TestPlanAsksTheWitness(unittest.TestCase):
         self.settled = self.root / "settled.mkv"
         self.settled.write_bytes(b"x" * 64)
         os.utime(self.settled, (0, 0))
+        # the young file reads as young by the frozen clock, not by
+        # wall-clock luck (#587's review): the same freeze the witness's own
+        # suite applies around a real mtime (tests/test_file_stability.py) -
+        # a loaded CI runner or a paused debugger may sit between setUp and
+        # the CLI's stat() for more than STABLE_MIN_AGE
+        clock = patch(
+            "shrinkray.engine.watch.time.time",
+            return_value=self.young.stat().st_mtime + 5.0,
+        )
+        clock.start()
+        self.addCleanup(clock.stop)
 
     def _scan_cataloguing(self, *movies: Path):
         """A faked scan that writes each movie's file row exactly as a real

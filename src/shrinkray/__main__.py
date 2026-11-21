@@ -903,8 +903,8 @@ def plan(
                 continue
             if not stability.settled:
                 # the reason comes from the witness itself (#587's review):
-                # one wording shared with the backlog jobs (#586), so the
-                # same situation reads the same wherever it is reported
+                # the CLI builds no sentence of its own, so the wording
+                # lives with the verdict it explains
                 table.add_row(
                     movie.name,
                     "[yellow]wait[/yellow]",

@@ -86,7 +86,7 @@ class TestPlanNoTable(unittest.TestCase):
         scripted `plan --no-table` during a copy printed nothing about the
         file it did not decide. The one-line summary closes that."""
         young = self.root / "young.mkv"
-        young.write_bytes(b"x" * 8)  # no utime: the witness must hold it back
+        young.write_bytes(b"x" * 8)  # fresh mtime: the witness must hold it back
         planned: list[str] = []
 
         def fake_plan(movie: Path, **kwargs: object) -> QualityResult:
@@ -95,6 +95,13 @@ class TestPlanNoTable(unittest.TestCase):
 
         with (
             _toolchain_present(),
+            # the young file reads as young by the frozen clock, not by
+            # wall-clock luck (#587's review): the freeze the witness's own
+            # suite applies around a real mtime (tests/test_file_stability.py)
+            patch(
+                "shrinkray.engine.watch.time.time",
+                return_value=young.stat().st_mtime + 5.0,
+            ),
             patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan),
         ):
             output = self._run("plan", str(young), "--no-table")
