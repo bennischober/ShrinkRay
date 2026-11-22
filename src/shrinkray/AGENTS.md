@@ -12,8 +12,8 @@ file is the module map plus the rules that bind the whole package. `engine/`,
 |---|---|---|
 | CLI commands, tables, progress | `__main__.py` | typer: `encode`, `plan`, `serve` (+ hidden `app`), `setup`, `retained`, `doctor`; no business logic |
 | The terminal UI (`shrinkray setup`) | `tui.py` | Textual: edits config.json through `Conf` (invalid values are never written), warns on fingerprint settings, switches the pause; a front end beside `server`, never importing it (#252) |
-| Config schema, defaults, flat facade | `config.py` | pydantic sections + `Conf`; loading has no side effects |
-| sqlite schema, migrations, queries | `db.py` | `SCHEMA_VERSION`, `MIGRATIONS`, `prune_missing` |
+| Config schema, defaults, flat facade | `config.py` | pydantic sections + `Conf`; loading has no side effects; the product rules are validators (floors raise-only, `av1` rejected as a candidate, svt_av1-only output encoder) and deprecated keys are accepted-and-warned |
+| sqlite schema, migrations, queries | `db.py` | `SCHEMA_VERSION`, `MIGRATIONS`, `prune_missing`; writes are single statements + `commit()` so WAL readers never block; legacy columns stay unread, never dropped (#605) |
 | Swap-in-place, retained originals | `replace.py` | `stage`/`swap`/`recover`; `RETAINED_SUFFIX` |
 | Batch resume + result persistence | `service.py` | `record_plan`, `save_encode`, `save_skip`, `doctor`, `all_problems` |
 | Failure bundles | `telemetry.py` | `save_failure` -> `logs/` beside the db file; best-effort by design |
@@ -23,7 +23,9 @@ file is the module map plus the rules that bind the whole package. `engine/`,
 `__main__.py` defaults the database to `metadata.db` in the cwd. `py.typed`
 (PEP 561, forced into the wheel) and `models/vmaf_v0.6.1.json` ship as package
 data — the model is read from `tools/vmaf.py` and copied into a temp workdir per
-measurement, never edited.
+measurement, never edited. `__init__.py` reads `__version__` from installed package
+metadata with a literal fallback for direct src-tree runs; a release bumps that
+fallback together with `pyproject.toml`.
 
 ## LAYER RULES (`pyproject.toml`, enforced by `uv run lint-imports`)
 

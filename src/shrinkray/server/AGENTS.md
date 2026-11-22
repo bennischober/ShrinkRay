@@ -12,7 +12,7 @@ product-rule violation, not a feature.
 
 | Question | Module | Notes |
 |---|---|---|
-| Routes, auth, containment, boot | `app.py` | 13 routes (12 GET + 1 POST `/api/reveal`); `require_token`, `validate_path`, `AppState`, `db_access`, `run_app`, `start_watch`, `auto_backlog` |
+| Routes, auth, containment, boot | `app.py` | 16 routes (15 GET + 1 POST `/api/reveal`); `require_token`, `validate_path`, `AppState`, `db_access`, `run_app`, `start_watch`, `auto_backlog` |
 | Job queue, worker, live progress | `jobs.py` | `JobState`/`JobKind` (scan, plan, decision, crf-search, encode), `ProgressBus`, `JobQueue`, `execute_scan`/`execute_plan`/`execute_encode`, `JobWorker` |
 | Prometheus text exposition | `metrics.py` | `render_metrics`; hand-rolled, no `prometheus-client` dependency |
 
@@ -54,6 +54,14 @@ product-rule violation, not a feature.
   decision, not an implementation detail.
 - The worker is single-threaded by design (`jobs.py`): heavy encodes do not profit from
   running in parallel, so queueing more jobs would only add latency.
+- `JobQueue` concurrency shape is fixed, not style: the connection gate is taken BEFORE
+  `_lock` and `_lock` is never held while waiting for the gate; a failed commit rolls
+  back and restores the row to `QUEUED`; only `QUEUED` jobs are taken or cancelled
+  (`jobs.py`, #660 review rounds — the shape that has repeatedly broken).
+- `JobWorker._run` logs and backs off a failed iteration; only
+  `WORKER_MAX_CONSECUTIVE_FAILURES = 5` consecutive failures end it, with the reason
+  recorded on `fatal_error` for `/api/status` (`jobs.py`, #649) — a silent dead worker
+  is the bug, not a crash.
 - Live progress goes through `ProgressBus` only; it is flow, never state, never a row
   (`jobs.py`). Every engine call receives a `ProgressCallback` and the same dict
   shape the console prints.
