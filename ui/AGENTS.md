@@ -61,9 +61,10 @@ ui/
   happy-dom with `conditions: ['browser']` over `src/**/*.test.ts` (`api`, progress, JobsPage).
 
 ## ANTI-PATTERNS
-- **Calling an endpoint that does not exist.** The server has 12 GET routes plus one
-  `POST /api/reveal`; `POST /api/jobs` and `POST /api/watch/start|stop` are gone and the
-  root `README.md` still advertises them. The dashboard starts no work (issue #134).
+- **Calling an endpoint that does not exist.** The server has 15 GET routes plus one
+  `POST /api/reveal`; `POST /api/jobs` and `POST /api/watch/start|stop` are gone — the
+  root `README.md` no longer advertises them either. The dashboard starts no work
+  (issue #134).
 - `fetch`/`EventSource` in a component, or a locally re-declared API shape: extend
   `api.ts` instead — it mirrors the FastAPI JSON, so new server fields land there first.
 - Branching a component on theme, hardcoding a hex, or adding shadows/glow/blur. Depth is
