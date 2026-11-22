@@ -12,7 +12,7 @@ file is the module map plus the rules that bind the whole package. `engine/`,
 |---|---|---|
 | CLI commands, tables, progress | `__main__.py` | typer: `encode`, `plan`, `serve` (+ hidden `app`), `setup`, `retained`, `doctor`; no business logic |
 | The terminal UI (`shrinkray setup`) | `tui.py` | Textual: edits config.json through `Conf` (invalid values are never written), warns on fingerprint settings, switches the pause; a front end beside `server`, never importing it (#252) |
-| Config schema, defaults, flat facade | `config.py` | pydantic sections + `Conf`; loading has no side effects; the product rules are validators (floors raise-only, `av1` rejected as a candidate, output encoder is SVT-AV1 only — `svt_av1` for 8-bit sources, `svt_av1_10bit` for deeper ones) and deprecated keys are accepted-and-warned |
+| Config schema, defaults, flat facade | `config.py` | pydantic sections + `Conf`; loading has no side effects; the product rules are validators (floors raise-only, `av1` rejected as a candidate, output encoder is SVT-AV1 only — `svt_av1` for 8-bit sources, `svt_av1_10bit` for deeper ones) and deprecated keys are accepted (most with a warning; `handbrake.preset` is accepted and ignored) |
 | sqlite schema, migrations, queries | `db.py` | `SCHEMA_VERSION`, `MIGRATIONS`, `prune_missing`; every write path ends in an explicit `commit()` so WAL readers never block (several batch multiple statements before that commit); legacy columns stay unread, never dropped (#605) |
 | Swap-in-place, retained originals | `replace.py` | `stage`/`swap`/`recover`; `RETAINED_SUFFIX` |
 | Batch resume + result persistence | `service.py` | `record_plan`, `save_encode`, `save_skip`, `doctor`, `all_problems` |

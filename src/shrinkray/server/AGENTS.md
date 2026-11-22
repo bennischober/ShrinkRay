@@ -54,8 +54,9 @@ product-rule violation, not a feature.
   decision, not an implementation detail.
 - The worker is single-threaded by design (`jobs.py`): heavy encodes do not profit from
   running in parallel, so queueing more jobs would only add latency.
-- `JobQueue` concurrency shape is fixed, not style: the connection gate is taken BEFORE
-  `_lock` and `_lock` is never held while waiting for the gate; a failed commit rolls
+- `JobQueue` concurrency shape is fixed, not style: `_lock` is never held while waiting
+  for the connection gate (`take_next` marks the job under `_lock`, releases it, then
+  takes the gate for the RUNNING commit); a failed commit rolls
   back and restores the row to `QUEUED`; only `QUEUED` jobs are taken, and only a
   `QUEUED` job is cancelled as queued — a running job's cancellation is its cancel
   event, and a job in the take window is not cancellable as queued (returns False)
