@@ -54,6 +54,10 @@ ENCODER_PRESETS = (
     "veryslow",
     "placebo",
 )
+# the speed-preset vocabulary of SVT-AV1, the output encoder: numeric levels
+# -1..10. One tuple for both output ids (svt_av1 / svt_av1_10bit) so the two
+# can never drift apart (issue #688).
+_SVT_AV1_PRESETS = tuple(str(n) for n in range(-1, 11))
 # per-encoder preset vocabularies and defaults (issue #22). SVT-AV1 is the
 # live encoder and the numeric defaults are its vocabulary; x264/x265 names
 # stay in the table and are rejected as output codecs.
@@ -61,7 +65,8 @@ ENCODER_PRESET_VOCABULARIES: dict[str, tuple[str, ...]] = {
     "x264": ENCODER_PRESETS,
     "x265": ENCODER_PRESETS,
     "x265_10bit": ENCODER_PRESETS,
-    "svt_av1": tuple(str(n) for n in range(-1, 11)),
+    "svt_av1": _SVT_AV1_PRESETS,
+    "svt_av1_10bit": _SVT_AV1_PRESETS,
 }
 ENCODER_PRESET_DEFAULTS: dict[str, tuple[str, str]] = {
     # encoder => (probe preset, final preset)
