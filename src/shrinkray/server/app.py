@@ -1819,7 +1819,8 @@ def auto_backlog(state: "AppState", roots: list[Path], *, enabled: bool) -> list
         enabled (bool): False when `app.auto_backlog` is off (the default).
 
     Returns:
-        list[str]: The enqueued job kinds, empty when disabled.
+        list[str]: The enqueued job kinds, empty when disabled or when an
+        identical backlog is already queued.
     """
     if not enabled or not roots:
         return []
@@ -1829,10 +1830,35 @@ def auto_backlog(state: "AppState", roots: list[Path], *, enabled: bool) -> list
         Job(kind=JobKind.PLAN, payload={**payload, "quality": True}),
         Job(kind=JobKind.ENCODE, payload={**payload, "quality": True}),
     ]
+    # issue #626: a restart must not stack a second identical triple beside the
+    # one the queue just restored from the database. The comparison reads the
+    # persisted queue (queued AND running rows - the worker starts before this
+    # runs, so the first restored job is usually already taken out of
+    # `_pending`) keyed on kind and payload (the payload is serialized for a
+    # hashable key; sort_keys makes the comparison order-independent). A start
+    # whose roots changed leaves the old queued triple in place: it covers the
+    # roots it names.
+    pending_keys = {
+        (job.kind, json.dumps(job.payload, sort_keys=True)) for job in state.queue.queued_jobs()
+    }
+    enqueued: list[str] = []
+    kept: list[str] = []
     for job in jobs:
-        state.queue.enqueue(job)
-    log(
-        "Startup backlog enqueued: scan -> plan -> encode over "
-        f"{len(roots)} root{'s' if len(roots) != 1 else ''}."
-    )
-    return [job.kind.value for job in jobs]
+        if (job.kind, json.dumps(job.payload, sort_keys=True)) in pending_keys:
+            kept.append(job.kind.value)
+        else:
+            state.queue.enqueue(job)
+            enqueued.append(job.kind.value)
+    if enqueued and kept:
+        log(
+            f"Startup backlog: enqueued {', '.join(enqueued)}; "
+            f"kept {', '.join(kept)} (already queued)."
+        )
+    elif kept:
+        log(f"Startup backlog: kept {', '.join(kept)} (already queued); nothing enqueued.")
+    else:
+        log(
+            "Startup backlog enqueued: scan -> plan -> encode over "
+            f"{len(roots)} root{'s' if len(roots) != 1 else ''}."
+        )
+    return enqueued

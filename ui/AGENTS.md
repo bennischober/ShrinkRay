@@ -72,9 +72,10 @@ ui/
   happy-dom with `conditions: ['browser']` over `src/**/*.test.ts` (`api`, progress, JobsPage).
 
 ## ANTI-PATTERNS
-- **Calling an endpoint that does not exist.** The server has 12 GET routes plus one
-  `POST /api/reveal`; `POST /api/jobs` and `POST /api/watch/start|stop` are gone and the
-  root `README.md` still advertises them. The dashboard starts no work (issue #134).
+- **Calling an endpoint that does not exist.** The server has 15 GET routes plus one
+  `POST /api/reveal`; `POST /api/jobs` and `POST /api/watch/start|stop` are gone — the
+  root `README.md` no longer advertises them either. The dashboard starts no work
+  (issue #134).
 - `fetch`/`EventSource` in a component, or a locally re-declared API shape: extend
   `api.ts` instead — it mirrors the FastAPI JSON, so new server fields land there first.
 - Branching a component on theme, hardcoding a hex, or adding shadows/glow/blur. Depth is
@@ -89,8 +90,8 @@ ui/
   live methods are `snapshot`, `retained`, `movie`, `config`, `reveal`. Adding a caller is
   fine; changing a shape without the server is not.
 - `App.svelte` hardcodes Windows defaults (`D:\Movies`, `D:\Encoded`) and VMAF 96;
-  `SHORTCUT_LEGEND` says `1–5: pages` while the map binds only 1-4 (Retained has none) —
-  a real mismatch, not a stale note (checked 2026-10-25, issue #294).
+  `SHORTCUT_LEGEND` says `1–4: pages` while the map binds only 1-4 (Retained has none) —
+the legend binds `1`-`4` and matches the map (fixed in #701)
 - `--poster-ground`/`--poster-line` (`tokens.css`) outlived `PosterCard.svelte`, deleted
   in #180; the root `DESIGN.md` still describes the demoted poster grid. `ui/README.md` is
   project documentation (rewritten 2026-10-24), not the Vite template.

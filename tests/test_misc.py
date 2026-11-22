@@ -109,6 +109,30 @@ class TestEncoderPresetConfig(unittest.TestCase):
         self.assertIn("encoder_preset", str(ctx.exception))
         self.assertIn("Fast 1080p30", str(ctx.exception))
 
+    def test_svt_av1_10bit_encoder_uses_the_svt_av1_vocabulary(self):
+        # issue #688: the 10-bit output id shares the SVT-AV1 numeric ladder.
+        # Without its own entry the lookup fell back to the x264 names and
+        # rejected the shipped '5', so this config could not load at all.
+        conf = config_helper.Conf({"handbrake": {"encoder": "svt_av1_10bit"}})
+        self.assertEqual(conf.handbrake_encoder, "svt_av1_10bit")
+        self.assertEqual(conf.handbrake_probe_encoder_preset, "5")
+        self.assertEqual(conf.handbrake_encoder_preset, "5")
+
+    def test_svt_av1_10bit_rejects_a_non_numeric_preset(self):
+        # the vocabulary still guards the 10-bit id: an x264 name is refused
+        # with the key named, exactly as for svt_av1
+        with self.assertRaises(ValueError) as ctx:
+            config_helper.Conf(
+                {"handbrake": {"encoder": "svt_av1_10bit", "encoder_preset": "medium"}}
+            )
+        self.assertIn("handbrake.encoder_preset", str(ctx.exception))
+
+    def test_both_svt_av1_ids_share_one_vocabulary(self):
+        # one shared tuple, so the two ids cannot drift (issue #688)
+        vocabularies = config_helper.ENCODER_PRESET_VOCABULARIES
+        self.assertEqual(vocabularies["svt_av1_10bit"], vocabularies["svt_av1"])
+        self.assertIs(vocabularies["svt_av1_10bit"], vocabularies["svt_av1"])
+
 
 class TestConfigSchema(unittest.TestCase):
     """The config.json schema (issue #61): every mistake is an error that

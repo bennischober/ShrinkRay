@@ -883,4 +883,15 @@
        class): a bare `1fr` track lets nowrap content set the track width */
     .cols { grid-template-columns: minmax(0, 1fr); }
   }
+  /* below 768px the five-part trail row cannot fit: the outcome gets its own
+     line instead of running off the panel (issue #636) */
+  @media (max-width: 768px) {
+    .hist-row {
+      flex-wrap: wrap;
+      gap: 4px 10px;
+      padding: 8px 12px;
+      align-items: baseline;
+    }
+    .hist-row > .err { flex: 0 0 100%; white-space: normal; word-break: break-word; }
+  }
 </style>

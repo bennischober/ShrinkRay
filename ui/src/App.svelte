@@ -89,6 +89,19 @@
   let detailMovie = $state<Movie | null>(null)
   // where the detail was opened from — the back button returns there
   let detailFrom = $state<'overview' | 'library' | 'jobs'>('overview')
+  /** The title path a `#/movie/<path>` hash carries, or null for a bare
+   * `#/movie`. The path is the page's URL (issue #635): a shared link, a
+   * bookmark and a reload all restore the same title, where sessionStorage
+   * only survived a reload in the same tab. */
+  function moviePathFromHash(): string | null {
+    const prefix = '#/movie/'
+    if (!location.hash.startsWith(prefix)) return null
+    try {
+      return decodeURIComponent(location.hash.slice(prefix.length)) || null
+    } catch {
+      return null
+    }
+  }
   function goto(next: Page) {
     detailMovie = null
     detailPath = null
@@ -96,14 +109,19 @@
     page = next
     location.hash = `/${next}`
   }
+  let pendingDetailFrom: 'overview' | 'library' | 'jobs' = 'library'
   function openDetail(movie: Movie, from: 'overview' | 'library' | 'jobs') {
     detailMovie = movie
     detailFrom = from
+    // the deep-link effect reads pendingDetailFrom, so the click's origin must
+    // ride there too or the effect resets it to 'library' and the back link
+    // says LIBRARY for a title opened from Overview or Jobs (issue #635 review)
+    pendingDetailFrom = from
     detailPath = null
     // deep link: the hash stays routable (#/movie), the path rides in
     // sessionStorage so F5 on a detail page restores the same title
     sessionStorage.setItem('sr.detail', movie.path)
-    location.hash = '/movie'
+    location.hash = '/movie/' + encodeURIComponent(movie.path)
   }
   function closeDetail() {
     detailMovie = null
@@ -125,7 +143,7 @@
     page = 'library'
   }
   let detailPath = $state<string | null>(
-    location.hash === '#/movie' ? sessionStorage.getItem('sr.detail') : null
+    moviePathFromHash() ?? (location.hash === '#/movie' ? sessionStorage.getItem('sr.detail') : null)
   )
 
   // back/forward support: hash is the single source of truth for pages,
@@ -133,6 +151,12 @@
   // the detail — otherwise the hash says library while a detail page is
   // still mounted (a zombie the rail clicks can't explain)
   window.addEventListener('hashchange', () => {
+    const hashPath = moviePathFromHash()
+    if (hashPath !== null) {
+      detailPath = hashPath
+      page = 'library'
+      return
+    }
     if (location.hash === '#/movie') {
       // Forward onto a dead deep link (detail closed, session gone):
       // settle on the overview instead of a zombie hash
@@ -153,8 +177,10 @@
     page = pageFromHash()
   })
 
-  // ── keyboard layer: 1-5 switch pages, / focuses search ──
-  const SHORTCUT_LEGEND = '1–5: pages · /: search'
+  // ── keyboard layer: 1–4 switch pages, / focuses search ──
+  // the map binds 1-4 (Retained has no shortcut), so the legend must not
+  // promise a fifth (issue #636; ui/AGENTS.md records the mismatch)
+  const SHORTCUT_LEGEND = '1–4: pages · /: search'
   function handleShortcuts(e: KeyboardEvent) {
     // never hijack typing in inputs
     const t = e.target as HTMLElement
@@ -279,7 +305,6 @@
   // not knowable after a reload — library is the honest default, since a
   // fresh session has no page history to return to. openDetailFromJobs
   // presets the origin it wants ('jobs') before the library arrives.
-  let pendingDetailFrom: 'library' | 'jobs' = 'library'
   $effect(() => {
     if (detailPath && movies.length > 0) {
       const m = movies.find((mv) => mv.path === detailPath)
@@ -617,6 +642,9 @@
     letter-spacing: var(--track-legend);
     text-decoration: none;
     transition: top 0.1s ease;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skip-link { transition: none; }
   }
   .skip-link:focus-visible {
     top: 10px;
