@@ -676,6 +676,25 @@ class JobQueue:
         self._wake.clear()
         return woken
 
+    def queued_jobs(self) -> list[Job]:
+        """Returns the pending backlog: every queued and running job, oldest first.
+
+        This is a database read, not the in-memory `_pending` snapshot: after a
+        restart the worker is started before the boot backlog runs, so the first
+        restored job is usually already taken (`take_next` removed it from
+        `_pending`) but still `running` in the database — a caller deciding
+        whether work is already pending must see it (issue #626).
+
+        Returns:
+            list[Job]: The queued and running jobs in enqueue order.
+        """
+        with self._conn_gate():
+            rows = self._connection.execute(
+                "SELECT * FROM jobs WHERE state IN (?, ?) ORDER BY id",
+                (JobState.QUEUED.value, JobState.RUNNING.value),
+            ).fetchall()
+        return [_row_to_job(row) for row in rows]
+
     def all_jobs(self, limit: int = 100) -> list[Job]:
         """Returns the recent jobs (history), newest first.
 

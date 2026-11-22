@@ -1385,6 +1385,78 @@ class TestStartupBacklog(unittest.TestCase):
         self.assertEqual(app_module.auto_backlog(state, [], enabled=True), [])
         self.assertFalse(state.queue.enqueue.called)
 
+    def test_two_starts_enqueue_one_triple(self) -> None:
+        """Two consecutive starts on the same state keep one triple (issue #626).
+
+        The second start reads the restored triple from `queued_jobs()` (the
+        mocked seam models the database read) and enqueues nothing.
+        """
+        from shrinkray.server import app as app_module
+
+        state = self._state()
+        kinds = app_module.auto_backlog(state, [self.root], enabled=True)
+        self.assertEqual(kinds, ["scan", "plan", "encode"])
+        self.assertEqual(state.queue.enqueue.call_count, 3)
+        state.queue.queued_jobs.return_value = [
+            call.args[0] for call in state.queue.enqueue.call_args_list
+        ]
+        with mock.patch("shrinkray.server.app.log") as logged:
+            kinds = app_module.auto_backlog(state, [self.root], enabled=True)
+        self.assertEqual(kinds, [])
+        self.assertEqual(state.queue.enqueue.call_count, 3)
+        self.assertIn(
+            "kept scan, plan, encode (already queued)",
+            logged.call_args.args[0],
+        )
+
+    def test_a_changed_root_set_enqueues_the_new_backlog(self) -> None:
+        """A start whose roots changed enqueues the new triple (issue #626).
+
+        The old queued triple over the old roots is left untouched: it covers
+        the roots it names.
+        """
+        from shrinkray.server import app as app_module
+        from shrinkray.server.jobs import Job, JobKind
+
+        state = self._state()
+        app_module.auto_backlog(state, [self.root], enabled=True)
+        before = list(state.queue.enqueue.call_args_list)
+        other = Path(self.tmp.name) / "other"
+        other.mkdir()
+        payload: dict = {"paths": [str(other)]}
+        state.queue.queued_jobs.return_value = [
+            Job(kind=JobKind.SCAN, payload=payload),
+            Job(kind=JobKind.PLAN, payload={**payload, "quality": True}),
+            Job(kind=JobKind.ENCODE, payload={**payload, "quality": True}),
+        ]
+        kinds = app_module.auto_backlog(state, [self.root], enabled=True)
+        self.assertEqual(kinds, ["scan", "plan", "encode"])
+        self.assertEqual(state.queue.enqueue.call_count, 6)
+        self.assertEqual(state.queue.enqueue.call_args_list[:3], before)
+        scan = state.queue.enqueue.call_args_list[3].args[0]
+        self.assertEqual(scan.payload["paths"], [str(self.root)])
+
+    def test_a_running_backlog_counts_as_pending(self) -> None:
+        """A RUNNING row is pending for the dedupe (issue #626).
+
+        The mocked seam models the database read; a real running row cannot
+        exist at backlog time - `_recover_stale_jobs` marks it failed first -
+        so this pins the rule, not a reachable state.
+        """
+        from shrinkray.server import app as app_module
+        from shrinkray.server.jobs import Job, JobState
+
+        state = self._state()
+        app_module.auto_backlog(state, [self.root], enabled=True)
+        snapshot = [
+            Job(kind=call.args[0].kind, payload=call.args[0].payload, state=JobState.RUNNING)
+            for call in state.queue.enqueue.call_args_list
+        ]
+        state.queue.queued_jobs.return_value = snapshot
+        kinds = app_module.auto_backlog(state, [self.root], enabled=True)
+        self.assertEqual(kinds, [])
+        self.assertEqual(state.queue.enqueue.call_count, 3)
+
 
 class TestDurationEnvGuard(unittest.TestCase):
     """`_duration_env`'s guard is total (issue #537's review): every
