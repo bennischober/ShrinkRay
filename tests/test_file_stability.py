@@ -23,7 +23,7 @@ import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 
 from shrinkray.engine import watch
 
@@ -368,8 +368,17 @@ class TestCliCallsTheSeam(unittest.TestCase):
         # the whole test rests on the backdate having landed on the file the
         # CLI will judge: assert it instead of assuming it (issue #694)
         self.assertAlmostEqual(os.stat(self.movie).st_mtime, old, places=6)
+        # the sleep seam is scoped to the seam under test: watch's own `time`
+        # reference is replaced, so only a sleep the WAIT itself issues lands
+        # on the mock. A process-global patch (patching time.sleep through
+        # watch.time IS the global time module) would also record an unrelated
+        # thread's sleep during the invoke window - the recorded 14 x 0.05
+        # signature of #694 - a failure channel this test does not own. The
+        # assertion stays strict: one sleep through the seam still fails it.
+        sleep = Mock()
+        clock = SimpleNamespace(time=time.time, monotonic=time.monotonic, sleep=sleep)
         with (
-            patch("shrinkray.engine.watch.time.sleep") as sleep,
+            patch.object(watch, "time", clock),
             patch("shrinkray.service.all_problems", return_value=[]),
             patch("shrinkray.engine.pipeline.encode_with_quality") as engine,
         ):
