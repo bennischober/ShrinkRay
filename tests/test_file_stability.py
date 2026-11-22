@@ -324,8 +324,15 @@ class TestCliCallsTheSeam(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.movie = self.root / "movie.mkv"
         self.movie.write_bytes(b"x" * 16)
+        # the ambient constants are pinned like the sibling classes' are (the
+        # env-derived values are re-read on every reload of engine.watch, and
+        # this class runs the REAL witness): the test's verdict must never
+        # depend on state a reload or an export left behind (issue #694)
+        self.stack = ExitStack()
+        self.stack.enter_context(patch.object(watch, "STABLE_MIN_AGE", 60.0))
 
     def tearDown(self) -> None:
+        self.stack.close()
         self.tmp.cleanup()
 
     def test_a_rejected_file_is_skipped_with_the_reason(self) -> None:
@@ -358,6 +365,9 @@ class TestCliCallsTheSeam(unittest.TestCase):
 
         old = time.time() - 3600
         os.utime(self.movie, (old, old))
+        # the whole test rests on the backdate having landed on the file the
+        # CLI will judge: assert it instead of assuming it (issue #694)
+        self.assertAlmostEqual(os.stat(self.movie).st_mtime, old, places=6)
         with (
             patch("shrinkray.engine.watch.time.sleep") as sleep,
             patch("shrinkray.service.all_problems", return_value=[]),
