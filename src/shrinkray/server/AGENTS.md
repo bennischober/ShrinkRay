@@ -56,7 +56,9 @@ product-rule violation, not a feature.
   running in parallel, so queueing more jobs would only add latency.
 - `JobQueue` concurrency shape is fixed, not style: the connection gate is taken BEFORE
   `_lock` and `_lock` is never held while waiting for the gate; a failed commit rolls
-  back and restores the row to `QUEUED`; only `QUEUED` jobs are taken or cancelled
+  back and restores the row to `QUEUED`; only `QUEUED` jobs are taken, and only a
+  `QUEUED` job is cancelled as queued — a running job's cancellation is its cancel
+  event, and a job in the take window is not cancellable as queued (returns False)
   (`jobs.py`, #660 review rounds — the shape that has repeatedly broken).
 - `JobWorker._run` logs and backs off a failed iteration; only
   `WORKER_MAX_CONSECUTIVE_FAILURES = 5` consecutive failures end it, with the reason
