@@ -13,7 +13,7 @@ file is the module map plus the rules that bind the whole package. `engine/`,
 | CLI commands, tables, progress | `__main__.py` | typer: `encode`, `plan`, `serve` (+ hidden `app`), `setup`, `retained`, `doctor`; no business logic |
 | The terminal UI (`shrinkray setup`) | `tui.py` | Textual: edits config.json through `Conf` (invalid values are never written), warns on fingerprint settings, switches the pause; a front end beside `server`, never importing it (#252) |
 | Config schema, defaults, flat facade | `config.py` | pydantic sections + `Conf`; loading has no side effects; the product rules are validators (floors raise-only, `av1` rejected as a candidate, svt_av1-only output encoder) and deprecated keys are accepted-and-warned |
-| sqlite schema, migrations, queries | `db.py` | `SCHEMA_VERSION`, `MIGRATIONS`, `prune_missing`; writes are single statements + `commit()` so WAL readers never block; legacy columns stay unread, never dropped (#605) |
+| sqlite schema, migrations, queries | `db.py` | `SCHEMA_VERSION`, `MIGRATIONS`, `prune_missing`; every write path ends in an explicit `commit()` so WAL readers never block (several — `save_plan`, `save_probe_score`, `save_crop_summary`, `set_encode_output`, `prune_missing` — batch multiple statements first); legacy columns stay unread, never dropped (#605) |
 | Swap-in-place, retained originals | `replace.py` | `stage`/`swap`/`recover`; `RETAINED_SUFFIX` |
 | Batch resume + result persistence | `service.py` | `record_plan`, `save_encode`, `save_skip`, `doctor`, `all_problems` |
 | Failure bundles | `telemetry.py` | `save_failure` -> `logs/` beside the db file; best-effort by design |
