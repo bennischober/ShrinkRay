@@ -2977,7 +2977,7 @@ class TestDb(unittest.TestCase):
             root = Path(tmp).resolve()
             movie = root / "movie.mkv"
             movie.write_bytes(b"x" * 8)
-            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            db.upsert_file(self.connection, self._record(str(movie)))
             service.record_quality_results(
                 self.connection,
                 movie,
