@@ -101,13 +101,23 @@ def render_metrics(connection: sqlite3.Connection, library_root: Path | None = N
 
     reclaimed = connection.execute(
         "SELECT COALESCE(SUM(input_size - output_size), 0) AS b FROM encodes"
-        " WHERE outcome = 'applied'"
+        " WHERE outcome = 'applied' AND EXISTS ("
+        "SELECT 1 FROM files f WHERE f.id = encodes.file_id"
+        " AND f.missing_scans = 0"
+        " AND (encodes.output_file IS NULL OR encodes.output_file != f.path"
+        " OR f.size = encodes.output_size))"
     ).fetchone()["b"]
     out += _family(
         "shrinkray_bytes_reclaimed_total",
         "gauge",
-        "Bytes the applied encodes saved in total (issue #625: a discarded"
-        " attempt reclaimed nothing). The value can FALL on a decline.",
+        "Bytes the applied encodes saved that the library's records still"
+        " corroborate (issue #647: an in-place encode counts while the"
+        " file's size matches the record and the file is not missing; an"
+        " output-dir encode counts - its artifact lives outside the library"
+        " and is not verifiable from the database; a legacy row with no"
+        " path claim counts; issue #625: a discarded"
+        " attempt reclaims nothing). The value can FALL on a decline or a"
+        " restore.",
         [f"shrinkray_bytes_reclaimed_total {int(reclaimed)}"],
     )
 
