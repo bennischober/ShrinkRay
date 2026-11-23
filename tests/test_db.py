@@ -801,7 +801,11 @@ class TestDb(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             original = root / "movie.mkv"
+            original.write_bytes(b"x" * 1000)
             reencode = root / "movie_reencoded.mkv"
+            # the artifact the row describes: the identity rule asks for the
+            # file's actual size (issue #647)
+            reencode.write_bytes(b"x" * 500)
 
             file_id = db.upsert_file(self.connection, self._record(str(original)))
             db.add_encode(
@@ -818,8 +822,164 @@ class TestDb(unittest.TestCase):
             )
             # the re-encode input is the output of generation 1
             self.assertEqual(service.derive_generation(self.connection, reencode), 2)
-            # an unrelated file stays generation 1
-            self.assertEqual(service.derive_generation(self.connection, root / "other.mkv"), 1)
+            # an unrelated file (which exists, with no ancestry) stays 1
+            other = root / "other.mkv"
+            other.write_bytes(b"x")
+            self.assertEqual(service.derive_generation(self.connection, other), 1)
+
+    def test_a_discarded_attempt_is_never_ancestry_or_finished(self):
+        """The outcome filter (issue #647, round 4): a discarded attempt can
+        carry a path claim (`set_encode_output` sets the path without
+        touching the outcome - the contract the decline path pins). The row
+        is history: it is neither ancestry for the generation derivation nor
+        a finished encode for the resume rule."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "a.mkv"
+            movie.write_bytes(b"x" * 400)
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            encode_id = db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(movie),
+            )
+            # the decline discards the outcome; the path claim remains (the
+            # contract set_encode_output pins: setting a path never
+            # resurrects a discarded row)
+            connection = self.connection
+            connection.execute(
+                "UPDATE encodes SET outcome = 'discarded' WHERE id = ?",
+                (encode_id,),
+            )
+            db.set_encode_output(self.connection, encode_id, str(movie))
+            self.connection.commit()
+            row = self.connection.execute(
+                "SELECT outcome, output_file, output_size FROM encodes WHERE id = ?",
+                (encode_id,),
+            ).fetchone()
+            self.assertEqual(row["outcome"], "discarded")
+            # the path claim matches the file's size - and still is not ancestry
+            self.assertIsNone(db.latest_ancestry(self.connection, str(movie), 400))
+            self.assertEqual(service.derive_generation(self.connection, movie), 1)
+            # and the resume rule does not call the file finished
+            self.assertFalse(db.has_output_for_latest_encode(self.connection, file_id, movie))
+
+    def test_a_vanished_source_does_not_crash_the_recording(self):
+        """The designed "source changed during the encode" outcome (issue
+        #647, round 5): the row is recorded BEFORE the swap, so the ancestry
+        input is the size the encode read - not a fresh stat. A source that
+        vanished during a multi-hour encode reaches the swap's own decline
+        (the original is untouched) instead of crashing the job."""
+
+        from shrinkray import service
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 1000)
+            db.upsert_file(self.connection, self._record(str(movie)))
+            result = service.record_quality_results(
+                self.connection,
+                movie,
+                QualityResult(
+                    input=movie,
+                    output=root / ".shrinkray-x/movie.mkv",
+                    success=True,
+                    target_vmaf=96.0,
+                    chosen_crf=21,
+                    achieved_vmaf=95.5,
+                    input_size=1000,
+                    output_size=400,
+                ),
+                config_helper.Conf(),
+                final_output=movie,
+            )
+            self.assertTrue(result.encoded)
+            # the swap: the artifact took the source's path
+            movie.write_bytes(b"x" * 400)
+            # the SECOND encode reads the file (400) - and the source
+            # vanishes during it; the result carries the size as read.
+            # THE SOURCE IS GONE: recording must not stat it.
+            movie.unlink()
+            second = service.record_quality_results(
+                self.connection,
+                movie,
+                QualityResult(
+                    input=movie,
+                    output=root / ".shrinkray-y/movie.mkv",
+                    success=True,
+                    target_vmaf=96.0,
+                    chosen_crf=20,
+                    achieved_vmaf=95.8,
+                    input_size=400,
+                    output_size=300,
+                ),
+                config_helper.Conf(),
+                final_output=movie,
+            )
+            self.assertTrue(second.encoded)
+            row = self.connection.execute(
+                "SELECT generation FROM encodes ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            # the file (as the encode read it) WAS the first row's output
+            self.assertEqual(row["generation"], 2)
+            # the size=None stat path: a vanished file has no ancestry and
+            # never raises
+            self.assertEqual(service.derive_generation(self.connection, movie), 1)
+
+    def test_derive_generation_restored_original_is_generation_1(self):
+        """The identity rule on the write side (issue #647, round 3): a path
+        claim counts as ancestry only when the row's recorded output is the
+        file the path now carries. A restored original (its size no longer
+        matches any row's output) is generation 1 again - its re-encode
+        starts a fresh chain instead of writing a false generation-2 link."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 1000)  # the restored original's size
+
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            # two in-place encodes claim the movie's path (1000->500->400)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=str(movie),
+                generation=1,
+            )
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>90",
+                "svt_av1",
+                500,
+                400,
+                20.0,
+                output_file=str(movie),
+                generation=2,
+            )
+            # the encoded state: the file IS the latest row's output
+            movie.write_bytes(b"x" * 400)
+            self.assertEqual(service.derive_generation(self.connection, movie), 3)
+            # the restore: no row's output matches the file any more
+            movie.write_bytes(b"x" * 1000)
+            self.assertEqual(service.derive_generation(self.connection, movie), 1)
 
     def test_add_encode_with_drift_fields(self):
         file_id = db.upsert_file(self.connection, self._record("a.mkv"))
@@ -1013,6 +1173,395 @@ class TestDb(unittest.TestCase):
                 self.assertTrue(body["plan"]["stale"])
                 self.assertEqual(body["plan"]["encoder"], "svt_av1")
                 self.assertEqual(body["plan"]["target_vmaf"], 96.0)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_library_hides_an_encode_whose_file_no_longer_matches(self):
+        """The identity rule on the library surface (issue #647): an encode
+        record is history, not the current state. When the file's size no
+        longer matches the recorded output (a restored original), the
+        library entry carries no encode block; when the sizes match again,
+        the record is presented."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "restored.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path),
+                    mtime=100.0,
+                    size=1000,
+                    name="restored",
+                    category="Cat",
+                ),
+            )
+            # an in-place encode: the row's output_file is the file's own
+            # path - that is the claim the identity rule checks
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=movie_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                # the scan's record says 1000 bytes; the row claims 500: the
+                # record is not the file on disk
+                self.connection.execute("UPDATE files SET size = 1000 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "restored")
+                self.assertIsNone(entry["encode"])
+                # the encoded state's size back in the record: presented again
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "restored")
+                self.assertIsNotNone(entry["encode"])
+                self.assertEqual(entry["encode"]["saved_percent"], 50.0)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_the_latest_row_is_the_one_the_identity_rule_judges(self):
+        """The visibility rule applies to the LATEST encode row, not to the
+        latest row that happens to pass a filter (issue #647, round 2): a
+        library with an earlier out-of-place encode (E1, its artifact at its
+        own output path) and a later in-place encode (E2) whose file was
+        restored must show NO current encode - the latest row is what
+        changed, and an older row is not the file's current state."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "chained.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path), mtime=100.0, size=1000, name="chained", category="Cat"
+                ),
+            )
+            # E1: an out-of-place encode (its artifact at its own path)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(Path(media_tmp) / "elsewhere.mkv"),
+            )
+            # E2: a later in-place encode (its output took the file's path)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>90",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=movie_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                # the encoded state: E2 is the current encode
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "chained")
+                self.assertEqual(entry["encode"]["saved_percent"], 50.0)
+                # the restore: E2's identity fails - and E1 must NOT fall
+                # back in as the current encode
+                self.connection.execute("UPDATE files SET size = 1000 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "chained")
+                self.assertIsNone(entry["encode"])
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_a_restore_busts_the_library_etag(self):
+        """The identity signal is part of the ETag fingerprints (issue #647):
+        a restore rewrites a file's size WITHOUT touching any encode row, and
+        the restored original's mtime is typically not the library maximum -
+        so the max-mtime term alone would serve a 304 / library:null and the
+        dashboard would keep the stale ENCODED entry (the #625 stale-cache
+        class). The fingerprint carries the exact SET of mismatching in-place
+        row ids."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            # file A carries the library's max mtime and never changes
+            a_path = str(Path(media_tmp) / "a.mkv")
+            Path(a_path).write_bytes(b"x" * 100)
+            # file B is encoded in place, then restored by hand
+            b_path = str(Path(media_tmp) / "b.mkv")
+            Path(b_path).write_bytes(b"x" * 1000)
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(a_path), mtime=900.0, size=100, name="a", category="Cat"),
+            )
+            b_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(b_path), mtime=100.0, size=500, name="b", category="Cat"),
+            )
+            db.add_encode(
+                self.connection,
+                b_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=b_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                first = client.get("/api/library")
+                etag = first.headers["ETag"]
+                cached = client.get("/api/library", headers={"If-None-Match": etag})
+                self.assertEqual(cached.status_code, 304)
+                # the restore: the file is back to the ORIGINAL size, its
+                # mtime stays BELOW file A's maximum
+                self.connection.execute(
+                    "UPDATE files SET size = 1000, mtime = 150.0 WHERE id = ?",
+                    (b_id,),
+                )
+                self.connection.commit()
+                second = client.get("/api/library", headers={"If-None-Match": etag})
+                self.assertEqual(second.status_code, 200)
+                entry = next(e for e in second.json() if e["name"] == "b")
+                self.assertIsNone(entry["encode"])
+                # the SNAPSHOT's fingerprint carries the same term: the
+                # restore must move it too, or the dashboard's poll keeps a
+                # stale library behind an unchanged fingerprint
+                # the snapshot's payload carries the library etag the UI's
+                # poll compares (the same fingerprint term)
+                fp_before = client.get("/api/snapshot").json()["library_etag"]
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (b_id,))
+                self.connection.commit()
+                fp_after = client.get("/api/snapshot").json()["library_etag"]
+                self.assertNotEqual(fp_before, fp_after)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_movie_route_generation_follows_the_identity_rule(self):
+        """The detail page's GENERATION chip is a current-state surface
+        (issue #647, round 3): a restored original's /api/movie says
+        generation 1 - the stale in-place row's path claim is history, not
+        ancestry."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "restored.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path), mtime=100.0, size=1000, name="restored", category="Cat"
+                ),
+            )
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=movie_path,
+                generation=1,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                body = client.get("/api/movie", params={"path": movie_path}).json()
+                self.assertEqual(body["file"]["generation"], 1)
+                # the encoded state: the file IS the row's output - generation 2
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                Path(movie_path).write_bytes(b"x" * 500)
+                body = client.get("/api/movie", params={"path": movie_path}).json()
+                self.assertEqual(body["file"]["generation"], 2)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_the_snapshot_hides_a_restored_original_too(self):
+        """The snapshot carries the same rule as the library (issue #647):
+        an applied in-place row whose size no longer matches is hidden, and
+        an OUT-OF-PLACE latest row (an output-dir run's artifact at its own
+        path) stays visible - the deployment the gauge must agree with."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "restored.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path), mtime=100.0, size=1000, name="restored", category="Cat"
+                ),
+            )
+            # the latest row: out-of-place (its artifact at its own path)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(Path(media_tmp) / "elsewhere.mkv"),
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                body = client.get("/api/snapshot").json()
+                entry = next(m for m in body["library"] if m["name"] == "restored")
+                self.assertIsNotNone(entry["encode"])
+                self.assertEqual(entry["encode"]["saved_percent"], 60.0)
+                # an in-place latest row with a size mismatch: hidden
+                db.add_encode(
+                    self.connection,
+                    file_id,
+                    "VMAF>90",
+                    "svt_av1",
+                    1000,
+                    500,
+                    50.0,
+                    output_file=movie_path,
+                )
+                self.connection.commit()
+                body = client.get("/api/snapshot").json()
+                entry = next(m for m in body["library"] if m["name"] == "restored")
+                self.assertIsNone(entry["encode"])
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_a_chain_restore_busts_the_library_etag(self):
+        """The ETag signal is the exact SET of mismatching row ids, not a
+        count (issue #647, round 3): a chain restore can move the mismatch
+        from one applied row to another and leave the count unchanged - the
+        fingerprint must still change, or the dashboard keeps the stale
+        entry behind a 304."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            a_path = str(Path(media_tmp) / "a.mkv")
+            Path(a_path).write_bytes(b"x" * 100)
+            b_path = str(Path(media_tmp) / "b.mkv")
+            Path(b_path).write_bytes(b"x" * 1000)
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(a_path), mtime=900.0, size=100, name="a", category="Cat"),
+            )
+            b_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(b_path), mtime=100.0, size=400, name="b", category="Cat"),
+            )
+            # the chain: two in-place encodes (1000->500, then 500->400)
+            db.add_encode(
+                self.connection,
+                b_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=b_path,
+            )
+            db.add_encode(
+                self.connection,
+                b_id,
+                "VMAF>90",
+                "svt_av1",
+                500,
+                400,
+                20.0,
+                output_file=b_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                # the encoded state (size 400): the latest row matches, the
+                # EARLIER row mismatches - the mismatch count is 1
+                first = client.get("/api/library")
+                etag = first.headers["ETag"]
+                # the restore to the intermediate generation's size (500):
+                # the latest row mismatches now, the earlier one matches -
+                # the COUNT is still 1, but the SET of mismatching ids moved
+                self.connection.execute(
+                    "UPDATE files SET size = 500, mtime = 150.0 WHERE id = ?",
+                    (b_id,),
+                )
+                self.connection.commit()
+                second = client.get("/api/library", headers={"If-None-Match": etag})
+                self.assertEqual(second.status_code, 200)
+                entry = next(e for e in second.json() if e["name"] == "b")
+                self.assertIsNone(entry["encode"])
             finally:
                 app_module.state.shutdown()
                 app_module.state = None
@@ -1763,8 +2312,8 @@ class TestDb(unittest.TestCase):
             self.assertFalse(
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
-            # output exists and is non-empty => finished
-            (out / "c.mkv").write_bytes(b"encoded data")
+            # output exists with the RECORDED size => finished
+            (out / "c.mkv").write_bytes(b"x" * 50)
             self.assertTrue(
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
@@ -1773,11 +2322,20 @@ class TestDb(unittest.TestCase):
             self.assertFalse(
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
+            # a different-size file at the path (a restored original, issue
+            # #647) => not finished: the record is history, not the state
+            (out / "c.mkv").write_bytes(b"y" * 123)
+            self.assertFalse(
+                db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
+            )
 
-    def test_finished_movies_excludes_truncated_output(self):
-        """The quality-mode resume set excludes truncated outputs (debris):
-        the db says encoded and the file is non-empty, but the duration does
-        not verify => re-encode instead of skip-forever."""
+    def test_finished_movies_excludes_a_same_size_foreign_file(self):
+        """The quality-mode resume set excludes debris the identity rule
+        cannot see (issue #647): the file carries the RECORDED size but the
+        duration does not verify - a same-size replaced or corrupt file (a
+        truncated one is smaller and fails the identity check first; a crash
+        mid-write leaves no row at all) - so the duration check stays the
+        second line of defence => re-encode instead of skip-forever."""
 
         from shrinkray import service
 
@@ -1787,7 +2345,7 @@ class TestDb(unittest.TestCase):
             movie.write_bytes(b"x")
             out_dir = root / "enc"
             out_dir.mkdir()
-            (out_dir / "movie.mkv").write_bytes(b"truncated debris")
+            (out_dir / "movie.mkv").write_bytes(b"x" * 500)
             file_id = db.upsert_file(self.connection, self._record(str(movie)))
             db.add_encode(self.connection, file_id, "VMAF>95", "svt_av1", 1000, 500, 50.0)
             with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=False):
@@ -1796,6 +2354,41 @@ class TestDb(unittest.TestCase):
             with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True):
                 finished = service.finished_movies(self.connection, [movie], out_dir)
             self.assertEqual(finished, {str(movie)})
+
+    def test_finished_movies_restored_original_is_not_finished(self):
+        """The identity rule (issue #647): a recorded in-place encode does not
+        make the PATH finished forever - the file at the path must BE the
+        recorded output. Replacing it with a different-size file (the
+        documented restore: delete the AV1 output, rename the retained
+        original back) must drop the movie from the resume set, so the
+        watcher re-decides and re-encodes it instead of skipping it as
+        already_encoded."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 1000)  # the restored original's size
+            out_dir = root / "enc"
+            out_dir.mkdir()
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            # an in-place encode: the output took the source's path
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=str(movie),
+            )
+            # the duration verifies (the identity check is what must exclude
+            # the file, not a truncation verdict)
+            with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True):
+                finished = service.finished_movies(self.connection, [movie], out_dir)
+            self.assertEqual(finished, set())
 
     def test_records_effective_target_vmaf(self):
         """The preset column carries the engine's EFFECTIVE target (what the
@@ -2472,7 +3065,10 @@ class TestInPlaceAuditTrail(unittest.TestCase):
         self.assertEqual(row["output_file"], str(self.movie))
 
     def test_the_generation_chain_links_an_in_place_reencode(self) -> None:
-        """A second in-place encode of the same path is generation 2."""
+        """A second in-place encode of the same path is generation 2: the
+        swap made the file BE the first encode's output, so the ancestry
+        identity (issue #647) holds - the file's size matches the row's
+        recorded output."""
         from shrinkray import service
 
         service.record_quality_results(
@@ -2482,10 +3078,25 @@ class TestInPlaceAuditTrail(unittest.TestCase):
             config_helper.Conf(),
             final_output=self.movie,
         )
+        # the swap: the artifact took the source's path (the mocked encode
+        # skips it; the real flow's file IS the recorded output now)
+        self.movie.write_bytes(b"x" * 400)
+        # the second encode reads the file at its post-swap size
+        from shrinkray.engine.plan import QualityResult
+
         second = service.record_quality_results(
             self.connection,
             self.movie,
-            self._result(self.root / ".shrinkray-y/movie.mkv"),
+            QualityResult(
+                input=self.movie,
+                output=self.root / ".shrinkray-y/movie.mkv",
+                success=True,
+                target_vmaf=96.0,
+                chosen_crf=20,
+                achieved_vmaf=95.8,
+                input_size=400,
+                output_size=300,
+            ),
             config_helper.Conf(),
             final_output=self.movie,
         )

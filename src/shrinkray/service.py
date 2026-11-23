@@ -260,30 +260,37 @@ def ensure_file_row(connection: sqlite3.Connection, movie: Path) -> int:
     return db.upsert_file(connection, record)
 
 
-def derive_generation(connection: sqlite3.Connection, movie: Path) -> int:
+def derive_generation(connection: sqlite3.Connection, movie: Path, size: int | None = None) -> int:
     """Determines the generation of a movie by its encode ancestry.
 
     The encodes table chains generations via output_file: a row's
     output_file is the path of the file it produced. When the movie's path
-    appears as a previous row's output_file, the movie IS that encode's
-    output — generation N+1. A file with no ancestry is generation 1.
+    appears as a previous row's output_file AND that row's recorded output
+    is the size the file carries now (the identity rule, issue #647 - only
+    an applied row counts), the movie IS that encode's output - generation
+    N+1. A file with no ancestry is generation 1.
 
     Args:
         connection: The database connection.
         movie (Path): The movie file to classify.
+        size (int | None): The file's size as the encode read it (the run
+            identity), when the caller has it; None stats the file, and a
+            vanished file has no ancestry (generation 1).
 
     Returns:
         int: The generation number (>= 1).
     """
     path_str = str(movie.resolve())
-    row = connection.execute(
-        """
-        SELECT generation FROM encodes
-        WHERE output_file = ?
-        ORDER BY id DESC LIMIT 1
-        """,
-        (path_str,),
-    ).fetchone()
+    if size is None:
+        try:
+            size = movie.stat().st_size
+        except OSError:
+            return 1
+    # the identity rule (issue #647): a path claim counts as ancestry only
+    # when the row's recorded output is the file the path now carries - a
+    # restored original is generation 1 again, and its re-encode starts a
+    # fresh chain instead of writing a false link
+    row = db.latest_ancestry(connection, path_str, size)
     if row is not None:
         return int(row["generation"]) + 1
     return 1
@@ -443,7 +450,12 @@ def save_encode(
     file_id = ensure_file_row(connection, movie)
     saved_percent = round((1 - output_size / input_size) * 100, 2) if input_size else 0.0
     if generation is None:
-        generation = derive_generation(connection, movie)
+        # the identity input is the size the encode actually READ (the run
+        # identity), not a fresh stat: the row is written before the swap,
+        # and a source that vanished or changed during a multi-hour encode
+        # must reach the swap's own "source changed" decline, not crash here
+        # (issue #647, round 5)
+        generation = derive_generation(connection, movie, size=input_size)
     return db.add_encode(
         connection,
         file_id,
@@ -506,11 +518,18 @@ def finished_movies(
     """Determines which movies are already encoded (batch resume check).
 
     A movie counts as finished when the database holds a real encode (not a
-    skip marker) AND its output file still exists, is non-empty AND its
-    duration verifies against the source. The duration check catches debris
-    from interrupted encodes: a crashed HandBrake leaves a non-empty but
-    truncated file which must be re-encoded, not skipped (an unverifiable
-    file stays conservatively "finished" - never delete on a guess).
+    skip marker), the file at the output path IS that output (issue #647's
+    identity rule: the file's size matches the row's `output_size` - a
+    restored original is a different file), and its duration verifies against
+    the source. The duration check's scope: for an OUT-OF-PLACE row it
+    compares the artifact at its own path with the source and catches a
+    same-size replaced or corrupt artifact (a truncated one is smaller and
+    fails the identity check first); for an IN-PLACE row the row's output path
+    is the movie itself, so the comparison is vacuous and the size identity
+    is the whole check (a same-size foreign file at an in-place path is not
+    detectable here - a named limit). A crash mid-write leaves no row at all
+    - the row is written only after the encode returns - so a crash cannot
+    produce the state this check sees.
 
     Args:
         connection: The database connection.
@@ -543,8 +562,9 @@ def finished_movies(
             from shrinkray.logger import log_warning
 
             log_warning(
-                f"Output of '{movie.name}' exists but is truncated (interrupted "
-                "encode?) => it will be re-encoded."
+                f"Output of '{movie.name}' exists at the recorded size but its "
+                "duration does not verify (a replaced or corrupt file?) => it "
+                "will be re-encoded."
             )
     return finished
 

@@ -183,6 +183,23 @@
   /** Newest first for the history table. */
   const encodesDesc = $derived(encodes ? [...encodes].reverse() : [])
 
+  /** The most recent RECORD whose output claim matches the file being
+   * viewed (the identity rule, issue #647): only that row produced the
+   * file - an older row with a coinciding claim is history. The history is
+   * generation-ordered, so a restored original's re-encode (generation 1
+   * again) does NOT sort last - it lands among the older rows: the
+   * record's id, not the display position, says which row is the latest. */
+  const currentEncodeId = $derived.by(() => {
+    const matches = encodesDesc.filter(
+      (r) =>
+        r.outcome === 'applied' &&
+        r.output_file != null &&
+        normPath(r.output_file) === normPath(movie.path) &&
+        r.output_size === movie.size,
+    )
+    return matches.length ? Math.max(...matches.map((r) => r.id ?? -1)) : null
+  })
+
   // ── drift chart: the provenance chain as a shape ──
   // The chain table carries the numbers; the chart carries the SHAPE —
   // rip 5.0 MBit/s collapsing to 1.0 across generations is the product's
@@ -560,7 +577,11 @@
             <span class="delta"></span>
           </div>
           {#each encodesDesc as rec, i (rec.id ?? `${rec.encoded_at}-${i}`)}
-            {@const producedThis = rec.output_file != null && normPath(rec.output_file) === normPath(movie.path)}
+            <!-- the identity rule (issue #647): the LATEST row matching the
+                 file's path and size is the one that produced it - an older
+                 row whose claim happens to coincide (a restore followed by a
+                 re-encode at the same size) is history, not the current state -->
+            {@const producedThis = rec.id != null && rec.id === currentEncodeId && rec.output_file != null && normPath(rec.output_file) === normPath(movie.path) && rec.output_size === movie.size}
             {@const fromElsewhere = rec.file_path != null && normPath(rec.file_path) !== normPath(movie.path)}
             <div class="enc-row">
               <span

@@ -303,6 +303,50 @@ Item 3 also needed a schema migration: a plan stored while the flag existed was 
 *without* a crop when the flag was off, so reusing it would encode the film with its bars kept.
 Migration 15 drops every stored plan rather than reuse one that describes an uncropped output.
 
+## The already-encoded resume rule and the identity rule
+
+A movie counts as **already encoded** (the batch resume check, the encode job's
+`already_encoded` outcome) when the database holds an APPLIED encode — not a skip
+marker and not a #625-discarded attempt — AND the file at the recorded output
+path **is that output**: it exists, is non-empty, and its size matches the row's
+`output_size`, AND the duration verifies (for an OUT-OF-PLACE row: the
+artifact at its own path against the source — the check that catches a
+same-size replaced or corrupt artifact; a TRUNCATED artifact is smaller than
+the record and fails the size identity first; for an IN-PLACE row the file
+would be compared with itself, so the size identity is the whole check there —
+a same-size foreign file at an in-place path is not detectable by these two
+checks, a named limit). A legacy row with no path claim (`output_file` IS NULL) falls back to
+the run's output directory, where the duration check does compare two different
+files (issue #647). The
+identity rule exists because in-place encoding (#232) made the output path equal
+the source path: without it, a restored original — the documented recovery path,
+delete the AV1 output and rename the retained `<name>.shrinkray-original` back —
+passes a bare existence check, the surfaces keep claiming savings that are no
+longer on disk, and the file silently drops out of the pipeline for good.
+
+The same rule governs the surfaces that present an encode as the file's CURRENT
+state: `/api/snapshot` and `/api/library` hide an applied encode from a library
+entry when the row claims the file's own path (`output_file` = the entry's path)
+and the scan's recorded size no longer matches the row's `output_size`, and the
+generation derivation (`db.latest_ancestry`, shared by `derive_generation` and
+the movie route) refuses a path claim whose recorded output is not the file the
+path now carries — a restored original is generation 1 again — and the movie
+page's provenance badge marks the most recent RECORD whose claim matches (the
+history is generation-ordered, so a re-encode of a restored original does NOT
+sort last - it lands among the older rows, before an older generation-2 row;
+the record id, not the display position, decides). Every
+other row stays visible exactly as it was: the #625 attempts and the skip
+markers (their `outcome` names them), rows whose artifact lives elsewhere (an
+output-directory run), and rows with no path claim (`output_file` IS NULL).
+`/metrics`' reclaimed gauge counts an applied row while the library's records
+still corroborate it: an in-place row while the file's recorded size matches
+the record, an output-directory row always (its artifact lives outside the
+library and the database cannot verify it), a legacy row with no path claim
+(`output_file` IS NULL) always, and never a file the scans report missing. A restored original is re-decided by the watcher and, if
+eligible, encoded again: a new row, the old one staying in the history. The
+definition of bytes reclaimed across a CHAIN (a re-encoded file's earlier
+generations) is issue #646's.
+
 ## AV1 sources - decided
 
 **AV1 sources.** Re-encoding AV1 to AV1 buys no codec generation gain, so the only saving would come
