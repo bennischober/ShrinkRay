@@ -2965,6 +2965,71 @@ class TestDb(unittest.TestCase):
             issues = [f.issue for f in findings]
             self.assertIn("encode output vanished", issues)
 
+    def test_doctor_silence_on_a_restored_original(self):
+        """A restored original is history, not a vanished output (issue
+        #706): an applied own-path row whose file's size no longer matches
+        the row's output_size gets no finding from doctor."""
+
+        from shrinkray import service
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 8)
+            db.upsert_file(self.connection, self._record(str(movie)))
+            service.record_quality_results(
+                self.connection,
+                movie,
+                QualityResult(
+                    input=movie,
+                    output=root / ".shrinkray-x" / "movie.mkv",
+                    success=True,
+                    target_vmaf=96.0,
+                    chosen_crf=21,
+                    achieved_vmaf=95.5,
+                    input_size=8,
+                    output_size=400,
+                ),
+                config_helper.Conf(),
+                final_output=movie,
+            )
+            row = self.connection.execute(
+                "SELECT output_file, output_size, outcome FROM encodes ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            self.assertEqual(row["output_file"], str(movie))
+            self.assertEqual(row["outcome"], "applied")
+            # the restore: the original's bytes are back at the path - a
+            # different size than the row's output_size
+            movie.write_bytes(b"restored original")
+            findings = service.doctor(self.connection)
+            self.assertEqual([f for f in findings if f.movie == str(movie)], [])
+
+    def test_output_claim_is_current_classifies_the_restored_original(self):
+        """The predicate behind doctor's silence (issue #706): an applied
+        own-path row is current only when the actual size matches the
+        recorded output_size - a mismatch is a restored original."""
+
+        self.assertTrue(
+            db.output_claim_is_current("applied", "/lib/movie.mkv", "/lib/movie.mkv", 400, 400)
+        )
+        # the restored original: own path, applied, but the bytes differ
+        self.assertFalse(
+            db.output_claim_is_current("applied", "/lib/movie.mkv", "/lib/movie.mkv", 400, 17)
+        )
+        # nothing at the path is not a current claim either
+        self.assertFalse(
+            db.output_claim_is_current("applied", "/lib/movie.mkv", "/lib/movie.mkv", 400, None)
+        )
+        # a discarded attempt's claim is never current, even at the same size
+        self.assertFalse(
+            db.output_claim_is_current("discarded", "/lib/movie.mkv", "/lib/movie.mkv", 400, 400)
+        )
+        # an out-of-place claim cannot be identity-checked against its file row
+        self.assertFalse(
+            db.output_claim_is_current("applied", "/lib/enc/movie.mkv", "/lib/movie.mkv", 400, 400)
+        )
+
     def test_doctor_probe_all_detects_corruption(self):
         """--probe-all ffprobes every row: a file that exists but does not
         probe is reported as unprobeable; a probeable one is silent."""
