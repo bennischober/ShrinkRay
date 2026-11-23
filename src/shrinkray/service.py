@@ -762,18 +762,49 @@ def doctor(connection: sqlite3.Connection, probe_all: bool = False) -> list[Doct
             findings.append(
                 DoctorFinding(movie=row["path"], issue="unprobeable (corrupt/truncated?)")
             )
-    # encode rows: does the recorded output still exist?
-    for path_str in connection.execute(
-        "SELECT DISTINCT output_file FROM encodes WHERE output_file IS NOT NULL"
+    # encode rows: does the recorded output still exist - and when the claim
+    # is the file's own path, is the file at the path still the recorded
+    # output? The identity rule (issue #647, PR #705): a path claim alone is
+    # not the file's state, because in-place encoding (#232) made the output
+    # path equal the source path - a restored original still carries the
+    # row's own-path claim. db.output_claim_is_current applies #705's
+    # predicate (applied, own path, size match); a claim that is not current
+    # is either a vanished artifact (reported below, unchanged) or a restored
+    # original - history, not a vanished output - which the maintainer
+    # decided is silence-only (issue #706, 2026-11-22): no finding, no
+    # repair. DISTINCT keeps one finding per path: several encode rows can
+    # share an output_file.
+    reported: set[str] = set()
+    for row in connection.execute(
+        """
+        SELECT DISTINCT e.output_file, e.output_size, e.outcome, f.path AS file_path
+        FROM encodes e JOIN files f ON f.id = e.file_id
+        WHERE e.output_file IS NOT NULL
+        """
     ).fetchall():
-        output = Path(path_str["output_file"])
-        if not output.exists():
-            findings.append(
-                DoctorFinding(
-                    movie=path_str["output_file"],
-                    issue="encode output vanished",
+        output = Path(row["output_file"])
+        actual_size = output.stat().st_size if output.exists() else None
+        if db.output_claim_is_current(
+            row["outcome"],
+            row["output_file"],
+            row["file_path"],
+            row["output_size"],
+            actual_size,
+        ):
+            continue  # the claim still describes the bytes at the path
+        if actual_size is None:
+            if row["output_file"] not in reported:
+                reported.add(row["output_file"])
+                findings.append(
+                    DoctorFinding(
+                        movie=row["output_file"],
+                        issue="encode output vanished",
+                    )
                 )
-            )
+            continue
+        # a present path whose claim is stale: a restored original (or an
+        # out-of-place claim no file row can verify) is history, not a
+        # vanished output - silence-only per the maintainer's decision.
     findings.extend(stale_scratch_findings())
     return findings
 

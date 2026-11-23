@@ -1399,6 +1399,48 @@ def has_output_for_latest_encode(
     return int(output_file.stat().st_size) == int(latest["output_size"])
 
 
+def output_claim_is_current(
+    outcome: str,
+    output_file: str,
+    file_path: str,
+    output_size: int,
+    actual_size: int | None,
+) -> bool:
+    """Checks whether an encode row's output claim still describes the bytes
+    at the claimed path (the identity rule, issue #647).
+
+    A row's ``output_file`` is a claim, not a state: in-place encoding (#232)
+    made the output path equal the source path, so a restored original still
+    carries an applied row's own-path claim while the bytes at the path are
+    the original's. The claim is current only when the row is APPLIED, claims
+    the file's own path, and the file's actual size matches the row's
+    recorded ``output_size`` - the same predicate ``latest_ancestry`` applies
+    (``WHERE output_file = ? AND output_size = ? AND outcome = 'applied'``).
+    A row pointing elsewhere cannot be identity-checked against its file row
+    and reads as not current; doctor keeps today's existence verdict for
+    those (issue #706).
+
+    Args:
+        outcome (str): The row's outcome - only an applied row's claim can
+            be current.
+        output_file (str): The path the row claims as its output.
+        file_path (str): The owning file row's own path.
+        output_size (int): The size the row recorded for its output.
+        actual_size (int | None): The size of the file actually at the
+            claimed path (None when nothing is there).
+
+    Returns:
+        bool: True when the claim still describes the bytes at the path.
+    """
+    if outcome != "applied":
+        return False
+    if output_file != file_path:
+        return False
+    if actual_size is None:
+        return False
+    return int(output_size) == int(actual_size)
+
+
 def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:
     """Returns all encodes for a file, newest first.
 
