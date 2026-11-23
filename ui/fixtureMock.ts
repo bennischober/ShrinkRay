@@ -23,6 +23,61 @@ const STATUS_SCENARIOS: Record<string, number> = {
   locked: 401,
 }
 
+/** The synthetic overlap probe's overlay (issue #628, review round 5 B3).
+ * The real Jobs row #4 overlap is not reproducible on any fixture — #632
+ * fixed its cause (the narrow KIND column) before this harness existed — so
+ * the overlap check's sensitivity is proven on a deliberately-defective page
+ * instead: for THIS fixture name only, the mock's page carries a script that
+ * draws two clearly-labeled, absolutely-positioned text boxes over a Jobs
+ * row's cells. The e2e probe test expects the overlap check to report exactly
+ * that pair, the way a real page's own overlap would be reported; the check
+ * itself and the allowlist are untouched. The mock is `apply: 'serve'`, so a
+ * production build never carries any of this. */
+const OVERLAP_PROBE_FIXTURE = 'overlap-probe'
+
+const OVERLAY_SCRIPT = `
+// SYNTHETIC overlap probe (issue #628, review round 5 B3) — dev fixture only.
+// Two labeled boxes over a Jobs row give the e2e overlap check a defect to
+// catch on a page whose real layout has none. Not product UI, not in the
+// known-failures allowlist.
+;(function () {
+  var tries = 0
+  var timer = setInterval(function () {
+    tries += 1
+    // the Jobs page renders after the snapshot fetch; take the first VISIBLE
+    // row (every page stays mounted, hidden ones measure zero)
+    var rows = document.querySelectorAll('main .entry .row')
+    var row = null
+    for (var i = 0; i < rows.length; i += 1) {
+      if (rows[i].getBoundingClientRect().width > 0) { row = rows[i]; break }
+    }
+    if (row === null) {
+      if (tries > 100) clearInterval(timer)
+      return
+    }
+    clearInterval(timer)
+    row.style.position = 'relative'
+    var boxes = [
+      ['overlap-probe-a', 'SYNTHETIC OVERLAP PROBE A', '8px'],
+      ['overlap-probe-b', 'SYNTHETIC OVERLAP PROBE B', '56px'],
+    ]
+    for (var j = 0; j < boxes.length; j += 1) {
+      var el = document.createElement('span')
+      el.className = 'synthetic-overlap-probe ' + boxes[j][0]
+      el.textContent = boxes[j][1]
+      // loud, hand-set styling on purpose: the overlay is test scaffolding
+      // that must be unmistakable in a screenshot, never mistaken for the
+      // page's design
+      el.style.cssText =
+        'position:absolute;top:0;left:' + boxes[j][2] +
+        ';width:120px;height:22px;z-index:9;background:#f2c94c;color:#111;' +
+        'font:600 9px/22px monospace;text-align:center;white-space:nowrap;overflow:hidden;'
+      row.appendChild(el)
+    }
+  }, 50)
+})()
+`
+
 /** Dev-only mock of the dashboard's API, so a page renders against a
  * fixture with no resident process (issue #628). `?fixture=<name>` on any
  * request selects the scenario and it rides a cookie, so it sticks for the
@@ -54,6 +109,13 @@ export function fixtureMock(dir = resolve(process.cwd(), 'fixtures')): Plugin {
   return {
     name: 'shrinkray-fixture-mock',
     apply: 'serve',
+    transformIndexHtml(html, ctx) {
+      // the overlay rides the served page, so the probe's DOM is the mock's
+      // work, not the test's; only the probe fixture's page carries it
+      const fixture = new URL(ctx.originalUrl ?? '/', 'http://localhost').searchParams.get('fixture')
+      if (fixture !== OVERLAP_PROBE_FIXTURE) return html
+      return { html, tags: [{ tag: 'script', children: OVERLAY_SCRIPT, injectTo: 'head' }] }
+    },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const url = new URL(req.url ?? '/', 'http://localhost')

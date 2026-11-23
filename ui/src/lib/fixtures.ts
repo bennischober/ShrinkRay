@@ -1,19 +1,25 @@
 import emptyJson from '../../fixtures/empty.json' with { type: 'json' }
 import nastyNamesJson from '../../fixtures/nasty-names.json' with { type: 'json' }
 import failuresJson from '../../fixtures/failures.json' with { type: 'json' }
+import overlapProbeJson from '../../fixtures/overlap-probe.json' with { type: 'json' }
 import type { Config, Job, Movie, MovieDetail, RetainedFile, Status } from './api.js'
 
 /** A scenario a page can be rendered against with no resident process
  * (issue #628): every GET route's body, plus the events the SSE stream would
  * have sent.
  *
- * JSON cannot carry a tuple or a literal union, so exactly four fields are
+ * JSON cannot carry a tuple or a literal union, so exactly five fields are
  * widened here (`resolution` arrives as `number[]`, `watcher`/`worker`/
- * `kind`/`state` as `string`). Everything else is the API's own type: a field added to
+ * `kind`/`state` as `string`, and `status.queue`'s entries share the jobs
+ * widening — a hand-written fixture may carry a truthful queue). Everything else is the API's own type: a field added to
  * `Movie`, `Job` or `Status` without a matching fixture value fails
  * `npm run check`, which is how a fixture cannot drift from the contract. */
 export type Fixture = Omit<FixtureBody, 'status' | 'library' | 'jobs' | 'movie'> & {
-  status: Omit<Status, 'watcher' | 'worker'> & { watcher: string; worker?: string }
+  status: Omit<Status, 'watcher' | 'worker' | 'queue'> & {
+    watcher: string
+    worker?: string
+    queue: (Omit<Job, 'kind' | 'state'> & { kind: string; state: string })[]
+  }
   library: (Omit<Movie, 'resolution'> & { resolution: number[] | null })[]
   jobs: (Omit<Job, 'kind' | 'state'> & { kind: string; state: string })[]
   movie:
@@ -39,6 +45,7 @@ type FixtureBody = {
 emptyJson satisfies Fixture
 nastyNamesJson satisfies Fixture
 failuresJson satisfies Fixture
+overlapProbeJson satisfies Fixture
 
 /** The scenarios `?fixture=<name>` knows — the one list the dev mock
  * validates the query parameter against before it touches the filesystem
@@ -52,6 +59,9 @@ export const FIXTURES = [
   'huge',
   'offline',
   'locked',
+  // the synthetic overlap probe (issue #628, review round 5 B3): its page is
+  // the ONLY one the dev mock defaces — see fixtureMock.ts's overlay script
+  'overlap-probe',
 ] as const
 
 export type FixtureName = (typeof FIXTURES)[number]

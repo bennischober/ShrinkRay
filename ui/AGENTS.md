@@ -66,7 +66,13 @@ ui/
   fails when a listed case starts passing, so it can only shrink. Adding a scenario
   is adding its JSON plus its name in `FIXTURES` (`src/lib/fixtures.ts`) — a scale
   scenario in `fixtures/generated.ts`, a status scenario in `fixtureMock.ts`'s
-  `STATUS_SCENARIOS`.
+  `STATUS_SCENARIOS`. The `overlap-probe` fixture is the synthetic overlap proof
+  (issue #628, review round 5 B3): the dev mock draws a clearly-labeled two-box
+  overlay over a Jobs row for that fixture name only, and
+  `npm run test:e2e:overlap-probe` runs the e2e test that expects the overlap
+  check to report it — the real Jobs overlap is not reproducible (#632 fixed its
+  cause), so the check's sensitivity is proven on a deliberately defective page
+  instead.
 - **One network boundary**: every `fetch` lives in `api.ts`; `progress.svelte.ts` owns the
   only `EventSource` (token as `?token=` — it cannot set a header).
 - **Flow is not state**: SSE carries progress only; the snapshot poll is the state channel.

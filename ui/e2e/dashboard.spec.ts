@@ -95,9 +95,11 @@ async function expectNothingEscapes(page: Page): Promise<void> {
  * overlap on Jobs (measured 2026-11-23: every jobs case passes, including
  * nasty-names rows carrying a 200-character name and Windows-style paths) —
  * the check stays as the class's regression gate. One pixel of slack absorbs
- * subpixel rounding; merely touching edges are not an overlap. */
-async function expectNoOverlappingText(page: Page): Promise<void> {
-  const overlapping = await page.evaluate(() => {
+ * subpixel rounding; merely touching edges are not an overlap. The finding
+ * list is the shared seam: the matrix gate asserts it empty, and the
+ * synthetic probe test (below) asserts it names the mock's labeled pair. */
+async function findOverlappingBoxes(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
     const out: string[] = []
     const overlaps = (a: DOMRect, b: DOMRect) =>
       Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 &&
@@ -123,6 +125,11 @@ async function expectNoOverlappingText(page: Page): Promise<void> {
     }
     return out
   })
+}
+
+/** The matrix's gate on the finding above: zero overlapping pairs. */
+async function expectNoOverlappingText(page: Page): Promise<void> {
+  const overlapping = await findOverlappingBoxes(page)
   expect(overlapping, `overlapping text boxes: ${overlapping.join(', ')}`).toHaveLength(0)
 }
 
@@ -275,3 +282,67 @@ for (const scenario of SCENARIOS) {
     }
   }
 }
+
+/** The overlap check's firing proof (issue #628, review round 5 B3): the real
+ * Jobs row #4 overlap is NOT reproducible on any fixture — #632 fixed its
+ * cause before this harness existed — so the check's sensitivity is proven
+ * synthetically, in the shape of a mutation test. The mock's `overlap-probe`
+ * fixture renders a clearly-labeled two-box overlap over a Jobs row (see
+ * fixtureMock.ts), and this test EXPECTS the overlap finding, naming the
+ * intersecting boxes: it passes while the check works and fails the moment
+ * the check is removed or blinded. A real page whose own layout overlaps
+ * fails a matrix run with the same finding. This is deliberately NOT in
+ * known-failures.json: the allowlist is for real page defects only. */
+test('the overlap check catches an overlap (synthetic probe)', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.addInitScript((t) => localStorage.setItem('ms.theme', t), 'dark')
+  await page.goto('/?fixture=overlap-probe#/jobs', { waitUntil: 'load' })
+  // the mock injects the labeled pair once a Jobs row has rendered; the wait
+  // IS the proof the overlay is the mock's work, not this test's
+  await expect(page.locator('.synthetic-overlap-probe')).toHaveCount(2)
+  await page.evaluate(() => document.fonts.ready)
+  // the evidence artifact: the two labeled boxes visible over the row
+  await page.screenshot({ path: 'test-results/screenshots/overlap-probe-synthetic.png' })
+
+  // the labeled pair must actually intersect before the check is judged
+  const probe = await page.evaluate(() => {
+    const row = document.querySelector<HTMLElement>('main .entry .row')
+    if (row == null) throw new Error('no Jobs row rendered')
+    const children = Array.from(row.children)
+    const index = (cls: string) => children.findIndex((el) => el.classList.contains(cls))
+    const a = index('overlap-probe-a')
+    const b = index('overlap-probe-b')
+    const ra = children[a].getBoundingClientRect()
+    const rb = children[b].getBoundingClientRect()
+    return {
+      a,
+      b,
+      rowClass: row.className,
+      x: Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left),
+      y: Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top),
+    }
+  })
+  expect(probe.x, 'the synthetic boxes do not intersect — the probe fixture is broken').toBeGreaterThan(1)
+  expect(probe.y, 'the synthetic boxes do not intersect — the probe fixture is broken').toBeGreaterThan(1)
+
+  // the finding, the way a real page's overlap would be named. The overlay
+  // covers the row's own cells too (that is what "drawn over the row" means),
+  // so the check reports every pair a labeled box takes part in — the proof
+  // is that (1) EVERY finding involves one of the two labeled boxes (the
+  // page's own layout contributes none) and (2) the labeled pair itself is
+  // among them, named with the row and the two child indexes.
+  const findings = await findOverlappingBoxes(page)
+  const synthetic = new Set([probe.a, probe.b])
+  const otherFindings = findings.filter((f) => {
+    const m = /child (\d+) over child (\d+)$/.exec(f)
+    return m == null || ![Number(m[1]), Number(m[2])].some((i) => synthetic.has(i))
+  })
+  expect(
+    otherFindings,
+    `the check reported overlaps the synthetic overlay does not explain: ${otherFindings.join(', ')}`,
+  ).toHaveLength(0)
+  expect(
+    findings,
+    `the overlap check missed the synthetic overlap (findings: ${findings.join(', ')})`,
+  ).toContain(`${probe.rowClass}: child ${probe.a} over child ${probe.b}`)
+})

@@ -1,0 +1,120 @@
+{
+  "status": {
+    "queue": [
+      {
+        "id": 1,
+        "kind": "encode",
+        "state": "running",
+        "created_at": "2026-11-14T11:54:00Z",
+        "started_at": "2026-11-14T11:55:00Z",
+        "finished_at": null,
+        "payload": { "paths": ["/media/Filme/Probe Titel (2020).mkv"] },
+        "result": null,
+        "error": null
+      },
+      {
+        "id": 2,
+        "kind": "encode",
+        "state": "queued",
+        "created_at": "2026-11-14T11:55:00Z",
+        "started_at": null,
+        "finished_at": null,
+        "payload": { "paths": ["/media/Filme/Anderer Probe Titel (2021).mkv"] },
+        "result": null,
+        "error": null
+      }
+    ],
+    "watcher": "running",
+    "database": "/data/metadata.db",
+    "rss_mib": 49.1,
+    "config_error": null,
+    "paused": null,
+    "encode_window": "open",
+    "reveal_available": false
+  },
+  "library": [
+    {
+      "path": "/media/Filme/Probe Titel (2020).mkv",
+      "name": "Probe Titel (2020)",
+      "category": "Filme",
+      "duration": "01:30:00",
+      "codec": "h264",
+      "resolution": [1920, 1080],
+      "size": 4200000000,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Anderer Probe Titel (2021).mkv",
+      "name": "Anderer Probe Titel (2021)",
+      "category": "Filme",
+      "duration": "02:10:00",
+      "codec": "hevc",
+      "resolution": [1920, 1080],
+      "size": 5100000000,
+      "hdr": false,
+      "encode": null
+    }
+  ],
+  "jobs": [
+    {
+      "id": 1,
+      "kind": "encode",
+      "state": "running",
+      "created_at": "2026-11-14T11:54:00Z",
+      "started_at": "2026-11-14T11:55:00Z",
+      "finished_at": null,
+      "payload": { "paths": ["/media/Filme/Probe Titel (2020).mkv"] },
+      "result": null,
+      "error": null
+    },
+    {
+      "id": 2,
+      "kind": "encode",
+      "state": "queued",
+      "created_at": "2026-11-14T11:55:00Z",
+      "started_at": null,
+      "finished_at": null,
+      "payload": { "paths": ["/media/Filme/Anderer Probe Titel (2021).mkv"] },
+      "result": null,
+      "error": null
+    },
+    {
+      "id": 3,
+      "kind": "plan",
+      "state": "done",
+      "created_at": "2026-11-14T11:30:00Z",
+      "started_at": "2026-11-14T11:30:00Z",
+      "finished_at": "2026-11-14T11:31:00Z",
+      "payload": { "paths": ["/media/Filme/Probe Titel (2020).mkv"] },
+      "result": {
+        "plans": [
+          {
+            "movie": "Probe Titel (2020)",
+            "state": "encode",
+            "crf": 30,
+            "estimated_size": 1500000000,
+            "saved_percent": 55,
+            "reason": null
+          }
+        ]
+      },
+      "error": null
+    },
+    {
+      "id": 4,
+      "kind": "encode",
+      "state": "failed",
+      "created_at": "2026-11-14T11:00:00Z",
+      "started_at": "2026-11-14T11:00:00Z",
+      "finished_at": "2026-11-14T11:10:00Z",
+      "payload": { "paths": ["/media/Filme/Anderer Probe Titel (2021).mkv"] },
+      "result": null,
+      "error": "HandBrakeCLI exited with code 1"
+    }
+  ],
+  "retained": [],
+  "config": { "quality": { "target_vmaf": 96 } },
+  "movie": null,
+  "events": []
+}
