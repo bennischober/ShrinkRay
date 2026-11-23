@@ -89,8 +89,13 @@ async function expectNothingEscapes(page: Page): Promise<void> {
 
 /** No two boxes in a table row or a card row may overlap (issue #628): the
  * defect this check exists for is text drawn over neighbouring text — the
- * Jobs page's row #4. One pixel of slack absorbs subpixel rounding; merely
- * touching edges are not an overlap. */
+ * Jobs page's row #4, whose filename wrapped out of its narrow KIND column
+ * into the start-time column (#632's fourth bullet). That cause is fixed in
+ * the page's own file cell (#632), and no current fixture reproduces an
+ * overlap on Jobs (measured 2026-11-23: every jobs case passes, including
+ * nasty-names rows carrying a 200-character name and Windows-style paths) —
+ * the check stays as the class's regression gate. One pixel of slack absorbs
+ * subpixel rounding; merely touching edges are not an overlap. */
 async function expectNoOverlappingText(page: Page): Promise<void> {
   const overlapping = await page.evaluate(() => {
     const out: string[] = []
