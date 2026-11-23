@@ -130,7 +130,37 @@
       "target_vmaf": 96
     }
   },
-  "movie": null,
-  "job": null,
+  "movie": {
+    "file": {
+      "path": "/media/Filme/Lang/Ein sehr langer Filmtitel mit Untertitel und Jahreszahl (2019) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay x265 10bit HDR DTS-HD MA 7.1-GRP.mkv",
+      "name": "Ein sehr langer Filmtitel mit Untertitel und Jahreszahl (2019) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay x265 10bit HDR DTS-HD MA 7.1-GRP",
+      "category": "Filme/Lang",
+      "duration": "02:00:00",
+      "codec": "hevc",
+      "resolution": [3840, 2160],
+      "size": 2400000000,
+      "hdr": false,
+      "generation": 1
+    },
+    "history": [
+      {
+        "id": 1,
+        "preset": "p5",
+        "crf": 30,
+        "vmaf": 96.1,
+        "input_size": 2400000000,
+        "output_size": 900000000,
+        "saved_percent": 62.5,
+        "encoder_preset": "p5",
+        "input_bitrate": 5300,
+        "output_bitrate": 2000,
+        "generation": 1,
+        "outcome": "applied",
+        "outcome_reason": null,
+        "encoded_at": "2026-11-14T10:00:00.000Z"
+      }
+    ],
+    "plan": null
+  },
   "events": []
 }

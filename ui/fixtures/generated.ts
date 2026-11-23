@@ -52,8 +52,48 @@ function job(id: number, state: Job['state'], kind: Job['kind'], offsetMinutes: 
     started_at: state === 'queued' ? null : started,
     finished_at: state === 'done' || state === 'failed' ? started : null,
     payload: { paths: [`/media/Filme/Titel ${id} (2020).mkv`] },
-    result: state === 'done' ? { encoded: 1 } : null,
+    result: null,
     error: null,
+  }
+}
+
+/** The finished jobs' mixed outcomes (issue #628): encoded, skipped HDR,
+ * skipped on no saving, a swap declined on verification, already encoded,
+ * and the failed rows. The states and reasons are the server's own
+ * vocabulary (`jobs.py`), so the pages summarize them the way they would
+ * summarize real work. */
+function outcome(id: number): Record<string, unknown> {
+  const name = `Titel ${id} (2020)`
+  const variant = id % 6
+  switch (variant) {
+    case 0:
+      return {
+        outcomes: [{
+          movie: name,
+          state: 'encoded',
+          crf: 28 + (id % 6),
+          vmaf: 95.5 + (id % 4) / 10,
+          input_size: 4_200_000_000,
+          output_size: 1_400_000_000 + (id % 7) * 10_000_000,
+          saved_percent: 60 + (id % 9),
+        }],
+      }
+    case 1:
+      return { outcomes: [{ movie: name, state: 'skipped', error: 'hdr not supported' }] }
+    case 2:
+      return { outcomes: [{ movie: name, state: 'skipped', error: 'output not smaller' }] }
+    case 3:
+      return {
+        outcomes: [{
+          movie: name,
+          state: 'skipped',
+          error: 'the swap was declined: audio track lost in verification (the encode is discarded)',
+        }],
+      }
+    case 4:
+      return { outcomes: [{ movie: name, state: 'already_encoded' }] }
+    default:
+      return { outcomes: [{ movie: name, state: 'failed', error: 'HandBrakeCLI exited with code 1' }] }
   }
 }
 
@@ -63,8 +103,28 @@ export function busy(): Fixture {
   const jobs: Job[] = [job(1, 'running', 'crf-search', 3)]
   for (let i = 2; i <= 41; i += 1) jobs.push(job(i, 'queued', 'encode', 0))
   for (let i = 42; i <= 341; i += 1) {
-    jobs.push(job(i, i % 9 === 0 ? 'failed' : 'done', i % 4 === 0 ? 'plan' : 'encode', i))
+    const finished = job(i, i % 9 === 0 ? 'failed' : 'done', i % 4 === 0 ? 'plan' : 'encode', i)
+    if (finished.state === 'done') {
+      // a plan writes `plans`, an encode writes `outcomes` — both keyed by
+      // kind the way the server's job trail is
+      finished.result = finished.kind === 'plan'
+        ? {
+            plans: [{
+              movie: `Titel ${i} (2020)`,
+              state: i % 8 === 0 ? 'skip' : 'encode',
+              crf: 28 + (i % 6),
+              estimated_size: 1_500_000_000,
+              saved_percent: 55 + (i % 10),
+              reason: i % 8 === 0 ? 'hdr not supported' : null,
+            }],
+          }
+        : outcome(i)
+    } else {
+      finished.error = 'HandBrakeCLI exited with code 1'
+    }
+    jobs.push(finished)
   }
+  const first = movie(0)
   return {
     status: {
       queue: jobs.filter((j) => j.state === 'queued' || j.state === 'running'),
@@ -87,10 +147,44 @@ export function busy(): Fixture {
       present: true,
     }],
     config: { quality: { target_vmaf: 96 } },
-    movie: null,
-    job: null,
+    movie: {
+      file: {
+        path: first.path,
+        name: first.name,
+        category: first.category,
+        duration: first.duration,
+        codec: first.codec,
+        resolution: first.resolution,
+        size: first.size,
+        hdr: first.hdr,
+        generation: 1,
+      },
+      history: [{
+        id: 1,
+        preset: 'p5',
+        crf: 30,
+        vmaf: 96.2,
+        input_size: 4_200_000_000,
+        output_size: 1_350_000_000,
+        saved_percent: 67.9,
+        encoder_preset: 'p5',
+        input_bitrate: 9_400,
+        output_bitrate: 3_000,
+        generation: 1,
+        outcome: 'applied',
+        outcome_reason: null,
+        encoded_at: new Date(NOW - 7_200_000).toISOString(),
+      }],
+      plan: null,
+    },
     events: [
-      { id: 1, kind: 'crf-search', movie: 'Titel 1 (2020)', detail: 'crf 30', percent: 41 },
+      { job_id: 1, stage: 'decision', detail: 'eligible: h264 1080p', movie: 'Titel 1 (2020)', percent: 0 },
+      { job_id: 1, stage: 'crf-search', detail: 'probe crf 32', movie: 'Titel 1 (2020)', percent: 20 },
+      { job_id: 1, stage: 'crf-search', detail: 'probe crf 28', movie: 'Titel 1 (2020)', percent: 45 },
+      { job_id: 1, stage: 'crf-search', detail: 'probe crf 30', movie: 'Titel 1 (2020)', percent: 60 },
+      { job_id: 1, stage: 'encode', detail: 'encoding at crf 30', movie: 'Titel 1 (2020)', percent: 70 },
+      { job_id: 1, stage: 'encode', detail: 'encoding at crf 30', movie: 'Titel 1 (2020)', percent: 88 },
+      { job_id: 1, stage: 'done', detail: 'vmaf 96.4', movie: 'Titel 1 (2020)', percent: 100 },
     ],
   }
 }
