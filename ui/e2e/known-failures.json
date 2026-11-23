@@ -1,0 +1,206 @@
+{
+  "overview · busy · desktop-1440 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=desktop-1440 -g \"overview · busy · dark\""
+  },
+  "overview · busy · desktop-1440 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=desktop-1440 -g \"overview · busy · light\""
+  },
+  "overview · busy · desktop-1024 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=desktop-1024 -g \"overview · busy · dark\""
+  },
+  "overview · busy · desktop-1024 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=desktop-1024 -g \"overview · busy · light\""
+  },
+  "overview · busy · phone-390 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"overview · busy · dark\""
+  },
+  "overview · busy · phone-390 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"overview · busy · light\""
+  },
+  "overview · busy · phone-320 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"overview · busy · dark\""
+  },
+  "overview · busy · phone-320 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"overview · busy · light\""
+  },
+  "title · nasty-names · desktop-1024 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=desktop-1024 -g \"title · nasty-names · dark\""
+  },
+  "title · nasty-names · desktop-1024 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=desktop-1024 -g \"title · nasty-names · light\""
+  },
+  "title · nasty-names · phone-390 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"title · nasty-names · dark\""
+  },
+  "title · nasty-names · phone-390 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"title · nasty-names · light\""
+  },
+  "title · nasty-names · phone-320 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"title · nasty-names · dark\""
+  },
+  "title · nasty-names · phone-320 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"title · nasty-names · light\""
+  },
+  "title · busy · phone-390 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"title · busy · dark\""
+  },
+  "title · busy · phone-390 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"title · busy · light\""
+  },
+  "title · busy · phone-320 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"title · busy · dark\""
+  },
+  "title · busy · phone-320 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"title · busy · light\""
+  },
+  "title · failures · phone-390 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"title · failures · dark\""
+  },
+  "title · failures · phone-390 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"title · failures · light\""
+  },
+  "title · failures · phone-320 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"title · failures · dark\""
+  },
+  "title · failures · phone-320 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"title · failures · light\""
+  },
+  "overview · nasty-names · phone-390 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"overview · nasty-names · dark\""
+  },
+  "overview · nasty-names · phone-390 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"overview · nasty-names · light\""
+  },
+  "overview · nasty-names · phone-320 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"overview · nasty-names · dark\""
+  },
+  "overview · nasty-names · phone-320 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"overview · nasty-names · light\""
+  },
+  "config · empty · phone-320 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"config · empty · dark\""
+  },
+  "config · empty · phone-320 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"config · empty · light\""
+  },
+  "config · busy · phone-320 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"config · busy · dark\""
+  },
+  "config · busy · phone-320 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"config · busy · light\""
+  },
+  "config · nasty-names · phone-320 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"config · nasty-names · dark\""
+  },
+  "config · nasty-names · phone-320 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"config · nasty-names · light\""
+  },
+  "config · failures · phone-320 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"config · failures · dark\""
+  },
+  "config · failures · phone-320 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"config · failures · light\""
+  },
+  "retained · failures · desktop-1024 · dark": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=desktop-1024 -g \"retained · failures · dark\""
+  },
+  "retained · failures · desktop-1024 · light": {
+    "expected": "the page scrolls sideways",
+    "repro": "cd ui && npx playwright test --project=desktop-1024 -g \"retained · failures · light\""
+  },
+  "retained · busy · desktop-1440 · light": {
+    "expected": "serious axe violations",
+    "repro": "cd ui && npx playwright test --project=desktop-1440 -g \"retained · busy · light\""
+  },
+  "retained · busy · desktop-1024 · light": {
+    "expected": "serious axe violations",
+    "repro": "cd ui && npx playwright test --project=desktop-1024 -g \"retained · busy · light\""
+  },
+  "retained · busy · phone-390 · light": {
+    "expected": "serious axe violations",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"retained · busy · light\""
+  },
+  "retained · failures · desktop-1440 · dark": {
+    "expected": "serious axe violations",
+    "repro": "cd ui && npx playwright test --project=desktop-1440 -g \"retained · failures · dark\""
+  },
+  "retained · failures · phone-390 · dark": {
+    "expected": "serious axe violations",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"retained · failures · dark\""
+  },
+  "retained · failures · desktop-1440 · light": {
+    "expected": "serious axe violations",
+    "repro": "cd ui && npx playwright test --project=desktop-1440 -g \"retained · failures · light\""
+  },
+  "retained · failures · phone-390 · light": {
+    "expected": "serious axe violations",
+    "repro": "cd ui && npx playwright test --project=phone-390 -g \"retained · failures · light\""
+  },
+  "retained · empty · phone-320 · dark": {
+    "expected": "toBeVisible() failed",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"retained · empty · dark\""
+  },
+  "retained · empty · phone-320 · light": {
+    "expected": "toBeVisible() failed",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"retained · empty · light\""
+  },
+  "retained · busy · phone-320 · dark": {
+    "expected": "toBeVisible() failed",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"retained · busy · dark\""
+  },
+  "retained · busy · phone-320 · light": {
+    "expected": "toBeVisible() failed",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"retained · busy · light\""
+  },
+  "retained · nasty-names · phone-320 · dark": {
+    "expected": "toBeVisible() failed",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"retained · nasty-names · dark\""
+  },
+  "retained · nasty-names · phone-320 · light": {
+    "expected": "toBeVisible() failed",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"retained · nasty-names · light\""
+  },
+  "retained · failures · phone-320 · dark": {
+    "expected": "toBeVisible() failed",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"retained · failures · dark\""
+  },
+  "retained · failures · phone-320 · light": {
+    "expected": "toBeVisible() failed",
+    "repro": "cd ui && npx playwright test --project=phone-320 -g \"retained · failures · light\""
+  }
+}

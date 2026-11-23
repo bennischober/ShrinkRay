@@ -47,6 +47,32 @@ ui/
   from `src/lib/format.ts` and the DESIGN.md Glossary (#655 tracks the sites still to move); a page never formats a value it
   shows with a hand-rolled `toFixed`/`toLocale*`/`1024 **`. Values that feed geometry
   rather than text — SVG coordinates, bar widths, axis positions — stay numbers.
+- **Fixtures and the browser check**: `ui/fixtures/*.json` are invented scenarios
+  (`empty`, `nasty-names`, `failures`; `busy` and `huge` are generated in
+  `fixtures/generated.ts`) served by `fixtureMock.ts`, a `serve`-only Vite plugin, so
+  a page renders with no resident app: run `npm run dev`, then open
+  `http://localhost:5173/?fixture=<name>` — the query belongs on the BROWSER URL, not
+  on the npm command. `offline` and `locked` are status scenarios: the mock answers
+  503 / 401 on every route and the shell renders its loading state / token prompt
+  against them. The mock validates the name against `FIXTURES` in `src/lib/fixtures.ts`
+  before it touches the filesystem, so an unknown or traversing name is a 400, never
+  a file read. `npm run test:e2e` (Playwright, `e2e/`) renders every page at 320,
+  390, 1024 and 1440 px in dark and light and fails on a page that scrolls sideways,
+  an element outside the viewport, two text boxes drawn over each other, a console
+  error, or a serious axe violation. axe sees the shell and the first rows of a
+  repeated list — the busy fixture mounts every page, and a scan of all of it does
+  not return. `e2e/known-failures.json` lists the cases that fail today, each with
+  the failure it allowlists (`expected`) and its reproduction command (`repro`); it
+  fails when a listed case starts passing, so it can only shrink. Adding a scenario
+  is adding its JSON plus its name in `FIXTURES` (`src/lib/fixtures.ts`) — a scale
+  scenario in `fixtures/generated.ts`, a status scenario in `fixtureMock.ts`'s
+  `STATUS_SCENARIOS`. The `overlap-probe` fixture is the synthetic overlap proof
+  (issue #628, review round 5 B3): the dev mock draws a clearly-labeled two-box
+  overlay over a Jobs row for that fixture name only, and
+  `npm run test:e2e:overlap-probe` runs the e2e test that expects the overlap
+  check to report it — the real Jobs overlap is not reproducible (#632 fixed its
+  cause), so the check's sensitivity is proven on a deliberately defective page
+  instead.
 - **One network boundary**: every `fetch` lives in `api.ts`; `progress.svelte.ts` owns the
   only `EventSource` (token as `?token=` — it cannot set a header).
 - **Flow is not state**: SSE carries progress only; the snapshot poll is the state channel.

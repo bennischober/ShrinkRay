@@ -67,3 +67,21 @@ jobs:
       - name: Build UI
         run: npm run build
         working-directory: ui
+
+      # the dashboard's layout checks (issue #628): every page at 320, 390,
+      # 1024 and 1440 px, in dark and light, against a fixture, with no resident app
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: ui
+
+      - name: Browser checks
+        run: npm run test:e2e
+        working-directory: ui
+
+      - name: Upload the screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-screenshots
+          path: ui/test-results/screenshots
+          if-no-files-found: ignore
