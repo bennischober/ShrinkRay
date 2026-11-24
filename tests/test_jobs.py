@@ -1141,6 +1141,52 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(reloaded.state, jobs.JobState.DONE)
         self.assertEqual(reloaded.result, {"plans": []})
 
+    def test_queued_jobs_reads_queued_and_running_rows_from_the_database(self):
+        """`queued_jobs()` is the read the #626 boot dedupe keys on: it must
+        return the queued rows AND the taken (running) row, with kind and
+        payload read back from the database rather than the pending list."""
+        scan = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"paths": ["/media/a"]}))
+        plan = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["/media/a"], "quality": True})
+        )
+        taken = self.queue.take_next()
+        self.assertEqual(taken.id, scan.id)
+        pending = self.queue.queued_jobs()
+        self.assertEqual(
+            [(job.id, job.kind, job.state) for job in pending],
+            [
+                (scan.id, jobs.JobKind.SCAN, jobs.JobState.RUNNING),
+                (plan.id, jobs.JobKind.PLAN, jobs.JobState.QUEUED),
+            ],
+        )
+        self.assertEqual(pending[0].payload, {"paths": ["/media/a"]})
+        self.assertEqual(pending[1].payload, {"paths": ["/media/a"], "quality": True})
+
+    def test_queued_jobs_lists_a_stage_row_as_running(self):
+        """A per-file stage row is written RUNNING directly (issue #602), so
+        the boot dedupe's read must see it as pending work."""
+        stage = self.queue.stage(jobs.JobKind.CRF_SEARCH, {"input": "/media/a.mkv"})
+        pending = self.queue.queued_jobs()
+        self.assertEqual(
+            [(job.id, job.kind, job.state) for job in pending],
+            [(stage.id, jobs.JobKind.CRF_SEARCH, jobs.JobState.RUNNING)],
+        )
+        self.assertEqual(pending[0].payload, {"input": "/media/a.mkv"})
+
+    def test_queued_jobs_excludes_cancelled_and_finished_rows(self):
+        """Only queued and running rows are pending; a cancelled or finished
+        row is history and must not make the boot dedupe keep a stale
+        backlog."""
+        cancelled = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        self.queue.cancel(cancelled.id)
+        finished = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={}))
+        taken = self.queue.take_next()
+        self.queue.finish(taken, {"plans": []})
+        # both rows are still in the database; only their state excludes them
+        self.assertEqual(self.queue.get(cancelled.id).state, jobs.JobState.CANCELLED)
+        self.assertEqual(self.queue.get(finished.id).state, jobs.JobState.DONE)
+        self.assertEqual(self.queue.queued_jobs(), [])
+
     def test_fail_stores_error(self):
         self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
         taken = self.queue.take_next()

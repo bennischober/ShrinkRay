@@ -1408,6 +1408,15 @@ class TestStartupBacklog(unittest.TestCase):
             "kept scan, plan, encode (already queued)",
             logged.call_args.args[0],
         )
+        # the MIXED branch (issue #626): the scan is already pending, the
+        # plan and encode are not - the identical scan is kept, not re-enqueued
+        state.queue.queued_jobs.return_value = [state.queue.enqueue.call_args_list[0].args[0]]
+        with mock.patch("shrinkray.server.app.log") as logged:
+            app_module.auto_backlog(state, [self.root], enabled=True)
+        self.assertIn(
+            "enqueued plan, encode; kept scan (already queued)",
+            logged.call_args.args[0],
+        )
 
     def test_a_changed_root_set_enqueues_the_new_backlog(self) -> None:
         """A start whose roots changed enqueues the new triple (issue #626).
