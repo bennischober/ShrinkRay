@@ -50,8 +50,9 @@ product-rule violation, not a feature.
 
 - No route starts, cancels or reconfigures work. `start_watch` is called by `run_app`
   on boot and by nothing else (`app.py`, issue #134); `auto_backlog` is a
-  scheduler gated on `app.auto_backlog`. A new mutating route is a product
-  decision, not an implementation detail.
+  scheduler gated on `app.auto_backlog`, and a restart's identical pending job
+  (same kind and payload) is kept, not re-enqueued (issue #626). A new mutating
+  route is a product decision, not an implementation detail.
 - The worker is single-threaded by design (`jobs.py`): heavy encodes do not profit from
   running in parallel, so queueing more jobs would only add latency.
 - `JobQueue` concurrency shape is fixed, not style: `_lock` is never held while waiting
@@ -83,4 +84,6 @@ product-rule violation, not a feature.
 - Do not make `db_access` yield a lock — a generator-yielded lock is released by a
   different threadpool thread (`app.py`).
 - `JobRequest` (`app.py`) is dead: no route and no importer. Do not wire it up
-  without a product decision; job creation today is `auto_backlog` at boot only.
+  without a product decision; job creation today is the boot backlog
+  (`auto_backlog`) and the watcher's discovered-file enqueue
+  (`submit_watch_candidate`, `app.py`).

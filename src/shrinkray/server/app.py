@@ -1835,10 +1835,13 @@ def auto_backlog(state: "AppState", roots: list[Path], *, enabled: bool) -> list
     without a client. It is off unless `app.auto_backlog` is set, because a
     developer's dashboard must not start encoding their library.
 
-    The three jobs are enqueued together, not chained on completion: the queue is
-    FIFO and the worker is single-threaded, so they run in this order by
-    construction. A restart does not re-encode finished files, because the encode
-    job consults the database and skips what it already recorded.
+    On a fresh boot the three jobs are enqueued together, not chained on
+    completion: the queue is FIFO and the worker is single-threaded, so they
+    run in this order by construction. On a restart the dedupe (issue #626)
+    keeps an identical pending job (same kind and payload, queued or already
+    running) instead of enqueueing it a second time. A finished file is not
+    re-encoded either, because the encode job consults the database and skips
+    what it already recorded.
 
     Args:
         state (AppState): The app state (queue and validated roots).
