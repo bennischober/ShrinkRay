@@ -762,28 +762,13 @@ def find_optimal_crf(
     if recipe is None:
         recipe = vmaf_recipe(crop=crop)
 
-    # the search's own bracket, tracked only to report a known step count:
-    # the bisect updates the same two bounds, so this never changes a choice
-    bounds: dict[str, tuple[int, float] | None] = {"passing": None, "failing": None}
-
-    def known_count() -> int | None:
-        """The search's step count from the remaining range, or None.
-
-        Before both bounds exist the total is unknowable: any number would be
-        invented. Once a pass and a fail bracket the target, the CRFs still to
-        try are the whole CRFs strictly between them, plus the current probe.
-        """
-        passing = bounds["passing"]
-        failing = bounds["failing"]
-        if passing is None or failing is None:
-            return None
-        remaining = max(0, failing[0] - passing[0] - 1)
-        return len(probes) + 1 + remaining
-
     def check(crf: int) -> float:
         _check_cancel(cancel)
         probe_index = len(probes) + 1
-        probe_count = known_count()
+        # the total is unknowable while the search still runs: a future pass
+        # can early-stop on its own tolerance ladder, so any number here would
+        # be invented (issue #631's count, `null` when unknown)
+        probe_count = None
         if progress:
             progress(
                 progress_event(
@@ -824,10 +809,6 @@ def find_optimal_crf(
         shown = recorded_vmaf(vmaf, target_vmaf)
         probes.append(SampleProbe(crf=crf, vmaf=shown))
         passed = shown >= target_vmaf
-        if passed:
-            bounds["passing"] = (crf, shown)
-        else:
-            bounds["failing"] = (crf, shown)
         # one line per probe in the transcript (issue #325): during the
         # search the operator saw only 'Probing ...' for minutes with no
         # sign of convergence - the progress event reaches the CLI's bar
@@ -841,7 +822,7 @@ def find_optimal_crf(
                     target_vmaf=target_vmaf,
                     probe={
                         "index": len(probes),
-                        "count": known_count(),
+                        "count": None,
                         "crf": crf,
                         "vmaf": shown,
                         "predicted_bytes": None,
@@ -855,6 +836,26 @@ def find_optimal_crf(
     lo, hi = crf_range
     chosen = bisect_crf(check, lo, hi, target_vmaf)
     achieved = next(p.vmaf for p in reversed(probes) if p.crf == chosen)
+    if progress and probes:
+        # the search knows its actual step count only when it has finished;
+        # the final probe event carries it (the issue's count, not a bracket)
+        final = next((p for p in reversed(probes) if p.crf == chosen), probes[-1])
+        progress(
+            progress_event(
+                "crf-search",
+                file=file_state(movie.name, str(movie), "crf-search"),
+                target_vmaf=target_vmaf,
+                probe={
+                    "index": len(probes),
+                    "count": len(probes),
+                    "crf": final.crf,
+                    "vmaf": final.vmaf,
+                    "predicted_bytes": None,
+                    "passed": final.vmaf >= target_vmaf,
+                },
+                detail=f"search complete: {len(probes)} probes",
+            )
+        )
     return chosen, achieved, probes
 
 

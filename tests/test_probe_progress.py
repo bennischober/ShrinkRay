@@ -194,6 +194,39 @@ class TestProbeProgress(unittest.TestCase):
         self.assertIsInstance(events[-1]["probe"]["passed"], bool)
         self.assertEqual(events[-1]["file"]["stage"], "crf-search")
         self.assertEqual(events[-1]["file"]["step"], 4)
+        self.assertEqual(events[-1]["probe"]["count"], len(probes))
+
+    def test_probe_count_is_the_searchs_actual_step_count(self):
+        """Issue #631: the count is the search's actual step sequence, not the
+        remaining CRF bracket. The search knows the total only when it finishes;
+        the live events carry null, and the final event carries the real count."""
+        events: list[dict] = []
+        with (
+            patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(
+                engine_search,
+                "probe_crf",
+                side_effect=lambda samples, crf, *a, **k: 96.6 if crf in (23, 26, 27) else 95.9,
+            ),
+        ):
+            chosen, _achieved, probes = engine_search.find_optimal_crf(
+                Path("movie.mkv"),
+                Path("work"),
+                "hb",
+                target_vmaf=96.0,
+                crf_range=(14, 32),
+                sample_count=1,
+                sample_seconds=10.0,
+                progress=events.append,
+            )
+        self.assertEqual([p.crf for p in probes], [23, 28, 25, 24])
+        self.assertEqual(chosen, 23)
+        self.assertEqual(len(probes), 4)
+        self.assertEqual(events[-1]["probe"]["count"], len(probes))
+        self.assertEqual(events[-1]["probe"]["index"], len(probes))
+        live = [e for e in events if e["detail"].startswith("probe encode")]
+        self.assertTrue(live)
+        self.assertTrue(all(e["probe"]["count"] is None for e in live))
 
     def test_probe_crf_reports_each_sample(self):
         """Issue #690: a probe states the sample it is on, so a running search
