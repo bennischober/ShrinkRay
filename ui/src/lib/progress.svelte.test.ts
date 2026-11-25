@@ -209,10 +209,22 @@ describe('progress store', () => {
         },
       }),
     )
+    // the server's merge accumulates `probes` on every frame, so the real
+    // frames carry the trail arrays, not just the latest `probe`
+    const aProbes: Record<string, unknown>[] = []
     for (const [index, crf, vmaf, passed] of [
       [1, 30, 94.8, false],
       [2, 24, 96.6, true],
     ] as const) {
+      const probe = {
+        index,
+        count: 2,
+        crf,
+        vmaf,
+        predicted_bytes: null,
+        passed,
+      }
+      aProbes.push(probe)
       es.emit(
         'message',
         frame({
@@ -228,14 +240,8 @@ describe('progress store', () => {
             steps: 7,
           },
           target_vmaf: 96,
-          probe: {
-            index,
-            count: 2,
-            crf,
-            vmaf,
-            predicted_bytes: null,
-            passed,
-          },
+          probe,
+          probes: [...aProbes],
         }),
       )
     }
@@ -255,6 +261,7 @@ describe('progress store', () => {
           predicted_bytes: null,
           passed: true,
         },
+        probes: [...aProbes],
         chosen: { crf: 24, vmaf: 96.6, predicted_bytes: 1_400_000_000, reason: null },
       }),
     )
