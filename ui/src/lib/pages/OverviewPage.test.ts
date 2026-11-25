@@ -7,6 +7,7 @@ import OverviewPage from './OverviewPage.svelte'
 let progressStub: { percent?: number; movie?: string | null; detail?: string | null } | null = null
 vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
 import type { Job, Movie, Status } from '../api'
+import { reclaimedTotalBytes } from '../format'
 
 /** The overview is the status window's front page. Issue #239: it rendered
  * a CANCEL button wired to nothing (oncancel was a prop App.svelte never
@@ -22,6 +23,7 @@ function movie(overrides: Partial<Movie> = {}): Movie {
     duration: '01:00:00',
     codec: 'h264',
     hdr: false,
+    reclaimed_bytes: 0,
     ...overrides,
   } as Movie
 }
@@ -49,13 +51,18 @@ const status: Status = {
   reveal_available: false,
 }
 
-function renderOverview(runningJobs: Job[] = [], movies: Movie[] = [movie()], history?: Job[]) {
+function renderOverview(
+  runningJobs: Job[] = [],
+  movies: Movie[] = [movie()],
+  history?: Job[],
+  savedTotalGb = 0.5,
+) {
   return render(OverviewPage, {
     movies,
     history: history ?? (runningJobs.length ? runningJobs : [job()]),
     status,
     targetVmaf: 96,
-    savedTotalGb: 0.5,
+    savedTotalGb,
     measuredCount: 0,
     missingMovies: [],
     runningJobs,
@@ -145,6 +152,103 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     const names = [...container.querySelectorAll('.bar-name')].map((e) => e.textContent?.trim())
     expect(names).toContain('Same')
     expect(names).not.toContain('Alone')
+  })
+
+  it('the RECLAIMED stat and the category bars read the same server field and guard (issue #646)', () => {
+    // the server's reclaimed_bytes is the true library delta plus
+    // output-dir savings. The encode sizes below describe a DIFFERENT
+    // quantity (one hop); neither surface may re-derive them.
+    const chain = movie({
+      path: '/m/chain.mkv',
+      name: 'chain.mkv',
+      category: 'C',
+      size: 400,
+      reclaimed_bytes: 600,
+      encode: {
+        preset: 'VMAF>95',
+        crf: 20,
+        vmaf: 95.5,
+        input_size: 500,
+        output_size: 400,
+        saved_percent: 20,
+        outcome: 'applied',
+      },
+    })
+    const outDir = movie({
+      path: '/m/out.mkv',
+      name: 'out.mkv',
+      category: 'C',
+      size: 1000,
+      reclaimed_bytes: 600,
+      encode: {
+        preset: 'VMAF>95',
+        crf: 20,
+        vmaf: 95.5,
+        input_size: 1000,
+        output_size: 400,
+        saved_percent: 60,
+        outcome: 'applied',
+      },
+    })
+    // a stale positive on a missing file or a discarded attempt is dropped
+    // by the shared guard, exactly as the server drops it
+    const missing = movie({
+      path: '/m/gone.mkv',
+      name: 'gone.mkv',
+      category: 'C',
+      missing: true,
+      reclaimed_bytes: 5000,
+    })
+    const discarded = movie({
+      path: '/m/discarded.mkv',
+      name: 'discarded.mkv',
+      category: 'C',
+      reclaimed_bytes: 4000,
+      encode: {
+        preset: 'VMAF>95',
+        crf: 20,
+        vmaf: 95.5,
+        input_size: 1000,
+        output_size: 400,
+        saved_percent: 60,
+        outcome: 'discarded',
+      },
+    })
+    // a positive field with saved_percent 0 still counts: the server's
+    // clamp is the authority, not a re-derived percentage guard
+    const rounded = movie({
+      path: '/m/rounded.mkv',
+      name: 'rounded.mkv',
+      category: 'C',
+      size: 1000,
+      reclaimed_bytes: 1,
+      encode: {
+        preset: 'VMAF>95',
+        crf: 20,
+        vmaf: 95.5,
+        input_size: 1000,
+        output_size: 999,
+        saved_percent: 0,
+        outcome: 'applied',
+      },
+    })
+    const movies = [chain, outDir, missing, discarded, rounded]
+    const total = reclaimedTotalBytes(movies)
+    expect(total).toBe(1201)
+    const { container, unmount } = renderOverview([], movies, undefined, total / 1024 ** 3)
+    try {
+      const reclaimedStat = [...container.querySelectorAll('.stat')].find((el) =>
+        el.textContent?.includes('RECLAIMED'),
+      )
+      expect(reclaimedStat?.textContent).toContain('1.17 KiB')
+      expect(reclaimedStat?.textContent).toContain('library delta + output-dir')
+      const nums = container.querySelector('.bar-nums')?.textContent ?? ''
+      expect(nums).toContain('1.17 KiB')
+      // the one-hop sizes (100 + 600 + 1) are not the figure
+      expect(nums).not.toContain('701 B')
+    } finally {
+      unmount()
+    }
   })
 
   it('excludes a missing file from the category bar (issue #647)', () => {

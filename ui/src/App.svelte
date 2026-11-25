@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { queueLabel } from './lib/format'
+  import { queueLabel, reclaimedTotalBytes } from './lib/format'
   import { onMount } from 'svelte'
   import {
     api,
@@ -403,17 +403,11 @@
   })
 
   const savedTotalGb = $derived(
-    movies.reduce((sum, m) => {
-      // only an APPLIED encode reclaimed anything (issue #625): a discarded
-      // attempt's sizes describe an artifact that was thrown away
-      if (!m.encode || m.encode.outcome === 'discarded') return sum
-      // the identity rule (issue #647): a file the scans report missing has
-      // nothing on disk - its record reclaims nothing, like /metrics'
-      // gauge, so the two totals agree
-      if (m.missing) return sum
-      if (m.encode.saved_percent == null) return sum
-      return sum + ((m.encode.input_size ?? 0) - (m.encode.output_size ?? 0))
-    }, 0) / 1024 ** 3
+    // the server's per-title library delta + output-dir savings (#646);
+    // reclaimedTotalBytes owns the #625/#647 guard so the stat card and the
+    // category bars cannot disagree. The total intentionally differs from
+    // /metrics' corroborated row sum on a multi-hop chain.
+    reclaimedTotalBytes(movies) / 1024 ** 3
   )
   const measuredCount = $derived(movies.filter((m) => m.encode?.vmaf != null).length)
 </script>

@@ -21,6 +21,7 @@
       "codec": "h264",
       "resolution": [1920, 1080],
       "size": 3100000000,
+      "reclaimed_bytes": 0,
       "hdr": false,
       "missing": true,
       "missing_since": "2026-11-12T03:00:00.000Z",
@@ -34,6 +35,7 @@
       "codec": "hevc",
       "resolution": [3840, 2160],
       "size": 8800000000,
+      "reclaimed_bytes": 0,
       "hdr": false,
       "encode": null
     }

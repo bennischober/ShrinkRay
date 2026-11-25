@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, elapsedSeconds, eta, etaShort, remainingSeconds, groupJobs, isStageRow, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, elapsedSeconds, eta, etaShort, reclaimedBytes, reclaimedTotalBytes, remainingSeconds, groupJobs, isStageRow, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
+import type { Movie } from './api'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -378,5 +379,73 @@ describe('etaShort', () => {
   it('drops the sentence the column header already carries', () => {
     expect(etaShort(90 * 60)).toBe('~1 h 30 min')
     expect(etaShort(null)).toBe('')
+  })
+})
+
+describe('reclaimedBytes (issue #646)', () => {
+  function movie(overrides: Partial<Movie> = {}): Movie {
+    return {
+      path: '/m/a.mkv',
+      name: 'a.mkv',
+      category: 'C',
+      duration: '01:00:00',
+      codec: 'h264',
+      resolution: [1920, 1080],
+      size: 400,
+      reclaimed_bytes: 600,
+      hdr: false,
+      encode: null,
+      ...overrides,
+    } as Movie
+  }
+
+  it('reads the server field, never the latest hop', () => {
+    // the encode row describes one hop (500 -> 400); the server's
+    // reclaimed_bytes describes the whole chain (1000 -> 400)
+    expect(
+      reclaimedBytes(
+        movie({
+          encode: {
+            preset: 'VMAF>95',
+            crf: 20,
+            vmaf: 95.5,
+            input_size: 500,
+            output_size: 400,
+            saved_percent: 20,
+            outcome: 'applied',
+          },
+        }),
+      ),
+    ).toBe(600)
+  })
+
+  it('sums the same per-title field the bars group', () => {
+    const movies = [
+      movie({ reclaimed_bytes: 600 }),
+      movie({ path: '/m/b.mkv', name: 'b.mkv', reclaimed_bytes: 1 }),
+      movie({ path: '/m/c.mkv', name: 'c.mkv', missing: true, reclaimed_bytes: 5000 }),
+    ]
+    expect(reclaimedTotalBytes(movies)).toBe(601)
+  })
+
+  it('applies the shared #625/#647 guard and the 0 clamp', () => {
+    expect(reclaimedBytes(movie({ missing: true, reclaimed_bytes: 600 }))).toBe(0)
+    expect(
+      reclaimedBytes(
+        movie({
+          reclaimed_bytes: 600,
+          encode: {
+            preset: 'VMAF>95',
+            crf: 20,
+            vmaf: 95.5,
+            input_size: 1000,
+            output_size: 500,
+            saved_percent: 50,
+            outcome: 'discarded',
+          },
+        }),
+      ),
+    ).toBe(0)
+    expect(reclaimedBytes(movie({ reclaimed_bytes: -1 }))).toBe(0)
   })
 })

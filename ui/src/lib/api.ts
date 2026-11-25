@@ -129,7 +129,7 @@ export interface EncodeRecord extends EncodeInfo {
 }
 
 export interface MovieDetail {
-  file: Omit<Movie, 'encode'> & { generation?: number }
+  file: Omit<Movie, 'encode' | 'reclaimed_bytes'> & { generation?: number }
   history: EncodeRecord[]
   /** the stored plan ("quicksave"): the prediction display's data —
    * what a future encode would do with this file. `stale` = the file's
@@ -163,6 +163,12 @@ export interface Movie {
   codec: string | null
   resolution: [number, number] | null
   size: number | null
+  /** The dashboard's reclaimed figure (issue #646): the true per-title
+   * library delta for an in-place chain plus applied output-directory/legacy
+   * rows' own savings, clamped at 0. The server applies #625 (a discarded
+   * attempt reclaimed nothing) and #647 (a missing or restored file reclaimed
+   * nothing); the dashboard never re-derives a single hop. */
+  reclaimed_bytes: number
   hdr: boolean
   missing?: boolean
   missing_since?: string | null

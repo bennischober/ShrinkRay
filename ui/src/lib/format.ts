@@ -1,4 +1,4 @@
-import type { JobOutcome } from './api'
+import type { JobOutcome, Movie } from './api'
 
 const LOCALE = 'en-GB'
 
@@ -165,6 +165,24 @@ export function savedPercent(value: number | null | undefined): {
   if (value === 0) return { text: '0.0%', grew: false }
   if (value < 0) return { text: `+${Math.abs(value).toFixed(1)}% larger`, grew: true }
   return { text: `${value.toFixed(1)}%`, grew: false }
+}
+
+/** The bytes a title reclaimed for the dashboard (issue #646): the server's
+ * per-title library delta plus output-directory savings. The server already
+ * applies #625 (a discarded attempt reclaimed nothing) and #647 (a missing file,
+ * or a restored original, has nothing on disk) and clamps every term at 0 - so the
+ * RECLAIMED stat and the category bars read this one field through this one
+ * guard and never re-derive a single hop. */
+export function reclaimedBytes(movie: Movie): number {
+  if (movie.missing || movie.encode?.outcome === 'discarded') return 0
+  return Math.max(movie.reclaimed_bytes ?? 0, 0)
+}
+
+/** The dashboard's total reclaimed bytes (issue #646): the one sum the
+ * RECLAIMED stat shows, over the same per-title values the category bars
+ * group. */
+export function reclaimedTotalBytes(movies: Movie[]): number {
+  return movies.reduce((sum, movie) => sum + reclaimedBytes(movie), 0)
 }
 
 const STATE_WORDS: Record<string, string> = {
