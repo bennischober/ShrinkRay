@@ -56,9 +56,11 @@ One schema for every stage, built by `engine/progress.py` and mirrored in
 - `stage_job_id` is the per-file stage row (#602) when one exists. A stage row's
   own event KEEPS its own `job_id` (#639); the folder job's event carries the
   row's id in `stage_job_id`, so the browser can follow one file.
-- `probe`/`chosen` belong to `crf-search`; `probe.count` is the search's known
-  step count from its remaining range, `null` when unknowable. `chosen.reason` is
-  `null` for a prediction, else the skip reason (`no size gain`,
+- `probe`/`chosen` belong to `crf-search`; `probe.count` is `null` while the
+  search can still early-stop (any live total would be invented), and the final
+  probe event carries the search's actual step count (`len(probes)`). The stored-plan
+  reuse path is also a `crf-search` event, with the plan's chosen result.
+  `chosen.reason` is `null` for a prediction, else the skip reason (`no size gain`,
   `target unreachable`, `saving below minimum`). The search does not compute a
   predicted size per probe, so `probe.predicted_bytes` is always `null`; the plan's
   `estimated_size` is the whole-file prediction.
@@ -68,6 +70,10 @@ One schema for every stage, built by `engine/progress.py` and mirrored in
   never rides `run.done`/`run.total`.
 - `/api/movie` returns `plan.probes` as `[{crf, vmaf}]` from the persisted
   `plans.probes` column; the title page renders that trail.
+- `/api/status` and `/api/snapshot` carry `recent_encodes`: the last five
+  applied encodes ordered by `encoded_at DESC`. The queue outlook's rough time reads
+  this recency list; `/api/library` is category/name-ordered and must never be the
+  pace source.
 
 ## SECURITY CONTRACT
 
