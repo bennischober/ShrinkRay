@@ -131,6 +131,35 @@ describe('progress store', () => {
     expect(mod.fileProgressFor(1)).toBeNull()
   })
 
+  it('hello recomputes the encode ETA after reload (issue #604)', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    mod.connectEvents()
+    const es = FakeEventSource.instances[0]
+    es.open()
+    es.emit('hello', {
+      jobs: {
+        '1': {
+          v: 1,
+          stage: 'encode',
+          stage_job_id: 2,
+          run: { done: 3, total: 12 },
+          file: {
+            movie: 'a.mkv',
+            path: '/media/a.mkv',
+            stage: 'encode',
+            step: 5,
+            steps: 7,
+          },
+          encode: { percent: 50, fps: 12.3, avg_fps: 12.1, eta_seconds: 7200 },
+        },
+      },
+    })
+    const view = mod.fileProgressFor(1)
+    // the estimate is recomputed from the seed, not persisted client state
+    expect(mod.progressEta(view)).toBe(7200)
+  })
+
   it('data frames merge and a percent tick never erases the file counter', () => {
     mod.connectEvents()
     const es = FakeEventSource.instances[0]

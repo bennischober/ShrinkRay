@@ -7,11 +7,7 @@ import OverviewPage from './OverviewPage.svelte'
 let progressStub: Record<string, unknown> | null = null
 vi.mock('../progress.svelte', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../progress.svelte')>()
-  return {
-    ...actual,
-    fileProgressFor: () => progressStub,
-    progressEta: (view: { etaSeconds?: number | null } | null) => view?.etaSeconds ?? null,
-  }
+  return { ...actual, fileProgressFor: () => progressStub }
 })
 import type { Job, Movie, Status } from '../api'
 import { reclaimedTotalBytes } from '../format'
@@ -435,7 +431,9 @@ describe('OverviewPage VMAF display (issue #599)', () => {
       movie: 'a.mkv',
       path: '/m/a.mkv',
       encode: { percent: 50, fps: null, avg_fps: null, eta_seconds: 7200 },
-      etaSeconds: 7200,
+      etaSmoothed: 7200,
+      encodeTicks: [],
+      probeTicks: [],
     }
     const props = {
       movies: [movie()],
@@ -446,6 +444,7 @@ describe('OverviewPage VMAF display (issue #599)', () => {
       measuredCount: 0,
       missingMovies: [],
       runningJobs: [running],
+      runningProgress: progressStub as never,
       failedJobs: [],
       scanPaths: ['/m'],
       outputDir: '/out',
@@ -465,9 +464,14 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     })
     const stale = container.querySelector('.running')!.textContent
     expect(stale).toContain('stale')
-    // the ETA text is frozen: the countdown did not move while stale
+    // the ETA text and the wall-clock finish are frozen: neither moved
+    // while stale (the real estimate, not a mocked constant)
     const left = (text: string | null) => text?.match(/about [^·]+ left/)?.[0]
+    const finish = (text: string | null) => text?.match(/finishes ≈ \d{2}:\d{2}/)?.[0]
+    expect(left(live)).toBe('about 2 h left')
     expect(left(stale)).toBe(left(live))
+    expect(finish(live)).toMatch(/^finishes ≈ \d{2}:\d{2}$/)
+    expect(finish(stale)).toBe(finish(live))
     progressStub = null
     vi.useRealTimers()
   })
