@@ -1,6 +1,6 @@
 /** Typed client for the resident app's API. */
 
-export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
 export type JobKind = 'scan' | 'plan' | 'decision' | 'crf-search' | 'encode' | 'legacy'
 
 export interface Job {

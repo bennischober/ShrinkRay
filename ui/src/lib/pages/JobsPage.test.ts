@@ -71,6 +71,19 @@ describe('JobsPage render', () => {
     expect(screen.getByText(/still starting/)).toBeTruthy()
   })
 
+  it('an interrupted job says so in amber, and its filter exists (issue #622)', () => {
+    const { container } = render(JobsPage, {
+      history: [job({ state: 'interrupted', error: null })],
+      onopenMovie: () => {},
+    })
+    const stateSpan = container.querySelector('.state')!
+    expect(stateSpan.textContent).toContain('Interrupted')
+    // DESIGN.md's glossary: interrupted is amber, a half dot
+    expect(stateSpan.querySelector('.badge.work')).toBeTruthy()
+    const option = container.querySelector<HTMLOptionElement>('option[value="interrupted"]')!
+    expect(option.textContent).toBe('Interrupted')
+  })
+
   it('expands a row to show what the job did, not its raw payload (issue #632)', async () => {
     const movie = 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv'
     const j = job({

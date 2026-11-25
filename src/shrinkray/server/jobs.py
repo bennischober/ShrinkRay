@@ -53,6 +53,31 @@ CANCEL_POLL_SECONDS = 1.0
 MAILBOX_SIZE = 64
 
 
+def utc_timestamp() -> str:
+    """Returns the current UTC time in the jobs table's ``datetime('now')`` shape."""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+
+
+def merge_job_result(result: dict | None, extra: dict) -> dict:
+    """Returns a copy of a job result with ``extra`` merged over it.
+
+    The resume ledger (``resumed_at``/``resume_count``) lives in the result
+    JSON, so every write that is not a final outcome must merge instead of
+    replacing the column: a shutdown cancellation, a crash recovery and the boot
+    resume each preserve what the previous attempt recorded (issue #622).
+
+    Args:
+        result (dict | None): The row's stored result, if any.
+        extra (dict): The keys to add or replace.
+
+    Returns:
+        dict: The merged result.
+    """
+    merged = dict(result or {})
+    merged.update(extra)
+    return merged
+
+
 class JobState(str, Enum):
     """The lifecycle states of a job."""
 
@@ -61,6 +86,9 @@ class JobState(str, Enum):
     DONE = "done"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # a shutdown interrupted the job: the state is the durable discriminator
+    # an operator cancel lacks, and the boot resume step re-queues the row
+    INTERRUPTED = "interrupted"
 
 
 TERMINAL_STATES = frozenset({JobState.DONE, JobState.FAILED, JobState.CANCELLED})
@@ -278,6 +306,10 @@ class JobQueue:
         self._lock = threading.Lock()
         self._pending: list[Job] = []
         self._cancel_events: dict[int, threading.Event] = {}
+        # the operator-cancel mark for a RUNNING job (issue #622): the worker's
+        # cancel branches read it before the shutdown flag, so an operator cancel
+        # whose unwind is still running when a shutdown lands stays cancelled
+        self._operator_cancelled: set[int] = set()
         self._wake = threading.Event()
         self._load_pending()
 
@@ -501,10 +533,10 @@ class JobQueue:
             self._connection.execute(
                 """
                 DELETE FROM jobs
-                 WHERE state IN ('done', 'failed', 'cancelled')
+                 WHERE state IN ('done', 'failed', 'cancelled', 'interrupted')
                    AND id NOT IN (
                        SELECT id FROM jobs
-                        WHERE state IN ('done', 'failed', 'cancelled')
+                        WHERE state IN ('done', 'failed', 'cancelled', 'interrupted')
                         ORDER BY id DESC
                         LIMIT ?
                    )
@@ -563,6 +595,43 @@ class JobQueue:
                 self._bus.forget(job.id)
             self._connection.commit()
 
+    def mark_interrupted(self, job: Job, result: dict | None = None) -> None:
+        """Marks a job as interrupted by an app shutdown (issue #622).
+
+        The state is the durable discriminator an operator cancel lacks: the next
+        boot re-queues this row instead of leaving it cancelled. The result JSON
+        is MERGED, never replaced - it carries the resume ledger
+        (``resumed_at``/``resume_count``) an earlier boot wrote, and a graceful
+        stop must not reset that ledger or the resume cap could never fire.
+
+        Args:
+            job (Job): The interrupted job.
+            result (dict | None): The engine's partial result, if any.
+        """
+        job.state = JobState.INTERRUPTED
+        with self._conn_gate():
+            row = self._connection.execute(
+                "SELECT result FROM jobs WHERE id = ?", (job.id,)
+            ).fetchone()
+            existing = json.loads(row["result"]) if row and row["result"] else None
+            merged = merge_job_result(
+                existing,
+                {
+                    **(result or {}),
+                    "interrupted_at": utc_timestamp(),
+                    "interrupted_reason": "app shutdown",
+                },
+            )
+            job.result = merged
+            self._connection.execute(
+                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                (JobState.INTERRUPTED.value, json.dumps(merged), job.id),
+            )
+            self._prune_history()
+            if self._bus is not None and job.id is not None:
+                self._bus.forget(job.id)
+            self._connection.commit()
+
     def cancel(self, job_id: int) -> bool:
         """Requests cancellation of a queued job (or signals a running one).
 
@@ -612,6 +681,11 @@ class JobQueue:
                         break
                 else:
                     event = self._cancel_events.get(job_id)
+                    if event is not None:
+                        # a running cancel is the operator's intent, not the
+                        # shutdown's (issue #622): the worker's cancel branches
+                        # read this mark before the stop flag
+                        self._operator_cancelled.add(job_id)
             if cancelled is not None:
                 try:
                     self._connection.execute(
@@ -652,13 +726,34 @@ class JobQueue:
             self._cancel_events[job_id] = event
 
     def unregister_cancel_event(self, job_id: int) -> None:
-        """Removes the cancel event of a finished job.
+        """Removes the cancel event and operator mark of a finished job.
 
         Args:
             job_id (int): The job's id.
         """
         with self._lock:
             self._cancel_events.pop(job_id, None)
+            self._operator_cancelled.discard(job_id)
+
+    def take_operator_cancel(self, job_id: int) -> bool:
+        """Returns whether an operator cancelled the job, clearing the mark.
+
+        The worker's cancel branches call this before checking the shutdown
+        flag: an operator cancel whose unwind is still running when a shutdown
+        lands is still the operator's cancel and must stay cancelled (issue
+        #622).
+
+        Args:
+            job_id (int): The job's id.
+
+        Returns:
+            bool: True when JobQueue.cancel signalled this running job.
+        """
+        with self._lock:
+            if job_id in self._operator_cancelled:
+                self._operator_cancelled.discard(job_id)
+                return True
+            return False
 
     def cancel_event(self, job_id: int) -> threading.Event | None:
         """Returns the cancel event of a job, if registered.
@@ -701,6 +796,23 @@ class JobQueue:
             rows = self._connection.execute(
                 "SELECT * FROM jobs WHERE state IN (?, ?) ORDER BY id",
                 (JobState.QUEUED.value, JobState.RUNNING.value),
+            ).fetchall()
+        return [_row_to_job(row) for row in rows]
+
+    def interrupted_jobs(self) -> list[Job]:
+        """Returns the jobs an interruption left behind, oldest first.
+
+        These are the rows the boot resume step re-queues (issue #622); the
+        resume happens before the worker starts, so the oldest id is the first
+        work the app does after a restart.
+
+        Returns:
+            list[Job]: The interrupted jobs in id order.
+        """
+        with self._conn_gate():
+            rows = self._connection.execute(
+                "SELECT * FROM jobs WHERE state = ? ORDER BY id",
+                (JobState.INTERRUPTED.value,),
             ).fetchall()
         return [_row_to_job(row) for row in rows]
 
@@ -1858,6 +1970,14 @@ class JobWorker:
             remove_cancel_request(self._state_dir, job_id)
             log(f"Cancel request for job #{job_id} consumed: the job is already {job.state.value}")
             return
+        if job.state is JobState.INTERRUPTED:
+            # the boot resume step applies this request (issue #622);
+            # consuming it here would lose the operator's intent before the
+            # restart that resumes the row
+            log(
+                f"Cancel request for job #{job_id} left for the boot resume: the job is interrupted"
+            )
+            return
         if self.queue.cancel(job_id):
             log(f"Cancel request for job #{job_id} accepted; the request stays until the job ends")
         else:
@@ -1936,6 +2056,7 @@ class JobWorker:
         if job.id is None:  # not persisted => programming error
             self.queue.fail(job, "job has no id")
             return
+        job_id = job.id
         if cancel is None:
             cancel = threading.Event()
         self._running_cancel = cancel
@@ -1948,6 +2069,22 @@ class JobWorker:
         result: dict | None = None
         failure: str | None = None
         cancelled = False
+        interrupted = False
+
+        def record_cancel(partial: dict | None) -> bool:
+            """Writes the cancel outcome and returns whether a shutdown caused it.
+
+            The operator mark is read BEFORE the stop flag (issue #622): an
+            operator cancel whose unwind is still running when a shutdown lands
+            is still the operator's cancel, never an interruption.
+            """
+            operator_cancelled = self.queue.take_operator_cancel(job_id)
+            shutdown = self._stop.is_set() and not operator_cancelled
+            if shutdown:
+                self.queue.mark_interrupted(job, partial)
+            else:
+                self.queue.mark_cancelled(job, partial)
+            return shutdown
 
         def progress(data: dict) -> None:
             """Persists live progress for the API/UI (worker thread only)."""
@@ -1971,15 +2108,15 @@ class JobWorker:
             if result.get("cancelled"):
                 # a graceful cancel carries the engine's partial result —
                 # the UI renders outcomes on cancelled encode rows
-                cancelled = True
-                self.queue.mark_cancelled(job, result)
+                interrupted = record_cancel(result)
+                cancelled = not interrupted
             else:
                 self.queue.finish(job, result)
         except Cancelled:
             # the engine raised between checkpoints (subprocess terminated);
             # partial probe/output artifacts are cleaned by the engine
-            cancelled = True
-            self.queue.mark_cancelled(job)
+            interrupted = record_cancel(None)
+            cancelled = not interrupted
         except Exception as e:
             from shrinkray.telemetry import save_failure
 
@@ -1997,20 +2134,35 @@ class JobWorker:
             # duration is measured, never subtracted from console stamps; the
             # line carries the outcome counts and, on failure, the error - a
             # failed job's transcript must not read like success
+            outcome = self._outcome_counts(result, interrupted=interrupted) if result else ""
+            if interrupted:
+                # the interrupted state is the discriminator the issue exists
+                # for, so the verb itself must say it: a partial result with
+                # no cancelled item would otherwise read like a normal finish
+                # (issue #622 review)
+                verb = "interrupted"
+                outcome = f" - {outcome}" if outcome else ""
+            elif cancelled:
+                verb = "finished"
+                outcome = f", {outcome}" if outcome else ", cancelled"
+            else:
+                verb = "finished"
+                outcome = f" - {outcome}" if outcome else ""
             log(
-                f"Job #{job.id} ({job.kind.value}) finished in "
+                f"Job #{job.id} ({job.kind.value}) {verb} in "
                 f"{time.perf_counter() - started:.0f}s"
-                + (f" - {self._outcome_counts(result)}" if result else "")
-                + (", cancelled" if cancelled else "")
+                + outcome
                 + (f" - FAILED: {failure}" if failure else "")
             )
 
     @staticmethod
-    def _outcome_counts(result: dict) -> str:
+    def _outcome_counts(result: dict, *, interrupted: bool = False) -> str:
         """Counts the result's per-item outcomes for the job end line.
 
         Args:
             result (dict): The executor's result dict.
+            interrupted (bool): True when a shutdown caused the cancel, so the
+                cancelled bucket reads interrupted (issue #622).
 
         Returns:
             str: A short summary like ``6 to encode, 2 skipped, 0 failed``.
@@ -2032,4 +2184,5 @@ class JobWorker:
             summary = f"{encode_like} to encode, {skipped} skipped, {failed} failed"
         else:
             summary = f"{encode_like} encoded, {skipped} skipped, {failed} failed"
-        return summary + (f", {cancelled} cancelled" if cancelled else "")
+        word = "interrupted" if interrupted else "cancelled"
+        return summary + (f", {cancelled} {word}" if cancelled else "")

@@ -55,6 +55,10 @@ product-rule violation, not a feature.
   route is a product decision, not an implementation detail.
 - The worker is single-threaded by design (`jobs.py`): heavy encodes do not profit from
   running in parallel, so queueing more jobs would only add latency.
+- A boot resume step (`AppState.resume_interrupted_jobs`) re-queues the rows a
+  shutdown or crash left `interrupted`, before the worker starts and independent
+  of `app.auto_backlog` (issue #622): the same row keeps its id and order, a
+  pending cancel request wins, and a per-file stage row is history, never resumed.
 - `JobQueue` concurrency shape is fixed, not style: `_lock` is never held while waiting
   for the connection gate (`take_next` marks the job under `_lock`, releases it, then
   takes the gate for the RUNNING commit); a failed commit rolls

@@ -87,6 +87,7 @@
       // teal would say "clean" while the row says PARTIAL
       return failedOutcomeNote(job) !== '' ? 'partial' : 'ok'
     }
+    if (job.state === 'interrupted') return 'warn'
     return job.state === 'failed' ? 'bad' : job.state === 'running' ? 'run' : 'dim'
   }
 
@@ -106,14 +107,14 @@
   // Filter state persists per session (library sort persists; the jobs
   // filters resetting on F5 was the round-6 granularity inconsistency)
   type KindFilter = 'all' | 'scan' | 'plan' | 'decision' | 'crf-search' | 'encode' | 'legacy'
-  type StateFilter = 'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled'
+  type StateFilter = 'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled' | 'interrupted'
   const storedKind = sessionStorage.getItem('ms.jobsKind')
   const storedState = sessionStorage.getItem('ms.jobsState')
   let kindFilter = $state<KindFilter>(
     ['all', 'scan', 'plan', 'decision', 'crf-search', 'encode', 'legacy'].includes(storedKind ?? '') ? (storedKind as KindFilter) : 'all'
   )
   let stateFilter = $state<StateFilter>(
-    ['all', 'running', 'queued', 'done', 'partial', 'failed', 'cancelled'].includes(storedState ?? '')
+    ['all', 'running', 'queued', 'done', 'partial', 'failed', 'cancelled', 'interrupted'].includes(storedState ?? '')
       ? (storedState as StateFilter)
       : 'all'
   )
@@ -182,6 +183,7 @@
           <option value="partial">{stateWord('partial')}</option>
           <option value="failed">{stateWord('failed')}</option>
           <option value="cancelled">{stateWord('cancelled')}</option>
+          <option value="interrupted">{stateWord('interrupted')}</option>
         </select>
       </div>
     {/if}
@@ -209,7 +211,7 @@
             </span>
             <span class="state"><StatusBadge
               label={`${stateWord(job.state)}${job.state === 'done' && failedOutcomeNote(job) !== '' ? ' · Partial' : ''}${liveElapsed(job) ? ` · ${liveElapsed(job)}` : ''}`}
-              tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
+              tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'warn' ? 'work' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
             <span class="dur" title={job.state === 'running' ? 'time left, estimated from the work done in this step' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(progress(job)?.elapsed ?? elapsedSeconds(job.started_at, new Date(now)), workFraction(progress(job)))) || '…') : ''}</span>
