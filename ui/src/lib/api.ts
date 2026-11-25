@@ -289,6 +289,9 @@ export interface Status {
   /** the resident app's own memory (MiB), self-measured every 5 min —
    * staying lean is a measured fact (4534e07); null when unmeasurable */
   rss_mib?: number | null
+  /** the last real encodes by RECENCY, newest first (issue #631): the queue
+   * outlook's rough time must not use /api/library's category/name order */
+  recent_encodes?: { encode_seconds: number; input_size: number }[]
   /** why the config.json on disk is NOT in effect (an edit that failed to
    * parse or validate; the app keeps its previous settings), null when it is
    * — issue #247. Clears itself once the file is fixed. */

@@ -312,28 +312,31 @@ describe('queue outlook', () => {
 
   it('shows a rough time only with measured history', async () => {
     const { queuePaceSeconds } = await import('./format')
-    const movie = (seconds: number) => ({
-      path: '/a',
-      name: 'a',
-      category: 'c',
-      duration: null,
-      codec: null,
-      resolution: null,
-      size: 1024 ** 3,
-      reclaimed_bytes: 0,
-      hdr: false,
-      encode: {
-        crf: 24,
-        vmaf: 96,
-        saved_percent: 50,
-        preset: 'p5',
-        encode_seconds: seconds,
-        input_size: 1024 ** 3,
-        output_size: 512 * 1024 ** 2,
-      },
+    const recent = (seconds: number) => ({
+      encode_seconds: seconds,
+      input_size: 1024 ** 3,
     })
     expect(queuePaceSeconds(3, [])).toBeNull()
     // 3 files of 1 GiB each at 3600 s/GiB => 10800 s
-    expect(queuePaceSeconds(3, [movie(3600)])).toBe(3 * 3600)
+    expect(queuePaceSeconds(3, [recent(3600)])).toBe(3 * 3600)
+  })
+
+  it('uses the NEWEST five encodes, not an alphabetical window', async () => {
+    const { queuePaceSeconds } = await import('./format')
+    const recent = (seconds: number) => ({
+      encode_seconds: seconds,
+      input_size: 1024 ** 3,
+    })
+    // newest first: the five 60 s encodes, then the old 9999 s one
+    expect(
+      queuePaceSeconds(1, [
+        recent(60),
+        recent(60),
+        recent(60),
+        recent(60),
+        recent(60),
+        recent(9999),
+      ]),
+    ).toBe(60)
   })
 })

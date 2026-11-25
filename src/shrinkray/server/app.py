@@ -1003,6 +1003,7 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
     )
 
+    recent_encodes = s.with_lock(_recent_encodes)
     rss = rss_mib()
     # the worker fields come from one fixed-order read pair (issue #660
     # round 13, finding 2 / round 14, finding 2): a give-up landing between
@@ -1022,6 +1023,10 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         "worker_error": fatal,
         "database": str(s.db_file),
         "rss_mib": round(rss, 1) if rss is not None else None,
+        # the last real encodes by RECENCY, for the queue outlook's rough
+        # time (issue #631): /api/library is ordered by category/name, so the
+        # UI cannot derive the newest five from it
+        "recent_encodes": recent_encodes,
         # an edited config.json that was NOT applied (issue #247): the app
         # keeps running on the previous settings, and the operator must see why
         "config_error": config_module.config_error,
@@ -1145,6 +1150,9 @@ def snapshot(
             # by the state transition itself.
             "jobs_fp": tuple((j.id, j.state.value) for j in jobs),
             "rss_mib": rss_mib(),
+            # the queue outlook's measured pace is the NEWEST encodes by
+            # recency, not the library's category/name order (issue #631)
+            "recent_encodes": _recent_encodes(c),
         }
 
     data = s.with_lock(read)
@@ -1244,6 +1252,9 @@ def snapshot(
             "worker_error": fatal,
             "database": str(s.db_file),
             "rss_mib": round(data["rss_mib"], 1) if data["rss_mib"] is not None else None,
+            # the last real encodes by recency, for the queue outlook (issue
+            # #631): the library list is category/name-ordered, not recent
+            "recent_encodes": data["recent_encodes"],
             # the snapshot is the UI's one state channel (App.svelte reads
             # snap.status alone): it must carry the same fields /api/status
             # does, or the built surfaces behind them can never render
@@ -1697,6 +1708,46 @@ def _plan_probes(raw: str | None) -> list[dict]:
         except (TypeError, ValueError):
             continue
     return probes
+
+
+# how many recent encodes the queue outlook reads (issue #631): enough for
+# a measured seconds-per-GB pace, small enough to be the "recent" window
+RECENT_ENCODES_LIMIT = 5
+
+
+def _recent_encodes(
+    connection: sqlite3.Connection, limit: int = RECENT_ENCODES_LIMIT
+) -> list[dict]:
+    """Returns the last real encodes by recency, newest first (issue #631).
+
+    `/api/library` is ordered by category/name, so taking its last five measured
+    titles gives an alphabetical window, not the newest five encodes. This reads
+    the encodes table by `encoded_at` instead. Only applied rows are real
+    encodes: a discarded attempt reclaimed nothing and is not a pace sample.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        limit (int): How many rows to return.
+
+    Returns:
+        list[dict]: [{"encode_seconds": float, "input_size": int}, ...],
+            newest first.
+    """
+    rows = connection.execute(
+        """
+        SELECT encode_seconds, input_size FROM encodes
+        WHERE outcome = 'applied'
+          AND encode_seconds IS NOT NULL
+          AND input_size > 0
+        ORDER BY encoded_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        {"encode_seconds": float(row["encode_seconds"]), "input_size": int(row["input_size"])}
+        for row in rows
+    ]
 
 
 def _default_roots() -> list[Path]:

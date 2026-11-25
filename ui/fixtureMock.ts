@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Plugin } from 'vite'
-import { busy, huge } from './fixtures/generated.js'
+import { busy, busyHistory, huge } from './fixtures/generated.js'
 import { FIXTURES, type Fixture } from './src/lib/fixtures.js'
 
 /** Which fixture key answers which GET route. */
@@ -123,7 +123,13 @@ export function fixtureMock(dir = resolve(process.cwd(), 'fixtures')): Plugin {
     // `busy-changing` is the same workload with a payload that moves every
     // poll (issue #661): the discrimination scenario for a mock-only fix.
     const generated =
-      name === 'busy' || name === 'busy-changing' ? busy : name === 'huge' ? huge : null
+      name === 'busy' || name === 'busy-changing'
+        ? busy
+        : name === 'busy-history'
+          ? busyHistory
+          : name === 'huge'
+            ? huge
+            : null
     const fixture = generated
       ? generated()
       : (JSON.parse(readFileSync(resolve(dir, `${name}.json`), 'utf8')) as Fixture)

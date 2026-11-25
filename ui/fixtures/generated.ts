@@ -266,6 +266,29 @@ export function busy(): Fixture {
   }
 }
 
+/** `busy-history`: the busy stream plus a measured encode history (five
+ * newest real encodes at 60 s per GiB) and a 2 h encoder ETA, so the queue
+ * outlook shows a rough time and the summary a `finishes ≈ HH:MM` line
+ * (issue #631). */
+export function busyHistory(): Fixture {
+  const fixture = busy()
+  return {
+    ...fixture,
+    status: {
+      ...fixture.status,
+      recent_encodes: Array.from({ length: 5 }, () => ({
+        encode_seconds: 60,
+        input_size: 1024 ** 3,
+      })),
+    },
+    events: fixture.events.map((event) => {
+      const frame = event as { stage?: string; encode?: Record<string, unknown> }
+      if (frame.stage !== 'encode' || frame.encode == null) return event
+      return { ...frame, encode: { ...frame.encode, eta_seconds: 7200 } }
+    }),
+  }
+}
+
 /** `huge`: 20 000 titles and 1 500 jobs — scale and performance. */
 export function huge(): Fixture {
   const fixture = busy()

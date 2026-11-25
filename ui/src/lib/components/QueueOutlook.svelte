@@ -1,13 +1,20 @@
 <script lang="ts">
-  import type { Job, Movie } from '../api'
+  import type { Job } from '../api'
   import { duration, queuePaceSeconds, queuedFileCount } from '../format'
 
   /** The Overview's and Jobs page's queue outlook (issue #631): how many
    * files wait, and a ROUGH time only from measured seconds-per-GB of the
-   * last real encodes. No history means no time, never a fabricated one. */
-  let { jobs, movies }: { jobs: Job[]; movies: Movie[] } = $props()
+   * last real encodes. No history means no time, never a fabricated one.
+   * `recent` is the server's encodes ordered by recency (newest first). */
+  let {
+    jobs,
+    recent,
+  }: {
+    jobs: Job[]
+    recent: readonly { encode_seconds: number; input_size: number }[]
+  } = $props()
   const files = $derived(queuedFileCount(jobs))
-  const seconds = $derived(queuePaceSeconds(files, movies))
+  const seconds = $derived(queuePaceSeconds(files, recent))
 </script>
 
 <div class="outlook mono" data-queue-outlook>

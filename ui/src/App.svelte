@@ -636,6 +636,7 @@
         <JobsPage
           history={page === 'jobs' ? history : NO_JOBS}
           movies={page === 'jobs' ? movies : NO_MOVIES}
+          recent={page === 'jobs' ? (status?.recent_encodes ?? []) : []}
           {targetVmaf}
           stale={connectionState === 'stale'}
           onopenMovie={(p) => openDetailFromJobs(p)}

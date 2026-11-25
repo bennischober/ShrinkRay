@@ -217,31 +217,26 @@ export function queuedFileCount(
 }
 
 /** A rough queue time from the measured seconds-per-GB of the last real
- * encodes (issue #631): null without history. The average library title's size
- * is the estimate for the waiting files — a rough number, labelled as such. */
+ * encodes (issue #631): null without history. `recent` is the server's
+ * encodes ordered by recency (newest first); the average of those same rows'
+ * input sizes is the estimate for the waiting files — a rough number, labelled
+ * as such. The library list is category/name-ordered, so it is never the pace
+ * source (a verifier probe measured 2047.8 s from an alphabetical window
+ * whose newest five real encodes averaged 60 s). */
 export const QUEUE_PACE_SAMPLE = 5
 export function queuePaceSeconds(
   files: number,
-  movies: readonly Movie[],
+  recent: readonly { encode_seconds: number; input_size: number }[],
 ): number | null {
   if (files <= 0) return 0
-  const measured = movies.filter(
-    (movie) => movie.encode?.encode_seconds != null && (movie.encode.input_size ?? 0) > 0,
-  )
-  const recent = measured.slice(-QUEUE_PACE_SAMPLE)
-  if (recent.length === 0) return null
-  const seconds = recent.reduce((sum, movie) => sum + (movie.encode?.encode_seconds ?? 0), 0)
-  const gb = recent.reduce(
-    (sum, movie) => sum + (movie.encode?.input_size ?? 0) / 1024 ** 3,
-    0,
-  )
+  const sample = recent
+    .slice(0, QUEUE_PACE_SAMPLE)
+    .filter((row) => row.encode_seconds > 0 && row.input_size > 0)
+  if (sample.length === 0) return null
+  const seconds = sample.reduce((sum, row) => sum + row.encode_seconds, 0)
+  const gb = sample.reduce((sum, row) => sum + row.input_size / 1024 ** 3, 0)
   if (!(gb > 0)) return null
-  const sizes = movies
-    .map((movie) => movie.size ?? 0)
-    .filter((size) => size > 0)
-  const averageGb =
-    sizes.length > 0 ? sizes.reduce((sum, size) => sum + size, 0) / sizes.length / 1024 ** 3 : 0
-  if (!(averageGb > 0)) return null
+  const averageGb = gb / sample.length
   return files * averageGb * (seconds / gb)
 }
 

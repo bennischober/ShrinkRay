@@ -350,7 +350,7 @@
     {/if}
   {/if}
 
-  <QueueOutlook jobs={status?.queue ?? []} movies={movies} />
+  <QueueOutlook jobs={status?.queue ?? []} recent={status?.recent_encodes ?? []} />
 
   <div class="cols">
     <!-- ══ failures ══ -->
