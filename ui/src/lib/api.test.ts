@@ -168,7 +168,7 @@ describe('token storage (issue #36 auth)', () => {
 })
 
 describe('snapshot conditional requests (issue #661)', () => {
-  it('sends the known ETags and keeps the collections the server says are unchanged', async () => {
+  it('sends the known ETags and passes unchanged collections through as null', async () => {
     vi.resetModules()
     const { api } = await import('./api')
     const calls: { url: string; headers: Record<string, string> }[] = []

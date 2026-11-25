@@ -8,8 +8,10 @@ import { expect, test } from '@playwright/test'
  * throttle. It covers both measured causes: `busy` (an unchanged collection —
  * the mock must answer it with null, like the resident app) and
  * `busy-changing` (a library that really moves every poll — the hidden pages
- * must not re-render it). A read that never returns fails through the 1 s race;
- * a read that takes longer fails the assertion. */
+ * must not re-render it). The visible Library page is the measured-tightest
+ * (962 ms of the 1 000 ms bound), so the changing payload is read there too.
+ * A read that never returns fails through the 1 s race; a read that takes longer
+ * fails the assertion. */
 test.use({ trace: 'off' })
 
 test('the busy fixture answers a DOM read within a second (issue #661)', async ({ page }) => {
@@ -31,6 +33,7 @@ test('the busy fixture answers a DOM read within a second (issue #661)', async (
   })
 
   for (const target of [
+    { fixture: 'busy-changing', hash: '#/library' },
     { fixture: 'busy', hash: '#/config' },
     { fixture: 'busy-changing', hash: '#/config' },
   ]) {
