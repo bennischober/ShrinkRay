@@ -222,6 +222,133 @@ class TestStructuredEventSequence(unittest.TestCase):
         self.assertTrue(all(isinstance(p["vmaf"], float) for p in probes))
         self.assertTrue(all(isinstance(p["passed"], bool) for p in probes))
 
+    def test_the_stored_plan_reuse_path_emits_the_crf_search_stage(self) -> None:
+        """A valid stored plan is a CRF-search decision reused, not a `probe`
+        stage (issue #631): the event carries the new shape and the chosen
+        result; a skipped stored plan carries its reason and no encode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            movie = Path(tmp) / "movie.mkv"
+            movie.write_bytes(b"x" * 16)
+            output = Path(tmp) / "out.mkv"
+            events: list[dict] = []
+
+            def fake_encode(movie_path, out, *args, **kwargs):
+                out.write_bytes(b"y" * 8)
+                kwargs["progress"](
+                    engine_progress.event(
+                        "encode",
+                        file={"movie": movie_path.name, "path": str(movie_path), "stage": "encode"},
+                        encode={"percent": 10.0},
+                    )
+                )
+                return SimpleNamespace(
+                    input_size=16,
+                    output_size=8,
+                    chosen_crf=21,
+                    achieved_vmaf=95.4,
+                    error=None,
+                    input_mtime=None,
+                    success=True,
+                    cancelled=False,
+                )
+
+            valid_plan = {
+                "chosen_crf": 21,
+                "achieved_vmaf": 95.4,
+                "skipped_reason": None,
+                "crop": None,
+                "probes": json.dumps([(30, 94.8), (24, 96.6)]),
+                "estimated_size": 1_000_000,
+                "created_at": "2026-11-25 12:00:00",
+                "encoder_preset": "5",
+            }
+            skipped_plan = {
+                **valid_plan,
+                "chosen_crf": 14,
+                "achieved_vmaf": 92.8,
+                "skipped_reason": "target unreachable",
+                "estimated_size": None,
+            }
+            stack = contextlib.ExitStack()
+            self.addCleanup(stack.close)
+            for patcher in (
+                patch.object(engine_pipeline, "_lookup_plan", return_value=valid_plan),
+                patch.object(
+                    engine_pipeline,
+                    "_source_snapshot",
+                    return_value={
+                        "width": 1920,
+                        "height": 1080,
+                        "duration": 100.0,
+                        "codec": "h264",
+                        "bit_depth": 8,
+                        "bitrate": None,
+                    },
+                ),
+                patch.object(engine_plan, "is_hdr_file", return_value=False),
+                patch.object(engine_pipeline, "source_bit_depth", return_value=8),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=100.0),
+                patch.object(engine_pipeline, "check_disk_space", return_value=(True, "")),
+                patch.object(engine_pipeline, "find_handbrake", return_value="hb"),
+                patch.object(engine_pipeline, "build_encode_command", return_value=["hb"]),
+                patch.object(engine_pipeline, "_encode_with_command", side_effect=fake_encode),
+                patch.object(engine_pipeline, "durations_match", return_value=True),
+                patch.object(engine_pipeline, "tracks_survived", return_value=(True, "ok")),
+                patch.object(engine_pipeline, "_output_bitrate", return_value=None),
+            ):
+                stack.enter_context(patcher)
+            result = engine_pipeline.encode_with_quality(
+                movie,
+                output,
+                progress=events.append,
+                db_file=Path(tmp) / "metadata.db",
+            )
+            self.assertTrue(result.success)
+            self.assertEqual(events[0]["v"], 1)
+            self.assertEqual(events[0]["stage"], "crf-search")
+            self.assertEqual(events[0]["file"]["stage"], "crf-search")
+            self.assertEqual(events[0]["file"]["step"], 4)
+            self.assertEqual(events[0]["chosen"]["crf"], 21)
+            self.assertEqual(events[0]["chosen"]["vmaf"], 95.4)
+            self.assertEqual(events[0]["chosen"]["predicted_bytes"], 1_000_000)
+            self.assertIsNone(events[0]["chosen"]["reason"])
+            self.assertIn("encode", [event["stage"] for event in events])
+
+            events.clear()
+            stack.pop_all().close()
+            stack = contextlib.ExitStack()
+            self.addCleanup(stack.close)
+            for patcher in (
+                patch.object(engine_pipeline, "_lookup_plan", return_value=skipped_plan),
+                patch.object(
+                    engine_pipeline,
+                    "_source_snapshot",
+                    return_value={
+                        "width": 1920,
+                        "height": 1080,
+                        "duration": 100.0,
+                        "codec": "h264",
+                        "bit_depth": 8,
+                        "bitrate": None,
+                    },
+                ),
+                patch.object(engine_plan, "is_hdr_file", return_value=False),
+                patch.object(engine_pipeline, "source_bit_depth", return_value=8),
+                patch("shrinkray.tools.ffprobe.probe_duration_seconds", return_value=100.0),
+                patch.object(engine_pipeline, "check_disk_space", return_value=(True, "")),
+            ):
+                stack.enter_context(patcher)
+            skipped = engine_pipeline.encode_with_quality(
+                movie,
+                output,
+                progress=events.append,
+                db_file=Path(tmp) / "metadata.db",
+            )
+            self.assertFalse(skipped.success)
+            self.assertEqual(events[0]["stage"], "crf-search")
+            self.assertEqual(events[0]["chosen"]["reason"], "target unreachable")
+            self.assertEqual([event["stage"] for event in events], ["crf-search"])
+
     def test_the_full_event_sequence_for_one_file(self) -> None:
         """One resident encode emits decision -> bars -> samples -> probes ->
         chosen -> encode -> verify -> swap, with the folder job carrying the
@@ -303,6 +430,7 @@ class TestStructuredEventSequence(unittest.TestCase):
                 "probes": json.dumps([(30, 94.8), (24, 96.6)]),
                 "created_at": "2026-11-25 12:00:00",
                 "encoder_preset": "5",
+                "estimated_size": 1_000_000,
             }
             stack = contextlib.ExitStack()
             self.addCleanup(stack.close)

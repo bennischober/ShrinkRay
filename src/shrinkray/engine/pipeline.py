@@ -1493,10 +1493,18 @@ def encode_with_quality(
             reason = str(plan["skipped_reason"])
             if progress is not None:
                 progress(
-                    {
-                        "stage": "probe",
-                        "detail": f"using plan (probed {plan['created_at']}) · {reason}",
-                    }
+                    progress_event(
+                        "crf-search",
+                        file=file_state(input_file.name, str(input_file), "crf-search"),
+                        target_vmaf=target_vmaf,
+                        chosen={
+                            "crf": plan["chosen_crf"],
+                            "vmaf": plan["achieved_vmaf"],
+                            "predicted_bytes": None,
+                            "reason": reason,
+                        },
+                        detail=f"using plan (probed {plan['created_at']}) · {reason}",
+                    )
                 )
             log(f"Using plan for '{input_file.name}' (probed {plan['created_at']}): {reason}")
             return QualityResult(
@@ -1532,10 +1540,18 @@ def encode_with_quality(
         plan_created_at = plan["created_at"]
         if progress is not None:
             progress(
-                {
-                    "stage": "probe",
-                    "detail": f"using plan (probed {plan['created_at']}) · CRF {crf}",
-                }
+                progress_event(
+                    "crf-search",
+                    file=file_state(input_file.name, str(input_file), "crf-search"),
+                    target_vmaf=target_vmaf,
+                    chosen={
+                        "crf": crf,
+                        "vmaf": achieved,
+                        "predicted_bytes": plan["estimated_size"],
+                        "reason": None,
+                    },
+                    detail=f"using plan (probed {plan['created_at']}) · CRF {crf}",
+                )
             )
         log(f"Using plan for '{input_file.name}' (probed {plan['created_at']}): CRF {crf}")
     else:
