@@ -1550,7 +1550,7 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
             """
             SELECT p.chosen_crf, p.achieved_vmaf, p.skipped_reason,
                    p.estimated_size, p.created_at, p.input_mtime, p.input_size,
-                   p.encoder, p.encoder_preset, p.target_vmaf
+                   p.encoder, p.encoder_preset, p.target_vmaf, p.probes
             FROM plans p JOIN files f ON f.id = p.file_id
             WHERE f.path = ?
             """,
@@ -1578,6 +1578,7 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "target_vmaf": None,
                 "stale": False,
                 "estimate_note": None,
+                "probes": [],
             }
         elif plan_row is not None:
             try:
@@ -1599,6 +1600,12 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "probe_encoder_preset": plan_row["encoder_preset"],
                 "target_vmaf": plan_row["target_vmaf"],
                 "stale": not file_ok,
+                # the persisted probe trail (issue #631): what the search
+                # measured, so the title page can show it. The search does not
+                # compute a predicted size per probe, so the pairs carry only
+                # crf/vmaf (the plan's estimated_size is the whole-file
+                # prediction).
+                "probes": _plan_probes(plan_row["probes"]),
                 # the HDR estimate bias note (issue #98): derived, not stored -
                 # the files row's hdr flag is the same one the plan used
                 "estimate_note": (
@@ -1662,6 +1669,34 @@ def reveal(request: RevealRequest) -> dict:
 # the /report route was removed with issue #202 (Zef-X: "report is a fossil");
 # `shrinkray report` was removed with it. The provenance surface is the
 # dashboard's per-title chain and `shrinkray retained`.
+
+
+def _plan_probes(raw: str | None) -> list[dict]:
+    """Parses a stored plan's probe trail (``[(crf, vmaf)]`` JSON).
+
+    The plans table has carried the pairs since #98; the route exposes them as
+    objects so the title page can render one row per probe (issue #631). A
+    damaged or missing column is an empty trail, never a crash: the plan's
+    chosen CRF and VMAF are the decision, and the trail is the evidence.
+
+    Args:
+        raw (str | None): The plans.probes JSON column.
+
+    Returns:
+        list[dict]: [{"crf": int, "vmaf": float}, ...] in stored order.
+    """
+    try:
+        pairs = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    probes: list[dict] = []
+    for pair in pairs:
+        try:
+            crf, vmaf = pair
+            probes.append({"crf": int(crf), "vmaf": float(vmaf)})
+        except (TypeError, ValueError):
+            continue
+    return probes
 
 
 def _default_roots() -> list[Path]:

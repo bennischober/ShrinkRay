@@ -9,6 +9,7 @@ it is pipeline logic that USES this command.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -200,3 +201,51 @@ def supports_svt_av1(binary: str) -> bool:
     presets = (proc.stdout + proc.stderr).decode(errors="replace").split()
     # an unknown encoder id answers with only the generic 'auto' preset
     return any(preset and preset != "auto" for preset in presets)
+
+
+# HandBrake's progress line, e.g.
+#   Encoding: task 1 of 1, 42.31 % (123.45 fps, avg 120.00 fps, ETA 00h12m34s)
+# The percent, the two frame rates and the ETA are one external fact: the one
+# parser lives here beside the command builder, and the runner in
+# engine/pipeline.py only consumes it (issue #631).
+_PROGRESS_LINE = re.compile(
+    r"Encoding:.*?(?P<percent>\d{1,3}\.\d{2})\s*%"
+    r"(?:.*?\((?P<fps>\d+(?:\.\d+)?)\s*fps,\s*avg\s+(?P<avg_fps>\d+(?:\.\d+)?)\s*fps"
+    r"(?:,\s*ETA\s+(?P<eta_h>\d+)h(?P<eta_m>\d+)m(?P<eta_s>\d+)s)?)?"
+)
+
+
+def parse_progress_line(line: str) -> dict | None:
+    """Parses one HandBrake progress line into its reported facts.
+
+    The line carries everything the dashboard shows for the final encode —
+    percent, current fps, average fps and the ETA — and HandBrake omits the
+    parenthesised block on some builds. A line with no percent is not a
+    progress line (a banner or a log line), so it returns None; a line with a
+    percent but no parenthesised block returns the percent with null fields
+    rather than crashing or inventing numbers.
+
+    Args:
+        line (str): One stdout line (already split on ``\\r``/``\\n``).
+
+    Returns:
+        dict | None: ``{"percent", "fps", "avg_fps", "eta_seconds"}`` or None
+            when the line carries no percent. ``fps``/``avg_fps``/
+            ``eta_seconds`` are None when the line does not print them.
+    """
+    match = _PROGRESS_LINE.search(line)
+    if match is None:
+        return None
+    eta: int | None = None
+    if match.group("eta_h") is not None:
+        eta = (
+            int(match.group("eta_h")) * 3600
+            + int(match.group("eta_m")) * 60
+            + int(match.group("eta_s"))
+        )
+    return {
+        "percent": float(match.group("percent")),
+        "fps": float(match.group("fps")) if match.group("fps") is not None else None,
+        "avg_fps": (float(match.group("avg_fps")) if match.group("avg_fps") is not None else None),
+        "eta_seconds": eta,
+    }

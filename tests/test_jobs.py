@@ -560,12 +560,45 @@ class TestJobs(unittest.TestCase):
         folder_events: list[dict] = []
 
         def fake_search(decision, *args, **kwargs):
-            kwargs["progress"]({"stage": "probe", "percent": 10.0, "movie": decision.input.name})
+            kwargs["progress"](
+                {
+                    "v": 1,
+                    "stage": "crf-search",
+                    "file": {
+                        "movie": decision.input.name,
+                        "path": str(decision.input),
+                        "stage": "crf-search",
+                        "step": 4,
+                        "steps": 7,
+                    },
+                    "probe": {
+                        "index": 1,
+                        "count": 3,
+                        "crf": 30,
+                        "vmaf": 96.1,
+                        "predicted_bytes": None,
+                        "passed": True,
+                    },
+                }
+            )
             seen.update(bus.latest())
             return _prediction(movie)
 
         def fake_encode(movie, output, *args, **kwargs):
-            kwargs["progress"]({"stage": "encode", "percent": 42.5, "movie": movie.name})
+            kwargs["progress"](
+                {
+                    "v": 1,
+                    "stage": "encode",
+                    "file": {
+                        "movie": movie.name,
+                        "path": str(movie),
+                        "stage": "encode",
+                        "step": 5,
+                        "steps": 7,
+                    },
+                    "encode": {"percent": 42.5, "fps": 12.3, "avg_fps": 12.1, "eta_seconds": 60},
+                }
+            )
             # the seed cache drops a row's progress when it finishes, so the
             # event is captured while the encode is still running
             seen.update(bus.latest())
@@ -607,13 +640,22 @@ class TestJobs(unittest.TestCase):
         encode_row = next(row for row in rows if row["kind"] == "encode")
         # both stage rows receive the engine's events...
         self.assertIn(search_row["id"], seen)
-        self.assertEqual(seen[search_row["id"]]["percent"], 10.0)
+        self.assertEqual(seen[search_row["id"]]["probe"]["vmaf"], 96.1)
+        self.assertEqual(seen[search_row["id"]]["stage_job_id"], search_row["id"])
         self.assertIn(encode_row["id"], seen)
-        self.assertEqual(seen[encode_row["id"]]["percent"], 42.5)
-        # ...and the folder job keeps receiving them too
-        folder_percents = [event.get("percent") for event in folder_events]
-        self.assertIn(10.0, folder_percents)
+        self.assertEqual(seen[encode_row["id"]]["encode"]["percent"], 42.5)
+        self.assertEqual(seen[encode_row["id"]]["encode"]["fps"], 12.3)
+        self.assertEqual(seen[encode_row["id"]]["stage_job_id"], encode_row["id"])
+        # ...and the folder job keeps receiving them too, carrying the stage
+        # row's id so the browser model can follow one file (issue #631)
+        folder_percents = [event.get("encode", {}).get("percent") for event in folder_events]
         self.assertIn(42.5, folder_percents)
+        folder_probes = [event.get("probe") for event in folder_events]
+        self.assertTrue(any(p and p.get("vmaf") == 96.1 for p in folder_probes))
+        probe_events = [e for e in folder_events if e.get("probe")]
+        self.assertEqual(probe_events[0]["stage_job_id"], search_row["id"])
+        encode_events = [e for e in folder_events if e.get("encode")]
+        self.assertEqual(encode_events[0]["stage_job_id"], encode_row["id"])
 
     def test_the_plan_path_search_row_reports_the_live_progress(self):
         """Issue #639: the plan job's crf-search row shows the search's live
@@ -640,7 +682,27 @@ class TestJobs(unittest.TestCase):
         seen: dict[int, dict] = {}
 
         def fake_search(decision, *args, **kwargs):
-            kwargs["progress"]({"stage": "probe", "percent": 33.0, "movie": decision.input.name})
+            kwargs["progress"](
+                {
+                    "v": 1,
+                    "stage": "crf-search",
+                    "file": {
+                        "movie": decision.input.name,
+                        "path": str(decision.input),
+                        "stage": "crf-search",
+                        "step": 4,
+                        "steps": 7,
+                    },
+                    "probe": {
+                        "index": 1,
+                        "count": 3,
+                        "crf": 30,
+                        "vmaf": 96.1,
+                        "predicted_bytes": None,
+                        "passed": True,
+                    },
+                }
+            )
             seen.update(bus.latest())
             return _prediction(movie)
 
@@ -659,7 +721,8 @@ class TestJobs(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertIn(row["id"], seen)
-        self.assertEqual(seen[row["id"]]["percent"], 33.0)
+        self.assertEqual(seen[row["id"]]["probe"]["vmaf"], 96.1)
+        self.assertEqual(seen[row["id"]]["stage_job_id"], row["id"])
 
     def test_a_stored_plan_skips_the_queue_path_search(self):
         """Issue #602: a valid stored plan means the search already ran for
@@ -1223,10 +1286,24 @@ class TestJobs(unittest.TestCase):
         q = jobs.JobQueue(self.connection, bus=bus)
         q.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
         taken = q.take_next()
-        q.report_progress(taken, {"percent": 10})
-        q.report_progress(taken, {"percent": 20})  # replaces, not accumulates
+        q.report_progress(taken, {"run": {"done": 2, "total": 7}})
+        q.report_progress(taken, {"stage": "encode", "encode": {"percent": 20}})
         sid, _box, seed = bus.subscribe()  # late subscriber
-        self.assertEqual(seed, [(taken.id, {"percent": 20})])
+        # the hello seed is the MERGED latest state: the percent tick did not
+        # erase the folder counter (issue #631)
+        self.assertEqual(
+            seed,
+            [
+                (
+                    taken.id,
+                    {
+                        "run": {"done": 2, "total": 7},
+                        "stage": "encode",
+                        "encode": {"percent": 20},
+                    },
+                )
+            ],
+        )
         # terminal write drops the job from the seed cache
         q.finish(taken, {"movies": 1})
         self.assertEqual(bus.latest(), {})

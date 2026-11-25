@@ -1736,13 +1736,19 @@ class TestDb(unittest.TestCase):
                 # ── plan: the prediction display's data ──
                 # no plan recorded => the key exists, is None
                 self.assertIsNone(child_body["plan"])
+                from shrinkray.engine.search import SampleProbe
+
                 db.save_plan(
                     self.connection,
                     file_id,
                     chosen_crf=21,
                     achieved_vmaf=95.47,
                     crop=None,
-                    probes=[],
+                    probes=[
+                        SampleProbe(crf=30, vmaf=94.8),
+                        SampleProbe(crf=24, vmaf=96.6),
+                        SampleProbe(crf=21, vmaf=95.47),
+                    ],
                     skipped_reason=None,
                     estimated_size=450,
                     input_mtime=Path(movie_path).stat().st_mtime,
@@ -1764,6 +1770,16 @@ class TestDb(unittest.TestCase):
                 self.assertIsNone(plan_body["skipped_reason"])
                 self.assertFalse(plan_body["stale"])
                 self.assertEqual(plan_body["target_vmaf"], 95.0)
+                # the persisted probe trail rides along (issue #631): one
+                # object per probe, in the order the search measured them
+                self.assertEqual(
+                    plan_body["probes"],
+                    [
+                        {"crf": 30, "vmaf": 94.8},
+                        {"crf": 24, "vmaf": 96.6},
+                        {"crf": 21, "vmaf": 95.47},
+                    ],
+                )
                 # a changed file flips the staleness flag (mtime+size guard);
                 # the file only exists physically from this write on
                 Path(movie_path).write_bytes(b"x" * (1000 + 8))

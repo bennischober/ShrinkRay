@@ -35,6 +35,8 @@ from shrinkray.engine.identity import (
     ensure_unchanged,
     probe_scratch_prefix,
 )
+from shrinkray.engine.progress import event as progress_event
+from shrinkray.engine.progress import file_state
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_COUNT,
     DEFAULT_SAMPLE_EVERY,
@@ -816,6 +818,14 @@ def search_quality(
 
     workdir = Path(tempfile.mkdtemp(prefix=probe_scratch_prefix(input_file)))
     try:
+        if progress:
+            progress(
+                progress_event(
+                    "bars",
+                    file=file_state(input_file.name, str(input_file), "bars"),
+                    detail="measuring black bars",
+                )
+            )
         # bar detection is part of every re-encode, never optional: a re-encode
         # is the only moment the picture can be corrected for free, and keeping
         # bars in a smaller file is strictly worse than the source
@@ -839,6 +849,18 @@ def search_quality(
                 bit_depth=decision.bit_depth,
             ),
         )
+        if progress:
+            progress(
+                progress_event(
+                    "bars",
+                    file=file_state(input_file.name, str(input_file), "bars"),
+                    detail=(
+                        f"cropping top {crop[0]}, bottom {crop[1]}, left {crop[2]}, right {crop[3]}"
+                        if crop is not None
+                        else "no stable black bars"
+                    ),
+                )
+            )
         # the measurement recipe follows the source's dimensions (for the model
         # and the scale, through the crop) and its bit depth (the analysis pixel
         # format). Derived once here so the probes and the recorded fingerprint
@@ -880,6 +902,20 @@ def search_quality(
         )
 
         if target_unreachable(crf, achieved, target_vmaf, crf_range):
+            if progress:
+                progress(
+                    progress_event(
+                        "crf-search",
+                        file=file_state(input_file.name, str(input_file), "crf-search"),
+                        target_vmaf=target_vmaf,
+                        chosen={
+                            "crf": crf,
+                            "vmaf": achieved,
+                            "predicted_bytes": None,
+                            "reason": "target unreachable",
+                        },
+                    )
+                )
             # gate 7 before gate 8 (issue #591): an unreachable search is
             # skipped for its quality, whatever the size at the floor CRF (the
             # search measured none). The verdict is recorded like a skip (issue
@@ -923,6 +959,20 @@ def search_quality(
         # needs no threshold.
         saving_percent = (1.0 - factor) * 100.0
         if not skip and saving_percent < min_saving_percent:
+            if progress:
+                progress(
+                    progress_event(
+                        "crf-search",
+                        file=file_state(input_file.name, str(input_file), "crf-search"),
+                        target_vmaf=target_vmaf,
+                        chosen={
+                            "crf": crf,
+                            "vmaf": achieved,
+                            "predicted_bytes": None,
+                            "reason": "saving below minimum",
+                        },
+                    )
+                )
             ensure_unchanged(input_file, identity, "plan")
             log(
                 f"Plan for '{input_file.name}': skip (predicted saving "
@@ -957,6 +1007,20 @@ def search_quality(
             )
 
         if skip:
+            if progress:
+                progress(
+                    progress_event(
+                        "crf-search",
+                        file=file_state(input_file.name, str(input_file), "crf-search"),
+                        target_vmaf=target_vmaf,
+                        chosen={
+                            "crf": crf,
+                            "vmaf": achieved,
+                            "predicted_bytes": None,
+                            "reason": "no size gain",
+                        },
+                    )
+                )
             # the record-time recheck (issue #436): the skip verdict rides the
             # plans row and is trusted without re-probing later, so it must
             # not commit for bytes the run no longer sees. Loud abort, the
@@ -997,6 +1061,20 @@ def search_quality(
         log(
             f"Plan for '{input_file.name}': encode at CRF {crf} (predicted {factor:.2f}x of source)"
         )
+        if progress:
+            progress(
+                progress_event(
+                    "crf-search",
+                    file=file_state(input_file.name, str(input_file), "crf-search"),
+                    target_vmaf=target_vmaf,
+                    chosen={
+                        "crf": crf,
+                        "vmaf": achieved,
+                        "predicted_bytes": int(identity.size * factor),
+                        "reason": None,
+                    },
+                )
+            )
         return QualityResult(
             input=input_file,
             output=input_file,

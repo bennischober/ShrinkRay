@@ -17,12 +17,13 @@ import hashlib
 import math
 import sqlite3
 import threading
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from shrinkray.config import DEFAULT_TARGET_VMAF as DEFAULT_TARGET_VMAF
+from shrinkray.engine.progress import event as progress_event
+from shrinkray.engine.progress import file_state
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_COUNT,
     DEFAULT_SAMPLE_EVERY,
@@ -392,6 +393,8 @@ def probe_crf(
     encoder_threads: int | None = None,
     use_probe_cache: bool = True,
     progress: ProgressCallback | None = None,
+    probe_index: int | None = None,
+    probe_count: int | None = None,
 ) -> float:
     """Encodes all samples at one CRF and returns their mean VMAF score.
 
@@ -437,9 +440,13 @@ def probe_crf(
         use_probe_cache (bool): False bypasses the cache entirely
             (force_reprobe: the caller asked to measure everything fresh).
         progress (callable | None): Callback progress(dict) for live step
-            updates. One event per sample carries `done`/`total`, so the
-            dashboard can state how far the search has got (issue #690) —
-            without it a running search showed no position at all for hours.
+            updates. One event per sample carries the probe's own sample
+            position, so the dashboard can state how far the current probe has
+            got (issue #690) — without it a running search showed no position
+            at all for hours.
+        probe_index (int | None): The probe's 1-based index in the search
+            (the caller's count), for the structured progress event.
+        probe_count (int | None): The search's known step count, when known.
 
     Returns:
         float: The mean per-sample VMAF mean at this CRF.
@@ -452,7 +459,6 @@ def probe_crf(
         recipe = vmaf_recipe(crop=crop)
     tool_versions = _tool_versions(handbrake)
     scores: list[float] = []
-    probe_started = time.monotonic()
     for index, (sample, offset) in enumerate(samples):
         _check_cancel(cancel)
         # one event per sample: the sample index IS the search's position, and the
@@ -461,14 +467,19 @@ def probe_crf(
         # estimate by an order of magnitude on every new probe (issue #690 review)
         if progress:
             progress(
-                {
-                    "stage": "probe",
-                    "detail": f"sample {index + 1}/{len(samples)} (CRF {crf})",
-                    "done": index,
-                    "total": len(samples),
-                    "crf": crf,
-                    "elapsed": round(time.monotonic() - probe_started, 1),
-                }
+                progress_event(
+                    "crf-search",
+                    file=file_state(movie.name, str(movie), "crf-search"),
+                    probe={
+                        "index": probe_index,
+                        "count": probe_count,
+                        "crf": crf,
+                        "vmaf": None,
+                        "predicted_bytes": None,
+                        "passed": None,
+                    },
+                    detail=f"sample {index + 1}/{len(samples)} (CRF {crf})",
+                )
             )
         key = probe_cache_key(
             movie,
@@ -593,7 +604,13 @@ def estimate_size_factor(
     sample, offset = samples[0]
     encoded = workdir / f"size_probe_crf{crf}.mkv"
     if progress:
-        progress({"stage": "probe", "detail": f"size probe (CRF {crf})"})
+        progress(
+            progress_event(
+                "crf-search",
+                file=file_state(movie.name, str(movie), "crf-search"),
+                detail=f"size probe (CRF {crf})",
+            )
+        )
     # the size ratio is measured without VMAF: the measurement inputs (the
     # recipe, libvmaf version) cannot change a byte count and stay out of the
     # key
@@ -745,10 +762,44 @@ def find_optimal_crf(
     if recipe is None:
         recipe = vmaf_recipe(crop=crop)
 
+    # the search's own bracket, tracked only to report a known step count:
+    # the bisect updates the same two bounds, so this never changes a choice
+    bounds: dict[str, tuple[int, float] | None] = {"passing": None, "failing": None}
+
+    def known_count() -> int | None:
+        """The search's step count from the remaining range, or None.
+
+        Before both bounds exist the total is unknowable: any number would be
+        invented. Once a pass and a fail bracket the target, the CRFs still to
+        try are the whole CRFs strictly between them, plus the current probe.
+        """
+        passing = bounds["passing"]
+        failing = bounds["failing"]
+        if passing is None or failing is None:
+            return None
+        remaining = max(0, failing[0] - passing[0] - 1)
+        return len(probes) + 1 + remaining
+
     def check(crf: int) -> float:
         _check_cancel(cancel)
+        probe_index = len(probes) + 1
+        probe_count = known_count()
         if progress:
-            progress({"stage": "probe", "detail": f"probe encode (CRF {crf})"})
+            progress(
+                progress_event(
+                    "crf-search",
+                    file=file_state(movie.name, str(movie), "crf-search"),
+                    probe={
+                        "index": probe_index,
+                        "count": probe_count,
+                        "crf": crf,
+                        "vmaf": None,
+                        "predicted_bytes": None,
+                        "passed": None,
+                    },
+                    detail=f"probe encode (CRF {crf})",
+                )
+            )
         vmaf = probe_crf(
             samples,
             crf,
@@ -765,11 +816,18 @@ def find_optimal_crf(
             encoder_threads=encoder_threads,
             use_probe_cache=use_probe_cache,
             progress=progress,
+            probe_index=probe_index,
+            probe_count=probe_count,
         )
         # the recorded score keeps the verdict bisect_crf reaches on the
         # unrounded one (issue #595): target_unreachable reads it back
         shown = recorded_vmaf(vmaf, target_vmaf)
         probes.append(SampleProbe(crf=crf, vmaf=shown))
+        passed = shown >= target_vmaf
+        if passed:
+            bounds["passing"] = (crf, shown)
+        else:
+            bounds["failing"] = (crf, shown)
         # one line per probe in the transcript (issue #325): during the
         # search the operator saw only 'Probing ...' for minutes with no
         # sign of convergence - the progress event reaches the CLI's bar
@@ -777,11 +835,20 @@ def find_optimal_crf(
         log(f"'{movie.name}' probe CRF {crf}: VMAF {shown} (probe {len(probes)})")
         if progress:
             progress(
-                {
-                    "stage": "probe",
-                    "detail": f"CRF {crf}: VMAF {shown}",
-                    "probes_done": len(probes),
-                }
+                progress_event(
+                    "crf-search",
+                    file=file_state(movie.name, str(movie), "crf-search"),
+                    target_vmaf=target_vmaf,
+                    probe={
+                        "index": len(probes),
+                        "count": known_count(),
+                        "crf": crf,
+                        "vmaf": shown,
+                        "predicted_bytes": None,
+                        "passed": passed,
+                    },
+                    detail=f"CRF {crf}: VMAF {shown}",
+                )
             )
         return vmaf
 

@@ -146,8 +146,18 @@ class TestProbeProgress(unittest.TestCase):
             [e["detail"] for e in events],
             ["extracting sample 1/3", "extracting sample 2/3", "extracting sample 3/3"],
         )
-        self.assertEqual([e["done"] for e in events], [0, 1, 2])
-        self.assertEqual(events[0]["total"], 3)
+        self.assertEqual(
+            [e["sample"] for e in events],
+            [
+                {"index": 1, "count": 3},
+                {"index": 2, "count": 3},
+                {"index": 3, "count": 3},
+            ],
+        )
+        # samples never ride done/total: that counter is the folder job's
+        self.assertNotIn("done", events[0])
+        self.assertNotIn("total", events[0])
+        self.assertEqual(events[0]["file"]["stage"], "samples")
 
     def test_find_optimal_crf_reports_probe_steps(self):
         """The CRF bisect emits a start event per probe encode and a result
@@ -176,7 +186,14 @@ class TestProbeProgress(unittest.TestCase):
         details = [e["detail"] for e in events]
         self.assertTrue(any("probe encode" in d for d in details))
         self.assertTrue(all("VMAF" in d for d in details[1::2]))  # result events
-        self.assertEqual(events[-1]["probes_done"], len(probes))
+        # every completed probe carries its numeric crf/vmaf, its position and
+        # the search's known step count (issue #631)
+        self.assertEqual(events[-1]["probe"]["index"], len(probes))
+        self.assertEqual(events[-1]["probe"]["vmaf"], probes[-1].vmaf)
+        self.assertEqual(events[-1]["probe"]["crf"], probes[-1].crf)
+        self.assertIsInstance(events[-1]["probe"]["passed"], bool)
+        self.assertEqual(events[-1]["file"]["stage"], "crf-search")
+        self.assertEqual(events[-1]["file"]["step"], 4)
 
     def test_probe_crf_reports_each_sample(self):
         """Issue #690: a probe states the sample it is on, so a running search
@@ -215,14 +232,12 @@ class TestProbeProgress(unittest.TestCase):
             [e["detail"] for e in events],
             ["sample 1/2 (CRF 30)", "sample 2/2 (CRF 30)"],
         )
-        self.assertEqual([e["done"] for e in events], [0, 1])
-        self.assertEqual(events[0]["total"], 2)
-        self.assertEqual(events[0]["crf"], 30)
-        # the probe's OWN elapsed time is what an ETA divides: without it the
-        # page falls back to the job's elapsed and swings the estimate by an
-        # order of magnitude on every new probe (issue #690 review)
-        self.assertIsInstance(events[0]["elapsed"], float)
-        self.assertGreaterEqual(events[1]["elapsed"], events[0]["elapsed"])
+        self.assertEqual([e["probe"]["index"] for e in events], [None, None])
+        self.assertEqual([e["probe"]["crf"] for e in events], [30, 30])
+        # a probe's per-sample tick has no measured VMAF yet; the completed
+        # probe event (find_optimal_crf's) carries it
+        self.assertIsNone(events[0]["probe"]["vmaf"])
+        self.assertEqual(events[0]["file"]["stage"], "crf-search")
 
     def test_estimate_size_factor_reports_size_probe(self):
         """The skip-check size probe emits its step event."""
