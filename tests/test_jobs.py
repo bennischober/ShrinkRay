@@ -2002,8 +2002,42 @@ class TestJobs(unittest.TestCase):
             logger.remove(sink_id)
             worker._stop.clear()
         text = "".join(captured)
-        self.assertIn(f"Job #{job.id} (scan) finished in", text, text)
-        self.assertIn(", interrupted", text, text)
+        self.assertIn(f"Job #{job.id} (scan) interrupted in", text, text)
+        self.assertNotIn("finished", text, text)
+        self.assertNotIn("cancelled", text, text)
+        self.assertEqual(self.queue.get(job.id).state, jobs.JobState.INTERRUPTED)
+
+    def test_the_end_line_says_interrupted_with_a_partial_result_and_no_cancelled_item(self):
+        """Issue #622 review: a shutdown-interrupted scan's partial result has
+        counts but no cancelled item; the end line must still name the
+        interruption instead of reading like a normal completion."""
+        from loguru import logger
+
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue)
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            worker._stop.set()  # the flag worker.stop()/request_stop() sets
+            with mock.patch.object(
+                jobs,
+                "execute_scan",
+                return_value={
+                    "movies": 3,
+                    "categories": 1,
+                    "errors": [],
+                    "cancelled": True,
+                },
+            ):
+                worker._execute(taken)
+        finally:
+            logger.remove(sink_id)
+            worker._stop.clear()
+        text = "".join(captured)
+        self.assertIn(f"Job #{job.id} (scan) interrupted in", text, text)
+        self.assertIn("3 scanned, 0 errors", text, text)
+        self.assertNotIn("finished", text, text)
         self.assertNotIn("cancelled", text, text)
         self.assertEqual(self.queue.get(job.id).state, jobs.JobState.INTERRUPTED)
 

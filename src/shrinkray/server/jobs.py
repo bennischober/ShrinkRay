@@ -2136,13 +2136,20 @@ class JobWorker:
             # failed job's transcript must not read like success
             outcome = self._outcome_counts(result, interrupted=interrupted) if result else ""
             if interrupted:
-                outcome = f", {outcome}" if outcome else ", interrupted"
+                # the interrupted state is the discriminator the issue exists
+                # for, so the verb itself must say it: a partial result with
+                # no cancelled item would otherwise read like a normal finish
+                # (issue #622 review)
+                verb = "interrupted"
+                outcome = f" - {outcome}" if outcome else ""
             elif cancelled:
+                verb = "finished"
                 outcome = f", {outcome}" if outcome else ", cancelled"
             else:
+                verb = "finished"
                 outcome = f" - {outcome}" if outcome else ""
             log(
-                f"Job #{job.id} ({job.kind.value}) finished in "
+                f"Job #{job.id} ({job.kind.value}) {verb} in "
                 f"{time.perf_counter() - started:.0f}s"
                 + outcome
                 + (f" - FAILED: {failure}" if failure else "")
