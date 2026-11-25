@@ -50,6 +50,8 @@ from shrinkray.engine.search import (
     VMAF_STATISTIC,
     SampleProbe,
     find_optimal_crf_and_skip,
+    probe_measured_at,
+    probe_source,
     sample_count_for,
     target_unreachable,
 )
@@ -107,7 +109,29 @@ def _plan_probes(plan: sqlite3.Row) -> list[SampleProbe]:
         pairs = json.loads(plan["probes"] or "[]")
     except (TypeError, ValueError):
         return []
-    return [SampleProbe(crf=int(c), vmaf=float(v)) for c, v in pairs]
+    probes: list[SampleProbe] = []
+    for pair in pairs:
+        try:
+            if len(pair) >= 4:
+                crf, vmaf, measured_at, cached = pair[0], pair[1], pair[2], pair[3]
+            elif len(pair) == 3:
+                crf, vmaf, measured_at = pair
+                cached = False
+            else:
+                crf, vmaf = pair
+                measured_at = None
+                cached = False
+            probes.append(
+                SampleProbe(
+                    crf=int(crf),
+                    vmaf=float(vmaf),
+                    cached=bool(cached),
+                    measured_at=None if measured_at is None else str(measured_at),
+                )
+            )
+        except (TypeError, ValueError, IndexError):
+            continue
+    return probes
 
 
 def _lookup_plan(
@@ -913,7 +937,10 @@ def search_quality(
                             "vmaf": achieved,
                             "predicted_bytes": None,
                             "reason": "target unreachable",
+                            "source": probe_source(probes),
                         },
+                        source=probe_source(probes),
+                        measured_at=probe_measured_at(probes),
                     )
                 )
             # gate 7 before gate 8 (issue #591): an unreachable search is
@@ -970,7 +997,10 @@ def search_quality(
                             "vmaf": achieved,
                             "predicted_bytes": None,
                             "reason": "saving below minimum",
+                            "source": probe_source(probes),
                         },
+                        source=probe_source(probes),
+                        measured_at=probe_measured_at(probes),
                     )
                 )
             ensure_unchanged(input_file, identity, "plan")
@@ -1018,7 +1048,10 @@ def search_quality(
                             "vmaf": achieved,
                             "predicted_bytes": None,
                             "reason": "no size gain",
+                            "source": probe_source(probes),
                         },
+                        source=probe_source(probes),
+                        measured_at=probe_measured_at(probes),
                     )
                 )
             # the record-time recheck (issue #436): the skip verdict rides the
@@ -1072,7 +1105,10 @@ def search_quality(
                         "vmaf": achieved,
                         "predicted_bytes": int(identity.size * factor),
                         "reason": None,
+                        "source": probe_source(probes),
                     },
+                    source=probe_source(probes),
+                    measured_at=probe_measured_at(probes),
                 )
             )
         return QualityResult(

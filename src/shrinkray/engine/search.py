@@ -63,10 +63,19 @@ DEFAULT_CRF_RANGE = (14, 70)
 
 @dataclass
 class SampleProbe:
-    """One CRF probe: the measured quality across all samples."""
+    """One CRF probe: the measured quality across all samples.
+
+    `cached` is true when every sample at this CRF came from `probe_cache`
+    instead of being encoded now; `measured_at` is then the original
+    measurement time (the maintainer's 2026-11-14 cache-provenance requirement,
+    issue #631). A mixed probe is a live measurement (`cached=False`) because at
+    least one sample was encoded now.
+    """
 
     crf: int
     vmaf: float
+    cached: bool = False
+    measured_at: str | None = None
 
 
 SAMPLE_EXTRACTION_TAG = "x264-crf12-veryfast"
@@ -137,7 +146,7 @@ def probe_cache_key(
 
 def _cached_or_none(
     db_file: Path | None, key: str
-) -> tuple[float | None, int | None, sqlite3.Connection | None]:
+) -> tuple[float | None, int | None, sqlite3.Connection | None, str | None]:
     """Reads a probe-cache entry, returning the connection to keep it open on.
 
     Opening one short-lived connection per probe is cheap (WAL, single
@@ -153,13 +162,13 @@ def _cached_or_none(
 
     Returns:
         tuple: (cached score or None, the encoded byte size or None, the
-            open connection for the cache write); (None, None, None) without
-            a usable database. The size is None on pre-#314 rows - a size
-            read misses rather than misleads. The caller owns the returned
-            connection and closes it on every path.
+            open connection for the cache write, the row's measured_at); (None,
+            None, None, None) without a usable database. The size is None on
+            pre-#314 rows - a size read misses rather than misleads. The
+            caller owns the returned connection and closes it on every path.
     """
     if db_file is None:
-        return None, None, None
+        return None, None, None, None
     from shrinkray import db as _db
 
     connection: sqlite3.Connection | None = None
@@ -172,16 +181,17 @@ def _cached_or_none(
         if connection is not None:
             connection.close()
         log(f"The probe cache is unavailable ({e}); probing uncached.")
-        return None, None, None
+        return None, None, None, None
     except BaseException:
         # the caller never received it: closing it is ours (issue #480)
         if connection is not None:
             connection.close()
         raise
     if entry is None:
-        return None, None, connection
+        return None, None, connection, None
     score, size = entry
-    return score, size, connection
+    measured_at = _db.get_probe_measured_at(connection, key)
+    return score, size, connection, measured_at
 
 
 def _store_probe(
@@ -395,6 +405,7 @@ def probe_crf(
     progress: ProgressCallback | None = None,
     probe_index: int | None = None,
     probe_count: int | None = None,
+    cache_status: list[tuple[bool, str | None]] | None = None,
 ) -> float:
     """Encodes all samples at one CRF and returns their mean VMAF score.
 
@@ -447,6 +458,8 @@ def probe_crf(
         probe_index (int | None): The probe's 1-based index in the search
             (the caller's count), for the structured progress event.
         probe_count (int | None): The search's known step count, when known.
+        cache_status (list | None): Optional per-sample (cached, measured_at)
+            collector for the caller's provenance decision (issue #631).
 
     Returns:
         float: The mean per-sample VMAF mean at this CRF.
@@ -493,15 +506,17 @@ def probe_crf(
             tool_versions,
             recipe.identifier(),
         )
-        cached, _cached_size, connection = (None, None, None)
+        cached, _cached_size, connection, measured_at = (None, None, None, None)
         if use_probe_cache:
-            cached, _cached_size, connection = _cached_or_none(db_file, key)
+            cached, _cached_size, connection, measured_at = _cached_or_none(db_file, key)
         # one finally closes the cache connection on every exit: a cancel or a
         # failed VMAF measurement mid-probe left it to the garbage collector
         # (issue #480)
         try:
             if cached is not None:
                 log(f"probe cache hit (CRF {crf}, sample {index + 1}/{len(samples)})")
+                if cache_status is not None:
+                    cache_status.append((True, measured_at))
                 scores.append(cached)
                 continue
             encoded = workdir / f"probe_crf{crf}_{index}.mkv"
@@ -539,6 +554,8 @@ def probe_crf(
             )
             _store_probe(connection, key, score, encoded.stat().st_size)
             encoded.unlink()
+            if cache_status is not None:
+                cache_status.append((False, None))
             scores.append(score)
         finally:
             if connection is not None:
@@ -627,9 +644,9 @@ def estimate_size_factor(
         recipe="",
         kind="size",
     )
-    cached, _cached_size, connection = (None, None, None)
+    cached, _cached_size, connection, _measured_at = (None, None, None, None)
     if use_probe_cache:
-        cached, _cached_size, connection = _cached_or_none(db_file, key)
+        cached, _cached_size, connection, _measured_at = _cached_or_none(db_file, key)
     # one finally closes the cache connection on every exit (issue #480)
     try:
         if cached is not None:
@@ -769,6 +786,7 @@ def find_optimal_crf(
         # can early-stop on its own tolerance ladder, so any number here would
         # be invented (issue #631's count, `null` when unknown)
         probe_count = None
+        cache_status: list[tuple[bool, str | None]] = []
         if progress:
             progress(
                 progress_event(
@@ -803,11 +821,14 @@ def find_optimal_crf(
             progress=progress,
             probe_index=probe_index,
             probe_count=probe_count,
+            cache_status=cache_status,
         )
         # the recorded score keeps the verdict bisect_crf reaches on the
         # unrounded one (issue #595): target_unreachable reads it back
         shown = recorded_vmaf(vmaf, target_vmaf)
-        probes.append(SampleProbe(crf=crf, vmaf=shown))
+        cached = bool(cache_status) and all(hit for hit, _ in cache_status)
+        measured_at = min(t for hit, t in cache_status if hit and t) if cached else None
+        probes.append(SampleProbe(crf=crf, vmaf=shown, cached=cached, measured_at=measured_at))
         passed = shown >= target_vmaf
         # one line per probe in the transcript (issue #325): during the
         # search the operator saw only 'Probing ...' for minutes with no
@@ -827,6 +848,8 @@ def find_optimal_crf(
                         "vmaf": shown,
                         "predicted_bytes": None,
                         "passed": passed,
+                        "cached": cached,
+                        "measured_at": measured_at,
                     },
                     detail=f"CRF {crf}: VMAF {shown}",
                 )
@@ -856,17 +879,43 @@ def find_optimal_crf(
                     "vmaf": last.vmaf,
                     "predicted_bytes": None,
                     "passed": last.vmaf >= target_vmaf,
+                    "cached": last.cached,
+                    "measured_at": last.measured_at,
                 },
                 chosen={
                     "crf": chosen,
                     "vmaf": achieved,
                     "predicted_bytes": None,
                     "reason": None,
+                    "source": probe_source(probes),
                 },
+                source=probe_source(probes),
+                measured_at=probe_measured_at(probes),
                 detail=f"search complete: {len(probes)} probes",
             )
         )
     return chosen, achieved, probes
+
+
+def probe_source(probes: list[SampleProbe]) -> str:
+    """Returns 'cache' when every probe was reused, else 'measured' (issue #631).
+
+    A mixed search measured at least one sample now, so it is not a cached
+    replay even though some rows came from the cache.
+    """
+    return "cache" if probes and all(p.cached for p in probes) else "measured"
+
+
+def probe_measured_at(probes: list[SampleProbe]) -> str | None:
+    """Returns the original measurement time of a cached replay (issue #631).
+
+    The earliest cached measurement is the batch's "measured <date>"; None for a
+    live or mixed search, which has no single original time.
+    """
+    if not probes or not all(p.cached for p in probes):
+        return None
+    times = [p.measured_at for p in probes if p.measured_at]
+    return min(times) if times else None
 
 
 def target_unreachable(

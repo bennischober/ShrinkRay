@@ -13,6 +13,8 @@ from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import progress as engine_progress
 from shrinkray.engine import samples as engine_samples
 from shrinkray.engine import search as engine_search
+from shrinkray.engine.progress import provenance as progress_provenance
+from shrinkray.engine.search import SampleProbe
 from shrinkray.server import jobs
 from shrinkray.tools import handbrake as tools_handbrake
 
@@ -120,6 +122,63 @@ class TestProgressMerge(unittest.TestCase):
         self.assertNotIn("probe", merged)
         self.assertNotIn("chosen", merged)
         self.assertNotIn("encode", merged)
+
+    def test_provenance_maps_measured_cache_and_plan(self) -> None:
+        """The stage result's source is measured | cache | plan (issue #631)."""
+        live = [SampleProbe(crf=21, vmaf=95.0)]
+        cached = [
+            SampleProbe(
+                crf=21,
+                vmaf=95.0,
+                cached=True,
+                measured_at="2026-11-14 08:12:00",
+            )
+        ]
+        self.assertEqual(progress_provenance(live), ("measured", None))
+        self.assertEqual(progress_provenance(cached), ("cache", "2026-11-14 08:12:00"))
+        self.assertEqual(
+            progress_provenance(
+                cached,
+                crf_source="plan",
+                plan_created_at="2026-11-15 10:00:00",
+            ),
+            ("plan", "2026-11-15 10:00:00"),
+        )
+
+    def test_merge_keeps_probe_cache_provenance(self) -> None:
+        """A cached replay's probe/source/measured_at survive the bus merge
+        (maintainer 2026-11-14, issue #631)."""
+        merged = engine_progress.merge(
+            None,
+            {
+                "v": 1,
+                "stage": "crf-search",
+                "probe": {
+                    "index": 1,
+                    "count": 1,
+                    "crf": 24,
+                    "vmaf": 96.6,
+                    "predicted_bytes": None,
+                    "passed": True,
+                    "cached": True,
+                    "measured_at": "2026-11-14 08:12:00",
+                },
+                "chosen": {
+                    "crf": 24,
+                    "vmaf": 96.6,
+                    "predicted_bytes": 1_000,
+                    "reason": None,
+                    "source": "cache",
+                },
+                "source": "cache",
+                "measured_at": "2026-11-14 08:12:00",
+            },
+        )
+        self.assertTrue(merged["probe"]["cached"])
+        self.assertEqual(merged["probe"]["measured_at"], "2026-11-14 08:12:00")
+        self.assertEqual(merged["chosen"]["source"], "cache")
+        self.assertEqual(merged["source"], "cache")
+        self.assertEqual(merged["measured_at"], "2026-11-14 08:12:00")
 
     def test_a_completed_probe_accumulates_by_index(self) -> None:
         merged = engine_progress.merge(None, {"probe": {"index": 1, "crf": 30, "vmaf": 94.8}})
@@ -257,7 +316,12 @@ class TestStructuredEventSequence(unittest.TestCase):
                 "achieved_vmaf": 95.4,
                 "skipped_reason": None,
                 "crop": None,
-                "probes": json.dumps([(30, 94.8), (24, 96.6)]),
+                "probes": json.dumps(
+                    [
+                        (30, 94.8, "2026-11-14 08:12:00", True),
+                        (24, 96.6, "2026-11-14 08:12:00", True),
+                    ]
+                ),
                 "estimated_size": 1_000_000,
                 "created_at": "2026-11-25 12:00:00",
                 "encoder_preset": "5",
@@ -312,6 +376,15 @@ class TestStructuredEventSequence(unittest.TestCase):
             self.assertEqual(events[0]["chosen"]["vmaf"], 95.4)
             self.assertEqual(events[0]["chosen"]["predicted_bytes"], 1_000_000)
             self.assertIsNone(events[0]["chosen"]["reason"])
+            self.assertEqual(events[0]["chosen"]["source"], "plan")
+            self.assertEqual(events[0]["source"], "plan")
+            self.assertEqual(events[0]["measured_at"], "2026-11-25 12:00:00")
+            self.assertTrue(events[0]["probes"])
+            self.assertTrue(all(probe["cached"] for probe in events[0]["probes"]))
+            self.assertTrue(
+                all(probe["measured_at"] == "2026-11-14 08:12:00" for probe in events[0]["probes"])
+            )
+            self.assertEqual(events[0]["probe"]["cached"], True)
             self.assertIn("encode", [event["stage"] for event in events])
 
             events.clear()
@@ -427,7 +500,12 @@ class TestStructuredEventSequence(unittest.TestCase):
                 "achieved_vmaf": 95.4,
                 "skipped_reason": None,
                 "crop": None,
-                "probes": json.dumps([(30, 94.8), (24, 96.6)]),
+                "probes": json.dumps(
+                    [
+                        (30, 94.8, "2026-11-14 08:12:00", True),
+                        (24, 96.6, "2026-11-14 08:12:00", True),
+                    ]
+                ),
                 "created_at": "2026-11-25 12:00:00",
                 "encoder_preset": "5",
                 "estimated_size": 1_000_000,

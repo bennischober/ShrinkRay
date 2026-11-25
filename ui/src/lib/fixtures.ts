@@ -60,6 +60,7 @@ export const FIXTURES = [
   // payload changes on every poll, so the ETag path cannot mask the cost
   'busy-changing',
   'busy-history',
+  'busy-cached',
   'huge',
   'offline',
   'locked',

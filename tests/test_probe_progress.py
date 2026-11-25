@@ -275,6 +275,78 @@ class TestProbeProgress(unittest.TestCase):
         self.assertEqual(merged["chosen"]["crf"], 23)
         self.assertEqual(merged["chosen"]["vmaf"], 96.6)
 
+    def test_cached_replay_reports_cache_provenance(self):
+        """A cached probe replay is source=cache with the stored measured_at, and
+        the final probe row is the cached row (maintainer 2026-11-14, #631)."""
+        events: list[dict] = []
+        measured_at = "2026-11-14 08:12:00"
+
+        def cached_probe(samples, crf, *args, **kwargs):
+            kwargs["cache_status"].append((True, measured_at))
+            return 96.2
+
+        with (
+            patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(engine_search, "probe_crf", side_effect=cached_probe),
+        ):
+            chosen, achieved, probes = engine_search.find_optimal_crf(
+                Path("movie.mkv"),
+                Path("work"),
+                "hb",
+                target_vmaf=96.0,
+                crf_range=(14, 32),
+                sample_count=1,
+                sample_seconds=10.0,
+                progress=events.append,
+            )
+        self.assertEqual(chosen, probes[-1].crf)
+        self.assertEqual(achieved, probes[-1].vmaf)
+        self.assertTrue(all(p.cached for p in probes))
+        self.assertTrue(all(p.measured_at == measured_at for p in probes))
+        self.assertEqual(events[-1]["chosen"]["source"], "cache")
+        self.assertEqual(events[-1]["source"], "cache")
+        self.assertEqual(events[-1]["measured_at"], measured_at)
+        self.assertTrue(events[-1]["probe"]["cached"])
+        self.assertEqual(events[-1]["probe"]["measured_at"], measured_at)
+        self.assertTrue(
+            all(
+                e["probe"].get("cached")
+                for e in events
+                if e.get("probe") and str(e.get("detail", "")).startswith("CRF ")
+            )
+        )
+
+    def test_live_probe_reports_measured_provenance(self):
+        """A live probe is source=measured with no measured_at, never cache."""
+        events: list[dict] = []
+
+        def live_probe(samples, crf, *args, **kwargs):
+            kwargs["cache_status"].append((False, None))
+            return 95.4
+
+        with (
+            patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(engine_search, "probe_crf", side_effect=live_probe),
+        ):
+            _chosen, _achieved, probes = engine_search.find_optimal_crf(
+                Path("movie.mkv"),
+                Path("work"),
+                "hb",
+                target_vmaf=96.0,
+                crf_range=(14, 32),
+                sample_count=1,
+                sample_seconds=10.0,
+                progress=events.append,
+            )
+        self.assertTrue(probes)
+        self.assertTrue(all(not p.cached for p in probes))
+        self.assertTrue(all(p.measured_at is None for p in probes))
+        self.assertEqual(events[-1]["chosen"]["source"], "measured")
+        self.assertEqual(events[-1]["source"], "measured")
+        self.assertIsNone(events[-1]["measured_at"])
+        self.assertFalse(events[-1]["probe"]["cached"])
+        self.assertIsNone(events[-1]["probe"]["measured_at"])
+
     def test_probe_crf_reports_each_sample(self):
         """Issue #690: a probe states the sample it is on, so a running search
         has a position (and an ETA) instead of showing nothing for hours."""
@@ -286,7 +358,7 @@ class TestProbeProgress(unittest.TestCase):
 
         with (
             patch.object(engine_search, "probe_cache_key", return_value="k"),
-            patch.object(engine_search, "_cached_or_none", return_value=(None, None, None)),
+            patch.object(engine_search, "_cached_or_none", return_value=(None, None, None, None)),
             patch.object(
                 engine_search,
                 "build_encode_command",

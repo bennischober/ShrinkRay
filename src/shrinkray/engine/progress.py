@@ -131,6 +131,40 @@ def with_run(data: dict[str, Any], done: int, total: int | None) -> dict[str, An
     return merged
 
 
+def provenance(
+    probes: list[Any] | None,
+    *,
+    crf_source: str | None = None,
+    plan_created_at: str | None = None,
+) -> tuple[str, str | None]:
+    """Returns (source, measured_at) for a stage result or chosen field.
+
+    The one mapping the server's stage results and events use (the maintainer's
+    2026-11-14 cache-provenance requirement, issue #631):
+    - a stored plan reuse is `plan`, measured at the plan's created_at;
+    - a search whose every probe came from the probe cache is `cache`,
+      measured at the earliest original measurement;
+    - anything else measured at least one sample now, so it is `measured`.
+
+    Args:
+        probes (list | None): The probes that backed the decision.
+        crf_source (str | None): 'plan' when the decision came from a stored
+            plan; the other values fall through to the probe evidence.
+        plan_created_at (str | None): The stored plan's measurement time.
+
+    Returns:
+        tuple: (source, measured_at); measured_at is None for a live search
+            and for a cache replay without a stored time.
+    """
+    if crf_source == "plan":
+        return "plan", plan_created_at
+    rows = list(probes or [])
+    if rows and all(bool(p.cached) for p in rows):
+        times = [str(p.measured_at) for p in rows if p.measured_at]
+        return "cache", min(times) if times else None
+    return "measured", None
+
+
 def merge(last: dict[str, Any] | None, data: dict[str, Any]) -> dict[str, Any]:
     """Merges one progress event into the latest known state (issue #631).
 

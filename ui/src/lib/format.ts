@@ -122,6 +122,24 @@ export function finishesAt(seconds: number | null | undefined, now: number): str
   return `finishes ≈ ${clock(at)}`
 }
 
+/** A stored measurement time as the reused wording shows it: `14 Nov 08:12`.
+ * SQLite writes `YYYY-MM-DD HH:MM:SS` in UTC; an already-ISO value is accepted. */
+export function measuredAtLabel(value: string | null | undefined): string {
+  if (!value) return 'unknown time'
+  const iso = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return value
+  return at
+    .toLocaleString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+    .replace(',', '')
+}
+
 /** The same estimate for a table cell, where the column header already says
  * what it is: `~9 h 56 min`, never `about ... left`. */
 export function etaShort(seconds: number | null | undefined): string {

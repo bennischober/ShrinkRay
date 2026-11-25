@@ -141,6 +141,12 @@ from shrinkray.engine.search import (
     probe_crf as probe_crf,
 )
 from shrinkray.engine.search import (
+    probe_measured_at as probe_measured_at,
+)
+from shrinkray.engine.search import (
+    probe_source as probe_source,
+)
+from shrinkray.engine.search import (
     sample_count_for as sample_count_for,
 )
 from shrinkray.engine.search import target_unreachable
@@ -1111,7 +1117,10 @@ def _probe_movie(
                             "vmaf": achieved,
                             "predicted_bytes": None,
                             "reason": "target unreachable",
+                            "source": probe_source(probes),
                         },
+                        source=probe_source(probes),
+                        measured_at=probe_measured_at(probes),
                     )
                 )
             raise SkipEncode(
@@ -1132,7 +1141,10 @@ def _probe_movie(
                             "vmaf": achieved,
                             "predicted_bytes": None,
                             "reason": "no size gain",
+                            "source": probe_source(probes),
                         },
+                        source=probe_source(probes),
+                        measured_at=probe_measured_at(probes),
                     )
                 )
             raise SkipEncode(
@@ -1157,7 +1169,10 @@ def _probe_movie(
                             "vmaf": achieved,
                             "predicted_bytes": None,
                             "reason": "saving below minimum",
+                            "source": probe_source(probes),
                         },
+                        source=probe_source(probes),
+                        measured_at=probe_measured_at(probes),
                     )
                 )
             raise SkipEncode(
@@ -1177,7 +1192,10 @@ def _probe_movie(
                         "vmaf": achieved,
                         "predicted_bytes": int(input_file.stat().st_size * chosen_factor),
                         "reason": None,
+                        "source": probe_source(probes),
                     },
+                    source=probe_source(probes),
+                    measured_at=probe_measured_at(probes),
                 )
             )
         return crf, achieved, probes, crop
@@ -1485,7 +1503,23 @@ def encode_with_quality(
         )
     crf_source: str | None = None
     plan_created_at: str | None = None
+    plan_event_probes: list[dict] = []
     if plan is not None:
+        plan_probes = _plan_probes(plan)
+        plan_measured_at = plan["created_at"]
+        plan_event_probes = [
+            {
+                "index": index,
+                "count": len(plan_probes),
+                "crf": probe.crf,
+                "vmaf": probe.vmaf,
+                "predicted_bytes": None,
+                "passed": probe.vmaf >= target_vmaf,
+                "cached": True,
+                "measured_at": probe.measured_at or plan_measured_at,
+            }
+            for index, probe in enumerate(plan_probes, start=1)
+        ]
         if plan["skipped_reason"]:
             # the plan already rejected this movie - trust the verdict,
             # no probing, no encode. The skip decision is as valuable
@@ -1502,7 +1536,12 @@ def encode_with_quality(
                             "vmaf": plan["achieved_vmaf"],
                             "predicted_bytes": None,
                             "reason": reason,
+                            "source": "plan",
                         },
+                        probes=plan_event_probes,
+                        probe=plan_event_probes[-1] if plan_event_probes else None,
+                        source="plan",
+                        measured_at=plan["created_at"],
                         detail=f"using plan (probed {plan['created_at']}) · {reason}",
                     )
                 )
@@ -1549,7 +1588,12 @@ def encode_with_quality(
                         "vmaf": achieved,
                         "predicted_bytes": plan["estimated_size"],
                         "reason": None,
+                        "source": "plan",
                     },
+                    probes=plan_event_probes,
+                    probe=plan_event_probes[-1] if plan_event_probes else None,
+                    source="plan",
+                    measured_at=plan["created_at"],
                     detail=f"using plan (probed {plan['created_at']}) · CRF {crf}",
                 )
             )

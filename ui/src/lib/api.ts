@@ -86,6 +86,11 @@ export function failedOutcomeNote(job: Job): string {
 /** The stage enum of the structured progress event (issue #631): kept in
  * sync with the server's job kinds of #602 plus the pipeline's own stages and
  * the pause hold. Mirrored from `engine/progress.py`. */
+/** Where a probe/decision came from (the maintainer's 2026-11-14 cache-provenance
+ * requirement, issue #631): a live measurement, a probe-cache replay, or a stored
+ * plan. */
+export type ProgressSource = 'measured' | 'cache' | 'plan'
+
 export type ProgressStage =
   | 'scan'
   | 'decision'
@@ -121,6 +126,10 @@ export interface ProgressProbe {
   vmaf: number | null
   predicted_bytes: number | null
   passed: boolean | null
+  /** true when every sample came from probe_cache instead of being encoded now */
+  cached?: boolean
+  /** the original measurement time of a cached probe */
+  measured_at?: string | null
 }
 
 /** The search's completion line. */
@@ -129,6 +138,8 @@ export interface ProgressChosen {
   vmaf: number | null
   predicted_bytes: number | null
   reason: string | null
+  source?: ProgressSource
+  measured_at?: string | null
 }
 
 /** HandBrake's own progress line: null when the line does not print a field. */
@@ -160,6 +171,10 @@ export interface ProgressData {
   probes?: ProgressProbe[]
   target_vmaf?: number | null
   chosen?: ProgressChosen
+  /** the stage result's provenance (measured | cache | plan) and its original
+   * measurement time, when reused */
+  source?: ProgressSource
+  measured_at?: string | null
   encode?: ProgressEncode
   sample?: ProgressSample
   detail?: string
@@ -236,7 +251,12 @@ export interface MoviePlan {
    * search measured, in stored order. The search does not compute a predicted
    * size per probe, so the pairs carry only crf/vmaf (the plan's estimated_size
    * is the whole-file prediction). */
-  probes?: { crf: number; vmaf: number }[]
+  probes?: {
+    crf: number
+    vmaf: number
+    measured_at?: string | null
+    cached?: boolean
+  }[]
   /** the HDR estimate bias note (issue #98): present only for HDR titles with
    * a live estimate — the prediction comes from easy-content probe windows */
   estimate_note?: string | null

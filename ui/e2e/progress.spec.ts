@@ -95,6 +95,22 @@ test('the queue outlook states the files waiting and a rough time only with hist
   })
 })
 
+test('a cached probe replay is visibly reused (issue #631)', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  await page.addInitScript((t) => localStorage.setItem('ms.theme', t), 'dark')
+  await page.goto('/?fixture=busy-cached#/overview', { waitUntil: 'load' })
+  const reused = page.locator('[data-reused]').first()
+  await expect(reused).toBeVisible({ timeout: 60_000 })
+  await expect(reused).toContainText('reused from the plan cache (measured')
+  const probes = page.locator('[data-work-progress] .probes').first()
+  await expect(probes).toBeVisible()
+  await expect(probes).toContainText('CRF 30')
+  await expect(page.locator('[data-work-summary]').first()).toContainText('reused')
+  await page.screenshot({
+    path: `test-results/screenshots/progress-reused-${testInfo.project.name}.png`,
+  })
+})
+
 test('the old Overview elapsed/percent estimate is gone (issue #631)', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   await page.addInitScript((t) => localStorage.setItem('ms.theme', t), 'dark')

@@ -25,10 +25,11 @@ import type {
   ProgressProbe,
   ProgressRun,
   ProgressSample,
+  ProgressSource,
   ProgressStage,
 } from './api'
 import { storedToken } from './api'
-import { bytes, crf, duration, finishesAt, fps, percent, vmaf } from './format'
+import { bytes, crf, duration, finishesAt, fps, measuredAtLabel, percent, vmaf } from './format'
 
 /** The stepper's order (issue #631's requirement 4). `scan` and `paused` are
  * stages but not steps: a scan has no per-file pipeline, and a pause holds the
@@ -84,6 +85,10 @@ export interface FileProgressView {
   encode: ProgressEncode | null
   sample: ProgressSample | null
   detail: string | null
+  /** measured | cache | plan, the stage result's provenance (issue #631) */
+  source: ProgressSource | null
+  /** the original measurement time when the source is cache/plan */
+  measuredAt: string | null
   /** encoder-reported ETA after the EMA smoothing; null when absent */
   etaSmoothed: number | null
   encodeTicks: EncodeTick[]
@@ -204,6 +209,19 @@ export function chosenLine(
   return line
 }
 
+/** The reused wording the UI must show instead of a fresh-search story (issue
+ * #631): a cached replay names the probe cache; a stored plan names the plan. */
+export function reusedLabel(view: FileProgressView | null): string {
+  if (!view) return ''
+  if (view.source === 'cache') {
+    return `reused from the plan cache (measured ${measuredAtLabel(view.measuredAt)})`
+  }
+  if (view.source === 'plan') {
+    return `reused from the plan (measured ${measuredAtLabel(view.measuredAt)})`
+  }
+  return ''
+}
+
 /** The same words every page renders for a running file (issue #631). */
 export function workSummary(
   view: FileProgressView | null,
@@ -219,6 +237,8 @@ export function workSummary(
     return view.detail ? `Paused — ${view.detail}` : 'Paused'
   }
   const parts = [STAGE_LABELS[view.stage] ?? view.stage]
+  const reused = reusedLabel(view)
+  if (reused) parts.push('reused')
   if (view.stage === 'crf-search') {
     const position = probePosition(view)
     if (position) parts.push(position)
@@ -300,6 +320,18 @@ function applyFileEvent(jobId: number, data: ProgressData, at: number): void {
     }
   }
 
+  const cachedProbes = probes.filter((p) => p.cached === true && p.measured_at)
+  const source: ProgressSource | null =
+    data.source ??
+    data.chosen?.source ??
+    (probes.length > 0 && probes.every((p) => p.cached === true) ? 'cache' : null)
+  const measuredAt =
+    data.measured_at ??
+    data.chosen?.measured_at ??
+    (source === 'cache' && cachedProbes.length > 0
+      ? cachedProbes.map((p) => p.measured_at!).sort()[0]
+      : null)
+
   fileByJob[jobId] = {
     jobId,
     stage,
@@ -319,6 +351,8 @@ function applyFileEvent(jobId: number, data: ProgressData, at: number): void {
     encode,
     sample: newFile ? data.sample ?? null : data.sample ?? previous?.sample ?? null,
     detail: newFile ? data.detail ?? null : data.detail ?? previous?.detail ?? null,
+    source: newFile ? source : source ?? previous?.source ?? null,
+    measuredAt: newFile ? measuredAt : measuredAt ?? previous?.measuredAt ?? null,
     etaSmoothed,
     encodeTicks,
     probeTicks,

@@ -791,6 +791,7 @@ class TestJobs(unittest.TestCase):
             [("decision", "done"), ("crf-search", "done"), ("encode", "done")],
         )
         self.assertIn('"source": "plan"', rows[1]["result"])
+        self.assertIn('"measured_at"', rows[1]["result"])
 
     def test_a_cancel_during_the_encode_marks_its_stage_row_cancelled(self):
         """Issue #602 review: the encode stage row must read cancelled on a

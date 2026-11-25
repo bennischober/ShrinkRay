@@ -38,10 +38,12 @@ One schema for every stage, built by `engine/progress.py` and mirrored in
   "stage_job_id": 12,
   "run": {"done": 3, "total": 12},
   "file": {"movie": "a.mkv", "path": "/media/a.mkv", "stage": "crf-search", "step": 4, "steps": 7},
-  "probe": {"index": 2, "count": 6, "crf": 27, "vmaf": 95.9, "predicted_bytes": null, "passed": false},
-  "probes": [{"index": 1, "count": 6, "crf": 30, "vmaf": 94.8, "passed": false}],
+  "probe": {"index": 2, "count": 6, "crf": 27, "vmaf": 95.9, "predicted_bytes": null, "passed": false, "cached": true, "measured_at": "2026-11-14 08:12:00"},
+  "probes": [{"index": 1, "count": 6, "crf": 30, "vmaf": 94.8, "passed": false, "cached": true, "measured_at": "2026-11-14 08:12:00"}],
   "target_vmaf": 96,
-  "chosen": {"crf": 26, "vmaf": 96.2, "predicted_bytes": 9400000000, "reason": null},
+  "chosen": {"crf": 26, "vmaf": 96.2, "predicted_bytes": 9400000000, "reason": null, "source": "cache"},
+  "source": "cache",
+  "measured_at": "2026-11-14 08:12:00",
   "encode": {"percent": 42.31, "fps": 123.45, "avg_fps": 120.0, "eta_seconds": 754},
   "sample": {"index": 2, "count": 7},
   "detail": "CRF 27: VMAF 95.9"
@@ -65,6 +67,13 @@ One schema for every stage, built by `engine/progress.py` and mirrored in
   final `chosen` has the chosen CRF/VMAF and the stage driver later replaces it with
   the predicted size/reason. The stored-plan reuse path is also a `crf-search` event,
   with the plan's chosen result.
+- Cache provenance (maintainer 2026-11-14, issue #631): a probe replayed from
+  `probe_cache` carries `cached: true` and its original `measured_at`; a live probe
+  carries `cached: false` and `measured_at: null`. The top-level and `chosen.source`
+  are `measured | cache | plan` (`plan` for a stored-plan reuse, `cache` only when every
+  probe was reused, otherwise `measured`), and the stage result carries the same
+  `source`/`measured_at`. `plans.probes` stores the per-probe measured_at/cached so a
+  later reuse can say when the measurement was taken.
   `chosen.reason` is `null` for a prediction, else the skip reason (`no size gain`,
   `target unreachable`, `saving below minimum`). The search does not compute a
   predicted size per probe, so `probe.predicted_bytes` is always `null`; the plan's
@@ -73,8 +82,9 @@ One schema for every stage, built by `engine/progress.py` and mirrored in
   own line by `tools/handbrake.parse_progress_line`; a field the line does not
   print is `null`, never a guess. `sample` is the sample-extraction position and
   never rides `run.done`/`run.total`.
-- `/api/movie` returns `plan.probes` as `[{crf, vmaf}]` from the persisted
-  `plans.probes` column; the title page renders that trail.
+- `/api/movie` returns `plan.probes` as
+  `[{crf, vmaf, measured_at, cached}]` from the persisted `plans.probes` column; the
+  title page renders that trail.
 - `/api/status` and `/api/snapshot` carry `recent_encodes`: the last five
   applied encodes ordered by `encoded_at DESC`. The queue outlook's rough time reads
   this recency list; `/api/library` is category/name-ordered and must never be the

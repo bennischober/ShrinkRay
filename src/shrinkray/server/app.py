@@ -1703,9 +1703,24 @@ def _plan_probes(raw: str | None) -> list[dict]:
     probes: list[dict] = []
     for pair in pairs:
         try:
-            crf, vmaf = pair
-            probes.append({"crf": int(crf), "vmaf": float(vmaf)})
-        except (TypeError, ValueError):
+            if len(pair) >= 4:
+                crf, vmaf, measured_at, cached = pair[0], pair[1], pair[2], pair[3]
+            elif len(pair) == 3:
+                crf, vmaf, measured_at = pair
+                cached = False
+            else:
+                crf, vmaf = pair
+                measured_at = None
+                cached = False
+            probes.append(
+                {
+                    "crf": int(crf),
+                    "vmaf": float(vmaf),
+                    "measured_at": None if measured_at is None else str(measured_at),
+                    "cached": bool(cached),
+                }
+            )
+        except (TypeError, ValueError, IndexError):
             continue
     return probes
 

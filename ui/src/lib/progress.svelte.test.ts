@@ -184,6 +184,79 @@ describe('progress store', () => {
     expect(mod.progressFor(999)).toBeNull()
   })
 
+  it('carries cache provenance and renders the reused wording (issue #631)', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    mod.connectEvents()
+    const es = FakeEventSource.instances[0]
+    es.open()
+    es.emit('message', {
+      job_id: 1,
+      v: 1,
+      stage: 'crf-search',
+      stage_job_id: 2,
+      run: { done: 0, total: 2 },
+      file: {
+        movie: 'A.mkv',
+        path: '/media/A.mkv',
+        stage: 'crf-search',
+        step: 4,
+        steps: 7,
+      },
+      target_vmaf: 96,
+      probe: {
+        index: 2,
+        count: 2,
+        crf: 24,
+        vmaf: 96.6,
+        predicted_bytes: null,
+        passed: true,
+        cached: true,
+        measured_at: '2026-11-14 08:12:00',
+      },
+      probes: [
+        {
+          index: 1,
+          count: 2,
+          crf: 30,
+          vmaf: 94.8,
+          predicted_bytes: null,
+          passed: false,
+          cached: true,
+          measured_at: '2026-11-14 08:12:00',
+        },
+        {
+          index: 2,
+          count: 2,
+          crf: 24,
+          vmaf: 96.6,
+          predicted_bytes: null,
+          passed: true,
+          cached: true,
+          measured_at: '2026-11-14 08:12:00',
+        },
+      ],
+      chosen: {
+        crf: 24,
+        vmaf: 96.6,
+        predicted_bytes: 1_400_000_000,
+        reason: null,
+        source: 'cache',
+      },
+      source: 'cache',
+      measured_at: '2026-11-14 08:12:00',
+    })
+    const view = mod.fileProgressFor(1)
+    expect(view?.source).toBe('cache')
+    expect(view?.measuredAt).toBe('2026-11-14 08:12:00')
+    expect(mod.reusedLabel(view)).toContain('reused from the plan cache (measured')
+    expect(mod.reusedLabel(view)).toContain('Nov')
+    expect(mod.workSummary(view, Date.now(), false)).toContain('reused')
+    expect(mod.reusedLabel({ ...view!, source: 'plan' })).toContain(
+      'reused from the plan (measured',
+    )
+  })
+
   it('a new file drops the previous file trail and chosen (issue #631)', () => {
     vi.useFakeTimers()
     vi.setSystemTime(0)
@@ -437,6 +510,8 @@ describe('progress store', () => {
       etaSmoothed: null,
       encodeTicks: [],
       probeTicks: [],
+      source: null,
+      measuredAt: null,
     }
     expect(mod.probePosition(view)).toBe('probe 2 of 4')
     expect(mod.workSummary(view, Date.now(), false)).toBe('CRF search · probe 2 of 4')
@@ -461,6 +536,8 @@ describe('progress store', () => {
       etaSmoothed: null,
       encodeTicks: [],
       probeTicks: [],
+      source: null,
+      measuredAt: null,
     }
     expect(mod.chosenLine(view, 96, 25_000_000_000)).toBe(
       'Found CRF 26 — VMAF 96.2 · predicted 8.75 GiB (−62 %)',

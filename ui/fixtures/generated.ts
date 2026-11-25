@@ -289,6 +289,37 @@ export function busyHistory(): Fixture {
   }
 }
 
+/** `busy-cached`: the busy stream with every probe reused from the probe cache
+ * (cached=true, measured_at), so the UI must say "reused" instead of a fresh
+ * search (maintainer 2026-11-14, issue #631). */
+export function busyCached(): Fixture {
+  const fixture = busy()
+  const measuredAt = '2026-11-14 08:12:00'
+  return {
+    ...fixture,
+    events: fixture.events.map((event) => {
+      const frame = event as {
+        stage?: string
+        probe?: Record<string, unknown>
+        chosen?: Record<string, unknown>
+      }
+      if (frame.stage !== 'crf-search') return event
+      const next = { ...frame, source: 'cache', measured_at: measuredAt }
+      if (frame.probe) {
+        next.probe = {
+          ...frame.probe,
+          cached: true,
+          measured_at: measuredAt,
+        }
+      }
+      if (frame.chosen) {
+        next.chosen = { ...frame.chosen, source: 'cache', measured_at: measuredAt }
+      }
+      return next
+    }),
+  }
+}
+
 /** `huge`: 20 000 titles and 1 500 jobs — scale and performance. */
 export function huge(): Fixture {
   const fixture = busy()

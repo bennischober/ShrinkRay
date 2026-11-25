@@ -29,6 +29,7 @@ from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.progress import event as progress_event
 from shrinkray.engine.progress import file_state, with_run
 from shrinkray.engine.progress import merge as merge_progress
+from shrinkray.engine.progress import provenance as progress_provenance
 from shrinkray.logger import file_scope, log, log_error
 from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
@@ -1288,12 +1289,19 @@ def execute_plan(
                 queue.fail_stage(search_row, str(e))
                 plans.append({"movie": movie.name, "state": "error", "error": str(e)})
                 continue
+            stage_source, stage_measured_at = progress_provenance(
+                result.probes,
+                crf_source=getattr(result, "crf_source", None),
+                plan_created_at=getattr(result, "plan_created_at", None),
+            )
             queue.finish_stage(
                 search_row,
                 {
                     "crf": result.chosen_crf,
                     "vmaf": result.achieved_vmaf,
                     "reason": result.skipped_reason,
+                    "source": stage_source,
+                    "measured_at": stage_measured_at,
                 },
             )
         else:
@@ -1635,6 +1643,7 @@ def _encode_measured(
                         "vmaf": stored["achieved_vmaf"],
                         "reason": stored["skipped_reason"],
                         "source": "plan",
+                        "measured_at": dict(stored).get("created_at"),
                     },
                 )
             else:
@@ -1662,12 +1671,19 @@ def _encode_measured(
                     queue.fail_stage(search_row, str(e))
                     outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
                     continue
+                stage_source, stage_measured_at = progress_provenance(
+                    prediction.probes,
+                    crf_source=getattr(prediction, "crf_source", None),
+                    plan_created_at=getattr(prediction, "plan_created_at", None),
+                )
                 queue.finish_stage(
                     search_row,
                     {
                         "crf": prediction.chosen_crf,
                         "vmaf": prediction.achieved_vmaf,
                         "reason": prediction.skipped_reason,
+                        "source": stage_source,
+                        "measured_at": stage_measured_at,
                     },
                 )
                 # the prediction is recorded so the encode below REUSES it instead of

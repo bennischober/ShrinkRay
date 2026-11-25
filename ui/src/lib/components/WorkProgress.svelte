@@ -6,6 +6,7 @@
     STAGE_STEPS,
     chosenLine,
     progressEta,
+    reusedLabel,
     workSummary,
     type FileProgressView,
   } from '../progress.svelte'
@@ -44,6 +45,7 @@
     (progress?.probes ?? []).filter((p) => p.crf != null && p.vmaf != null),
   )
   const chosen = $derived(progress?.chosen ?? null)
+  const reused = $derived(reusedLabel(progress))
 </script>
 
 <div class="work" data-work-progress data-stale={stale || undefined}>
@@ -84,6 +86,9 @@
             {/each}
           </tbody>
         </table>
+      {/if}
+      {#if reused}
+        <p class="reused mono" data-reused>{reused}</p>
       {/if}
       {#if chosen}
         <p class="chosen mono" data-chosen>{chosenLine(progress, targetVmaf, sourceBytes)}</p>
@@ -165,6 +170,7 @@
   .probes th { color: var(--ink-faint); font-weight: 400; }
   .below { color: var(--red); }
   .pass { color: var(--teal-ink); }
+  .reused { margin: 0; color: var(--amber); }
   .chosen { margin: 0; color: var(--ink); }
   .facts { margin: 0; color: var(--ink-dim); font-size: var(--fs-data); }
   .stale { margin: 0; color: var(--ink-faint); font-size: var(--fs-data); }

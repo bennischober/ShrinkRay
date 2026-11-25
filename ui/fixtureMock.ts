@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Plugin } from 'vite'
-import { busy, busyHistory, huge } from './fixtures/generated.js'
+import { busy, busyCached, busyHistory, huge } from './fixtures/generated.js'
 import { FIXTURES, type Fixture } from './src/lib/fixtures.js'
 
 /** Which fixture key answers which GET route. */
@@ -127,7 +127,9 @@ export function fixtureMock(dir = resolve(process.cwd(), 'fixtures')): Plugin {
         ? busy
         : name === 'busy-history'
           ? busyHistory
-          : name === 'huge'
+          : name === 'busy-cached'
+            ? busyCached
+            : name === 'huge'
             ? huge
             : null
     const fixture = generated

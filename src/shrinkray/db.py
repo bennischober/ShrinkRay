@@ -826,7 +826,17 @@ def save_plan(
             chosen_crf,
             achieved_vmaf,
             None if crop is None else ",".join(str(v) for v in crop),
-            json.dumps([(p.crf, p.vmaf) for p in probes]),
+            json.dumps(
+                [
+                    (
+                        p.crf,
+                        p.vmaf,
+                        getattr(p, "measured_at", None),
+                        bool(getattr(p, "cached", False)),
+                    )
+                    for p in probes
+                ]
+            ),
             skipped_reason,
             estimated_size,
             input_mtime,
@@ -899,6 +909,26 @@ def get_probe_entry(connection: sqlite3.Connection, key: str) -> tuple[float, in
         return None
     size = int(row["encoded_size"]) if row["encoded_size"] is not None else None
     return float(row["value"]), size
+
+
+def get_probe_measured_at(connection: sqlite3.Connection, key: str) -> str | None:
+    """Returns a cache row's measured_at, or None on a miss.
+
+    `created_at` is when this row was last measured: `save_probe_score` sets it on
+    insert and refreshes it on a re-measure, so a cached probe can say how old its
+    measurement is (the maintainer's 2026-11-14 cache-provenance requirement,
+    issue #631). Kept separate from `get_probe_entry` so callers that only need the
+    score/size keep their two-tuple contract.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        key (str): The sha256 cache key (probe_cache_key).
+
+    Returns:
+        str | None: The row's measured_at, or None when the key is absent.
+    """
+    row = connection.execute("SELECT created_at FROM probe_cache WHERE key = ?", (key,)).fetchone()
+    return None if row is None else str(row["created_at"])
 
 
 def get_valid_plan(
