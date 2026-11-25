@@ -498,7 +498,9 @@
     }
     .state { grid-area: state; }
     .when { grid-area: when; }
-    .dur { grid-area: dur; }
+    /* the shared ETA wording is longer than the old `~1 min`: let it wrap
+       inside its auto track instead of widening the row past the phone */
+    .dur { grid-area: dur; white-space: normal; overflow-wrap: anywhere; }
     .ops { grid-area: ops; justify-self: end; }
   }
 </style>
