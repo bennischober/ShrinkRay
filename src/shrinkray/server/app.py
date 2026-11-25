@@ -82,6 +82,55 @@ MAX_RESUME_ATTEMPTS = 3
 
 _T = TypeVar("_T")
 
+# issue #646: the dashboard's reclaimed figure is the true per-title library
+# delta plus the savings output-directory/legacy rows recorded outside the
+# library. Both surfaces read it from ONE set-based join over encodes+files - no
+# per-title chain walk runs inside the snapshot lock. An applied in-place row
+# that claims the file's own path AND matches its current size corroborates the
+# library's current state (both halves of the #647 predicate; a restored original
+# matches none, so it reclaims nothing), so the library delta starts at the
+# chain's first applied in-place row's input and ends at the file's current
+# size; every applied output-directory/legacy row adds its own
+# input-minus-output. A discarded attempt (#625) is not applied and contributes
+# nothing; a missing file contributes nothing; every term clamps at 0.
+_LIBRARY_FROM = """
+            FROM files f
+            LEFT JOIN encodes e ON e.id = (
+                SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
+            )
+            LEFT JOIN (
+                SELECT e.file_id,
+                       MIN(CASE WHEN e.output_file = f.path THEN e.id END)
+                           AS first_in_place_id,
+                       MAX(CASE
+                               WHEN e.output_file = f.path AND e.output_size = f.size
+                               THEN 1 ELSE 0
+                           END) AS has_current_in_place,
+                       SUM(CASE
+                               WHEN e.output_file IS NULL OR e.output_file != f.path
+                               THEN MAX(e.input_size - e.output_size, 0)
+                               ELSE 0
+                           END) AS output_dir_savings
+                FROM encodes e JOIN files f ON f.id = e.file_id
+                WHERE e.outcome = 'applied'
+                GROUP BY e.file_id
+            ) reclaimed ON reclaimed.file_id = f.id
+            LEFT JOIN encodes first_in_place ON first_in_place.id = reclaimed.first_in_place_id
+"""
+
+_RECLAIMED_COLUMN = """
+                    CASE
+                        WHEN COALESCE(f.missing_scans, 0) > 0 THEN 0
+                        ELSE COALESCE(
+                            CASE
+                                WHEN reclaimed.has_current_in_place = 1
+                                THEN MAX(first_in_place.input_size - f.size, 0)
+                                ELSE 0
+                            END, 0)
+                            + COALESCE(reclaimed.output_dir_savings, 0)
+                    END AS reclaimed_bytes
+"""
+
 
 def _configured_token() -> str | None:
     """Returns the operator's bearer token, or None when auth is off.
@@ -1121,6 +1170,7 @@ def snapshot(
                     "codec": r["codec"],
                     "resolution": [r["width"], r["height"]],
                     "size": r["size"],
+                    "reclaimed_bytes": r["reclaimed_bytes"],
                     "hdr": bool(r["hdr"]),
                     "missing": bool(r["missing_scans"]),
                     "missing_since": r["missing_since"],
@@ -1161,7 +1211,7 @@ def snapshot(
                     else None,
                 }
                 for r in c.execute(
-                    """
+                    f"""
                     SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                            f.size, f.hdr, f.missing_scans, f.missing_since,
                            e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
@@ -1169,11 +1219,9 @@ def snapshot(
                            e.encode_seconds,
                            e.probe_count, e.probe_seconds, e.tool_versions,
                            e.generation, e.input_bitrate, e.output_bitrate,
-                           e.outcome, e.outcome_reason, e.output_file
-                    FROM files f
-                    LEFT JOIN encodes e ON e.id = (
-                        SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
-                    )
+                           e.outcome, e.outcome_reason, e.output_file,
+                           {_RECLAIMED_COLUMN}
+                    {_LIBRARY_FROM}
                     ORDER BY f.category, f.name
                     """
                 ).fetchall()
@@ -1309,7 +1357,8 @@ def library(
     the identity rule's mismatching-row id set - issue #647: a restore
     moves no encode row and may not move the max mtime), so an unchanged
     library answers 304 without a payload - the UI's 3-second poll becomes
-    nearly free.
+    nearly free. Each entry also carries `reclaimed_bytes`, the per-title
+    library delta plus output-directory savings (issue #646).
 
     Args:
         conn: The database connection (db_access dependency).
@@ -1342,17 +1391,15 @@ def library(
         return Response(status_code=304, headers={"ETag": etag})
     rows = s.with_lock(
         lambda c: c.execute(
-            """
+            f"""
             SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                    f.size, f.hdr, f.missing_scans, f.missing_since,
                    e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                    e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
                    e.encode_seconds, e.outcome, e.outcome_reason, e.output_file,
-                   e.probe_count, e.probe_seconds, e.tool_versions
-            FROM files f
-            LEFT JOIN encodes e ON e.id = (
-                SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
-            )
+                   e.probe_count, e.probe_seconds, e.tool_versions,
+                   {_RECLAIMED_COLUMN}
+            {_LIBRARY_FROM}
             ORDER BY f.category, f.name
             """
         ).fetchall()
@@ -1366,6 +1413,7 @@ def library(
             "codec": r["codec"],
             "resolution": [r["width"], r["height"]],
             "size": r["size"],
+            "reclaimed_bytes": r["reclaimed_bytes"],
             "hdr": bool(r["hdr"]),
             "missing": bool(r["missing_scans"]),
             "missing_since": r["missing_since"],

@@ -25,7 +25,7 @@ export type Fixture = Omit<FixtureBody, 'status' | 'library' | 'jobs' | 'movie'>
   movie:
     | null
     | (Omit<MovieDetail, 'file'> & {
-        file: Omit<Movie, 'encode' | 'resolution'> & { resolution: number[] | null; generation?: number }
+        file: Omit<Movie, 'encode' | 'reclaimed_bytes' | 'resolution'> & { resolution: number[] | null; generation?: number }
       })
 }
 

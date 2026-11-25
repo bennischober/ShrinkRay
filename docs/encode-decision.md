@@ -343,9 +343,9 @@ still corroborate it: an in-place row while the file's recorded size matches
 the record, an output-directory row always (its artifact lives outside the
 library and the database cannot verify it), a legacy row with no path claim
 (`output_file` IS NULL) always, and never a file the scans report missing. A restored original is re-decided by the watcher and, if
-eligible, encoded again: a new row, the old one staying in the history. The
-definition of bytes reclaimed across a CHAIN (a re-encoded file's earlier
-generations) is issue #646's.
+eligible, encoded again: a new row, the old one staying in the history.
+
+The dashboard's RECLAIMED figure (issue #646) is a different, deliberately named quantity: the true per-title library delta plus output-directory savings. For a title whose applied in-place row claims the file's own path AND its recorded output size matches the file's current size (both halves of the #647 identity predicate), the library delta is the chain's first applied in-place row's `input_size` minus the file's current size; every applied output-directory/legacy row adds its own `input_size - output_size`; every term clamps at 0, and a missing title contributes nothing. The two totals therefore intentionally differ on a multi-hop in-place chain - the dashboard reports the whole library delta, `/metrics` the corroborated row sum - and agree on output-directory rows. The RECLAIMED stat and the category bars read that server field; the client keeps only the missing-file guard, and a discarded latest row no longer zeroes the corroborated chain delta (#625 applies to the row, not the title).
 
 ## AV1 sources - decided
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, isFailedOutcome, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
-  import { bytes, duration, kindWord, percent, progressLabel, relative, savedPercent, span, statusAnswer, titleBuckets, vmaf, verdictWord } from '../format'
+  import { bytes, duration, kindWord, percent, progressLabel, reclaimedBytes, relative, savedPercent, span, statusAnswer, titleBuckets, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
   import { progressFor } from '../progress.svelte'
 
@@ -184,18 +184,10 @@
       const bar = map.get(m.category) ?? { name: m.category, titles: 0, sizeGb: 0, reclaimedGb: 0 }
       bar.titles += 1
       bar.sizeGb += (m.size ?? 0) / 1024 ** 3
-      // only an APPLIED encode reclaimed anything (issue #625): a discarded
-      // attempt's sizes describe an artifact that was thrown away. A file
-      // the scans report missing has nothing on disk (issue #647) - the
-      // bar agrees with /metrics' gauge
-      if (
-        !m.missing &&
-        m.encode?.outcome !== 'discarded' &&
-        m.encode?.saved_percent != null &&
-        m.encode.saved_percent > 0
-      ) {
-        bar.reclaimedGb += ((m.encode.input_size ?? 0) - (m.encode.output_size ?? 0)) / 1024 ** 3
-      }
+      // the server's per-title library delta + output-dir savings (#646);
+      // reclaimedBytes owns the #625/#647 guard, so this bar and the
+      // RECLAIMED stat read one field through one rule and never disagree
+      bar.reclaimedGb += reclaimedBytes(m) / 1024 ** 3
       map.set(m.category, bar)
     }
     return [...map.values()].sort((a, b) => b.sizeGb - a.sizeGb)
@@ -345,7 +337,7 @@
     <button class="stat" onclick={() => ongoto('library')}>
       <span class="legend">RECLAIMED</span>
       <span class="stat-v mono">{bytes(savedTotalGb * 1024 ** 3)}</span>
-      <span class="stat-sub mono dim">of {bytes(totalSizeGb * 1024 ** 3)} library</span>
+      <span class="stat-sub mono dim">library delta + output-dir · of {bytes(totalSizeGb * 1024 ** 3)} library</span>
     </button>
     {#if reclaimable}
       <button class="stat" onclick={() => ongoto('library')} title="Plan-predicted savings on the {reclaimable.count} titles the last plan queued for encode — realized when they encode. Titles without a measured prediction are excluded, not estimated.">

@@ -397,6 +397,13 @@ stall-watchdog count, retained-original totals, the catalog size and the free
 space on the library filesystem. Every value is a query over state that already
 exists - the route measures nothing new.
 
+`shrinkray_bytes_reclaimed_total` is a **gauge**, not a counter: it can fall when
+a swap is declined or a restored original stops corroborating a record, because it
+counts only the applied rows the library's records still corroborate. The
+dashboard's RECLAIMED figure is a different, deliberately named quantity - the
+per-title library delta plus output-directory savings (issue #646) - so the two
+intentionally differ on a multi-hop in-place chain.
+
 ## Not problems
 
 - Resource politeness: `nice` works in containers; thread caps are

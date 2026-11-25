@@ -21,6 +21,9 @@ function movie(index: number, nasty = false): Movie {
     codec: CODECS[index % CODECS.length],
     resolution: index % 7 === 0 ? [3840, 2160] : [1920, 1080],
     size: 800_000_000 + index * 1_000_000,
+    // the server's per-title library delta + output-dir savings (#646):
+    // these fixture encodes are legacy/output-dir rows, so their own saving
+    reclaimed_bytes: index % 3 === 0 ? 200_000_000 : 0,
     hdr: index % 11 === 0,
     encode: index % 3 === 0
       ? {
