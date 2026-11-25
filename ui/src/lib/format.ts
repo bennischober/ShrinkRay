@@ -216,13 +216,13 @@ export function queuedFileCount(
     }, 0)
 }
 
-/** A rough queue time from the measured seconds-per-GB of the last real
- * encodes (issue #631): null without history. `recent` is the server's
- * encodes ordered by recency (newest first); the average of those same rows'
- * input sizes is the estimate for the waiting files — a rough number, labelled
- * as such. The library list is category/name-ordered, so it is never the pace
- * source (a verifier probe measured 2047.8 s from an alphabetical window
- * whose newest five real encodes averaged 60 s). */
+/** A rough queue time from the last real encodes (issue #631): null without
+ * history. `recent` is the server's encodes ordered by recency (newest first);
+ * the estimate is the mean measured encode time of those rows times the files
+ * waiting — the size term algebraically cancels, so it is not carried. The library
+ * list is category/name-ordered, so it is never the pace source (a verifier probe
+ * measured 2047.8 s from an alphabetical window whose newest five real encodes
+ * averaged 60 s). */
 export const QUEUE_PACE_SAMPLE = 5
 export function queuePaceSeconds(
   files: number,
@@ -233,11 +233,9 @@ export function queuePaceSeconds(
     .slice(0, QUEUE_PACE_SAMPLE)
     .filter((row) => row.encode_seconds > 0 && row.input_size > 0)
   if (sample.length === 0) return null
-  const seconds = sample.reduce((sum, row) => sum + row.encode_seconds, 0)
-  const gb = sample.reduce((sum, row) => sum + row.input_size / 1024 ** 3, 0)
-  if (!(gb > 0)) return null
-  const averageGb = gb / sample.length
-  return files * averageGb * (seconds / gb)
+  const meanSeconds =
+    sample.reduce((sum, row) => sum + row.encode_seconds, 0) / sample.length
+  return files * meanSeconds
 }
 
 /** The three questions the jobs page answers (issue #632) — what is

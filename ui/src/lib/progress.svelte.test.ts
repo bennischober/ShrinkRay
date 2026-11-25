@@ -184,6 +184,147 @@ describe('progress store', () => {
     expect(mod.progressFor(999)).toBeNull()
   })
 
+  it('a new file drops the previous file trail and chosen (issue #631)', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    mod.connectEvents()
+    const es = FakeEventSource.instances[0]
+    es.open()
+    const frame = (data: Record<string, unknown>) => ({ job_id: 1, ...data })
+
+    // file A completes: the real server-merged frames carry its trail + chosen
+    es.emit(
+      'message',
+      frame({
+        v: 1,
+        stage: 'decision',
+        stage_job_id: 2,
+        run: { done: 0, total: 2 },
+        file: {
+          movie: 'A.mkv',
+          path: '/media/A.mkv',
+          stage: 'decision',
+          step: 1,
+          steps: 7,
+        },
+      }),
+    )
+    for (const [index, crf, vmaf, passed] of [
+      [1, 30, 94.8, false],
+      [2, 24, 96.6, true],
+    ] as const) {
+      es.emit(
+        'message',
+        frame({
+          v: 1,
+          stage: 'crf-search',
+          stage_job_id: 2,
+          run: { done: 0, total: 2 },
+          file: {
+            movie: 'A.mkv',
+            path: '/media/A.mkv',
+            stage: 'crf-search',
+            step: 4,
+            steps: 7,
+          },
+          target_vmaf: 96,
+          probe: {
+            index,
+            count: 2,
+            crf,
+            vmaf,
+            predicted_bytes: null,
+            passed,
+          },
+        }),
+      )
+    }
+    es.emit(
+      'message',
+      frame({
+        v: 1,
+        stage: 'crf-search',
+        stage_job_id: 2,
+        file: { stage: 'crf-search', step: 4 },
+        target_vmaf: 96,
+        probe: {
+          index: 2,
+          count: 2,
+          crf: 24,
+          vmaf: 96.6,
+          predicted_bytes: null,
+          passed: true,
+        },
+        chosen: { crf: 24, vmaf: 96.6, predicted_bytes: 1_400_000_000, reason: null },
+      }),
+    )
+    let view = mod.fileProgressFor(1)
+    expect(view?.movie).toBe('A.mkv')
+    expect(view?.probes).toHaveLength(2)
+    expect(view?.chosen?.crf).toBe(24)
+
+    // B's decision is the real server merge: no probes/chosen/encode/sample/detail
+    es.emit(
+      'message',
+      frame({
+        v: 1,
+        stage: 'decision',
+        stage_job_id: 3,
+        run: { done: 1, total: 2 },
+        file: {
+          movie: 'B.mkv',
+          path: '/media/B.mkv',
+          stage: 'decision',
+          step: 1,
+          steps: 7,
+        },
+      }),
+    )
+    view = mod.fileProgressFor(1)
+    expect(view?.movie).toBe('B.mkv')
+    expect(view?.stage).toBe('decision')
+    expect(view?.probes).toEqual([])
+    expect(view?.probe).toBeNull()
+    expect(view?.chosen).toBeNull()
+    expect(view?.encode).toBeNull()
+    expect(view?.sample).toBeNull()
+    expect(view?.detail).toBeNull()
+
+    // B's probe-start must not resurrect A's trail either
+    es.emit(
+      'message',
+      frame({
+        v: 1,
+        stage: 'crf-search',
+        stage_job_id: 3,
+        file: {
+          movie: 'B.mkv',
+          path: '/media/B.mkv',
+          stage: 'crf-search',
+          step: 4,
+          steps: 7,
+        },
+        target_vmaf: 96,
+        probe: {
+          index: 1,
+          count: null,
+          crf: 28,
+          vmaf: null,
+          predicted_bytes: null,
+          passed: null,
+        },
+        detail: 'probe encode (CRF 28)',
+      }),
+    )
+    view = mod.fileProgressFor(1)
+    expect(view?.movie).toBe('B.mkv')
+    expect(view?.stage).toBe('crf-search')
+    expect(view?.probes).toEqual([])
+    expect(view?.chosen).toBeNull()
+    expect(view?.probe?.crf).toBe(28)
+    expect(view?.probe?.vmaf).toBeNull()
+  })
+
   it('a stage row event keeps its own job_id and does not feed the file model', () => {
     mod.connectEvents()
     const es = FakeEventSource.instances[0]

@@ -12,7 +12,9 @@
  * The view model (issue #631) accumulates events per running FILE: the stage,
  * the stepper position, the probe trail, the chosen CRF and the encode
  * percent/fps. `run` and `file` merge, so a percent tick never erases the
- * folder's file counter. Every page renders the same facts through
+ * folder's file counter; a new file identity drops the previous file's
+ * probe/chosen/encode/sample/detail before the new frame merges, mirroring the
+ * server's `engine/progress.merge`. Every page renders the same facts through
  * `WorkProgress.svelte`.
  */
 
@@ -337,13 +339,43 @@ function applyEvent(jobId: number, data: ProgressData): void {
   }
 }
 
+/** The server's file-transition rule, mirrored (issue #631): a new movie/path
+ * identity resets the previous file's per-file detail. Without this, the raw
+ * spread below resurrects A's probes/chosen in B's frames, and `applyFileEvent`
+ * reads the stale raw state even though its `newFile` branch asks for a reset. */
+function fileIdentityChanged(
+  previous: ProgressData | undefined,
+  data: ProgressData,
+): boolean {
+  const before = previous?.file
+  const after = data.file
+  if (!before || !after) return false
+  return (
+    (after.movie != null && before.movie != null && after.movie !== before.movie) ||
+    (after.path != null && before.path != null && after.path !== before.path)
+  )
+}
+
+function dropFileDetail(state: ProgressData): ProgressData {
+  const base: ProgressData = { ...state }
+  delete base.probe
+  delete base.probes
+  delete base.chosen
+  delete base.encode
+  delete base.sample
+  delete base.detail
+  return base
+}
+
 function mergeRaw(previous: ProgressData | undefined, data: ProgressData): ProgressData {
-  const merged: ProgressData = { ...(previous ?? {}), ...data }
-  if (data.run) merged.run = { ...(previous?.run ?? { done: 0, total: null }), ...data.run }
-  if (data.file) merged.file = { ...(previous?.file ?? {}), ...data.file }
-  if (data.encode) merged.encode = { ...(previous?.encode ?? {}), ...data.encode }
-  if (data.sample) merged.sample = { ...(previous?.sample ?? {}), ...data.sample }
-  if (data.probe) merged.probe = { ...(previous?.probe ?? {}), ...data.probe } as ProgressProbe
+  const newFile = fileIdentityChanged(previous, data)
+  const base = newFile && previous ? dropFileDetail(previous) : previous
+  const merged: ProgressData = { ...(base ?? {}), ...data }
+  if (data.run) merged.run = { ...(base?.run ?? { done: 0, total: null }), ...data.run }
+  if (data.file) merged.file = { ...(base?.file ?? {}), ...data.file }
+  if (data.encode) merged.encode = { ...(base?.encode ?? {}), ...data.encode }
+  if (data.sample) merged.sample = { ...(base?.sample ?? {}), ...data.sample }
+  if (data.probe) merged.probe = { ...(base?.probe ?? {}), ...data.probe } as ProgressProbe
   if (Array.isArray(data.probes)) merged.probes = data.probes
   return merged
 }
