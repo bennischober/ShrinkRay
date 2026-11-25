@@ -58,8 +58,13 @@ One schema for every stage, built by `engine/progress.py` and mirrored in
   row's id in `stage_job_id`, so the browser can follow one file.
 - `probe`/`chosen` belong to `crf-search`; `probe.count` is `null` while the
   search can still early-stop (any live total would be invented), and the final
-  probe event carries the search's actual step count (`len(probes)`). The stored-plan
-  reuse path is also a `crf-search` event, with the plan's chosen result.
+  probe event carries the search's actual step count (`len(probes)`). The final event's
+  `probe` is the REAL last probe (`probes[-1]`), never the chosen one: the merge
+  replaces probes by index, so reusing the chosen row would delete the last measured
+  row and duplicate the decision. The decision rides only in `chosen`; the search's
+  final `chosen` has the chosen CRF/VMAF and the stage driver later replaces it with
+  the predicted size/reason. The stored-plan reuse path is also a `crf-search` event,
+  with the plan's chosen result.
   `chosen.reason` is `null` for a prediction, else the skip reason (`no size gain`,
   `target unreachable`, `saving below minimum`). The search does not compute a
   predicted size per probe, so `probe.predicted_bytes` is always `null`; the plan's

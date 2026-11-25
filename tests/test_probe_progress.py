@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine import plan as engine_plan
+from shrinkray.engine import progress as engine_progress
 from shrinkray.engine import samples as engine_samples
 from shrinkray.engine import search as engine_search
 from shrinkray.tools import ffprobe as tools_ffprobe
@@ -209,7 +210,7 @@ class TestProbeProgress(unittest.TestCase):
                 side_effect=lambda samples, crf, *a, **k: 96.6 if crf in (23, 26, 27) else 95.9,
             ),
         ):
-            chosen, _achieved, probes = engine_search.find_optimal_crf(
+            chosen, achieved, probes = engine_search.find_optimal_crf(
                 Path("movie.mkv"),
                 Path("work"),
                 "hb",
@@ -224,9 +225,55 @@ class TestProbeProgress(unittest.TestCase):
         self.assertEqual(len(probes), 4)
         self.assertEqual(events[-1]["probe"]["count"], len(probes))
         self.assertEqual(events[-1]["probe"]["index"], len(probes))
+        # the final probe row is the REAL last probe (24), never the chosen
+        # decision (23): the merge replaces probes by index, so reusing the
+        # chosen row here would delete the last measured probe (issue #631)
+        self.assertEqual(events[-1]["probe"]["crf"], probes[-1].crf)
+        self.assertEqual(events[-1]["probe"]["vmaf"], probes[-1].vmaf)
+        self.assertEqual(events[-1]["probe"]["crf"], 24)
+        self.assertNotEqual(events[-1]["probe"]["crf"], chosen)
+        # the decision rides ONLY in the chosen field
+        self.assertEqual(events[-1]["chosen"]["crf"], chosen)
+        self.assertEqual(events[-1]["chosen"]["vmaf"], achieved)
         live = [e for e in events if e["detail"].startswith("probe encode")]
         self.assertTrue(live)
         self.assertTrue(all(e["probe"]["count"] is None for e in live))
+
+    def test_the_merged_probe_trail_ends_with_the_real_last_probe(self):
+        """Issue #631: merging the real-bracket event sequence must produce the
+        trail [(1,23),(2,28),(3,25),(4,24)] and chosen 23, not duplicate 23 at
+        the last row (the old final-event bug)."""
+        events: list[dict] = []
+        with (
+            patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(
+                engine_search,
+                "probe_crf",
+                side_effect=lambda samples, crf, *a, **k: 96.6 if crf in (23, 26, 27) else 95.9,
+            ),
+        ):
+            _chosen, _achieved, _probes = engine_search.find_optimal_crf(
+                Path("movie.mkv"),
+                Path("work"),
+                "hb",
+                target_vmaf=96.0,
+                crf_range=(14, 32),
+                sample_count=1,
+                sample_seconds=10.0,
+                progress=events.append,
+            )
+        merged = None
+        for event in events:
+            merged = engine_progress.merge(merged, event)
+        self.assertIsNotNone(merged)
+        self.assertEqual(
+            [(p["index"], p["crf"], p["vmaf"]) for p in merged["probes"]],
+            [(1, 23, 96.6), (2, 28, 95.9), (3, 25, 95.9), (4, 24, 95.9)],
+        )
+        self.assertEqual(merged["probe"]["crf"], 24)
+        self.assertEqual(merged["probe"]["vmaf"], 95.9)
+        self.assertEqual(merged["chosen"]["crf"], 23)
+        self.assertEqual(merged["chosen"]["vmaf"], 96.6)
 
     def test_probe_crf_reports_each_sample(self):
         """Issue #690: a probe states the sample it is on, so a running search

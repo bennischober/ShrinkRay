@@ -838,8 +838,12 @@ def find_optimal_crf(
     achieved = next(p.vmaf for p in reversed(probes) if p.crf == chosen)
     if progress and probes:
         # the search knows its actual step count only when it has finished;
-        # the final probe event carries it (the issue's count, not a bracket)
-        final = next((p for p in reversed(probes) if p.crf == chosen), probes[-1])
+        # the final probe event carries it (the issue's count, not a bracket).
+        # Its `probe` is the REAL last probe: the merge replaces probes by
+        # index, so writing the chosen probe here would delete the last measured
+        # row and duplicate the chosen one when chosen != last. The decision
+        # rides ONLY in `chosen`, which the UI renders as the chosen line.
+        last = probes[-1]
         progress(
             progress_event(
                 "crf-search",
@@ -848,10 +852,16 @@ def find_optimal_crf(
                 probe={
                     "index": len(probes),
                     "count": len(probes),
-                    "crf": final.crf,
-                    "vmaf": final.vmaf,
+                    "crf": last.crf,
+                    "vmaf": last.vmaf,
                     "predicted_bytes": None,
-                    "passed": final.vmaf >= target_vmaf,
+                    "passed": last.vmaf >= target_vmaf,
+                },
+                chosen={
+                    "crf": chosen,
+                    "vmaf": achieved,
+                    "predicted_bytes": None,
+                    "reason": None,
                 },
                 detail=f"search complete: {len(probes)} probes",
             )
