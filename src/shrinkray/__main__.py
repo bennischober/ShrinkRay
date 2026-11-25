@@ -998,15 +998,20 @@ def setup(
         None,
         "--db",
         help="The resident app's database: its folder holds the pause flag "
-        "(default in the container: /data).",
+        "and the cancel requests (default in the container: /data). Without "
+        "--db or $SHRINKRAY_CONFIG a native run has no data folder and no "
+        "pause or cancel surface, like a bare CLI run.",
     ),
 ) -> None:
-    """Configures ShrinkRay and pauses or resumes it, in a terminal UI.
+    """Configures ShrinkRay, pauses or resumes it, and cancels jobs, in a terminal UI.
 
     Edits config.json through the same schema the app loads it with, names a
-    change that re-measures the library before saving it, and switches the
-    resident app's pause. The dashboard only observes; this is where the
-    operator steers (issue #252).
+    change that re-measures the library before saving it, switches the resident
+    app's pause, and lists the queued and running jobs to write a cancel
+    request. The dashboard only observes; this is where the operator steers
+    (issues #252, #621). Without --db or $SHRINKRAY_CONFIG there is no data
+    folder, so the pause and cancel surfaces are absent (a bare CLI run has no
+    resident app to control).
     """
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         log_error(
@@ -1017,7 +1022,11 @@ def setup(
     from shrinkray.engine.pause import state_dir_for_cli
     from shrinkray.tui import SetupApp
 
-    SetupApp(resolve_config_path(config_file=config_file), state_dir_for_cli(db_file)).run()
+    SetupApp(
+        resolve_config_path(config_file=config_file),
+        state_dir_for_cli(db_file),
+        db_file,
+    ).run()
 
 
 @app.command("retained")

@@ -66,6 +66,41 @@ class TestOperatorPause(unittest.TestCase):
         self.assertIsNone(pause.pause_reason(None))
 
 
+class TestCancelRequests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_a_request_is_an_atomic_file_and_reads_back(self) -> None:
+        path = pause.write_cancel_request(self.state, 7)
+        folder = self.state / pause.CANCEL_REQUESTS
+        self.assertEqual(path, folder / "7")
+        self.assertEqual(path.read_text(encoding="ascii"), "7\n")
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["7"])
+        self.assertEqual(pause.read_pending_cancel_requests(self.state), [7])
+        pause.remove_cancel_request(self.state, 7)
+        self.assertEqual(pause.read_pending_cancel_requests(self.state), [])
+
+    def test_invalid_ids_are_rejected_before_a_file_is_written(self) -> None:
+        for bad in (0, -1, True):
+            with self.assertRaises(ValueError):
+                pause.write_cancel_request(self.state, bad)
+        self.assertFalse((self.state / pause.CANCEL_REQUESTS).exists())
+
+    def test_read_ignores_stray_names_and_orders_the_ids(self) -> None:
+        pause.write_cancel_request(self.state, 9)
+        pause.write_cancel_request(self.state, 3)
+        folder = self.state / pause.CANCEL_REQUESTS
+        (folder / "not-an-id").write_text("junk")
+        (folder / "03").write_text("junk")
+        (folder / "0").write_text("junk")
+        (folder / "4").mkdir()
+        self.assertEqual(pause.read_pending_cancel_requests(self.state), [3, 9])
+
+
 class TestManualEncodeMarker(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
