@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   failedOutcomeNote,
   isFailedOutcome,
@@ -164,5 +164,69 @@ describe('token storage (issue #36 auth)', () => {
     expect(isAuthFailure(new Error('API 401: unauthorized'))).toBe(true)
     expect(isAuthFailure(new Error('API 500: boom'))).toBe(false)
     expect(isAuthFailure('401')).toBe(false)
+  })
+})
+
+describe('snapshot conditional requests (issue #661)', () => {
+  it('sends the known ETags and keeps the collections the server says are unchanged', async () => {
+    vi.resetModules()
+    const { api } = await import('./api')
+    const calls: { url: string; headers: Record<string, string> }[] = []
+    const bodies = [
+      {
+        status: { watcher: 'running' },
+        jobs: [{ id: 1, kind: 'encode', payload: {}, state: 'running', result: null, error: null }],
+        jobs_etag: '"jobs-1"',
+        library: [
+          {
+            path: '/media/a.mkv',
+            name: 'a.mkv',
+            category: 'C',
+            duration: null,
+            codec: 'h264',
+            resolution: [1920, 1080],
+            size: 1,
+            reclaimed_bytes: 0,
+            hdr: false,
+            encode: null,
+          },
+        ],
+        library_etag: '"lib-1"',
+      },
+      {
+        status: { watcher: 'running' },
+        jobs: null,
+        jobs_etag: '"jobs-1"',
+        library: null,
+        library_etag: '"lib-1"',
+      },
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({
+          url: String(input),
+          headers: (init?.headers ?? {}) as Record<string, string>,
+        })
+        return {
+          ok: true,
+          status: 200,
+          json: async () => bodies[calls.length - 1],
+        } as Response
+      }),
+    )
+    try {
+      const first = await api.snapshot()
+      const second = await api.snapshot()
+      // the second poll names both known tags; the server answers null for
+      // both collections, which is the contract that keeps the arrays intact
+      expect(calls[1].headers['If-None-Match']).toBe('"lib-1", "jobs-1"')
+      expect(first.library).not.toBeNull()
+      expect(first.jobs).not.toBeNull()
+      expect(second.library).toBeNull()
+      expect(second.jobs).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

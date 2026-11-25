@@ -49,8 +49,10 @@ ui/
   rather than text — SVG coordinates, bar widths, axis positions — stay numbers.
 - **Fixtures and the browser check**: `ui/fixtures/*.json` are invented scenarios
   (`empty`, `nasty-names`, `failures`; `busy` and `huge` are generated in
-  `fixtures/generated.ts`) served by `fixtureMock.ts`, a `serve`-only Vite plugin, so
-  a page renders with no resident app: run `npm run dev`, then open
+  `fixtures/generated.ts`, and `busy-changing` is the #661 discrimination scenario:
+  the busy workload whose library payload moves on every poll) served by
+  `fixtureMock.ts`, a `serve`-only Vite plugin, so a page renders with no resident
+  app: run `npm run dev`, then open
   `http://localhost:5173/?fixture=<name>` — the query belongs on the BROWSER URL, not
   on the npm command. `offline` and `locked` are status scenarios: the mock answers
   503 / 401 on every route and the shell renders its loading state / token prompt

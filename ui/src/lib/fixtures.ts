@@ -56,6 +56,9 @@ export const FIXTURES = [
   'nasty-names',
   'failures',
   'busy',
+  // the #661 discrimination scenario: the busy workload whose library
+  // payload changes on every poll, so the ETag path cannot mask the cost
+  'busy-changing',
   'huge',
   'offline',
   'locked',

@@ -256,6 +256,19 @@
   // resident-memory window that fed it — no panel shows the trend, so no
   // code accumulates one.
 
+  // Hidden pages stay mounted so their in-memory state survives a tab
+  // switch, but a hidden page must not re-render the full collection on
+  // every poll (issue #661): with the busy fixture, the four hidden pages
+  // were up to 31 192 of the 31 333 live nodes, and their re-render was the
+  // 1 s+ busy tick on a page as small as Config. They receive stable empty
+  // collections instead; the visible page gets the real ones in the same
+  // update, so nothing shown changes.
+  const NO_MOVIES: Movie[] = []
+  const NO_JOBS: Job[] = []
+  const NO_RETAINED: RetainedFile[] = []
+  const NO_PATHS: string[] = []
+  const NO_PLAN_SAVINGS: readonly (readonly [string, number])[] = []
+
   // ── refresh loop ──
   async function refresh() {
     try {
@@ -561,18 +574,18 @@
     {:else}
       <div class="pages" class:hidden={page !== 'overview'}>
         <OverviewPage
-          {movies}
-          {history}
+          movies={page === 'overview' ? movies : NO_MOVIES}
+          history={page === 'overview' ? history : NO_JOBS}
           {status}
           {targetVmaf}
-          {savedTotalGb}
-          {measuredCount}
-          {missingMovies}
-          {runningJobs}
-          {failedJobs}
-          {scanPaths}
-          {outputDir}
-          {retainedFiles}
+          savedTotalGb={page === 'overview' ? savedTotalGb : 0}
+          measuredCount={page === 'overview' ? measuredCount : 0}
+          missingMovies={page === 'overview' ? missingMovies : NO_MOVIES}
+          runningJobs={page === 'overview' ? runningJobs : NO_JOBS}
+          failedJobs={page === 'overview' ? failedJobs : NO_JOBS}
+          scanPaths={page === 'overview' ? scanPaths : NO_PATHS}
+          outputDir={page === 'overview' ? outputDir : ''}
+          retainedFiles={page === 'overview' ? retainedFiles : NO_RETAINED}
           stale={connectionState === 'stale'}
           ondismiss={dismissFailed}
           ongoto={goto}
@@ -581,17 +594,25 @@
       </div>
       <div class="pages" class:hidden={page !== 'library'}>
         <LibraryPage
-          {movies}
+          movies={page === 'library' ? movies : NO_MOVIES}
           {selectedPaths}
           {targetVmaf}
-          runningMovie={runningProgress?.movie ?? null}
-          runningPercent={runningProgress?.percent ?? null}
-          plannedPaths={planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)}
-          planSavings={planEntries.flatMap((p) =>
-            p.state === 'encode' && p.saved_percent != null && p.saved_percent > 0
-              ? [[p.movie, p.saved_percent] as const]
-              : [],
-          )}
+          runningMovie={page === 'library' ? (runningProgress?.movie ?? null) : null}
+          runningPercent={page === 'library' ? (runningProgress?.percent ?? null) : null}
+          plannedPaths={
+            page === 'library'
+              ? planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)
+              : NO_PATHS
+          }
+          planSavings={
+            page === 'library'
+              ? planEntries.flatMap((p) =>
+                  p.state === 'encode' && p.saved_percent != null && p.saved_percent > 0
+                    ? [[p.movie, p.saved_percent] as const]
+                    : [],
+                )
+              : NO_PLAN_SAVINGS
+          }
           onopenmovie={(m) => openDetail(m, 'library')}
           stale={connectionState === 'stale'}
           ontoggle={(path, checked) => {
@@ -610,13 +631,24 @@
         />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
-        <JobsPage {history} stale={connectionState === 'stale'} onopenMovie={(p) => openDetailFromJobs(p)} />
+        <JobsPage
+          history={page === 'jobs' ? history : NO_JOBS}
+          stale={connectionState === 'stale'}
+          onopenMovie={(p) => openDetailFromJobs(p)}
+        />
       </div>
       <div class="pages" class:hidden={page !== 'retained'}>
-        <RetainedPage files={retainedFiles} onrecover={() => void loadRetained()} />
+        <RetainedPage
+          files={page === 'retained' ? retainedFiles : NO_RETAINED}
+          onrecover={() => void loadRetained()}
+        />
       </div>
       <div class="pages" class:hidden={page !== 'config'}>
-        <ConfigPage {scanPaths} {outputDir} {targetVmaf} />
+        <ConfigPage
+          scanPaths={page === 'config' ? scanPaths : NO_PATHS}
+          outputDir={page === 'config' ? outputDir : ''}
+          {targetVmaf}
+        />
       </div>
     {/if}
     {/if}
