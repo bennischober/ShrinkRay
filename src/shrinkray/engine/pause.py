@@ -1,4 +1,4 @@
-"""The resident app's pause state: the operator's pause, and manual encodes.
+"""The resident app's shared control state: pause, manual encodes, cancel requests.
 
 Two reasons make the resident app start no new probe or encode (issue #250):
 
@@ -14,10 +14,16 @@ Two reasons make the resident app start no new probe or encode (issue #250):
   its pid - is ignored and removed, so it can never pause the app for good.
 
 A running encode always finishes; pausing only holds back the next file.
+
+The third signal is a cancel request (issue #621): the terminal UI writes one
+file per job in ``cancel-requests/``, and the resident app's poller applies it
+through the job queue. The file stays until the job is terminal, so a crash during
+a running job's unwind cannot lose the operator's intent.
 """
 
 import contextlib
 import os
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -28,6 +34,7 @@ from shrinkray.tools.process import process_exists, process_start_ticks
 
 PAUSE_FLAG = "paused"
 MANUAL_ENCODES = "manual-encodes"
+CANCEL_REQUESTS = "cancel-requests"
 
 # where the container keeps its config; its folder is the data directory a
 # one-shot CLI run shares with the server (the image sets it, issue #247)
@@ -39,6 +46,99 @@ _MARKER_STALE_SECONDS = 21600.0
 
 # how often a paused job worker looks again
 PAUSE_POLL_SECONDS = 5.0
+
+
+def cancel_requests_dir(state_dir: Path) -> Path:
+    """Returns the folder holding the terminal UI's cancel requests.
+
+    Args:
+        state_dir (Path): The data directory.
+
+    Returns:
+        Path: The ``cancel-requests`` folder under it.
+    """
+    return state_dir / CANCEL_REQUESTS
+
+
+def write_cancel_request(state_dir: Path, job_id: int) -> Path:
+    """Writes a cancel request for one job, atomically.
+
+    The request is a file named after the job id in ``cancel-requests/``. It
+    stays until the job reaches a terminal state; the resident app's poller reads
+    it and applies it through the job queue. The atomic write follows the
+    config save's pattern: a crash leaves the old file or the new one, never a
+    half-written request.
+
+    Args:
+        state_dir (Path): The data directory shared with the resident app.
+        job_id (int): The job to cancel (a positive integer).
+
+    Returns:
+        Path: The request file.
+
+    Raises:
+        ValueError: When ``job_id`` is not a positive integer.
+    """
+    if isinstance(job_id, bool) or not isinstance(job_id, int) or job_id <= 0:
+        raise ValueError(f"job id must be a positive integer, got {job_id!r}")
+    folder = cancel_requests_dir(state_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / str(job_id)
+    fd, temp_name = tempfile.mkstemp(dir=folder, prefix=f".{job_id}-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(f"{job_id}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_name, 0o644)
+        os.replace(temp_name, target)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
+    return target
+
+
+def read_pending_cancel_requests(state_dir: Path) -> list[int]:
+    """Returns the pending cancel requests, sorted by job id.
+
+    Only a canonical positive-integer filename is a request: a stray file, a
+    temporary file and a non-integer name are ignored without raising. A
+    missing folder has no requests.
+
+    Args:
+        state_dir (Path): The data directory.
+
+    Returns:
+        list[int]: The requested job ids, oldest id first.
+    """
+    folder = cancel_requests_dir(state_dir)
+    if not folder.is_dir():
+        return []
+    ids: list[int] = []
+    for entry in folder.iterdir():
+        try:
+            job_id = int(entry.name)
+        except ValueError:
+            continue
+        if job_id <= 0 or entry.name != str(job_id):
+            continue
+        try:
+            if not entry.is_file():
+                continue
+        except OSError:
+            continue
+        ids.append(job_id)
+    return sorted(ids)
+
+
+def remove_cancel_request(state_dir: Path, job_id: int) -> None:
+    """Removes a consumed cancel request (idempotent).
+
+    Args:
+        state_dir (Path): The data directory.
+        job_id (int): The request's job id.
+    """
+    cancel_requests_dir(state_dir).joinpath(str(job_id)).unlink(missing_ok=True)
 
 
 def state_dir_for_cli(db_file: Path | None) -> Path | None:

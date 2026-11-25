@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from shrinkray import db
+from shrinkray.engine import pause
 from shrinkray.engine import search as engine_search
 from shrinkray.server import jobs
 
@@ -1295,6 +1296,186 @@ class TestJobs(unittest.TestCase):
         self.assertTrue(self.queue.cancel(taken.id))
         self.assertTrue(event.is_set())
         self.queue.unregister_cancel_event(taken.id)
+
+    def test_a_cancel_request_cancels_a_queued_job_from_the_poller_thread(self):
+        """Issue #621: the poller thread reads the terminal UI's request file,
+        cancels the queued row and removes the file once the row is terminal."""
+        state = Path(self.tmp.name)
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        request = pause.write_cancel_request(state, job.id)
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        worker._start_cancel_poller()
+        try:
+            self.assertTrue(worker._cancel_poll_done.wait(5.0), "the poller never ran")
+            self.assertEqual(self.queue.get(job.id).state, jobs.JobState.CANCELLED)
+            # accepted requests stay for the next poll, which sees the terminal row
+            self.assertTrue(request.exists())
+            worker._poll_cancel_requests()
+            self.assertFalse(request.exists())
+        finally:
+            worker.stop()
+
+    def test_a_running_cancel_marks_the_job_cancelled_with_its_partial_result(self):
+        """Issue #621: a request accepted on a running job sets the engine's
+        cancel event; the worker writes the engine's partial result on the row."""
+        state = Path(self.tmp.name)
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        started = threading.Event()
+
+        def fake_scan(job, connection, cancel, progress=None):
+            started.set()
+            self.assertTrue(cancel.wait(5.0), "the cancel event was never set")
+            return {"cancelled": True, "movies": 0}
+
+        with mock.patch.object(jobs, "execute_scan", side_effect=fake_scan):
+            runner = threading.Thread(target=worker._execute, args=(taken,))
+            runner.start()
+            self.assertTrue(started.wait(5.0), "the job never started")
+            request = pause.write_cancel_request(state, taken.id)
+            worker._poll_cancel_requests()
+            runner.join(timeout=10.0)
+        self.assertFalse(runner.is_alive())
+        reloaded = self.queue.get(taken.id)
+        self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+        self.assertEqual(reloaded.result, {"cancelled": True, "movies": 0})
+        self.assertTrue(request.exists(), "the request stays until the next poll")
+        worker._poll_cancel_requests()
+        self.assertFalse(request.exists())
+
+    def test_a_take_window_request_is_retained_until_the_job_is_cancellable(self):
+        """Issue #621: Queue.cancel returns False in the take window; the
+        request must stay on disk and apply when the job is cancellable."""
+        state = Path(self.tmp.name)
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        request = pause.write_cancel_request(state, job.id)
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        # the take window: the in-memory job is RUNNING while the row is QUEUED
+        job.state = jobs.JobState.RUNNING
+        worker._poll_cancel_requests()
+        self.assertTrue(request.exists(), "a take-window request must be retained")
+        self.assertEqual(self.queue.get(job.id).state, jobs.JobState.QUEUED)
+        job.state = jobs.JobState.QUEUED
+        worker._poll_cancel_requests()
+        self.assertEqual(self.queue.get(job.id).state, jobs.JobState.CANCELLED)
+        self.assertTrue(request.exists(), "the accepted request stays for the next poll")
+        worker._poll_cancel_requests()
+        self.assertFalse(request.exists())
+
+    def test_a_request_accepted_on_a_running_job_stays_during_the_unwind(self):
+        """Issue #621: a kill during the unwind must not lose the operator's
+        intent - the request stays while the row is still RUNNING."""
+        state = Path(self.tmp.name)
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        event = threading.Event()
+        self.queue.register_cancel_event(taken.id, event)
+        try:
+            worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+            request = pause.write_cancel_request(state, taken.id)
+            worker._poll_cancel_requests()
+            self.assertTrue(event.is_set())
+            self.assertEqual(self.queue.get(taken.id).state, jobs.JobState.RUNNING)
+            self.assertTrue(request.exists(), "the request was lost during the unwind")
+        finally:
+            self.queue.unregister_cancel_event(taken.id)
+
+    def test_stale_cancel_requests_are_ignored_or_removed(self):
+        """Issue #621: a non-integer filename is ignored without raising; a
+        request for a finished job is removed."""
+        state = Path(self.tmp.name)
+        finished = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        self.queue.finish(taken, {"plans": []})
+        folder = state / pause.CANCEL_REQUESTS
+        request = pause.write_cancel_request(state, finished.id)
+        stray = folder / "not-an-id"
+        stray.write_text("junk")
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        worker._poll_cancel_requests()
+        self.assertFalse(request.exists())
+        self.assertTrue(stray.exists(), "an invalid filename is ignored, not removed")
+
+    def test_the_poller_survives_a_commit_failure_and_keeps_consuming(self):
+        """Issue #621: a dead poller silently ends the cancel surface, so one
+        failed request is logged and the next request is still consumed."""
+        state = Path(self.tmp.name)
+        first = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        second = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        pause.write_cancel_request(state, first.id)
+        pause.write_cancel_request(state, second.id)
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+
+        class _FlakyCommit:
+            def __init__(self, real):
+                self._real = real
+                self._failed = False
+
+            def execute(self, *args, **kwargs):
+                return self._real.execute(*args, **kwargs)
+
+            def commit(self):
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("the db blinked")
+                return self._real.commit()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        with (
+            mock.patch.object(self.queue, "_connection", _FlakyCommit(self.queue._connection)),
+            mock.patch.object(jobs, "log_error") as log_error,
+        ):
+            worker._start_cancel_poller()
+            try:
+                self.assertTrue(worker._cancel_poll_done.wait(5.0), "the poller never ran")
+            finally:
+                worker.stop()
+        self.assertEqual(self.queue.get(first.id).state, jobs.JobState.QUEUED)
+        self.assertEqual(self.queue.get(second.id).state, jobs.JobState.CANCELLED)
+        self.assertTrue(log_error.called, "the failed request was not logged")
+        self.assertIsNotNone(worker._cancel_thread)
+        self.assertFalse(worker._cancel_thread.is_alive())
+
+    def test_stop_joins_the_cancel_poller_before_the_database_closes(self):
+        """Issue #621: the poller is joined before the caller closes the
+        database, so a late cancel write cannot race the close."""
+        from shrinkray.server import app as app_module
+
+        root = Path(self.tmp.name)
+        real_connection = db.connect(root / "metadata.db")
+        probe: dict = {}
+
+        class _CloseProbe:
+            def __init__(self, real):
+                self._real = real
+
+            def close(self):
+                probe["poller_alive"] = (
+                    state.worker._cancel_thread.is_alive()
+                    if state.worker._cancel_thread is not None
+                    else None
+                )
+                self._real.close()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        proxy = _CloseProbe(real_connection)
+        with mock.patch.object(app_module.db, "connect", return_value=proxy):
+            state = app_module.AppState(root / "metadata.db")
+        # the worker must not take the seeded job: the poller is the subject
+        state.queue.take_next = mock.Mock(return_value=None)
+        job = state.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        pause.write_cancel_request(root, job.id)
+        state.worker.start()
+        self.assertTrue(state.worker._cancel_poll_done.wait(5.0), "the poller never ran")
+        state.shutdown()
+        self.assertIsNotNone(state.worker._cancel_thread)
+        self.assertFalse(state.worker._cancel_thread.is_alive())
+        self.assertIs(probe.get("poller_alive"), False, "the poller was alive at the close")
 
     def test_worker_executes_job(self):
         payload = {"path": str(Path(self.tmp.name) / "movies")}

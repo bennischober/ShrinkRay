@@ -154,14 +154,14 @@ Everything the dashboard deliberately cannot do happens in the terminal. `shrink
 is a terminal UI (TUI) that configures **everything** an operator may change: the
 required VMAF, thread caps, the eligibility gates (resolution floor, minimum file size),
 and the rest of `config.json`; and, where a resident process runs, **pause and resume**
-of the backlog. The watched folder is not a setting: it is whatever is mounted at
-`/media`.
+of the backlog and **cancel a queued or running job**. The watched folder is not a setting: it is
+whatever is mounted at `/media`.
 
 The split is by role, not by convenience. A browser on the LAN can observe; changing what
 the machine does requires a shell on the host or in the container, which the network never
 exposes. So the TUI talks to the resident process through the state it already shares on
-disk (the config file and a pause flag in `/data`), never through a network route — the
-dashboard stays read-only by construction, not by discipline.
+disk (the config file, a pause flag and a cancel-request file in `/data`), never through
+a network route — the dashboard stays read-only by construction, not by discipline.
 
 Rules the TUI must keep:
 
@@ -174,6 +174,11 @@ Rules the TUI must keep:
   consequence before it saves.
 - **A saved change applies at the next file.** A running encode finishes with the settings
   it started with.
+- **A cancel request is applied by the resident process, not the TUI.** The TUI writes
+  `cancel-requests/<job id>` in `/data`; the resident worker polls it and cancels the
+  queued job or signals the running job's cancel event. The request file stays until the
+  job is terminal, so a crash during the unwind does not lose the intent. A request that
+  cannot be applied yet (the job is being taken, or no such row) stays for a later poll.
 - **The same TUI works on a native install**, editing that install's config. Pause and
   resume appear only where a resident process is running.
 
@@ -186,7 +191,9 @@ issues). Built: the pause itself (issue #250: a `paused` file in `/data` holds t
 the watcher, and a manual encode pauses the watcher while it runs), and a saved
 `config.json` applies at the next file (issue #247), the console banner (issue #251), and
 `shrinkray setup` (issue #252, a Textual UI over config.json and the pause flag). The required
-VMAF became a setting for it (`quality.target_vmaf`).
+VMAF became a setting for it (`quality.target_vmaf`). The job list and cancel
+surface are built (issue #621): `shrinkray setup` reads the job table `mode=ro` and
+writes a cancel request file, and the resident worker's poller thread applies it.
 
 ## Deployment target: an Unraid Community App (issue #244)
 
@@ -353,8 +360,9 @@ to its quality** and whether its **frame matches its content**.
   caps, and a stall watchdog, so playback on the same box keeps its cores.
 - The dashboard is reached over the LAN and is **read-only in intent**: it reports
   Mode B's state (running, planned, remaining, reclaimed, retained) and does not start
-  work. The terminal is the control surface: `shrinkray setup` configures and pauses,
-  `shrinkray encode` runs a single file. The CLI is a first-class product: every
+  work. The terminal is the control surface: `shrinkray setup` configures, pauses
+  and cancels a queued or running job, `shrinkray encode` runs a single file. The CLI
+  is a first-class product: every
   capability is available without the resident process, and automation may drive it
   alone.
 - Files appear and change continuously. A watchdog notices every stable new or
@@ -368,9 +376,10 @@ to its quality** and whether its **frame matches its content**.
 - **The dashboard observes, it does not steer**: it shows the collection's state, the
   running job, the plan, what remains and what was reclaimed. It is Mode B's status
   window; it is not a second control path into the library.
-- **The terminal configures and controls** (planned, issue #244): `shrinkray setup` edits
-  every setting and pauses or resumes the backlog; a manual `shrinkray encode` pauses the
-  resident watcher while it runs. No network route reaches either.
+- **The terminal configures and controls** (issue #244): `shrinkray setup` edits
+  every setting, pauses or resumes the backlog, and cancels a queued or running job;
+  a manual `shrinkray encode` pauses the resident watcher while it runs. No network
+  route reaches either.
 - **One encode mode**: VMAF-driven CRF search per file against the required VMAF
   (96 by default; sampled probes, measured quality), then one full encode at the
   winning setting. Every re-encode, bar removal included, goes through it. The

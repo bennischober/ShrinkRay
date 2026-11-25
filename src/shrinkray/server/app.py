@@ -380,7 +380,10 @@ class AppState:
         try:
             self.bus = ProgressBus()
             self.queue = JobQueue(self.connection, bus=self.bus, connection_lock=self.db_lock)
-            self.worker = JobWorker(self.connection, self.queue)
+            # the db file's folder is the data folder the terminal UI shares
+            # its cancel requests in (issue #621); the same folder the pause
+            # flag lives in
+            self.worker = JobWorker(self.connection, self.queue, state_dir=db_file.resolve().parent)
             with self.db_lock:
                 self._recover_stale_jobs()
         except BaseException:

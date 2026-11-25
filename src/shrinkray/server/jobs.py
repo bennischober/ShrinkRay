@@ -24,6 +24,7 @@ from enum import Enum
 from pathlib import Path
 
 from shrinkray.config import Conf, encode_window_open, refresh_config
+from shrinkray.engine.pause import read_pending_cancel_requests, remove_cancel_request
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.logger import file_scope, log, log_error
 from shrinkray.replace import STAGING_DIR_PREFIX
@@ -37,6 +38,11 @@ from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_conf
 ProgressCallback = Callable[[dict], None]
 
 JOB_RETENTION = 100
+
+# how often the cancel-request poller looks at the data folder. It is its own
+# thread because the worker's idle loop does not turn during a running encode:
+# a cancel for a multi-hour job must arrive while that job holds the worker.
+CANCEL_POLL_SECONDS = 1.0
 
 # live progress is FLOW, not state: it is never persisted (a running job's
 # row keeps result = NULL) and dies with the process. The bus fans each
@@ -55,6 +61,9 @@ class JobState(str, Enum):
     DONE = "done"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+TERMINAL_STATES = frozenset({JobState.DONE, JobState.FAILED, JobState.CANCELLED})
 
 
 class JobKind(str, Enum):
@@ -1690,18 +1699,31 @@ class JobWorker:
     is reported as interrupted on the next start).
     """
 
-    def __init__(self, connection: sqlite3.Connection, queue: JobQueue) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        queue: JobQueue,
+        state_dir: Path | None = None,
+    ) -> None:
         """Initializes the worker.
 
         Args:
             connection (sqlite3.Connection): The database connection the
                 worker owns while executing jobs.
             queue (JobQueue): The queue to consume.
+            state_dir (Path | None): The data folder holding the terminal
+                UI's cancel requests; None disables the cancel surface.
         """
         self.connection = connection
         self.queue = queue
+        self._state_dir = state_dir
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        # the cancel-request poller's own thread (issue #621): the worker's
+        # idle loop does not turn during a running encode, so a cancel for a
+        # multi-hour job would never be seen without a second reader.
+        self._cancel_thread: threading.Thread | None = None
+        self._cancel_poll_done = threading.Event()
         # the running job's cancel event: a shutdown must terminate the
         # encode child, not leave it running unattended (issue #431
         # review, round 2 finding 1 - the measurement path has opted out of
@@ -1723,6 +1745,7 @@ class JobWorker:
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="job-worker", daemon=True)
         self._thread.start()
+        self._start_cancel_poller()
 
     def stop(self, join_timeout: float = 30.0) -> None:
         """Signals the worker to stop and joins it.
@@ -1753,6 +1776,10 @@ class JobWorker:
             # race it (review round 5, finding 3)
             self._running_cancel.set()
             self._thread.join(timeout=join_timeout)
+        # the poller must be joined BEFORE the caller closes the database: a
+        # late cancel write after the close would race it (issue #621)
+        if self._cancel_thread is not None:
+            self._cancel_thread.join(timeout=join_timeout)
 
     def request_stop(self) -> None:
         """Signals the worker to stop without joining it.
@@ -1769,6 +1796,75 @@ class JobWorker:
         if self._running_cancel is not None:
             self._running_cancel.set()
         self.queue._wake.set()
+
+    def _start_cancel_poller(self) -> None:
+        """Starts the cancel-request poller (no-op without a data folder)."""
+        if self._state_dir is None:
+            return
+        self._cancel_poll_done.clear()
+        self._cancel_thread = threading.Thread(
+            target=self._cancel_poll_loop, name="cancel-poller", daemon=True
+        )
+        self._cancel_thread.start()
+
+    def _cancel_poll_loop(self) -> None:
+        """Consumes the terminal UI's cancel requests until the worker stops.
+
+        A dead poller silently ends the cancel surface, so an exception is
+        logged and the loop continues: one unreadable request must not take the
+        rest down with it.
+        """
+        try:
+            while not self._stop.is_set():
+                self._poll_cancel_requests()
+                self._cancel_poll_done.set()
+                self._stop.wait(CANCEL_POLL_SECONDS)
+        finally:
+            self._cancel_poll_done.set()
+
+    def _poll_cancel_requests(self) -> None:
+        """Applies every pending cancel request once (poller thread)."""
+        if self._state_dir is None:
+            return
+        try:
+            pending = read_pending_cancel_requests(self._state_dir)
+        except Exception as e:
+            log_error(f"Cancel poller could not read the requests: {e}")
+            return
+        for job_id in pending:
+            try:
+                self._apply_cancel_request(job_id)
+            except Exception as e:
+                log_error(f"Cancel poller failed for job #{job_id}: {e}")
+
+    def _apply_cancel_request(self, job_id: int) -> None:
+        """Applies one cancel request, leaving the file until the job ends.
+
+        A request for an already terminal job is consumed. A request accepted on
+        a queued job is left for the next poll, which sees the terminal row; one
+        accepted on a running job is left until its unwind writes the terminal
+        state. A take-window or unknown request is left for a later poll.
+
+        Args:
+            job_id (int): The requested job id.
+        """
+        if self._state_dir is None:
+            return
+        job = self.queue.get(job_id)
+        if job is None:
+            log(f"Cancel request for job #{job_id} ignored: no such job; left for a later poll")
+            return
+        if job.state in TERMINAL_STATES:
+            remove_cancel_request(self._state_dir, job_id)
+            log(f"Cancel request for job #{job_id} consumed: the job is already {job.state.value}")
+            return
+        if self.queue.cancel(job_id):
+            log(f"Cancel request for job #{job_id} accepted; the request stays until the job ends")
+        else:
+            log(
+                f"Cancel request for job #{job_id} not applied yet "
+                "(take window or unknown id); left for a later poll"
+            )
 
     def _run(self) -> None:
         """Consumes jobs until stopped.
