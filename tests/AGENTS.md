@@ -15,6 +15,7 @@ Flat by design: `tests/fixtures/` is the only subdirectory, and no `tests/engine
 | `test_jobs` | `server.jobs` lifecycle, retention, thread cap, UI dist routes |
 | `test_cli` | `__main__` commands through `typer.testing.CliRunner`, plus `TestReadmeInvocations` parsing real `README.md` argv |
 | `test_crop_timeline` | `engine.crop` timeline pass; asserts a library scan never runs it |
+| `test_progress` | the structured progress event (issue #631): the HandBrake line parser, the bus merge (a tick never erases `run`/`file`), the real engine emission points (bars/samples/probes/chosen/encode), and the hello seed's probe trail |
 | `test_probe_progress`, `test_watch_progress`, `test_watch_output`, `test_preflight`, `test_fs_waiter`, `test_bracket_paths`, `test_single_file_scope`, `test_plan_exit`, `test_plan_no_table` | one CLI/engine seam each — progress output, env-gated output, preflight problems, `_FsWaiter`/`_sleep_plain`, path resolution, plan exit codes |
 | `test_media`, `test_hb_probe`, `test_missing_binary`, `test_resources`, `test_hdr_fixture` | `tools.*`: frame-rate/duration parsing, `supports_svt_av1`, binary-absent degradation, RSS/`_run`, HDR detection |
 | `test_auth`, `test_metrics` | `server.app` token gate, Prometheus render |
