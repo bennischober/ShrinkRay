@@ -21,6 +21,7 @@
   import RetainedPage from './lib/pages/RetainedPage.svelte'
   import MovieDetailPage from './lib/pages/MovieDetailPage.svelte'
   import { connectEvents, eventsConnected, fileProgressFor, resetEvents } from './lib/progress.svelte'
+  import { isStageRow } from './lib/format'
   import { deriveConnection, freshnessText, POLL_ACTIVE, POLL_HIDDEN, POLL_IDLE } from './lib/connection'
 
   type Page = 'overview' | 'library' | 'jobs' | 'retained' | 'config'
@@ -380,8 +381,18 @@
   }
 
   let dismissed = $state<Set<number>>(new Set())
+  // #602 stage rows are per-file detail rows, never the running-work owner:
+  // the folder job carries the file model and must be the binding target.
+  // During any encode/plan the stage row is newest, so without this filter
+  // `runningJob` picks it and every surface renders "starting…" (issue #631).
   const runningJobs = $derived(
-    history.filter((j) => (j.state === 'running' || j.state === 'queued') && j.id !== null && !dismissed.has(j.id))
+    history.filter(
+      (j) =>
+        (j.state === 'running' || j.state === 'queued') &&
+        j.id !== null &&
+        !dismissed.has(j.id) &&
+        !isStageRow(j),
+    ),
   )
   // failed work: jobs that FAILED, and DONE jobs whose per-movie outcomes
   // failed (the engine completed but the work did not — a green DONE must

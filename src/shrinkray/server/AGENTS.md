@@ -50,6 +50,8 @@ One schema for every stage, built by `engine/progress.py` and mirrored in
 }
 ```
 
+- The browser model reads `v` (`ui/src/lib/progress.svelte.ts`); an event from
+  another schema version is ignored and the poll stays the state channel.
 - `run` and `file` MERGE: a percent tick carries only `encode`, so the folder's
   `3/12` and the probes measured so far survive. A new file's identity resets the
   per-file trail; the server's `ProgressBus._last` keeps the merged latest event

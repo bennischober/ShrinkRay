@@ -31,6 +31,11 @@ import type {
 import { storedToken } from './api'
 import { bytes, crf, duration, finishesAt, fps, measuredAtLabel, percent, vmaf } from './format'
 
+/** The server's schema version. An event from a different version is ignored
+ * (the poll stays the state channel), so an old server's flat `probe` event is
+ * never rendered as the new schema. Mirrors engine/progress.py. */
+export const PROGRESS_VERSION = 1
+
 /** The stepper's order (issue #631's requirement 4). `scan` and `paused` are
  * stages but not steps: a scan has no per-file pipeline, and a pause holds the
  * step the file already reached. */
@@ -360,6 +365,7 @@ function applyFileEvent(jobId: number, data: ProgressData, at: number): void {
 }
 
 function applyEvent(jobId: number, data: ProgressData): void {
+  if (data.v !== PROGRESS_VERSION) return
   const previous = progressByJob[jobId]
   const merged = mergeRaw(previous, data)
   progressByJob[jobId] = merged
@@ -422,6 +428,7 @@ function seed(jobs: Record<string, ProgressData>): void {
   )
   fileByJob = {}
   for (const [id, data] of Object.entries(jobs)) {
+    if (data.v !== PROGRESS_VERSION) continue
     const jobId = Number(id)
     if (
       data.stage === 'scan' ||

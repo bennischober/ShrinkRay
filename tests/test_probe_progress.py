@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from shrinkray import db as shrinkray_db
 from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine import plan as engine_plan
 from shrinkray.engine import progress as engine_progress
@@ -274,6 +275,56 @@ class TestProbeProgress(unittest.TestCase):
         self.assertEqual(merged["probe"]["vmaf"], 95.9)
         self.assertEqual(merged["chosen"]["crf"], 23)
         self.assertEqual(merged["chosen"]["vmaf"], 96.6)
+
+    def test_a_real_probe_cache_hit_reaches_cache_status(self):
+        """A seeded probe_cache row is read through the real _cached_or_none
+        path: no fabricated collector, no probe encode (review M4, #631)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"movie")
+            sample = root / "sample.mkv"
+            sample.write_bytes(b"sample")
+            db_file = root / "shrinkray.db"
+            connection = shrinkray_db.connect(db_file)
+            try:
+                recipe = tools_vmaf.vmaf_recipe(crop=None)
+                key = engine_search.probe_cache_key(
+                    movie,
+                    0.0,
+                    10.0,
+                    24,
+                    "svt_av1",
+                    "5",
+                    None,
+                    None,
+                    tools_vmaf._tool_versions("HandBrakeCLI"),
+                    recipe.identifier(),
+                )
+                shrinkray_db.save_probe_score(connection, key, 95.5, 123)
+                measured_at = shrinkray_db.get_probe_measured_at(connection, key)
+            finally:
+                connection.close()
+            self.assertIsNotNone(measured_at)
+            statuses: list[tuple[bool, str | None]] = []
+            events: list[dict] = []
+            score = engine_search.probe_crf(
+                [(sample, 0.0)],
+                24,
+                root,
+                "HandBrakeCLI",
+                movie,
+                10.0,
+                "svt_av1",
+                "5",
+                recipe=recipe,
+                db_file=db_file,
+                cache_status=statuses,
+                progress=events.append,
+            )
+            self.assertEqual(score, 95.5)
+            self.assertEqual(statuses, [(True, measured_at)])
+            self.assertTrue(events)
 
     def test_cached_replay_reports_cache_provenance(self):
         """A cached probe replay is source=cache with the stored measured_at, and

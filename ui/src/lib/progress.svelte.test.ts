@@ -160,6 +160,30 @@ describe('progress store', () => {
     expect(mod.progressEta(view)).toBe(7200)
   })
 
+  it('ignores an event from another schema version (PROGRESS_VERSION)', () => {
+    mod.connectEvents()
+    const es = FakeEventSource.instances[0]
+    es.open()
+    es.emit('message', {
+      job_id: 1,
+      v: 2,
+      stage: 'encode',
+      file: { movie: 'old.mkv', path: '/old.mkv', stage: 'encode', step: 5, steps: 7 },
+      encode: { percent: 99 },
+    })
+    expect(mod.progressFor(1)).toBeNull()
+    es.emit('message', {
+      job_id: 1,
+      v: 1,
+      stage: 'encode',
+      stage_job_id: 2,
+      file: { movie: 'new.mkv', path: '/new.mkv', stage: 'encode', step: 5, steps: 7 },
+      encode: { percent: 10 },
+    })
+    expect(mod.progressFor(1)?.v).toBe(1)
+    expect(mod.fileProgressFor(1)?.movie).toBe('new.mkv')
+  })
+
   it('data frames merge and a percent tick never erases the file counter', () => {
     mod.connectEvents()
     const es = FakeEventSource.instances[0]
