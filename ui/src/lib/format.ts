@@ -168,13 +168,14 @@ export function savedPercent(value: number | null | undefined): {
 }
 
 /** The bytes a title reclaimed for the dashboard (issue #646): the server's
- * per-title library delta plus output-directory savings. The server already
- * applies #625 (a discarded attempt reclaimed nothing) and #647 (a missing file,
- * or a restored original, has nothing on disk) and clamps every term at 0 - so the
- * RECLAIMED stat and the category bars read this one field through this one
- * guard and never re-derive a single hop. */
+ * per-title library delta plus output-directory savings. The server applies #625
+ * per row (a discarded attempt reclaimed nothing) and both halves of #647 (a
+ * missing file, or a restored original, has nothing on disk), and clamps every
+ * term at 0. The client keeps only the missing-file guard for what remains
+ * client-side; it must never zero the whole title on a discarded latest row,
+ * because an earlier corroborated chain delta is still real. */
 export function reclaimedBytes(movie: Movie): number {
-  if (movie.missing || movie.encode?.outcome === 'discarded') return 0
+  if (movie.missing) return 0
   return Math.max(movie.reclaimed_bytes ?? 0, 0)
 }
 

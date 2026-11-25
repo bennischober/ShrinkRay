@@ -86,12 +86,13 @@ _T = TypeVar("_T")
 # delta plus the savings output-directory/legacy rows recorded outside the
 # library. Both surfaces read it from ONE set-based join over encodes+files - no
 # per-title chain walk runs inside the snapshot lock. An applied in-place row
-# that matches the file's current size corroborates the library's current state
-# (the #647 predicate; a restored original matches none, so it reclaims
-# nothing), so the library delta starts at the chain's first applied input and
-# ends at the file's current size; every applied output-directory/legacy row adds
-# its own input-minus-output. A discarded attempt (#625) is not applied and
-# contributes nothing; a missing file contributes nothing; every term clamps at 0.
+# that claims the file's own path AND matches its current size corroborates the
+# library's current state (both halves of the #647 predicate; a restored original
+# matches none, so it reclaims nothing), so the library delta starts at the
+# chain's first applied in-place row's input and ends at the file's current
+# size; every applied output-directory/legacy row adds its own
+# input-minus-output. A discarded attempt (#625) is not applied and contributes
+# nothing; a missing file contributes nothing; every term clamps at 0.
 _LIBRARY_FROM = """
             FROM files f
             LEFT JOIN encodes e ON e.id = (
@@ -99,9 +100,10 @@ _LIBRARY_FROM = """
             )
             LEFT JOIN (
                 SELECT e.file_id,
-                       MIN(e.id) AS first_applied_id,
+                       MIN(CASE WHEN e.output_file = f.path THEN e.id END)
+                           AS first_in_place_id,
                        MAX(CASE
-                               WHEN e.output_file IS NOT NULL AND e.output_size = f.size
+                               WHEN e.output_file = f.path AND e.output_size = f.size
                                THEN 1 ELSE 0
                            END) AS has_current_in_place,
                        SUM(CASE
@@ -113,7 +115,7 @@ _LIBRARY_FROM = """
                 WHERE e.outcome = 'applied'
                 GROUP BY e.file_id
             ) reclaimed ON reclaimed.file_id = f.id
-            LEFT JOIN encodes first_applied ON first_applied.id = reclaimed.first_applied_id
+            LEFT JOIN encodes first_in_place ON first_in_place.id = reclaimed.first_in_place_id
 """
 
 _RECLAIMED_COLUMN = """
@@ -122,7 +124,7 @@ _RECLAIMED_COLUMN = """
                         ELSE COALESCE(
                             CASE
                                 WHEN reclaimed.has_current_in_place = 1
-                                THEN MAX(first_applied.input_size - f.size, 0)
+                                THEN MAX(first_in_place.input_size - f.size, 0)
                                 ELSE 0
                             END, 0)
                             + COALESCE(reclaimed.output_dir_savings, 0)

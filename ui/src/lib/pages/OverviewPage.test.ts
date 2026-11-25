@@ -190,29 +190,14 @@ describe('OverviewPage VMAF display (issue #599)', () => {
         outcome: 'applied',
       },
     })
-    // a stale positive on a missing file or a discarded attempt is dropped
-    // by the shared guard, exactly as the server drops it
+    // a stale positive on a missing file is dropped by the client guard,
+    // exactly as the server sends 0 for it
     const missing = movie({
       path: '/m/gone.mkv',
       name: 'gone.mkv',
       category: 'C',
       missing: true,
       reclaimed_bytes: 5000,
-    })
-    const discarded = movie({
-      path: '/m/discarded.mkv',
-      name: 'discarded.mkv',
-      category: 'C',
-      reclaimed_bytes: 4000,
-      encode: {
-        preset: 'VMAF>95',
-        crf: 20,
-        vmaf: 95.5,
-        input_size: 1000,
-        output_size: 400,
-        saved_percent: 60,
-        outcome: 'discarded',
-      },
     })
     // a positive field with saved_percent 0 still counts: the server's
     // clamp is the authority, not a re-derived percentage guard
@@ -232,7 +217,7 @@ describe('OverviewPage VMAF display (issue #599)', () => {
         outcome: 'applied',
       },
     })
-    const movies = [chain, outDir, missing, discarded, rounded]
+    const movies = [chain, outDir, missing, rounded]
     const total = reclaimedTotalBytes(movies)
     expect(total).toBe(1201)
     const { container, unmount } = renderOverview([], movies, undefined, total / 1024 ** 3)
@@ -251,13 +236,55 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     }
   })
 
+  it('counts a corroborated chain when its latest attempt was discarded (issue #646)', () => {
+    // the discarded ROW's sizes are gone (#625), but the earlier applied
+    // chain's delta is real and the server's field carries it. The old
+    // title-level discarded guard zeroed the whole title - exactly the
+    // one-hop behaviour #646 removes.
+    const chain = movie({
+      path: '/m/chain-discarded.mkv',
+      name: 'chain-discarded.mkv',
+      category: 'C',
+      size: 400,
+      reclaimed_bytes: 600,
+      encode: {
+        preset: 'VMAF>95',
+        crf: 20,
+        vmaf: 95.5,
+        input_size: 400,
+        output_size: 390,
+        saved_percent: 2.5,
+        outcome: 'discarded',
+      },
+    })
+    const other = movie({
+      path: '/m/other.mkv',
+      name: 'other.mkv',
+      category: 'C',
+      size: 600,
+    })
+    const movies = [chain, other]
+    const total = reclaimedTotalBytes(movies)
+    expect(total).toBe(600)
+    const { container, unmount } = renderOverview([], movies, undefined, total / 1024 ** 3)
+    try {
+      const reclaimedStat = [...container.querySelectorAll('.stat')].find((el) =>
+        el.textContent?.includes('RECLAIMED'),
+      )
+      expect(reclaimedStat?.textContent).toContain('600 B')
+      const nums = container.querySelector('.bar-nums')?.textContent ?? ''
+      expect(nums).toContain('600 B')
+    } finally {
+      unmount()
+    }
+  })
+
   it('excludes a missing file from the category bar (issue #647)', () => {
-    // the identity rule's UI half: a file the scans report missing has
-    // nothing on disk - its record reclaims nothing, so the bar agrees
-    // with /metrics' gauge (the same rule App.svelte's savedTotalGb uses).
-    // TWO titles chart the category at all (a single title is never
-    // charted). The bar's SIZE total still includes the missing title's
-    // size - only the reclaimed figure is excluded.
+    // the server already sends 0 for a missing file; the client keeps this
+    // one guard for what remains client-side. TWO titles chart the category
+    // at all (a single title is never charted). The bar's SIZE total still
+    // includes the missing title's size - only the reclaimed figure is
+    // excluded.
     const encode = {
       preset: 'VMAF>95',
       crf: 21,
@@ -275,6 +302,7 @@ describe('OverviewPage VMAF display (issue #599)', () => {
         category: 'C',
         size: 1000,
         missing: true,
+        reclaimed_bytes: 5000,
         encode,
       }),
       movie({ path: '/m/here.mkv', name: 'here.mkv', category: 'C', size: 900 }),
@@ -282,7 +310,7 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     const { container } = renderOverview([], movies)
     const nums = container.querySelector('.bar-nums')?.textContent ?? ''
     // the reclaimed figure prints with a minus (fmtReclaimed): the missing
-    // title's 600 B (1000 -> 400) must not appear - only the sizes do
+    // title's positive 5000 B field must not appear - only the sizes do
     expect(nums).toContain('1.86 KiB')
     expect(nums).not.toContain('−')
   })

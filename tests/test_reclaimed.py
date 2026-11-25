@@ -101,11 +101,23 @@ class TestReclaimedBytes(unittest.TestCase):
         self._encode(file_id, 1000, 400, str(Path(self.media.name) / "encoded.mkv"))
         self._assert_reclaimed("out.mkv", 600)
 
-    def test_an_output_dir_row_adds_to_the_library_delta(self) -> None:
-        """The owner's definition is a sum: an in-place chain's library
-        delta plus the savings of the title's output-directory rows."""
-        path, file_id = self._file("mixed.mkv", 500)
+    def test_an_output_dir_row_with_a_matching_size_counts_only_its_own_saving(
+        self,
+    ) -> None:
+        """Both halves of the #647 predicate are required: an output-directory
+        row whose output happens to equal the file's size is not an in-place
+        claim, so it counts only its own input-minus-output."""
+        _, file_id = self._file("outdir-size-match.mkv", 400)
         self._encode(file_id, 1000, 400, str(Path(self.media.name) / "encoded.mkv"))
+        self._assert_reclaimed("outdir-size-match.mkv", 600)
+
+    def test_an_output_dir_row_adds_to_the_library_delta(self) -> None:
+        """The owner's definition is a sum: the in-place chain's library
+        delta plus the savings of the title's output-directory rows. The two
+        branch deltas differ (600 and 500), so only the sum (1100) passes -
+        a first-row-overall reading (1000) cannot."""
+        path, file_id = self._file("mixed.mkv", 500)
+        self._encode(file_id, 900, 300, str(Path(self.media.name) / "encoded.mkv"))
         self._encode(file_id, 1000, 500, path, generation=1)
         self._assert_reclaimed("mixed.mkv", 1100)
 

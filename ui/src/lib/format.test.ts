@@ -428,8 +428,10 @@ describe('reclaimedBytes (issue #646)', () => {
     expect(reclaimedTotalBytes(movies)).toBe(601)
   })
 
-  it('applies the shared #625/#647 guard and the 0 clamp', () => {
+  it('keeps the missing guard but never zeroes a discarded latest row', () => {
     expect(reclaimedBytes(movie({ missing: true, reclaimed_bytes: 600 }))).toBe(0)
+    // #625 applies to the discarded ROW: its own sizes are gone, but the
+    // server's corroborated chain delta is still real
     expect(
       reclaimedBytes(
         movie({
@@ -445,7 +447,7 @@ describe('reclaimedBytes (issue #646)', () => {
           },
         }),
       ),
-    ).toBe(0)
+    ).toBe(600)
     expect(reclaimedBytes(movie({ reclaimed_bytes: -1 }))).toBe(0)
   })
 })
