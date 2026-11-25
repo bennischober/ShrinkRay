@@ -94,6 +94,12 @@ export function vmaf(score: number | null | undefined, target?: number | null): 
   return rounded.toFixed(1)
 }
 
+/** A frame rate as the engine reports it: one decimal, always labelled. */
+export function fps(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${value.toFixed(1)} fps`
+}
+
 export function crf(value: number | null | undefined): string {
   return value == null ? '—' : String(value)
 }
@@ -108,35 +114,12 @@ export function eta(seconds: number | null | undefined): string {
   return `about ${duration(seconds)} left`
 }
 
-/** The wall time a step has left, from the fraction of its work it has finished
- * and how long IT has been running: the engine sends no ETA, so a proportional
- * estimate is the only honest one. `elapsed` must be the STEP's own — a probe's, not
- * the job's — or a fresh probe divides the job's elapsed by a tiny fraction and
- * swings the estimate by an order of magnitude (issue #690 review). Null when there
- * is no usable fraction or elapsed time, so a row says `…` rather than inventing a
- * number. */
-export function remainingSeconds(
-  elapsed: number | null | undefined,
-  fraction: number | null | undefined,
-): number | null {
-  if (elapsed == null || !(elapsed > 0)) return null
-  if (fraction == null || !(fraction > 0) || fraction >= 1) return null
-  const total = elapsed / fraction
-  return Math.max(0, total - elapsed)
-}
-
-/** Seconds a running job has been running, from its start timestamp. Null when
- * the timestamp is missing or unparseable. */
-export function elapsedSeconds(
-  startedIso: string | null | undefined,
-  now: Date = new Date(),
-): number | null {
-  if (!startedIso) return null
-  const iso =
-    startedIso.endsWith('Z') || startedIso.includes('+') ? startedIso : `${startedIso}Z`
-  const elapsed = (now.getTime() - Date.parse(iso)) / 1000
-  if (!Number.isFinite(elapsed) || elapsed <= 0) return null
-  return elapsed
+/** `finishes ≈ HH:MM` when more than 10 min are left (issue #631): the
+ * wall time the operator can plan around, next to `about X left`. */
+export function finishesAt(seconds: number | null | undefined, now: number): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 600) return ''
+  const at = new Date(now + seconds * 1000)
+  return `finishes ≈ ${clock(at)}`
 }
 
 /** The same estimate for a table cell, where the column header already says
@@ -219,38 +202,47 @@ export function kindWord(kind: string): string {
   return KIND_WORDS[kind] ?? kind
 }
 
-const STAGE_WORDS: Record<string, string> = {
-  scan: 'scanning',
-  probe: 'probing',
-  encode: 'encoding',
-  paused: 'paused',
+/** How many files are waiting in the queue (issue #631): one queued job can
+ * name several paths, and a job with no paths still names one unit of work.
+ * The running job is not counted. */
+export function queuedFileCount(
+  jobs: readonly { state: string; payload?: { paths?: string[]; path?: string } }[],
+): number {
+  return jobs
+    .filter((job) => job.state === 'queued')
+    .reduce((sum, job) => {
+      const paths = job.payload?.paths?.length ?? 0
+      return sum + Math.max(1, paths)
+    }, 0)
 }
 
-/** The step a multi-step job is on, in one voice (issue #631): an operator
- * can tell a CRF probe from the final encode. An unknown stage passes
- * through rather than disappearing, so a new server stage shows up as itself. */
-export function stageWord(stage: string | null | undefined): string {
-  if (!stage) return ''
-  return STAGE_WORDS[stage] ?? stage
-}
-
-/** What a running job's progress bar says (issue #631): the step it is
- * on, the file, and what the engine reported — never a bare percentage
- * with no explanation of what is being measured. Falls back to a plain
- * state word only when the payload carries nothing else. */
-export function progressLabel(
-  stage: string | null | undefined,
-  movie: string | null | undefined,
-  detail: string | null | undefined,
-  percent: number | null | undefined,
-): string {
-  const rest = [movie, detail].filter(Boolean)
-  // the engine's own detail sometimes names the step already
-  // ("scanning library", "probing a.mkv"): never say it twice
-  const saysStepAlready = (detail ?? '').toLowerCase().startsWith(stageWord(stage))
-  const parts = stageWord(stage) && !saysStepAlready ? [stageWord(stage), ...rest] : rest
-  if (parts.length > 0) return parts.join(' · ')
-  return percent != null ? 'working' : 'starting…'
+/** A rough queue time from the measured seconds-per-GB of the last real
+ * encodes (issue #631): null without history. The average library title's size
+ * is the estimate for the waiting files — a rough number, labelled as such. */
+export const QUEUE_PACE_SAMPLE = 5
+export function queuePaceSeconds(
+  files: number,
+  movies: readonly Movie[],
+): number | null {
+  if (files <= 0) return 0
+  const measured = movies.filter(
+    (movie) => movie.encode?.encode_seconds != null && (movie.encode.input_size ?? 0) > 0,
+  )
+  const recent = measured.slice(-QUEUE_PACE_SAMPLE)
+  if (recent.length === 0) return null
+  const seconds = recent.reduce((sum, movie) => sum + (movie.encode?.encode_seconds ?? 0), 0)
+  const gb = recent.reduce(
+    (sum, movie) => sum + (movie.encode?.input_size ?? 0) / 1024 ** 3,
+    0,
+  )
+  if (!(gb > 0)) return null
+  const sizes = movies
+    .map((movie) => movie.size ?? 0)
+    .filter((size) => size > 0)
+  const averageGb =
+    sizes.length > 0 ? sizes.reduce((sum, size) => sum + size, 0) / sizes.length / 1024 ** 3 : 0
+  if (!(averageGb > 0)) return null
+  return files * averageGb * (seconds / gb)
 }
 
 /** The three questions the jobs page answers (issue #632) — what is

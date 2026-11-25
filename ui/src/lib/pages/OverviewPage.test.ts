@@ -4,8 +4,15 @@ import OverviewPage from './OverviewPage.svelte'
 
 // the running card's stage comes from the live progress store: a mutable stub
 // lets one test seed it without a stream (issue #630)
-let progressStub: { percent?: number; movie?: string | null; detail?: string | null } | null = null
-vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
+let progressStub: Record<string, unknown> | null = null
+vi.mock('../progress.svelte', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../progress.svelte')>()
+  return {
+    ...actual,
+    fileProgressFor: () => progressStub,
+    progressEta: (view: { etaSeconds?: number | null } | null) => view?.etaSeconds ?? null,
+  }
+})
 import type { Job, Movie, Status } from '../api'
 import { reclaimedTotalBytes } from '../format'
 
@@ -400,20 +407,36 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     expect(screen.queryByText('95.0')).toBeNull()
   })
 
-  it('the running card at 30 % says working, not working… (issue #630)', async () => {
-    progressStub = { percent: 30.46, movie: 'Titel', detail: null }
+  it('the running card names the encode stage, never starting… (issue #631)', async () => {
+    progressStub = {
+      stage: 'encode',
+      movie: 'Titel',
+      path: '/m/a.mkv',
+      step: 5,
+      steps: 7,
+      encode: { percent: 30.46, fps: null, avg_fps: null, eta_seconds: null },
+      encodeTicks: [],
+      probeTicks: [],
+    }
     const running = { id: 4, kind: 'encode', state: 'running', created_at: '2026-10-24T10:00:00Z', started_at: '2026-10-24T10:00:00Z', finished_at: null, payload: {}, result: { plans: [] }, error: null } as unknown as Job
-    const { container } = render(OverviewPage, { movies: [] as Movie[], history: [running], status: null, targetVmaf: 96, savedTotalGb: 0, measuredCount: 0, missingMovies: [], runningJobs: [running], failedJobs: [], scanPaths: [], outputDir: '', ondismiss: () => {}, ongoto: () => {}, onopenmovie: () => {} })
+    const { container } = render(OverviewPage, { movies: [] as Movie[], history: [running], status: null, targetVmaf: 96, savedTotalGb: 0, measuredCount: 0, missingMovies: [], runningJobs: [running], runningProgress: progressStub as never, failedJobs: [], scanPaths: [], outputDir: '', ondismiss: () => {}, ongoto: () => {}, onopenmovie: () => {} })
     const text = (container.textContent ?? '').replace(/\s+/g, ' ')
-    expect(text).toContain('working')
-    expect(text).not.toContain('working…')
+    expect(text).toContain('Encode')
+    expect(text).toContain('30.5%')
+    expect(text).not.toContain('starting…')
     progressStub = null
   })
   it('freezes its ETA when the data goes stale (issue #629)', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-25T12:00:00Z'))
     const running = job({ started_at: '2026-10-25T10:00:00Z' })
-    progressStub = { percent: 50, movie: 'a.mkv', detail: null }
+    progressStub = {
+      stage: 'encode',
+      movie: 'a.mkv',
+      path: '/m/a.mkv',
+      encode: { percent: 50, fps: null, avg_fps: null, eta_seconds: 7200 },
+      etaSeconds: 7200,
+    }
     const props = {
       movies: [movie()],
       history: [running],
@@ -440,7 +463,11 @@ describe('OverviewPage VMAF display (issue #599)', () => {
       stale: true,
       runningJobs: [job({ started_at: '2026-10-25T10:00:00Z' })],
     })
-    expect(container.querySelector('.running')!.textContent).toBe(live)
+    const stale = container.querySelector('.running')!.textContent
+    expect(stale).toContain('stale')
+    // the ETA text is frozen: the countdown did not move while stale
+    const left = (text: string | null) => text?.match(/about [^·]+ left/)?.[0]
+    expect(left(stale)).toBe(left(live))
     progressStub = null
     vi.useRealTimers()
   })

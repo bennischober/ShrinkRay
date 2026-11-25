@@ -103,7 +103,8 @@ function outcome(id: number): Record<string, unknown> {
 /** `busy`: one file mid-CRF-search, the next queued, 40 queued files, 300
  * finished jobs with mixed outcomes and a 2 000-title library. */
 export function busy(): Fixture {
-  const jobs: Job[] = [job(1, 'running', 'crf-search', 3)]
+  const jobs: Job[] = [job(1, 'running', 'encode', 3)]
+  jobs[0].payload = { paths: ['/media/Filme/Titel 0 (2000).mkv'] }
   for (let i = 2; i <= 41; i += 1) jobs.push(job(i, 'queued', 'encode', 0))
   for (let i = 42; i <= 341; i += 1) {
     const finished = job(i, i % 9 === 0 ? 'failed' : 'done', i % 4 === 0 ? 'plan' : 'encode', i)
@@ -181,13 +182,86 @@ export function busy(): Fixture {
       plan: null,
     },
     events: [
-      { job_id: 1, stage: 'decision', detail: 'eligible: h264 1080p', movie: 'Titel 1 (2020)', percent: 0 },
-      { job_id: 1, stage: 'crf-search', detail: 'probe crf 32', movie: 'Titel 1 (2020)', percent: 20 },
-      { job_id: 1, stage: 'crf-search', detail: 'probe crf 28', movie: 'Titel 1 (2020)', percent: 45 },
-      { job_id: 1, stage: 'crf-search', detail: 'probe crf 30', movie: 'Titel 1 (2020)', percent: 60 },
-      { job_id: 1, stage: 'encode', detail: 'encoding at crf 30', movie: 'Titel 1 (2020)', percent: 70 },
-      { job_id: 1, stage: 'encode', detail: 'encoding at crf 30', movie: 'Titel 1 (2020)', percent: 88 },
-      { job_id: 1, stage: 'done', detail: 'vmaf 96.4', movie: 'Titel 1 (2020)', percent: 100 },
+      {
+        job_id: 1,
+        stage_job_id: 2,
+        v: 1,
+        stage: 'decision',
+        run: { done: 0, total: 12 },
+        file: { movie: first.name, path: first.path, stage: 'decision', step: 1, steps: 7 },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 2,
+        v: 1,
+        stage: 'bars',
+        file: { stage: 'bars', step: 2 },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 2,
+        v: 1,
+        stage: 'samples',
+        file: { stage: 'samples', step: 3 },
+        sample: { index: 1, count: 1 },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 2,
+        v: 1,
+        stage: 'crf-search',
+        file: { stage: 'crf-search', step: 4 },
+        target_vmaf: 96,
+        probe: {
+          index: 1,
+          count: 4,
+          crf: 30,
+          vmaf: 94.8,
+          predicted_bytes: null,
+          passed: false,
+        },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 2,
+        v: 1,
+        stage: 'crf-search',
+        file: { stage: 'crf-search', step: 4 },
+        target_vmaf: 96,
+        probe: {
+          index: 2,
+          count: 4,
+          crf: 24,
+          vmaf: 96.6,
+          predicted_bytes: null,
+          passed: true,
+        },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 2,
+        v: 1,
+        stage: 'crf-search',
+        file: { stage: 'crf-search', step: 4 },
+        target_vmaf: 96,
+        chosen: { crf: 24, vmaf: 96.6, predicted_bytes: 1_400_000_000, reason: null },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 2,
+        v: 1,
+        stage: 'encode',
+        file: { stage: 'encode', step: 5 },
+        encode: { percent: 70, fps: 12.3, avg_fps: 12.1, eta_seconds: 60 },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 2,
+        v: 1,
+        stage: 'encode',
+        file: { stage: 'encode', step: 5 },
+        encode: { percent: 88, fps: 12.3, avg_fps: 12.1, eta_seconds: 60 },
+      },
     ],
   }
 }

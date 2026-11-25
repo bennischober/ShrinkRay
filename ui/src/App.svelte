@@ -20,7 +20,7 @@
   import ConfigPage from './lib/pages/ConfigPage.svelte'
   import RetainedPage from './lib/pages/RetainedPage.svelte'
   import MovieDetailPage from './lib/pages/MovieDetailPage.svelte'
-  import { connectEvents, eventsConnected, progressFor, resetEvents } from './lib/progress.svelte'
+  import { connectEvents, eventsConnected, fileProgressFor, resetEvents } from './lib/progress.svelte'
   import { deriveConnection, freshnessText, POLL_ACTIVE, POLL_HIDDEN, POLL_IDLE } from './lib/connection'
 
   type Page = 'overview' | 'library' | 'jobs' | 'retained' | 'config'
@@ -402,7 +402,7 @@
     dismissed = new Set([...dismissed, id])
   }
   const runningJob = $derived(runningJobs.find((j) => j.state === 'running') ?? null)
-  const runningProgress = $derived(runningJob !== null ? progressFor(runningJob.id) : null)
+  const runningProgress = $derived(runningJob !== null ? fileProgressFor(runningJob.id) : null)
 
   const missingMovies = $derived(movies.filter((m) => m.missing))
 
@@ -566,6 +566,8 @@
         movie={detailMovie}
         {targetVmaf}
         allJobs={history}
+        {runningProgress}
+        stale={connectionState === 'stale'}
         revealAvailable={status?.reveal_available ?? false}
         onclose={closeDetail}
         onjobs={() => goto('jobs')}
@@ -582,6 +584,7 @@
           measuredCount={page === 'overview' ? measuredCount : 0}
           missingMovies={page === 'overview' ? missingMovies : NO_MOVIES}
           runningJobs={page === 'overview' ? runningJobs : NO_JOBS}
+          runningProgress={page === 'overview' ? runningProgress : null}
           failedJobs={page === 'overview' ? failedJobs : NO_JOBS}
           scanPaths={page === 'overview' ? scanPaths : NO_PATHS}
           outputDir={page === 'overview' ? outputDir : ''}
@@ -597,8 +600,7 @@
           movies={page === 'library' ? movies : NO_MOVIES}
           {selectedPaths}
           {targetVmaf}
-          runningMovie={page === 'library' ? (runningProgress?.movie ?? null) : null}
-          runningPercent={page === 'library' ? (runningProgress?.percent ?? null) : null}
+          runningProgress={page === 'library' ? runningProgress : null}
           plannedPaths={
             page === 'library'
               ? planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)
@@ -633,6 +635,8 @@
       <div class="pages" class:hidden={page !== 'jobs'}>
         <JobsPage
           history={page === 'jobs' ? history : NO_JOBS}
+          movies={page === 'jobs' ? movies : NO_MOVIES}
+          {targetVmaf}
           stale={connectionState === 'stale'}
           onopenMovie={(p) => openDetailFromJobs(p)}
         />

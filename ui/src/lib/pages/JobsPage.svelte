@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
-  import { bytes, crf, elapsedSeconds, etaShort, groupJobs, isStageRow, kindWord, progressLabel, relative, remainingSeconds, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
-  import { progressFor } from '../progress.svelte'
+  import { humanizeError, failedOutcomeNote, type Job, type JobOutcome, type Movie } from '../api'
+  import { bytes, crf, etaShort, groupJobs, isStageRow, kindWord, relative, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
+  import { fileProgressFor, progressEta } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
   import PageHeader from '../components/PageHeader.svelte'
-  import ProgressBar from '../components/ProgressBar.svelte'
+  import QueueOutlook from '../components/QueueOutlook.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
+  import WorkProgress from '../components/WorkProgress.svelte'
   import type { Tone } from '../components/tone'
 
   /** The run log as an event log: every job with its timestamps, wall
@@ -14,10 +15,15 @@
 
   let {
     history,
+    movies = [],
+    targetVmaf = 96,
     onopenMovie,
     stale = false,
   }: {
     history: Job[]
+    /** the library, for the queue outlook's measured pace and source sizes */
+    movies?: Movie[]
+    targetVmaf?: number
     /** Open a movie's detail page (single-movie jobs link to their title). */
     onopenMovie: (path: string) => void
     /** The shell's data is no longer current: the clock stops so a frozen
@@ -34,17 +40,7 @@
     return paths?.length === 1 ? paths[0] : null
   }
 
-  const progress = (job: Job) => progressFor(job.id)
-
-  /** How much of the job's work is done, as a fraction: the final encode reports
-   * a frame percent, a CRF search reports a sample count (`done`/`total`, #690).
-   * Null when neither is known, so the row states no estimate. */
-  function workFraction(p: { percent?: number; done?: number; total?: number | null } | null): number | null {
-    if (!p) return null
-    if (p.done != null && p.total != null && p.total > 0) return p.done / p.total
-    if (p.percent != null) return p.percent / 100
-    return null
-  }
+  const progress = (job: Job) => fileProgressFor(job.id)
 
   let now = $state(Date.now())
   $effect(() => {
@@ -214,7 +210,7 @@
               tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'warn' ? 'work' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
-            <span class="dur" title={job.state === 'running' ? 'time left, estimated from the work done in this step' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(progress(job)?.elapsed ?? elapsedSeconds(job.started_at, new Date(now)), workFraction(progress(job)))) || '…') : ''}</span>
+            <span class="dur" title={job.state === 'running' ? 'time left, from the encoder or the measured rate' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(progressEta(progress(job))) || '…') : ''}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}
@@ -224,7 +220,7 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <ProgressBar percent={p?.percent ?? null} stale={stale} stage={progressLabel(p?.stage, p?.movie, p?.detail, p?.percent)} />
+            <WorkProgress progress={p} {stale} detail {targetVmaf} sourceBytes={movies.find((m) => m.path === p?.path)?.size ?? null} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}
@@ -307,6 +303,7 @@
         <span>ACTIVE</span>
         <span class="section-count mono">{activeRows.length} running or waiting</span>
       </div>
+      <QueueOutlook jobs={groups.queued} {movies} />
       {#if activeRows.length === 0}
         <div class="dim pad">nothing running — the watcher is idle</div>
       {:else}
