@@ -149,7 +149,7 @@ describe('JobsPage render', () => {
       onopenMovie: () => {},
     })
     const dur = container.querySelector('.dur')!
-    expect(dur.textContent).toContain('~1 h 30 min')
+    expect(dur.textContent).toContain('about 1 h 30 min left')
     expect(dur.textContent?.trim()).not.toBe('…')
     progressStub = null
   })
@@ -222,7 +222,7 @@ describe('JobsPage render', () => {
       onopenMovie: () => {},
     })
     // 20 min for 1 of 3 samples implies 40 min left
-    expect(container.querySelector('.dur')!.textContent).toContain('~40 min')
+    expect(container.querySelector('.dur')!.textContent).toContain('about 40 min left')
     progressStub = null
   })
 
