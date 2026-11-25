@@ -33,11 +33,24 @@ from shrinkray import __version__, db
 from shrinkray.config import Conf, encode_window_open, load_config, refresh_config
 from shrinkray.engine import watch as watch_mod
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
-from shrinkray.engine.pause import pause_reason
+from shrinkray.engine.pause import (
+    pause_reason,
+    read_pending_cancel_requests,
+    remove_cancel_request,
+)
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error, log_warning
-from shrinkray.server.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
+from shrinkray.server.jobs import (
+    Job,
+    JobKind,
+    JobQueue,
+    JobState,
+    JobWorker,
+    ProgressBus,
+    merge_job_result,
+    utc_timestamp,
+)
 from shrinkray.server.metrics import CONTENT_TYPE, render_metrics
 from shrinkray.tools.process import apply_config, apply_reloaded_config
 
@@ -62,6 +75,10 @@ _file_token: str | None = None
 # a writable volume instead of crashing on its staging directory. Env var,
 # not config.json: it is deployment shape, like SHRINKRAY_TOKEN.
 WATCH_OUTPUT_ENV = "SHRINKRAY_WATCH_OUTPUT"
+
+# how many times one row may be re-queued after an interruption (issue #622):
+# a crash loop must not repeat forever
+MAX_RESUME_ATTEMPTS = 3
 
 _T = TypeVar("_T")
 
@@ -367,9 +384,9 @@ class AppState:
     def __init__(self, db_file: Path) -> None:
         """Initializes the app state.
 
-        Jobs left 'running' by a previous app instance are marked failed
-        (interrupted): the worker is single-threaded, so a running state in
-        the database without a live worker is stale by definition.
+        Jobs left 'running' by a previous app instance are marked interrupted
+        and resumed on boot: the worker is single-threaded, so a running state
+        in the database without a live worker is stale by definition.
 
         Args:
             db_file (Path): The sqlite database file.
@@ -416,32 +433,126 @@ class AppState:
             return fn(self.connection)
 
     def _recover_stale_jobs(self) -> None:
-        """Marks jobs left running by a previous app instance as failed.
+        """Marks jobs left running by a previous app instance as interrupted.
 
-        The result column stays NULL (live progress was never persisted):
-        the row becomes a plain failed-trail entry.
+        The row is not failed: it becomes ``interrupted``. The boot resume
+        step re-queues a folder row; a per-file stage row stays history. The
+        result column is MERGED, never replaced - it carries the resume ledger
+        (``resumed_at``/``resume_count``) an earlier boot wrote, and a crash
+        loop must not wipe it (issue #622).
         """
         # announce each recovered row (issue #471): the one event that
         # explains why the previous run's work stopped is the one event the
         # transcript omitted
         rows = self.connection.execute(
-            "SELECT id, kind, started_at FROM jobs WHERE state = ?", ("running",)
+            "SELECT id, kind, started_at, result FROM jobs WHERE state = ?", ("running",)
         ).fetchall()
+        interrupted_at = utc_timestamp()
         for row in rows:
             log(
                 f"Recovering job #{row['id']} ({row['kind']}) started "
                 f"{row['started_at']}: interrupted by app restart"
             )
-        self.connection.execute(
-            "UPDATE jobs SET state = ?, error = ?, result = NULL, "
-            "finished_at = datetime('now') WHERE state = ?",
-            (
-                "failed",
-                "interrupted by app restart",
-                "running",
-            ),
-        )
+            result = json.loads(row["result"]) if row["result"] else None
+            merged = merge_job_result(
+                result,
+                {
+                    "interrupted_at": interrupted_at,
+                    "interrupted_reason": "interrupted by app restart",
+                },
+            )
+            self.connection.execute(
+                "UPDATE jobs SET state = ?, error = NULL, result = ?, "
+                "finished_at = datetime('now') WHERE id = ?",
+                (
+                    JobState.INTERRUPTED.value,
+                    json.dumps(merged),
+                    row["id"],
+                ),
+            )
         self.connection.commit()
+
+    def resume_interrupted_jobs(self) -> list[int]:
+        """Re-queues the jobs an interruption left behind (issue #622).
+
+        Runs at boot after the stale-row recovery and before the worker starts,
+        so the resumed row is the first work the app does. The same row keeps
+        its id and only its terminal bookkeeping is cleared: a queued row has no
+        error, finish or start time, and the result JSON keeps the resume
+        ledger (``resumed_at``/``resume_count``) with one more attempt. The
+        original id order restores the scan -> plan -> encode chain ahead of
+        anything enqueued later.
+
+        A pending cancel request from the terminal UI's surface is applied
+        instead: the operator's intent survives the restart and the row stays
+        cancelled. A per-file stage row (payload carries ``pipeline``) is
+        history, never resumed. A row at MAX_RESUME_ATTEMPTS stays interrupted
+        with a note in its result JSON, so a crash loop cannot repeat forever.
+
+        Returns:
+            list[int]: The re-queued job ids, oldest first.
+        """
+        state_dir = self.db_file.resolve().parent
+        try:
+            pending_cancels = set(read_pending_cancel_requests(state_dir))
+        except OSError as e:
+            # the cancel surface must not stop the boot: the request stays on
+            # disk for the poller, and the interrupted rows still resume
+            log_error(f"could not read pending cancel requests: {e}")
+            pending_cancels = set()
+        resumed: list[int] = []
+        with self.db_lock:
+            for job in self.queue.interrupted_jobs():
+                job_id = job.id
+                if job_id is None:  # a stored row always has an id
+                    continue
+                if job.payload.get("pipeline"):
+                    if job_id in pending_cancels:
+                        remove_cancel_request(state_dir, job_id)
+                        log(
+                            f"Cancel request for interrupted stage job #{job_id} "
+                            "consumed: stage rows are never resumed"
+                        )
+                    continue
+                if job_id in pending_cancels:
+                    self.queue.mark_cancelled(job, job.result)
+                    remove_cancel_request(state_dir, job_id)
+                    log(
+                        f"Cancel request for interrupted job #{job_id} applied: "
+                        "the row is cancelled"
+                    )
+                    continue
+                result = dict(job.result or {})
+                count = int(result.get("resume_count", 0))
+                if count >= MAX_RESUME_ATTEMPTS:
+                    result["resume_cap_reached"] = True
+                    self.connection.execute(
+                        "UPDATE jobs SET result = ? WHERE id = ?",
+                        (json.dumps(result), job_id),
+                    )
+                    log(
+                        f"Interrupted job #{job_id} ({job.kind.value}) left "
+                        f"interrupted: the resume cap ({MAX_RESUME_ATTEMPTS}) was reached"
+                    )
+                    continue
+                result["resumed_at"] = utc_timestamp()
+                result["resume_count"] = count + 1
+                self.connection.execute(
+                    "UPDATE jobs SET state = ?, error = NULL, finished_at = NULL, "
+                    "started_at = NULL, result = ? WHERE id = ?",
+                    (JobState.QUEUED.value, json.dumps(result), job_id),
+                )
+                log(
+                    f"Resuming interrupted job #{job_id} ({job.kind.value}) started "
+                    f"{job.started_at}: re-queued (resume {count + 1}/{MAX_RESUME_ATTEMPTS})"
+                )
+                resumed.append(job_id)
+            self.connection.commit()
+        if resumed:
+            # the queue loaded its pending list in __init__, before these rows
+            # were queued again: reload it so take_next sees them in id order
+            self.queue._load_pending()
+        return resumed
 
     def shutdown(self) -> None:
         """Stops the worker and closes the database.
@@ -1676,6 +1787,10 @@ def run_app(
     # effect
     apply_config(load_config(config_file=config_file))
     _recover_interrupted_swaps()
+    # the resume runs before the worker and before the backlog (issue #622):
+    # an interrupted row is re-queued as the first work of this start, with no
+    # dependence on app.auto_backlog
+    state.resume_interrupted_jobs()
     state.worker.start()
     auto_backlog(state, list(_allowed_roots), enabled=load_config().auto_backlog)
     watch_output = os.environ.get(WATCH_OUTPUT_ENV, "") or None
@@ -1842,9 +1957,11 @@ def auto_backlog(state: "AppState", roots: list[Path], *, enabled: bool) -> list
     the queue is FIFO and the worker is single-threaded, so they run in this
     order by construction. On a restart the dedupe (issue #626) keeps an
     identical pending job (same kind and payload, queued or already running)
-    instead of enqueueing it a second time. A finished file is not re-encoded
-    either, because the encode job consults the database and skips what it
-    already recorded.
+    instead of enqueueing it a second time. An interrupted job does not depend
+    on this switch: the boot resume step re-queues the same row before this
+    backlog runs, with or without `app.auto_backlog` (issue #622). A finished
+    file is not re-encoded either, because the encode job consults the
+    database and skips what it already recorded.
 
     Args:
         state (AppState): The app state (queue and validated roots).

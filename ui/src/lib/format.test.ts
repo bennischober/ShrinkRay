@@ -144,6 +144,7 @@ describe('stateWord', () => {
     expect(stateWord('partial')).toBe('Partial')
     expect(stateWord('failed')).toBe('Failed')
     expect(stateWord('cancelled')).toBe('Cancelled')
+    expect(stateWord('interrupted')).toBe('Interrupted')
   })
 
   it('keeps an unknown state visible instead of blanking it', () => {

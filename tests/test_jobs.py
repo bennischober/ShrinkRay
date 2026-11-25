@@ -1833,7 +1833,9 @@ class TestJobs(unittest.TestCase):
         """Issue #431 (review round 2, finding 1): the measurement children run
         with the stall watchdog opted out, so a shutdown must set the running
         job's cancel event - the only kill path they have. stop() sets it
-        while the job is executing, and _execute clears it in its finally."""
+        while the job is executing, and _execute clears it in its finally.
+        Issue #622: the stop is a shutdown, not an operator cancel, so the row
+        reads interrupted and the next boot can resume it."""
         root = Path(self.tmp.name)
         job = self.queue.enqueue(
             jobs.Job(
@@ -1893,13 +1895,14 @@ class TestJobs(unittest.TestCase):
         )
         self.assertIsNone(worker._running_cancel, "the finally must clear the running event")
         reloaded = self.queue.get(job.id)
-        self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+        self.assertEqual(reloaded.state, jobs.JobState.INTERRUPTED)
 
     def test_worker_request_stop_is_non_blocking_and_reaches_the_child(self):
         """Issue #431 (review round 6, finding 2): the server's exit hook runs
         inside a signal handler, so it must arm the shutdown without joining -
         request_stop sets the flags and returns; the worker ends itself and the
-        running job's child terminates on its cancel event."""
+        running job's child terminates on its cancel event. The row reads
+        interrupted (issue #622), not cancelled."""
         root = Path(self.tmp.name)
         job = self.queue.enqueue(
             jobs.Job(
@@ -1942,7 +1945,67 @@ class TestJobs(unittest.TestCase):
         self.assertFalse(worker._thread.is_alive(), "the worker did not end itself")
         self.assertIsNone(worker._running_cancel, "the finally must clear the running event")
         reloaded = self.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.INTERRUPTED)
+
+    def test_an_operator_cancel_whose_unwind_outlives_a_shutdown_stays_cancelled(self):
+        """Issue #622: the operator mark is read BEFORE the shutdown flag. A
+        cancel request accepted on the running job, then a shutdown while the
+        engine still unwinds, is still the operator's cancel - never an
+        interruption that the next boot would resume."""
+        from shrinkray.tools.process import Cancelled
+
+        state = Path(self.tmp.name)
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_scan(job, connection, cancel, progress=None):
+            started.set()
+            self.assertTrue(cancel.wait(5.0), "the cancel event was never set")
+            release.wait(5.0)
+            raise Cancelled("operator cancel, then shutdown")
+
+        with mock.patch.object(jobs, "execute_scan", side_effect=slow_scan):
+            runner = threading.Thread(target=worker._execute, args=(taken,))
+            runner.start()
+            self.assertTrue(started.wait(5.0), "the job never started")
+            pause.write_cancel_request(state, taken.id)
+            worker._poll_cancel_requests()
+            # the operator cancel is accepted while the unwind is still
+            # running; the shutdown then lands before the engine raises
+            worker.request_stop()
+            release.set()
+            runner.join(timeout=10.0)
+        self.assertFalse(runner.is_alive())
+        reloaded = self.queue.get(job.id)
         self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+
+    def test_the_end_line_says_interrupted_for_a_shutdown_cancelled_job(self):
+        """Issue #622: docker logs must tell a shutdown from an operator
+        cancel, so the end line names the interruption."""
+        from loguru import logger
+
+        from shrinkray.tools.process import Cancelled
+
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue)
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            worker._stop.set()  # the flag worker.stop()/request_stop() sets
+            with mock.patch.object(jobs, "execute_scan", side_effect=Cancelled("stop")):
+                worker._execute(taken)
+        finally:
+            logger.remove(sink_id)
+            worker._stop.clear()
+        text = "".join(captured)
+        self.assertIn(f"Job #{job.id} (scan) finished in", text, text)
+        self.assertIn(", interrupted", text, text)
+        self.assertNotIn("cancelled", text, text)
+        self.assertEqual(self.queue.get(job.id).state, jobs.JobState.INTERRUPTED)
 
     def test_next_poll_interval_helper_exists(self):
         # guard the cross-module dependency used by watch mode
@@ -2218,6 +2281,20 @@ class TestTranscriptBoundaries(unittest.TestCase):
         self.assertEqual(
             counts({"movies": 3, "errors": ["a", "b"]}),
             "3 scanned, 2 errors",
+        )
+        # issue #622: a shutdown-cancelled job's cancelled items read
+        # interrupted, so docker logs tell the two outcomes apart
+        self.assertEqual(
+            counts(
+                {
+                    "outcomes": [
+                        {"state": "encoded"},
+                        {"state": "cancelled"},
+                    ]
+                },
+                interrupted=True,
+            ),
+            "1 encoded, 0 skipped, 0 failed, 1 interrupted",
         )
 
 

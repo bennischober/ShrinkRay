@@ -1,5 +1,6 @@
 """Database layer tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
+import json
 import os
 import sqlite3
 import tempfile
@@ -3195,6 +3196,255 @@ class TestInPlaceAuditTrail(unittest.TestCase):
         self.assertIsNone(row["output_file"])
 
 
+class TestInterruptedJobResume(unittest.TestCase):
+    """Issue #622: a shutdown or crash interruption is its own state and the
+    next boot resumes the same row without app.auto_backlog. An operator cancel
+    is never resumed; a stage row is history; a resume cap stops a crash loop."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db_file = Path(self.tmp.name) / "metadata.db"
+
+    def _seed(
+        self,
+        kind: jobs.JobKind,
+        payload: dict,
+        *,
+        state: str,
+        result: dict | None = None,
+        started_at: str | None = None,
+    ) -> int:
+        connection = db.connect(self.db_file)
+        try:
+            queue = JobQueue(connection)
+            job = queue.enqueue(jobs.Job(kind=kind, payload=payload))
+            connection.execute(
+                "UPDATE jobs SET state = ?, started_at = ?, result = ? WHERE id = ?",
+                (
+                    state,
+                    started_at,
+                    json.dumps(result) if result is not None else None,
+                    job.id,
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        return job.id
+
+    def _boot(self):
+        from shrinkray.server import app as app_module
+
+        state = app_module.AppState(self.db_file)
+        self.addCleanup(state.shutdown)
+        return state
+
+    def test_a_shutdown_row_is_re_queued_with_its_id_and_clean_bookkeeping(self) -> None:
+        """The same row is re-queued: its id is kept, the terminal
+        bookkeeping is cleared, and a finished attempt leaves error NULL."""
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"path": str(Path(self.tmp.name) / "movies")},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+        queued = state.queue.get(job_id)
+        self.assertEqual(queued.id, job_id)
+        self.assertEqual(queued.state, jobs.JobState.QUEUED)
+        self.assertIsNone(queued.error)
+        self.assertIsNone(queued.finished_at)
+        self.assertIsNone(queued.started_at)
+        taken = state.queue.take_next()
+        self.assertEqual(taken.id, job_id)
+        with mock.patch(
+            "shrinkray.server.jobs.execute_scan",
+            return_value={"movies": 0, "categories": 0, "errors": []},
+        ):
+            state.worker._execute(taken)
+        finished = state.queue.get(job_id)
+        self.assertEqual(finished.state, jobs.JobState.DONE)
+        self.assertIsNone(finished.error)
+
+    def test_an_operator_cancelled_row_does_not_resume(self) -> None:
+        connection = db.connect(self.db_file)
+        try:
+            queue = JobQueue(connection)
+            job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+            self.assertTrue(queue.cancel(job.id))
+        finally:
+            connection.close()
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        reloaded = state.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+
+    def test_the_resumed_row_is_taken_before_a_newer_queued_row(self) -> None:
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"path": "/library"},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        connection = db.connect(self.db_file)
+        try:
+            newer = JobQueue(connection).enqueue(
+                jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["/newer"]})
+            )
+        finally:
+            connection.close()
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+        first = state.queue.take_next()
+        second = state.queue.take_next()
+        self.assertEqual(first.id, job_id)
+        self.assertEqual(second.id, newer.id)
+
+    def test_a_resumed_row_dedupes_against_the_boot_backlog(self) -> None:
+        """Issue #626: the resumed scan has the backlog's kind and payload,
+        so the backlog keeps it instead of enqueueing a second one."""
+        from shrinkray.server import app as app_module
+
+        root = Path(self.tmp.name) / "library"
+        root.mkdir()
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"paths": [str(root)]},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+        self.assertEqual(app_module.auto_backlog(state, [root], enabled=True), ["plan", "encode"])
+        scans = [job for job in state.queue.queued_jobs() if job.kind is jobs.JobKind.SCAN]
+        self.assertEqual([job.id for job in scans], [job_id])
+
+    def test_an_interrupted_stage_row_is_not_re_queued(self) -> None:
+        job_id = self._seed(
+            jobs.JobKind.CRF_SEARCH,
+            {"paths": ["/m/a.mkv"], "pipeline": "plan"},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        reloaded = state.queue.get(job_id)
+        self.assertEqual(reloaded.state, jobs.JobState.INTERRUPTED)
+        self.assertIsNone(state.queue.take_next())
+
+    def test_a_crash_loop_accumulates_the_resume_count_and_then_stops(self) -> None:
+        """Three hard-killed attempts prove the recovery merge preserves the
+        ledger; the fourth boot hits the cap and leaves the row interrupted."""
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"path": "/library"},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        for expected in (1, 2, 3):
+            state = self._boot()
+            self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+            queued = state.queue.get(job_id)
+            self.assertEqual(queued.result["resume_count"], expected)
+            # the attempt is taken and the process dies before a terminal
+            # write: the running row is the hard kill's leftover
+            self.assertEqual(state.queue.take_next().id, job_id)
+            state.shutdown()
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        capped = state.queue.get(job_id)
+        self.assertEqual(capped.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(capped.result["resume_count"], 3)
+        self.assertTrue(capped.result["resume_cap_reached"])
+
+    def test_a_graceful_stop_preserves_the_resume_ledger(self) -> None:
+        """The interrupted write itself must merge, not replace, the result:
+        three docker-stop cycles accumulate the ledger and the cap fires."""
+        from shrinkray.tools.process import Cancelled
+
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"path": "/library"},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        for expected in (1, 2, 3):
+            state = self._boot()
+            self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+            taken = state.queue.take_next()
+            self.assertEqual(taken.id, job_id)
+            state.worker._stop.set()
+            with mock.patch(
+                "shrinkray.server.jobs.execute_scan",
+                side_effect=Cancelled("docker stop"),
+            ):
+                state.worker._execute(taken)
+            interrupted = state.queue.get(job_id)
+            self.assertEqual(interrupted.state, jobs.JobState.INTERRUPTED)
+            self.assertEqual(interrupted.result["resume_count"], expected)
+            state.shutdown()
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        capped = state.queue.get(job_id)
+        self.assertEqual(capped.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(capped.result["resume_count"], 3)
+        self.assertTrue(capped.result["resume_cap_reached"])
+
+    def test_a_row_at_the_resume_cap_stays_interrupted(self) -> None:
+        job_id = self._seed(
+            jobs.JobKind.PLAN,
+            {"paths": ["/library"]},
+            state="interrupted",
+            started_at="2026-01-01 00:00:00",
+            result={"resumed_at": "2026-01-01 00:00:00", "resume_count": 3},
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        capped = state.queue.get(job_id)
+        self.assertEqual(capped.state, jobs.JobState.INTERRUPTED)
+        self.assertTrue(capped.result["resume_cap_reached"])
+        self.assertIsNone(state.queue.take_next())
+
+    def test_a_pending_cancel_request_wins_over_the_resume(self) -> None:
+        from shrinkray.engine import pause
+
+        job_id = self._seed(
+            jobs.JobKind.PLAN,
+            {"paths": ["/library"]},
+            state="interrupted",
+            started_at="2026-01-01 00:00:00",
+            result={"resumed_at": "2026-01-01 00:00:00", "resume_count": 1},
+        )
+        request = pause.write_cancel_request(Path(self.tmp.name), job_id)
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        cancelled = state.queue.get(job_id)
+        self.assertEqual(cancelled.state, jobs.JobState.CANCELLED)
+        self.assertFalse(request.exists())
+
+    def test_a_hard_killed_running_row_is_recovered_and_resumed(self) -> None:
+        """A process killed before its terminal write leaves the row running;
+        the next boot marks it interrupted and re-queues it. The stale encode
+        lock the killed process left is the expected busy-skip (guard_encodes
+        raises at once, never waits), so the resumed attempt is expected to
+        record a skipped outcome rather than a second writer; this test pins the
+        recovery and resume, not the lock's own timing."""
+        job_id = self._seed(
+            jobs.JobKind.ENCODE,
+            {"paths": ["/library/a.mkv"], "quality": True},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+        resumed = state.queue.get(job_id)
+        self.assertEqual(resumed.state, jobs.JobState.QUEUED)
+        self.assertEqual(resumed.result["resume_count"], 1)
+        self.assertEqual(state.queue.take_next().id, job_id)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -3218,8 +3468,9 @@ class TestStaleJobRecoveryAnnouncement(unittest.TestCase):
         queue = JobQueue(connection)
         job = queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["D:/Movies"]}))
         connection.execute(
-            "UPDATE jobs SET state = 'running', started_at = '2026-01-01 00:00:00' WHERE id = ?",
-            (job.id,),
+            "UPDATE jobs SET state = 'running', started_at = '2026-01-01 00:00:00', "
+            "result = ? WHERE id = ?",
+            (json.dumps({"resumed_at": "2026-01-01 00:00:00", "resume_count": 2}), job.id),
         )
         connection.commit()
         connection.close()
@@ -3227,9 +3478,15 @@ class TestStaleJobRecoveryAnnouncement(unittest.TestCase):
         sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
         try:
             state = AppState(db_file)
+            recovered = state.queue.get(job.id)
         finally:
             logger.remove(sink_id)
         state.shutdown()
         text = "".join(captured)
         self.assertIn(f"Recovering job #{job.id} (plan)", text, text)
         self.assertIn("interrupted by app restart", text)
+        # issue #622: the row is interrupted, not failed, and the resume
+        # ledger it already carried survives the recovery write
+        self.assertEqual(recovered.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(recovered.result["resume_count"], 2)
+        self.assertEqual(recovered.result["interrupted_reason"], "interrupted by app restart")
