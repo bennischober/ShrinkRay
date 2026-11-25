@@ -524,8 +524,10 @@ Example [config.json](config.json):
 > **`app.auto_backlog` is off by default.** Set it to `true` (the container sets it) and a
 > started app enqueues the backlog for every allowlisted root with no client: a scan, then a
 > plan, then an encode of everything the plan marked worth encoding. The queue is FIFO and the
-> worker single-threaded, so the order holds by construction; a restart does not re-encode
-> finished files, because the database already records them as done.
+> worker single-threaded, so the order holds by construction. A restart does not stack a second
+> copy: an identical pending job (same kind and payload) is kept, not enqueued again
+> (issue #626), and finished files are not re-encoded either, because the database already
+> records them as done.
 
 Three keys named "preset" with different meanings — the distinction:
 `handbrake.preset` is a legacy key the measured pipeline no longer reads
