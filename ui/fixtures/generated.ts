@@ -103,7 +103,17 @@ function outcome(id: number): Record<string, unknown> {
 /** `busy`: one file mid-CRF-search, the next queued, 40 queued files, 300
  * finished jobs with mixed outcomes and a 2 000-title library. */
 export function busy(): Fixture {
-  const jobs: Job[] = [job(1, 'running', 'crf-search', 3)]
+  const jobs: Job[] = [job(1, 'running', 'encode', 3)]
+  jobs[0].payload = { paths: ['/media/Filme/Titel 0 (2000).mkv'] }
+  // #602's real topology: the folder job runs and its per-file stage row is
+  // also RUNNING with a higher id, so all_jobs (newest-first) returns the
+  // stage row first. The folder job owns the file model (issue #631).
+  const stageRow = job(1000, 'running', 'crf-search', 0)
+  stageRow.payload = {
+    paths: ['/media/Filme/Titel 0 (2000).mkv'],
+    pipeline: 'encode',
+  }
+  jobs.unshift(stageRow)
   for (let i = 2; i <= 41; i += 1) jobs.push(job(i, 'queued', 'encode', 0))
   for (let i = 42; i <= 341; i += 1) {
     const finished = job(i, i % 9 === 0 ? 'failed' : 'done', i % 4 === 0 ? 'plan' : 'encode', i)
@@ -181,14 +191,141 @@ export function busy(): Fixture {
       plan: null,
     },
     events: [
-      { job_id: 1, stage: 'decision', detail: 'eligible: h264 1080p', movie: 'Titel 1 (2020)', percent: 0 },
-      { job_id: 1, stage: 'crf-search', detail: 'probe crf 32', movie: 'Titel 1 (2020)', percent: 20 },
-      { job_id: 1, stage: 'crf-search', detail: 'probe crf 28', movie: 'Titel 1 (2020)', percent: 45 },
-      { job_id: 1, stage: 'crf-search', detail: 'probe crf 30', movie: 'Titel 1 (2020)', percent: 60 },
-      { job_id: 1, stage: 'encode', detail: 'encoding at crf 30', movie: 'Titel 1 (2020)', percent: 70 },
-      { job_id: 1, stage: 'encode', detail: 'encoding at crf 30', movie: 'Titel 1 (2020)', percent: 88 },
-      { job_id: 1, stage: 'done', detail: 'vmaf 96.4', movie: 'Titel 1 (2020)', percent: 100 },
+      {
+        job_id: 1,
+        stage_job_id: 1000,
+        v: 1,
+        stage: 'decision',
+        run: { done: 0, total: 12 },
+        file: { movie: first.name, path: first.path, stage: 'decision', step: 1, steps: 7 },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 1000,
+        v: 1,
+        stage: 'bars',
+        file: { stage: 'bars', step: 2 },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 1000,
+        v: 1,
+        stage: 'samples',
+        file: { stage: 'samples', step: 3 },
+        sample: { index: 1, count: 1 },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 1000,
+        v: 1,
+        stage: 'crf-search',
+        file: { stage: 'crf-search', step: 4 },
+        target_vmaf: 96,
+        probe: {
+          index: 1,
+          count: 4,
+          crf: 30,
+          vmaf: 94.8,
+          predicted_bytes: null,
+          passed: false,
+        },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 1000,
+        v: 1,
+        stage: 'crf-search',
+        file: { stage: 'crf-search', step: 4 },
+        target_vmaf: 96,
+        probe: {
+          index: 2,
+          count: 4,
+          crf: 24,
+          vmaf: 96.6,
+          predicted_bytes: null,
+          passed: true,
+        },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 1000,
+        v: 1,
+        stage: 'crf-search',
+        file: { stage: 'crf-search', step: 4 },
+        target_vmaf: 96,
+        chosen: { crf: 24, vmaf: 96.6, predicted_bytes: 1_400_000_000, reason: null },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 1000,
+        v: 1,
+        stage: 'encode',
+        file: { stage: 'encode', step: 5 },
+        encode: { percent: 70, fps: 12.3, avg_fps: 12.1, eta_seconds: 60 },
+      },
+      {
+        job_id: 1,
+        stage_job_id: 1000,
+        v: 1,
+        stage: 'encode',
+        file: { stage: 'encode', step: 5 },
+        encode: { percent: 88, fps: 12.3, avg_fps: 12.1, eta_seconds: 60 },
+      },
     ],
+  }
+}
+
+/** `busy-history`: the busy stream plus a measured encode history (five
+ * newest real encodes at 60 s per GiB) and a 2 h encoder ETA, so the queue
+ * outlook shows a rough time and the summary a `finishes ≈ HH:MM` line
+ * (issue #631). */
+export function busyHistory(): Fixture {
+  const fixture = busy()
+  return {
+    ...fixture,
+    status: {
+      ...fixture.status,
+      recent_encodes: Array.from({ length: 5 }, () => ({
+        encode_seconds: 60,
+        input_size: 1024 ** 3,
+      })),
+    },
+    events: fixture.events.map((event) => {
+      const frame = event as { stage?: string; encode?: Record<string, unknown> }
+      if (frame.stage !== 'encode' || frame.encode == null) return event
+      return { ...frame, encode: { ...frame.encode, eta_seconds: 7200 } }
+    }),
+  }
+}
+
+/** `busy-cached`: the busy stream with every probe reused from the probe cache
+ * (cached=true, measured_at), so the UI must say "reused" instead of a fresh
+ * search (maintainer 2026-11-14, issue #631). */
+export function busyCached(): Fixture {
+  const fixture = busy()
+  const measuredAt = '2026-11-14 08:12:00'
+  return {
+    ...fixture,
+    events: fixture.events.map((event) => {
+      const frame = event as {
+        stage?: string
+        probe?: Record<string, unknown>
+        chosen?: Record<string, unknown>
+      }
+      if (frame.stage !== 'crf-search') return event
+      const next = { ...frame, source: 'cache', measured_at: measuredAt }
+      if (frame.probe) {
+        next.probe = {
+          ...frame.probe,
+          cached: true,
+          measured_at: measuredAt,
+        }
+      }
+      if (frame.chosen) {
+        next.chosen = { ...frame.chosen, source: 'cache', measured_at: measuredAt }
+      }
+      return next
+    }),
   }
 }
 

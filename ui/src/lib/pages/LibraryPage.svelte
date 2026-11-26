@@ -3,13 +3,14 @@
   import { bytes, savedPercent, vmaf } from '../format'
   import EmptyState from '../components/EmptyState.svelte'
   import PageHeader from '../components/PageHeader.svelte'
+  import WorkProgress from '../components/WorkProgress.svelte'
+  import type { FileProgressView } from '../progress.svelte'
 
   let {
     movies,
     selectedPaths,
     targetVmaf,
-    runningMovie = null,
-    runningPercent = null,
+    runningProgress = null,
     plannedPaths = [],
     planSavings = [],
     onopenmovie,
@@ -21,8 +22,7 @@
     movies: Movie[]
     selectedPaths: Set<string>
     targetVmaf: number
-    runningMovie?: string | null
-    runningPercent?: number | null
+    runningProgress?: FileProgressView | null
     plannedPaths?: string[]
     planSavings?: readonly (readonly [string, number])[]
     onopenmovie: (movie: Movie) => void
@@ -268,7 +268,7 @@
             {@const decision = decisionOf(movie)}
             <tr
               class:row-selected={selectedPaths.has(movie.path)}
-              class:in-work={runningMovie != null && movie.path === runningMovie}
+              class:in-work={runningProgress?.path != null && movie.path === runningProgress.path}
             >
               <td class="chk">
                 <input
@@ -288,8 +288,8 @@
               <td class="dim" data-label="Category">{movie.category}</td>
               <td class="mono num" data-label="Size">{bytes(movie.size)}</td>
               <td data-label="Decision">
-                {#if runningMovie != null && movie.path === runningMovie}
-                  <span class="chip progress" class:stale><span class="swatch"></span>Running {runningPercent != null ? `${runningPercent}%` : ''}{stale ? ' (stale)' : ''}</span>
+                {#if runningProgress?.path != null && movie.path === runningProgress.path}
+                  <WorkProgress progress={runningProgress} {stale} />
                 {:else}
                   {#if decision.bare}
                     <!-- bare swatch: the state stays visible to sighted users via

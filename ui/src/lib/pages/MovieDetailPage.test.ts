@@ -42,6 +42,45 @@ function job(overrides: Partial<Job> = {}): Job {
   }
 }
 
+describe('MovieDetailPage probe trail (issue #631)', () => {
+  afterEach(() => cleanup())
+
+  it('renders the persisted CRF -> VMAF trail from /api/movie', async () => {
+    vi.mocked(api.movie).mockResolvedValue({
+      file: movie(),
+      history: [],
+      plan: {
+        crf: 26,
+        achieved_vmaf: 96.2,
+        skipped_reason: null,
+        estimated_size: 10_000_000_000,
+        created_at: '2026-11-20T10:00:00Z',
+        encoder: 'svt_av1',
+        encoder_preset: '5',
+        target_vmaf: 96,
+        stale: false,
+        probes: [
+          { crf: 30, vmaf: 94.8 },
+          { crf: 24, vmaf: 96.6 },
+        ],
+      },
+    })
+    const { container } = render(MovieDetailPage, {
+      movie: movie(),
+      targetVmaf: 96,
+      allJobs: [],
+      onclose: () => {},
+      onjobs: () => {},
+    })
+    await waitFor(() => expect(container.querySelector('.probe-trail')).not.toBeNull())
+    const trail = container.querySelector('.probe-trail')!.textContent ?? ''
+    expect(trail).toContain('CRF 30')
+    expect(trail).toContain('94.8')
+    expect(trail).toContain('CRF 24')
+    expect(trail).toContain('96.6')
+  })
+})
+
 describe('MovieDetailPage provenance badge (issue #647)', () => {
   afterEach(() => cleanup())
   const encodeRec = (outputSize: number) => ({

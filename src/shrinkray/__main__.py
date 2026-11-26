@@ -473,14 +473,18 @@ def _quality_progress_callback(progress: Progress, task: "TaskID") -> Callable[[
     """
 
     def callback(data: dict) -> None:
-        if data.get("stage") == "encode" and "percent" in data:
+        stage = data.get("stage")
+        file = data.get("file") or {}
+        movie = file.get("movie", "movie")
+        encode = data.get("encode") or {}
+        if stage == "encode" and encode.get("percent") is not None:
             progress.update(
                 task,
-                description=f"Encoding '{data.get('movie', 'movie')}'",
-                completed=float(data["percent"]),
+                description=f"Encoding '{movie}'",
+                completed=float(encode["percent"]),
             )
-        elif data.get("stage") == "probe":
-            # probing now streams its steps (samples, size probe, CRF
+        elif stage in ("decision", "bars", "samples", "crf-search"):
+            # probing streams its steps (bars, samples, size probe, CRF
             # bisect) — the bar's description tracks them; its total is
             # the movie count, so only the description moves here
             progress.update(task, description=f"Probing: {data.get('detail', '...')}")

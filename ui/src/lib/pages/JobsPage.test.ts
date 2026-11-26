@@ -4,8 +4,15 @@ import JobsPage from './JobsPage.svelte'
 
 // the running row's stage comes from the live progress store: a mutable stub
 // lets one test seed it without a stream (issue #630)
-let progressStub: { percent?: number; movie?: string | null; detail?: string | null; done?: number; total?: number | null; elapsed?: number } | null = null
-vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
+let progressStub: Record<string, unknown> | null = null
+vi.mock('../progress.svelte', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../progress.svelte')>()
+  return {
+    ...actual,
+    fileProgressFor: () => progressStub,
+    progressEta: (view: { etaSeconds?: number | null } | null) => view?.etaSeconds ?? null,
+  }
+})
 import type { Job } from '../api'
 
 /** The jobs page is the audit trail — the render test pins the contract a
@@ -128,13 +135,21 @@ describe('JobsPage render', () => {
     // so the column carries the proportional estimate
     const started = new Date(Date.now() - 30 * 60_000).toISOString()
     const j = job({ state: 'running', started_at: started, finished_at: null })
-    progressStub = { percent: 25 }
+    progressStub = {
+      stage: 'encode',
+      movie: 'a.mkv',
+      path: '/m/a.mkv',
+      step: 5,
+      steps: 7,
+      encode: { percent: 25, fps: null, avg_fps: null, eta_seconds: null },
+      etaSeconds: 90 * 60,
+    }
     const { container } = render(JobsPage, {
       history: [j],
       onopenMovie: () => {},
     })
     const dur = container.querySelector('.dur')!
-    expect(dur.textContent).toContain('~1 h 30 min')
+    expect(dur.textContent).toContain('about 1 h 30 min left')
     expect(dur.textContent?.trim()).not.toBe('…')
     progressStub = null
   })
@@ -192,13 +207,22 @@ describe('JobsPage render', () => {
     // estimate from the samples already probed
     const started = new Date(Date.now() - 20 * 60_000).toISOString()
     const j = job({ kind: 'crf-search', state: 'running', started_at: started, finished_at: null })
-    progressStub = { done: 1, total: 3, detail: 'sample 2/3 (CRF 30)', elapsed: 20 * 60 }
+    progressStub = {
+      stage: 'crf-search',
+      movie: 'a.mkv',
+      path: '/m/a.mkv',
+      step: 4,
+      steps: 7,
+      probe: { index: 1, count: 3, crf: 30, vmaf: 95.0, predicted_bytes: null, passed: false },
+      probes: [],
+      etaSeconds: 40 * 60,
+    }
     const { container } = render(JobsPage, {
       history: [j],
       onopenMovie: () => {},
     })
     // 20 min for 1 of 3 samples implies 40 min left
-    expect(container.querySelector('.dur')!.textContent).toContain('~40 min')
+    expect(container.querySelector('.dur')!.textContent).toContain('about 40 min left')
     progressStub = null
   })
 
@@ -254,11 +278,19 @@ describe('JobsPage render', () => {
   })
 
   it('a running row at 30 % says it is working, not starting (issue #630)', () => {
-    progressStub = { percent: 30.46, movie: null, detail: null }
+    progressStub = {
+      stage: 'encode',
+      movie: 'a.mkv',
+      path: '/m/a.mkv',
+      step: 5,
+      steps: 7,
+      encode: { percent: 30.46, fps: null, avg_fps: null, eta_seconds: null },
+    }
     const running = job({ id: 4, state: 'running', started_at: '2026-10-24T10:00:00Z', finished_at: null, result: null })
     const { container } = render(JobsPage, { history: [running], onopenMovie: () => {} })
     const text = (container.textContent ?? '').replace(/\s+/g, ' ')
-    expect(text).toContain('working')
+    expect(text).toContain('Encode')
+    expect(text).toContain('30.5%')
     expect(text).not.toContain('starting…')
     progressStub = null
   })

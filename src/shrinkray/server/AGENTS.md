@@ -26,6 +26,72 @@ product-rule violation, not a feature.
   tick, a `: ping` every 15 s (`app.py`). Mailboxes are bounded
   (`jobs.py`, drop-oldest) and progress is never persisted.
 
+## THE PROGRESS EVENT (versioned, issue #631)
+
+One schema for every stage, built by `engine/progress.py` and mirrored in
+`ui/src/lib/api.ts`:
+
+```json
+{
+  "v": 1,
+  "stage": "decision | bars | samples | crf-search | encode | verify | swap | paused | scan",
+  "stage_job_id": 12,
+  "run": {"done": 3, "total": 12},
+  "file": {"movie": "a.mkv", "path": "/media/a.mkv", "stage": "crf-search", "step": 4, "steps": 7},
+  "probe": {"index": 2, "count": 6, "crf": 27, "vmaf": 95.9, "predicted_bytes": null, "passed": false, "cached": true, "measured_at": "2026-11-14 08:12:00"},
+  "probes": [{"index": 1, "count": 6, "crf": 30, "vmaf": 94.8, "passed": false, "cached": true, "measured_at": "2026-11-14 08:12:00"}],
+  "target_vmaf": 96,
+  "chosen": {"crf": 26, "vmaf": 96.2, "predicted_bytes": 9400000000, "reason": null, "source": "cache"},
+  "source": "cache",
+  "measured_at": "2026-11-14 08:12:00",
+  "encode": {"percent": 42.31, "fps": 123.45, "avg_fps": 120.0, "eta_seconds": 754},
+  "sample": {"index": 2, "count": 7},
+  "detail": "CRF 27: VMAF 95.9"
+}
+```
+
+- The browser model reads `v` (`ui/src/lib/progress.svelte.ts`); an event from
+  another schema version is ignored and the poll stays the state channel.
+- `run` and `file` MERGE: a percent tick carries only `encode`, so the folder's
+  `3/12` and the probes measured so far survive. A new file's identity resets the
+  per-file trail; the server's `ProgressBus._last` keeps the merged latest event
+  per job, and the `hello` frame seeds it (a reload mid-search rebuilds the probe
+  list). `ProgressBus.publish` is the one merge point (`engine/progress.merge`).
+- `stage_job_id` is the per-file stage row (#602) when one exists. A stage row's
+  own event KEEPS its own `job_id` (#639); the folder job's event carries the
+  row's id in `stage_job_id`, so the browser can follow one file.
+- `probe`/`chosen` belong to `crf-search`; `probe.count` is `null` while the
+  search can still early-stop (any live total would be invented), and the final
+  probe event carries the search's actual step count (`len(probes)`). The final event's
+  `probe` is the REAL last probe (`probes[-1]`), never the chosen one: the merge
+  replaces probes by index, so reusing the chosen row would delete the last measured
+  row and duplicate the decision. The decision rides only in `chosen`; the search's
+  final `chosen` has the chosen CRF/VMAF and the stage driver later replaces it with
+  the predicted size/reason. The stored-plan reuse path is also a `crf-search` event,
+  with the plan's chosen result.
+- Cache provenance (maintainer 2026-11-14, issue #631): a probe replayed from
+  `probe_cache` carries `cached: true` and its original `measured_at`; a live probe
+  carries `cached: false` and `measured_at: null`. The top-level and `chosen.source`
+  are `measured | cache | plan` (`plan` for a stored-plan reuse, `cache` only when every
+  probe was reused, otherwise `measured`), and the stage result carries the same
+  `source`/`measured_at`. `plans.probes` stores the per-probe measured_at/cached so a
+  later reuse can say when the measurement was taken.
+  `chosen.reason` is `null` for a prediction, else the skip reason (`no size gain`,
+  `target unreachable`, `saving below minimum`). The search does not compute a
+  predicted size per probe, so `probe.predicted_bytes` is always `null`; the plan's
+  `estimated_size` is the whole-file prediction.
+- `encode.percent`/`fps`/`avg_fps`/`eta_seconds` are parsed from HandBrake's
+  own line by `tools/handbrake.parse_progress_line`; a field the line does not
+  print is `null`, never a guess. `sample` is the sample-extraction position and
+  never rides `run.done`/`run.total`.
+- `/api/movie` returns `plan.probes` as
+  `[{crf, vmaf, measured_at, cached}]` from the persisted `plans.probes` column; the
+  title page renders that trail.
+- `/api/status` and `/api/snapshot` carry `recent_encodes`: the last five
+  applied encodes ordered by `encoded_at DESC`. The queue outlook's rough time reads
+  this recency list; `/api/library` is category/name-ordered and must never be the
+  pace source.
+
 ## SECURITY CONTRACT
 
 - The token comes from `$SHRINKRAY_TOKEN` (`app.py`) — never from `config.json`,

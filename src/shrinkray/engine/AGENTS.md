@@ -18,6 +18,7 @@ answers — is this file bigger than its quality requires, and does it carry bar
 | Scan -> DB rows | `scan.py` | `scan_movies`, `process_movie`, `resolve_input_paths`; pool `min(8, cpu)` |
 | Inbox watchdog | `watch.py` | `watch`, `_FsWaiter`, `decide`, `next_poll_interval`; `check_stability` (the is-it-complete witness: age + not sparse, one stat, no sleep, #479) and `wait_until_settled` (the CLI's bounded wait on it) |
 | One encoder per contended dir | `lock.py` | `guard_encodes`, keyed on the movie's own directory in place; 60 s heartbeat, 5 min silence window; busy raises, never waits |
+| The structured progress event | `progress.py` | `PROGRESS_VERSION`, `STAGES`, `STAGE_STEPS`, `file_state`, `event`, `with_run`, `merge` (issue #631); one constructor for every emission site |
 | Pause, manual encodes, cancel requests | `pause.py` | `pause_reason`, `manual_encode` (CLI marker), `wait_while_paused` (jobs), `set_operator_paused` (the TUI's switch); `write_cancel_request`/`read_pending_cancel_requests`/`remove_cancel_request` (the TUI and the resident poller, issue #621); markers carry the process start time, so a reused pid never pauses (issue #250) |
 
 ## HOW THE DECISION FLOWS

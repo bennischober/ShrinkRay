@@ -1630,6 +1630,68 @@ class TestDb(unittest.TestCase):
                 app_module.state.shutdown()
                 app_module.state = None
 
+    def test_recent_encodes_are_the_newest_five_by_recency(self):
+        """Issue #631: the queue outlook's pace is the last real encodes by
+        `encoded_at`, not the last five titles alphabetically. A discarded
+        attempt reclaimed nothing and is not a pace sample."""
+        from shrinkray.server.app import _recent_encodes
+
+        file_id = db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=Path(self.tmp.name) / "pace.mkv",
+                mtime=100.0,
+                size=1024**3,
+                name="pace",
+                category="Cat",
+            ),
+        )
+        # the oldest encode is the slow one; the newest five are 60 s
+        for day, seconds in enumerate([9999, 60, 60, 60, 60, 60, 60], start=1):
+            encode_id = db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>96",
+                "svt_av1",
+                1024**3,
+                512 * 1024**2,
+                50.0,
+                encode_seconds=seconds,
+            )
+            self.connection.execute(
+                "UPDATE encodes SET encoded_at = ? WHERE id = ?",
+                (f"2026-11-{day:02d} 12:00:00", encode_id),
+            )
+        # a discarded attempt is not a real encode
+        discarded = db.add_encode(
+            self.connection,
+            file_id,
+            "VMAF>96",
+            "svt_av1",
+            1024**3,
+            512 * 1024**2,
+            50.0,
+            encode_seconds=9999,
+            outcome="discarded",
+        )
+        self.connection.execute(
+            "UPDATE encodes SET encoded_at = '2026-11-08 12:00:00' WHERE id = ?",
+            (discarded,),
+        )
+        self.connection.commit()
+        recent = _recent_encodes(self.connection)
+        self.assertEqual([row["encode_seconds"] for row in recent], [60, 60, 60, 60, 60])
+
+    def test_probe_measured_at_is_readable(self):
+        """The cache row keeps its original measurement time for provenance
+        (maintainer 2026-11-14, issue #631); the two-tuple entry stays."""
+        db.save_probe_score(self.connection, "measured-key", 95.5, 123)
+        self.connection.commit()
+        self.assertEqual(db.get_probe_entry(self.connection, "measured-key"), (95.5, 123))
+        measured_at = db.get_probe_measured_at(self.connection, "measured-key")
+        self.assertIsNotNone(measured_at)
+        self.assertIsNone(db.get_probe_measured_at(self.connection, "missing-key"))
+
     def test_movie_detail_endpoint(self):
         """GET /api/movie returns the file facts plus the COMPLETE encode
         history (the library list carries only the latest encode), including
@@ -1736,13 +1798,24 @@ class TestDb(unittest.TestCase):
                 # ── plan: the prediction display's data ──
                 # no plan recorded => the key exists, is None
                 self.assertIsNone(child_body["plan"])
+                from shrinkray.engine.search import SampleProbe
+
                 db.save_plan(
                     self.connection,
                     file_id,
                     chosen_crf=21,
                     achieved_vmaf=95.47,
                     crop=None,
-                    probes=[],
+                    probes=[
+                        SampleProbe(
+                            crf=30,
+                            vmaf=94.8,
+                            cached=True,
+                            measured_at="2026-11-14 08:12:00",
+                        ),
+                        SampleProbe(crf=24, vmaf=96.6),
+                        SampleProbe(crf=21, vmaf=95.47),
+                    ],
                     skipped_reason=None,
                     estimated_size=450,
                     input_mtime=Path(movie_path).stat().st_mtime,
@@ -1764,6 +1837,21 @@ class TestDb(unittest.TestCase):
                 self.assertIsNone(plan_body["skipped_reason"])
                 self.assertFalse(plan_body["stale"])
                 self.assertEqual(plan_body["target_vmaf"], 95.0)
+                # the persisted probe trail rides along (issue #631): one
+                # object per probe, in the order the search measured them
+                self.assertEqual(
+                    plan_body["probes"],
+                    [
+                        {
+                            "crf": 30,
+                            "vmaf": 94.8,
+                            "measured_at": "2026-11-14 08:12:00",
+                            "cached": True,
+                        },
+                        {"crf": 24, "vmaf": 96.6, "measured_at": None, "cached": False},
+                        {"crf": 21, "vmaf": 95.47, "measured_at": None, "cached": False},
+                    ],
+                )
                 # a changed file flips the staleness flag (mtime+size guard);
                 # the file only exists physically from this write on
                 Path(movie_path).write_bytes(b"x" * (1000 + 8))
@@ -1948,6 +2036,10 @@ class TestDb(unittest.TestCase):
             status_only = client.get("/api/status").json()
             for key in status_only:
                 self.assertIn(key, body["status"], f"snapshot.status lost /api/status key {key!r}")
+            # the queue outlook's recency source rides both status surfaces
+            # (issue #631): the library list is category/name-ordered
+            self.assertIn("recent_encodes", status_only)
+            self.assertEqual(status_only["recent_encodes"], body["status"]["recent_encodes"])
             # value parity for the three DERIVED fields (review finding 2,
             # PR #347): both handlers compute them from the same inputs, so
             # equality holds here and pins the handlers against drift.

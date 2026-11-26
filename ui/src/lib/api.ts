@@ -83,6 +83,103 @@ export function failedOutcomeNote(job: Job): string {
     .join(', ')}`
 }
 
+/** The stage enum of the structured progress event (issue #631): kept in
+ * sync with the server's job kinds of #602 plus the pipeline's own stages and
+ * the pause hold. Mirrored from `engine/progress.py`. */
+/** Where a probe/decision came from (the maintainer's 2026-11-14 cache-provenance
+ * requirement, issue #631): a live measurement, a probe-cache replay, or a stored
+ * plan. */
+export type ProgressSource = 'measured' | 'cache' | 'plan'
+
+export type ProgressStage =
+  | 'scan'
+  | 'decision'
+  | 'bars'
+  | 'samples'
+  | 'crf-search'
+  | 'encode'
+  | 'verify'
+  | 'swap'
+  | 'paused'
+
+/** The folder job's file counter; it merges, so an encode tick never erases it. */
+export interface ProgressRun {
+  done: number
+  total: number | null
+}
+
+/** The running file's identity and stepper position. */
+export interface ProgressFile {
+  movie?: string
+  path?: string
+  stage?: ProgressStage
+  step?: number | null
+  steps?: number | null
+}
+
+/** One CRF probe: numeric crf/vmaf, its position and the search's known
+ * step count (null when the remaining range is not knowable). */
+export interface ProgressProbe {
+  index: number | null
+  count: number | null
+  crf: number | null
+  vmaf: number | null
+  predicted_bytes: number | null
+  passed: boolean | null
+  /** true when every sample came from probe_cache instead of being encoded now */
+  cached?: boolean
+  /** the original measurement time of a cached probe */
+  measured_at?: string | null
+}
+
+/** The search's completion line. */
+export interface ProgressChosen {
+  crf: number | null
+  vmaf: number | null
+  predicted_bytes: number | null
+  reason: string | null
+  source?: ProgressSource
+  measured_at?: string | null
+}
+
+/** HandBrake's own progress line: null when the line does not print a field. */
+export interface ProgressEncode {
+  percent: number | null
+  fps: number | null
+  avg_fps: number | null
+  eta_seconds: number | null
+}
+
+/** One extracted sample; never in `run.done`/`run.total`. */
+export interface ProgressSample {
+  index: number
+  count: number
+}
+
+/** One versioned structured progress event (`server/AGENTS.md`). `run` and
+ * `file` are MERGING fields: each event updates only the keys it carries.
+ * `stage_job_id` names the per-file stage row when one exists; the stage row's
+ * own events keep their own job_id (#639). */
+export interface ProgressData {
+  v?: number
+  stage?: ProgressStage
+  stage_job_id?: number
+  run?: ProgressRun
+  file?: ProgressFile
+  probe?: ProgressProbe
+  /** the merged seed carries the probes measured so far (hello rebuild) */
+  probes?: ProgressProbe[]
+  target_vmaf?: number | null
+  chosen?: ProgressChosen
+  /** the stage result's provenance (measured | cache | plan) and its original
+   * measurement time, when reused */
+  source?: ProgressSource
+  measured_at?: string | null
+  encode?: ProgressEncode
+  sample?: ProgressSample
+  detail?: string
+}
+
 export interface EncodeInfo {
   preset: string | null
   crf: number | null
@@ -150,6 +247,16 @@ export interface MoviePlan {
   probe_encoder_preset?: string | null
   target_vmaf: number | null
   stale: boolean
+  /** the persisted CRF -> VMAF trail (issue #631): one entry per probe the
+   * search measured, in stored order. The search does not compute a predicted
+   * size per probe, so the pairs carry only crf/vmaf (the plan's estimated_size
+   * is the whole-file prediction). */
+  probes?: {
+    crf: number
+    vmaf: number
+    measured_at?: string | null
+    cached?: boolean
+  }[]
   /** the HDR estimate bias note (issue #98): present only for HDR titles with
    * a live estimate — the prediction comes from easy-content probe windows */
   estimate_note?: string | null
@@ -202,6 +309,9 @@ export interface Status {
   /** the resident app's own memory (MiB), self-measured every 5 min —
    * staying lean is a measured fact (4534e07); null when unmeasurable */
   rss_mib?: number | null
+  /** the last real encodes by RECENCY, newest first (issue #631): the queue
+   * outlook's rough time must not use /api/library's category/name order */
+  recent_encodes?: { encode_seconds: number; input_size: number }[]
   /** why the config.json on disk is NOT in effect (an edit that failed to
    * parse or validate; the app keeps its previous settings), null when it is
    * — issue #247. Clears itself once the file is fixed. */

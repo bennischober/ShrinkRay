@@ -26,6 +26,10 @@ from pathlib import Path
 from shrinkray.config import Conf, encode_window_open, refresh_config
 from shrinkray.engine.pause import read_pending_cancel_requests, remove_cancel_request
 from shrinkray.engine.pipeline import cap_threads
+from shrinkray.engine.progress import event as progress_event
+from shrinkray.engine.progress import file_state, with_run
+from shrinkray.engine.progress import merge as merge_progress
+from shrinkray.engine.progress import provenance as progress_provenance
 from shrinkray.logger import file_scope, log, log_error
 from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
@@ -215,12 +219,18 @@ class ProgressBus:
             data (dict): The engine's progress data (JSON-able).
         """
         with self._lock:
-            self._last[job_id] = data
+            # MERGE, never replace (issue #631): a percent tick carries no
+            # run/file counter, so replacing the latest event would wipe the
+            # folder's 3/12 and the probes measured so far. The hello frame
+            # seeds this merged state, so a reload mid-search rebuilds the
+            # whole picture.
+            merged = merge_progress(self._last.get(job_id), data)
+            self._last[job_id] = merged
             for box in self._subs.values():
                 if box.full():
                     with contextlib.suppress(queue.Empty):
                         box.get_nowait()  # drop-oldest
-                box.put_nowait((job_id, data))
+                box.put_nowait((job_id, merged))
 
     def subscribe(self) -> tuple[int, "queue.Queue", list[tuple[int, dict]]]:
         """Registers a subscriber and returns its mailbox and seed events.
@@ -975,7 +985,13 @@ def _hold_while_paused(
 
     def report(reason: str) -> None:
         if progress:
-            progress({"stage": "paused", "detail": reason, "movie": movie.name})
+            progress(
+                progress_event(
+                    "paused",
+                    file=file_state(movie.name, str(movie), "paused"),
+                    detail=reason,
+                )
+            )
 
     wait_while_paused(_db_file_of(connection).resolve().parent, cancel, on_pause=report)
 
@@ -1004,7 +1020,13 @@ def execute_scan(
     if cancel.is_set():
         return {"cancelled": True}
     if progress:
-        progress({"stage": "scan", "detail": "scanning library"})
+        progress(
+            progress_event(
+                "scan",
+                run={"done": 0, "total": None},
+                detail="scanning library",
+            )
+        )
 
     config = load_config()
     apply_config(config)
@@ -1016,13 +1038,11 @@ def execute_scan(
         """Persists each finished movie immediately (progressive UI)."""
         if progress and not cancel.is_set():
             progress(
-                {
-                    "stage": "scan",
-                    "detail": error or f"scanned {data['name']}" if data else "scanning",
-                    "done": index,
-                    "total": None,
-                    "movie": data["name"] if data else None,
-                }
+                progress_event(
+                    "scan",
+                    run={"done": index, "total": None},
+                    detail=error or f"scanned {data['name']}" if data else "scanning",
+                )
             )
 
     # the category roots: the resident app's allowed roots - the same roots
@@ -1142,16 +1162,6 @@ def execute_plan(
         # (issue #247)
         config = refresh_config()
         apply_reloaded_config(config)
-        if progress:
-            progress(
-                {
-                    "stage": "probe",
-                    "detail": f"probing {movie.name}",
-                    "done": index,
-                    "total": total,
-                    "movie": movie.name,
-                }
-            )
         # one precedence for every entry point (issue #526): the resident
         # job reads the same keys as the CLI - an unset count leaves density
         # (sample_every) in charge instead of the old fixed default of 3
@@ -1165,6 +1175,16 @@ def execute_plan(
             decision_row = queue.stage(
                 JobKind.DECISION, {"paths": [str(movie)], "pipeline": "plan"}
             )
+            if progress:
+                progress(
+                    progress_event(
+                        "decision",
+                        file=file_state(movie.name, str(movie), "decision"),
+                        run={"done": index, "total": total},
+                        detail=f"deciding {movie.name}",
+                        stage_job_id=decision_row.id,
+                    )
+                )
             try:
                 # the [i/N] prefix on this file's decision lines (issue #471)
                 with file_scope(index + 1, total):
@@ -1232,12 +1252,17 @@ def execute_plan(
                 data: dict,
                 row_ref: list[Job | None] = plan_row,
                 job_queue: JobQueue = plan_queue,
+                done: int = index,
+                total_files: int = total,
             ) -> None:
-                if progress is not None:
-                    progress(data)
+                event = with_run(data, done, total_files)
                 row = row_ref[0]
+                if row is not None and row.id is not None:
+                    event["stage_job_id"] = row.id
+                if progress is not None:
+                    progress(event)
                 if row is not None:
-                    job_queue.report_progress(row, data)
+                    job_queue.report_progress(row, event)
 
             try:
                 with file_scope(index + 1, total):
@@ -1264,17 +1289,33 @@ def execute_plan(
                 queue.fail_stage(search_row, str(e))
                 plans.append({"movie": movie.name, "state": "error", "error": str(e)})
                 continue
+            stage_source, stage_measured_at = progress_provenance(
+                result.probes,
+                crf_source=getattr(result, "crf_source", None),
+                plan_created_at=getattr(result, "plan_created_at", None),
+            )
             queue.finish_stage(
                 search_row,
                 {
                     "crf": result.chosen_crf,
                     "vmaf": result.achieved_vmaf,
                     "reason": result.skipped_reason,
+                    "source": stage_source,
+                    "measured_at": stage_measured_at,
                 },
             )
         else:
             # a direct executor call (the one-shot CLI, tests): no queue, so
             # the single-call engine path keeps the old shape
+            if progress:
+                progress(
+                    progress_event(
+                        "decision",
+                        file=file_state(movie.name, str(movie), "decision"),
+                        run={"done": index, "total": total},
+                        detail=f"deciding {movie.name}",
+                    )
+                )
             try:
                 with file_scope(index + 1, total):
                     result = plan_quality(
@@ -1512,17 +1553,33 @@ def _encode_measured(
         # loop-variable capture in a closure).
         active_row: list[Job | None] = [None]
 
-        def report_stage_progress(data: dict, row_ref: list[Job | None] = active_row) -> None:
-            if progress is not None:
-                progress(data)
+        def report_stage_progress(
+            data: dict,
+            row_ref: list[Job | None] = active_row,
+            done: int = index,
+            total_files: int = total,
+        ) -> None:
+            event = with_run(data, done, total_files)
             row = row_ref[0]
+            if row is not None and row.id is not None:
+                event["stage_job_id"] = row.id
+            if progress is not None:
+                progress(event)
             if queue is not None and row is not None:
-                queue.report_progress(row, data)
+                queue.report_progress(row, event)
 
         sample_every, sample_count, sample_seconds = config.probe_settings()
         if queue is not None:
             decision_row = queue.stage(
                 JobKind.DECISION, {"paths": [str(movie)], "pipeline": "encode"}
+            )
+            active_row[0] = decision_row
+            report_stage_progress(
+                progress_event(
+                    "decision",
+                    file=file_state(movie.name, str(movie), "decision"),
+                    detail=f"deciding {movie.name}",
+                )
             )
             try:
                 decision = decide_quality(
@@ -1586,6 +1643,7 @@ def _encode_measured(
                         "vmaf": stored["achieved_vmaf"],
                         "reason": stored["skipped_reason"],
                         "source": "plan",
+                        "measured_at": dict(stored).get("created_at"),
                     },
                 )
             else:
@@ -1613,12 +1671,19 @@ def _encode_measured(
                     queue.fail_stage(search_row, str(e))
                     outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
                     continue
+                stage_source, stage_measured_at = progress_provenance(
+                    prediction.probes,
+                    crf_source=getattr(prediction, "crf_source", None),
+                    plan_created_at=getattr(prediction, "plan_created_at", None),
+                )
                 queue.finish_stage(
                     search_row,
                     {
                         "crf": prediction.chosen_crf,
                         "vmaf": prediction.achieved_vmaf,
                         "reason": prediction.skipped_reason,
+                        "source": stage_source,
+                        "measured_at": stage_measured_at,
                     },
                 )
                 # the prediction is recorded so the encode below REUSES it instead of
@@ -1649,16 +1714,6 @@ def _encode_measured(
                     continue
             encode_row = queue.stage(JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"})
             active_row[0] = encode_row
-        if progress:
-            progress(
-                {
-                    "stage": "probe",
-                    "detail": f"probing {movie.name}",
-                    "done": index,
-                    "total": total,
-                    "movie": movie.name,
-                }
-            )
         try:
             # hold the encode slot on the MOVIE'S OWN DIRECTORY (in place): that
             # is where the staging copy and the swap's two renames happen, so it
@@ -1716,6 +1771,13 @@ def _encode_measured(
                     final_output=movie if in_place else None,
                 )
                 if in_place and outcome.encoded:
+                    report_stage_progress(
+                        progress_event(
+                            "swap",
+                            file=file_state(movie.name, str(movie), "swap"),
+                            detail="swapping the verified output into place",
+                        )
+                    )
                     swap = swap_encode_into_place(
                         connection,
                         movie,
@@ -1731,6 +1793,17 @@ def _encode_measured(
                         input_mtime=getattr(result, "input_mtime", None),
                     )
                     declined = not swap.replaced
+                    report_stage_progress(
+                        progress_event(
+                            "swap",
+                            file=file_state(movie.name, str(movie), "swap"),
+                            detail=(
+                                "swapped; the original is retained"
+                                if swap.replaced
+                                else f"swap declined: {swap.reason}"
+                            ),
+                        )
+                    )
                 else:
                     declined = False
         except EncodeBusyError as e:
@@ -1785,13 +1858,12 @@ def _encode_measured(
         outcomes.append(entry)
         if progress:
             progress(
-                {
-                    "stage": "encode",
-                    "detail": f"{movie.name}: {entry['state']}",
-                    "done": index + 1,
-                    "total": total,
-                    "movie": movie.name,
-                }
+                progress_event(
+                    "encode",
+                    file=file_state(movie.name, str(movie), "encode"),
+                    run={"done": index + 1, "total": total},
+                    detail=f"{movie.name}: {entry['state']}",
+                )
             )
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, elapsedSeconds, eta, etaShort, reclaimedBytes, reclaimedTotalBytes, remainingSeconds, groupJobs, isStageRow, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, etaShort, finishesAt, fps, groupJobs, isStageRow, kindWord, percent, queueLabel, queuedFileCount, queuePaceSeconds, reclaimedBytes, reclaimedTotalBytes, relative, resultSummary, savedPercent, span, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
 import type { Movie } from './api'
 
 describe('duration', () => {
@@ -150,42 +150,6 @@ describe('stateWord', () => {
 
   it('keeps an unknown state visible instead of blanking it', () => {
     expect(stateWord('reconciling')).toBe('reconciling')
-  })
-})
-
-describe('stageWord', () => {
-  // issue #631: a multi-step job must say which step it is on, so a CRF
-  // probe cannot look like the final encode
-  it('names the step the job is on', () => {
-    expect(stageWord('probe')).toBe('probing')
-    expect(stageWord('encode')).toBe('encoding')
-    expect(stageWord('scan')).toBe('scanning')
-    expect(stageWord('paused')).toBe('paused')
-  })
-
-  it('shows a stage it has never heard of as itself, not as nothing', () => {
-    expect(stageWord('verify')).toBe('verify')
-    expect(stageWord(null)).toBe('')
-  })
-})
-
-describe('progressLabel', () => {
-  // issue #631: the bar must say what is happening, not just how far
-  it('names the step, the file and what the engine reported', () => {
-    expect(progressLabel('probe', 'a.mkv', 'CRF 24: VMAF 96.41', 42)).toBe(
-      'probing · a.mkv · CRF 24: VMAF 96.41',
-    )
-  })
-
-  it('does not say the step twice when the engine names it already', () => {
-    // two live emissions do exactly this: "scanning library", "probing a.mkv"
-    expect(progressLabel('scan', null, 'scanning library', 10)).toBe('scanning library')
-    expect(progressLabel('probe', 'a.mkv', 'probing a.mkv', 20)).toBe('a.mkv · probing a.mkv')
-  })
-
-  it('falls back to a state word only when the payload carries nothing else', () => {
-    expect(progressLabel(null, null, null, 42)).toBe('working')
-    expect(progressLabel(null, null, null, null)).toBe('starting…')
   })
 })
 
@@ -358,27 +322,25 @@ describe('queueLabel', () => {
   })
 })
 
-describe('remainingSeconds', () => {
-  const now = new Date('2026-11-15T12:00:00Z')
-
-  it('scales the step elapsed time by the work fraction done', () => {
-    // 30 min elapsed at 25% implies 2 h total, so 90 min left
-    expect(remainingSeconds(30 * 60, 0.25)).toBe(90 * 60)
-  })
-
-  it('says nothing it cannot estimate', () => {
-    expect(remainingSeconds(30 * 60, null)).toBeNull()
-    expect(remainingSeconds(30 * 60, 0)).toBeNull()
-    expect(remainingSeconds(null, 0.4)).toBeNull()
-    // a finished fraction has nothing left to estimate
-    expect(remainingSeconds(30 * 60, 1)).toBeNull()
-  })
-})
-
 describe('etaShort', () => {
   it('drops the sentence the column header already carries', () => {
     expect(etaShort(90 * 60)).toBe('~1 h 30 min')
     expect(etaShort(null)).toBe('')
+  })
+})
+
+describe('finishesAt (issue #631)', () => {
+  it('shows the wall time only beyond 10 min', () => {
+    const now = Date.UTC(2026, 10, 14, 19, 50)
+    expect(finishesAt(600, now)).toBe('')
+    expect(finishesAt(601, now)).toMatch(/^finishes ≈ \d{2}:\d{2}$/)
+  })
+})
+
+describe('fps (issue #631)', () => {
+  it('labels the frame rate', () => {
+    expect(fps(12.34)).toBe('12.3 fps')
+    expect(fps(null)).toBe('—')
   })
 })
 
