@@ -399,8 +399,10 @@ class TestProbeProgress(unittest.TestCase):
         self.assertIsNone(events[-1]["probe"]["measured_at"])
 
     def test_probe_crf_reports_each_sample(self):
-        """Issue #690: a probe states the sample it is on, so a running search
-        has a position (and an ETA) instead of showing nothing for hours."""
+        """Issue #690: probe_crf emits one event per sample, naming the
+        within-probe sample in `detail`. This direct call passes no probe_index,
+        so `probe.index` is None; find_optimal_crf supplies the search
+        position (see test_find_optimal_crf_reports_probe_steps)."""
         events: list[dict] = []
 
         def fake_run(command, cancel=None):

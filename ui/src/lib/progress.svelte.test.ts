@@ -515,7 +515,7 @@ describe('progress store', () => {
     expect(mod.workSummary(view, Date.now(), true)).toContain('stale')
   })
 
-  it('the CRF summary names the probe position, not a fabricated percent', () => {
+  it('the CRF summary names the folder and probe positions, not a fabricated percent', () => {
     const view = {
       jobId: 1,
       stage: 'crf-search' as const,
@@ -538,7 +538,9 @@ describe('progress store', () => {
       measuredAt: null,
     }
     expect(mod.probePosition(view)).toBe('probe 2 of 4')
-    expect(mod.workSummary(view, Date.now(), false)).toBe('CRF search · probe 2 of 4')
+    expect(mod.workSummary(view, Date.now(), false)).toBe(
+      'file 4 of 12 · CRF search · probe 2 of 4',
+    )
   })
 
   it('the chosen line uses the issue wording (issue #631)', () => {
