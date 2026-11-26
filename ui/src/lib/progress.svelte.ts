@@ -245,6 +245,12 @@ export function workSummary(
   const reused = reusedLabel(view)
   if (reused) parts.push('reused')
   if (view.stage === 'crf-search') {
+    // the folder job's file counter, stated first for a search so the
+    // operator sees the folder position beside the search position
+    const run = view.run
+    if (run) {
+      parts.unshift(run.total != null ? `file ${run.done} of ${run.total}` : `file ${run.done}`)
+    }
     const position = probePosition(view)
     if (position) parts.push(position)
   } else if (view.stage === 'samples' && view.sample) {

@@ -474,10 +474,11 @@ def probe_crf(
     scores: list[float] = []
     for index, (sample, offset) in enumerate(samples):
         _check_cancel(cancel)
-        # one event per sample: the sample index IS the search's position, and the
-        # probe's OWN elapsed time is what an estimate must divide, never the
-        # job's — dividing the job's elapsed by a probe's fraction swung the
-        # estimate by an order of magnitude on every new probe (issue #690 review)
+        # one event per sample: probe.index is the search's position (the
+        # caller's probe index); the sample index in detail is the within-probe
+        # position. The dashboard's ETA uses the probe's own pace, never the
+        # job's elapsed — dividing the job's elapsed by a probe's fraction swung
+        # the estimate by an order of magnitude on every new probe (issue #690 review)
         if progress:
             progress(
                 progress_event(
