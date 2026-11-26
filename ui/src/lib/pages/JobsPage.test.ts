@@ -164,7 +164,7 @@ describe('JobsPage render', () => {
         plans: [
           {
             movie: 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv',
-            state: 'skipped',
+            state: 'skip',
             reason: 'already efficient',
             estimated_size: 5_000_000_000,
           },
@@ -180,6 +180,45 @@ describe('JobsPage render', () => {
     const detail = container.querySelector('.detail')!
     expect(detail.textContent).toContain('already efficient')
     expect(detail.textContent).toContain('4.66 GiB')
+  })
+
+  it('a plan row states what the plan found, not a bare DONE (issue #685)', () => {
+    const j = job({
+      kind: 'plan',
+      payload: { paths: ['/media'] },
+      result: {
+        plans: [
+          { movie: '/m/a', state: 'encode', crf: 30, estimated_size: 1_000_000_000, saved_percent: 40 },
+          { movie: '/m/b', state: 'encode', crf: 28, estimated_size: 2_000_000_000, saved_percent: 20 },
+          { movie: '/m/c', state: 'skip', reason: 'already efficient' },
+        ],
+      },
+    })
+    const { container } = render(JobsPage, { history: [j], onopenMovie: () => {} })
+    const note = container.querySelector('.note')!
+    expect(note.textContent?.trim()).toBe('2 would encode · 1 already efficient')
+    const state = container.querySelector('.state')!
+    expect(state.textContent).toContain('Done')
+    expect(state.textContent).not.toContain('Partial')
+  })
+
+  it('a plan with a failed entry is PARTIAL, with the failure named (issue #685)', () => {
+    const j = job({
+      kind: 'plan',
+      payload: { paths: ['/media'] },
+      result: {
+        plans: [
+          { movie: '/m/a', state: 'encode' },
+          { movie: '/m/b', state: 'error', error: 'boom' },
+        ],
+      },
+    })
+    const { container } = render(JobsPage, { history: [j], onopenMovie: () => {} })
+    const state = container.querySelector('.state')!
+    expect(state.textContent).toContain('Partial')
+    const note = container.querySelector('.error')!
+    expect(note.textContent).toContain('1 of 2 failed')
+    expect(note.textContent).toContain('/m/b')
   })
 
   it('a scan row lists the paths it could not read (issue #632 review)', async () => {

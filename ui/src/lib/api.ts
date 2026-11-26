@@ -70,15 +70,17 @@ import { isFailedOutcome } from './format'
 export { isFailedOutcome }
 
 /** A DONE job whose per-movie outcomes failed is not a clean done: the
- * lifecycle completed, but the work did not. Shared by the jobs page and
- * the detail trail — two audit trails must speak one language. */
+ * lifecycle completed, but the work did not. An encode writes `outcomes`, a
+ * plan `plans` (`jobs.py`); both are read by kind. Shared by the jobs page
+ * and the detail trail — two audit trails must speak one language. */
 export function failedOutcomeNote(job: Job): string {
-  if (job.state !== 'done' || job.kind !== 'encode') return ''
-  const r = job.result as { outcomes?: JobOutcome[] } | null
-  if (!r?.outcomes) return ''
-  const failed = r.outcomes.filter(isFailedOutcome)
+  if (job.state !== 'done' || (job.kind !== 'encode' && job.kind !== 'plan')) return ''
+  const r = job.result as { outcomes?: JobOutcome[]; plans?: JobOutcome[] } | null
+  const list = job.kind === 'encode' ? r?.outcomes : r?.plans
+  if (!list) return ''
+  const failed = list.filter(isFailedOutcome)
   if (failed.length === 0) return ''
-  return `__FAILED_OUTCOMES__${failed.length} of ${r.outcomes.length} failed: ${failed
+  return `__FAILED_OUTCOMES__${failed.length} of ${list.length} failed: ${failed
     .map((o) => o.movie)
     .join(', ')}`
 }

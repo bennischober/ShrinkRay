@@ -278,12 +278,16 @@ export function groupJobs<T extends { id: number | null; state: string }>(
 
 /** What a finished job did, in one line (issue #632): the operator reads
  * the result instead of clicking DETAIL and parsing raw JSON. Empty when the
- * payload carries no per-movie outcomes (scans, legacy rows). */
+ * payload carries no per-movie outcomes (scans, legacy rows). Plan entries use
+ * their own stored states (`encode` / `skip` / `error`, issue #685), so the plan
+ * buckets below key on those states, never on the display words. */
 export function resultSummary(outcomes: readonly JobOutcome[]): string {
   if (outcomes.length === 0) return ''
   const encoded = outcomes.filter((o) => o.state === 'encoded')
+  const wouldEncode = outcomes.filter((o) => o.state === 'encode')
   const skipped = outcomes.filter((o) => o.state === 'skipped' && !isFailedOutcome(o))
   const already = outcomes.filter((o) => o.state === 'already_encoded')
+  const efficient = outcomes.filter((o) => o.state === 'skip')
   const failed = outcomes.filter(isFailedOutcome)
   const parts: string[] = []
   if (encoded.length > 0) parts.push(`${encoded.length} encoded`)
@@ -297,19 +301,23 @@ export function resultSummary(outcomes: readonly JobOutcome[]): string {
     const avg = savings.reduce((sum, p) => sum + p, 0) / savings.length
     parts.push(`${savedPercent(avg).text} size`)
   }
+  if (wouldEncode.length > 0) parts.push(`${wouldEncode.length} would encode`)
   if (skipped.length > 0) parts.push(`${skipped.length} skipped`)
   if (already.length > 0) parts.push(`${already.length} already encoded`)
+  if (efficient.length > 0) parts.push(`${efficient.length} already efficient`)
   if (failed.length > 0) parts.push(`${failed.length} failed`)
   return parts.join(' · ')
 }
 
-/** A job outcome that is work lost, not work done: a failed movie, or a
- * swap the operator declined — which the server reports as `skipped` plus a
- * decline error (`src/shrinkray/server/jobs.py`). A busy or HDR skip is
- * neither. One definition, so no surface can disagree with another. */
+/** A job outcome that is work lost, not work done: a failed movie (an
+ * encode outcome's `failed`, a plan entry's `error`), or a swap the operator
+ * declined — which the server reports as `skipped` plus a decline error
+ * (`src/shrinkray/server/jobs.py`). A busy or HDR skip is neither. One
+ * definition, so no surface can disagree with another. */
 export function isFailedOutcome(o: JobOutcome): boolean {
   return (
     o.state === 'failed' ||
+    o.state === 'error' ||
     (o.state === 'skipped' && (o.error ?? '').includes('declined'))
   )
 }
