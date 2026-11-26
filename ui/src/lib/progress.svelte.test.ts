@@ -539,7 +539,7 @@ describe('progress store', () => {
     }
     expect(mod.probePosition(view)).toBe('probe 2 of 4')
     expect(mod.workSummary(view, Date.now(), false)).toBe(
-      'file 3 of 12 · CRF search · probe 2 of 4',
+      'file 4 of 12 · CRF search · probe 2 of 4',
     )
   })
 
