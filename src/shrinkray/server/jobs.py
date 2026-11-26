@@ -513,21 +513,47 @@ class JobQueue:
     def finish(self, job: Job, result: dict) -> None:
         """Marks a job as done and stores its result.
 
+        The row is bookkeeping; the artifact is the truth (issue #681): a
+        finished encode's verified output has already replaced the source path
+        when this runs, so a failed commit cannot undo the swap. The commit is
+        attempted BEFORE the in-memory state changes: on failure the transaction
+        is rolled back, the job is restored to its pre-transition state (still
+        re-transitionable), and the error propagates to the caller. The row stays
+        running; the next start's stale-row recovery marks it interrupted.
+        A folder row is re-queued, and the re-run skips the file as AV1 output
+        instead of re-encoding it (#650); a per-file stage row stays history.
+        A caller may also retry this write. If no caller does, the row's outcome
+        is lost; the artifact is still the truth.
+
         Args:
             job (Job): The finished job.
             result (dict): The engine summary (JSON-able).
         """
+        previous_state = job.state
+        previous_result = job.result
+        with self._conn_gate():
+            try:
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                    (JobState.DONE.value, json.dumps(result), job.id),
+                )
+                self._prune_history()
+                self._connection.commit()
+            except Exception:
+                # the failed commit did NOT end the transaction - the DONE
+                # UPDATE is still pending and the next successful commit
+                # would persist it - so roll back before restoring, exactly
+                # like take_next/cancel (issue #660 round 17, finding 3);
+                # the job is not done, so restore RUNNING and re-raise
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                job.state = previous_state
+                job.result = previous_result
+                raise
         job.state = JobState.DONE
         job.result = result
-        with self._conn_gate():
-            self._connection.execute(
-                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
-                (JobState.DONE.value, json.dumps(result), job.id),
-            )
-            self._prune_history()
-            if self._bus is not None and job.id is not None:
-                self._bus.forget(job.id)
-            self._connection.commit()
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
 
     def _prune_history(self) -> None:
         """Hard-deletes terminated jobs beyond the retention cap.
@@ -565,18 +591,33 @@ class JobQueue:
             job (Job): The failed job.
             error (str): The failure message.
         """
+        previous_state = job.state
+        previous_error = job.error
+        with self._conn_gate():
+            try:
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, error = ?, result = NULL, "
+                    "finished_at = datetime('now') WHERE id = ?",
+                    (JobState.FAILED.value, error, job.id),
+                )
+                self._prune_history()
+                self._connection.commit()
+            except Exception:
+                # the failed commit did NOT end the transaction - the FAILED
+                # UPDATE is still pending and the next successful commit
+                # would persist it - so roll back before restoring, exactly
+                # like take_next/cancel (issue #660 round 17, finding 3);
+                # the job is not failed, so restore its pre-transition state
+                # and re-raise
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                job.state = previous_state
+                job.error = previous_error
+                raise
         job.state = JobState.FAILED
         job.error = error
-        with self._conn_gate():
-            self._connection.execute(
-                "UPDATE jobs SET state = ?, error = ?, result = NULL, "
-                "finished_at = datetime('now') WHERE id = ?",
-                (JobState.FAILED.value, error, job.id),
-            )
-            self._prune_history()
-            if self._bus is not None and job.id is not None:
-                self._bus.forget(job.id)
-            self._connection.commit()
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
 
     def mark_cancelled(self, job: Job, result: dict | None = None) -> None:
         """Marks a job as cancelled (user request, not a failure).
@@ -590,20 +631,33 @@ class JobQueue:
             job (Job): The cancelled job.
             result (dict | None): The engine's partial result, if any.
         """
-        job.state = JobState.CANCELLED
+        previous_state = job.state
         with self._conn_gate():
-            self._connection.execute(
-                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
-                (
-                    JobState.CANCELLED.value,
-                    json.dumps(result) if result is not None else None,
-                    job.id,
-                ),
-            )
-            self._prune_history()
-            if self._bus is not None and job.id is not None:
-                self._bus.forget(job.id)
-            self._connection.commit()
+            try:
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                    (
+                        JobState.CANCELLED.value,
+                        json.dumps(result) if result is not None else None,
+                        job.id,
+                    ),
+                )
+                self._prune_history()
+                self._connection.commit()
+            except Exception:
+                # the failed commit did NOT end the transaction - the
+                # CANCELLED UPDATE is still pending and the next successful
+                # commit would persist it - so roll back before restoring,
+                # exactly like take_next/cancel (issue #660 round 17,
+                # finding 3); the job is not cancelled, so restore RUNNING
+                # and re-raise
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                job.state = previous_state
+                raise
+        job.state = JobState.CANCELLED
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
 
     def mark_interrupted(self, job: Job, result: dict | None = None) -> None:
         """Marks a job as interrupted by an app shutdown (issue #622).
@@ -618,29 +672,45 @@ class JobQueue:
             job (Job): The interrupted job.
             result (dict | None): The engine's partial result, if any.
         """
-        job.state = JobState.INTERRUPTED
+        previous_state = job.state
+        previous_result = job.result
         with self._conn_gate():
-            row = self._connection.execute(
-                "SELECT result FROM jobs WHERE id = ?", (job.id,)
-            ).fetchone()
-            existing = json.loads(row["result"]) if row and row["result"] else None
-            merged = merge_job_result(
-                existing,
-                {
-                    **(result or {}),
-                    "interrupted_at": utc_timestamp(),
-                    "interrupted_reason": "app shutdown",
-                },
-            )
-            job.result = merged
-            self._connection.execute(
-                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
-                (JobState.INTERRUPTED.value, json.dumps(merged), job.id),
-            )
-            self._prune_history()
-            if self._bus is not None and job.id is not None:
-                self._bus.forget(job.id)
-            self._connection.commit()
+            try:
+                row = self._connection.execute(
+                    "SELECT result FROM jobs WHERE id = ?", (job.id,)
+                ).fetchone()
+                existing = json.loads(row["result"]) if row and row["result"] else None
+                merged = merge_job_result(
+                    existing,
+                    {
+                        **(result or {}),
+                        "interrupted_at": utc_timestamp(),
+                        "interrupted_reason": "app shutdown",
+                    },
+                )
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                    (JobState.INTERRUPTED.value, json.dumps(merged), job.id),
+                )
+                self._prune_history()
+                self._connection.commit()
+            except Exception:
+                # the failed commit did NOT end the transaction - the
+                # INTERRUPTED UPDATE is still pending and the next successful
+                # commit would persist it - so roll back before restoring,
+                # exactly like take_next/cancel (issue #660 round 17,
+                # finding 3); the job is not interrupted, so restore its
+                # pre-transition state (including the merged result) and
+                # re-raise
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                job.state = previous_state
+                job.result = previous_result
+                raise
+        job.state = JobState.INTERRUPTED
+        job.result = merged
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
 
     def cancel(self, job_id: int) -> bool:
         """Requests cancellation of a queued job (or signals a running one).
@@ -2163,27 +2233,20 @@ class JobWorker:
             if not cancel.is_set():
                 self.queue.report_progress(job, data)
 
+        unknown_kind = job.kind not in (JobKind.SCAN, JobKind.PLAN, JobKind.ENCODE)
         try:
-            if job.kind == JobKind.SCAN:
+            if unknown_kind:
+                result = {}
+            elif job.kind == JobKind.SCAN:
                 result = execute_scan(job, self.connection, cancel, progress=progress)
             elif job.kind == JobKind.PLAN:
                 result = execute_plan(
                     job, self.connection, cancel, progress=progress, queue=self.queue
                 )
-            elif job.kind == JobKind.ENCODE:
+            else:
                 result = execute_encode(
                     job, self.connection, cancel, progress=progress, queue=self.queue
                 )
-            else:
-                self.queue.fail(job, f"unknown job kind: {job.kind}")
-                return
-            if result.get("cancelled"):
-                # a graceful cancel carries the engine's partial result —
-                # the UI renders outcomes on cancelled encode rows
-                interrupted = record_cancel(result)
-                cancelled = not interrupted
-            else:
-                self.queue.finish(job, result)
         except Cancelled:
             # the engine raised between checkpoints (subprocess terminated);
             # partial probe/output artifacts are cleaned by the engine
@@ -2197,8 +2260,22 @@ class JobWorker:
                 kind=f"job-{job.kind.value}",
                 context={"job_id": job.id, "payload": job.payload},
             )
-            self.queue.fail(job, f"{type(e).__name__}: {e}")
             failure = f"{type(e).__name__}: {e}"
+            self.queue.fail(job, failure)
+        else:
+            # the terminal write runs OUTSIDE the engine's exception boundary
+            # (issue #681): a failed commit restores the job and re-raises, so
+            # it must surface as the iteration's failure, never be re-recorded
+            # as a job failure by the except above
+            if unknown_kind:
+                self.queue.fail(job, f"unknown job kind: {job.kind}")
+            elif result.get("cancelled"):
+                # a graceful cancel carries the engine's partial result —
+                # the UI renders outcomes on cancelled encode rows
+                interrupted = record_cancel(result)
+                cancelled = not interrupted
+            else:
+                self.queue.finish(job, result)
         finally:
             self._running_cancel = None
             self.queue.unregister_cancel_event(job.id)

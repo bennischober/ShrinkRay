@@ -127,11 +127,13 @@ One schema for every stage, built by `engine/progress.py` and mirrored in
   pending cancel request wins, and a per-file stage row is history, never resumed.
 - `JobQueue` concurrency shape is fixed, not style: `_lock` is never held while waiting
   for the connection gate (`take_next` marks the job under `_lock`, releases it, then
-  takes the gate for the RUNNING commit); a failed commit rolls
-  back and restores the row to `QUEUED`; only `QUEUED` jobs are taken, and only a
-  `QUEUED` job is cancelled as queued — a running job's cancellation is its cancel
-  event, and a job in the take window is not cancellable as queued (returns False)
-  (`jobs.py`, #660 review rounds — the shape that has repeatedly broken).
+  takes the gate for the RUNNING commit); a failed commit rolls back and restores the
+  row to `QUEUED`; the terminal writes (`finish`/`fail`/`mark_cancelled`/
+  `mark_interrupted`) commit before changing the in-memory state and restore it on
+  failure (#681); only `QUEUED` jobs are taken, and only a `QUEUED` job is cancelled
+  as queued — a running job's cancellation is its cancel event, and a job in the take
+  window is not cancellable as queued (returns False) (`jobs.py`, #660 review rounds —
+  the shape that has repeatedly broken).
 - `JobWorker._run` logs and backs off a failed iteration; only
   `WORKER_MAX_CONSECUTIVE_FAILURES = 5` consecutive failures end it, with the reason
   recorded on `fatal_error` for `/api/status` (`jobs.py`, #649) — a silent dead worker

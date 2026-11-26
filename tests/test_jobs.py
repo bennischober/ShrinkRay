@@ -81,6 +81,34 @@ def _prediction(movie, **_kwargs):
     )
 
 
+class _FlakyCommitOnce:
+    """The #660 fault seam: the next gated commit raises once.
+
+    The proxy delegates everything else to the real connection, so the real
+    terminal-write ordering runs. The first commit raises before the real commit
+    can end the transaction, leaving the terminal UPDATE pending exactly like the
+    observed ``SystemError`` (issues #649/#681).
+    """
+
+    def __init__(self, real):
+        self._real = real
+        self._failed = False
+        self.statements: list[tuple[str, tuple]] = []
+
+    def execute(self, sql, *args, **kwargs):
+        self.statements.append((sql, args))
+        return self._real.execute(sql, *args, **kwargs)
+
+    def commit(self):
+        if not self._failed:
+            self._failed = True
+            raise RuntimeError("the db blinked")
+        return self._real.commit()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 class TestJobs(unittest.TestCase):
     def setUp(self):
         import tempfile
@@ -1829,6 +1857,138 @@ class TestJobs(unittest.TestCase):
         second = queue.take_next()
         self.assertIsNotNone(second, "the job was stranded by the failed commit")
         self.assertEqual(second.id, job.id)
+
+    def test_a_failed_finish_commit_keeps_the_finished_job_retryable(self):
+        """Issue #681: a finished encode's row is bookkeeping, the artifact is
+        the truth. The worker's finish commit runs BEFORE the in-memory DONE; a
+        failed commit rolls back, restores RUNNING (still re-transitionable) and
+        propagates, and is never re-recorded as a job failure."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={"quality": True}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue)
+        result = {"outcomes": [{"movie": "a.mkv", "state": "encoded"}]}
+        flaky = _FlakyCommitOnce(self.connection)
+        with (
+            mock.patch.object(jobs, "execute_encode", return_value=result),
+            mock.patch.object(self.queue, "_connection", flaky),
+            self.assertRaises(RuntimeError),
+        ):
+            worker._execute(taken)
+        # the DONE UPDATE ran; the commit after it is what failed
+        updates = [(sql, args) for sql, args in flaky.statements if "UPDATE jobs SET state" in sql]
+        self.assertTrue(updates, "finish never ran its terminal UPDATE")
+        self.assertEqual(updates[0][1][0][0], jobs.JobState.DONE.value)
+        # the rollback ended the transaction: the DONE UPDATE cannot linger
+        self.assertFalse(self.connection.in_transaction)
+        # the in-memory state is the pre-transition RUNNING, not DONE
+        self.assertEqual(taken.state, jobs.JobState.RUNNING)
+        self.assertIsNone(taken.result)
+        # the row stayed retryable, not FAILED-with-NULL-result
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.RUNNING)
+        self.assertIsNone(row.result)
+        # the same job can be transitioned again with the fault removed
+        self.queue.finish(taken, result)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.DONE)
+        self.assertEqual(row.result, result)
+        self.assertEqual(taken.state, jobs.JobState.DONE)
+        self.assertEqual(taken.result, result)
+
+    def test_a_failed_fail_commit_keeps_the_failed_job_retryable(self):
+        """Issue #681: a failed job's error text is written only after the
+        commit. A failed commit rolls back and restores the pre-transition
+        RUNNING state, and the error propagates; the row is retryable."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        flaky = _FlakyCommitOnce(self.connection)
+        with (
+            mock.patch.object(self.queue, "_connection", flaky),
+            self.assertRaises(RuntimeError),
+        ):
+            self.queue.fail(taken, "RuntimeError: engine exploded")
+        updates = [(sql, args) for sql, args in flaky.statements if "UPDATE jobs SET state" in sql]
+        self.assertTrue(updates, "fail never ran its terminal UPDATE")
+        self.assertEqual(updates[0][1][0][0], jobs.JobState.FAILED.value)
+        self.assertFalse(self.connection.in_transaction)
+        self.assertEqual(taken.state, jobs.JobState.RUNNING)
+        self.assertIsNone(taken.error)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.RUNNING)
+        self.assertIsNone(row.error)
+        # the same job can be transitioned again with the fault removed
+        self.queue.fail(taken, "RuntimeError: engine exploded")
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.FAILED)
+        self.assertEqual(row.error, "RuntimeError: engine exploded")
+        self.assertIsNone(row.result)
+        self.assertEqual(taken.state, jobs.JobState.FAILED)
+        self.assertEqual(taken.error, "RuntimeError: engine exploded")
+
+    def test_a_failed_cancel_commit_keeps_the_cancelled_job_retryable(self):
+        """Issue #681: a cancel's partial result is written only after the
+        commit. A failed commit rolls back and restores RUNNING; the retried
+        write stores the cancellation, never a row stuck RUNNING."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
+        taken = self.queue.take_next()
+        partial = {"outcomes": [{"movie": "a.mkv", "state": "encoded"}]}
+        flaky = _FlakyCommitOnce(self.connection)
+        with (
+            mock.patch.object(self.queue, "_connection", flaky),
+            self.assertRaises(RuntimeError),
+        ):
+            self.queue.mark_cancelled(taken, partial)
+        updates = [(sql, args) for sql, args in flaky.statements if "UPDATE jobs SET state" in sql]
+        self.assertTrue(updates, "mark_cancelled never ran its terminal UPDATE")
+        self.assertEqual(updates[0][1][0][0], jobs.JobState.CANCELLED.value)
+        self.assertFalse(self.connection.in_transaction)
+        self.assertEqual(taken.state, jobs.JobState.RUNNING)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.RUNNING)
+        self.assertIsNone(row.result)
+        # the same job can be transitioned again with the fault removed
+        self.queue.mark_cancelled(taken, partial)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.CANCELLED)
+        self.assertEqual(row.result, partial)
+        self.assertEqual(taken.state, jobs.JobState.CANCELLED)
+
+    def test_a_failed_interrupted_commit_keeps_the_interrupted_job_retryable(self):
+        """Issue #681: the shutdown's interrupted write merges its resume
+        ledger only after the commit. A failed commit rolls back, restores the
+        pre-transition RUNNING state, and leaves the row's ledger intact; the
+        retried write merges the partial result."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        self.connection.execute(
+            "UPDATE jobs SET result = ? WHERE id = ?",
+            ('{"resume_count": 2}', taken.id),
+        )
+        self.connection.commit()
+        flaky = _FlakyCommitOnce(self.connection)
+        with (
+            mock.patch.object(self.queue, "_connection", flaky),
+            self.assertRaises(RuntimeError),
+        ):
+            self.queue.mark_interrupted(taken, {"movies": 3})
+        updates = [(sql, args) for sql, args in flaky.statements if "UPDATE jobs SET state" in sql]
+        self.assertTrue(updates, "mark_interrupted never ran its terminal UPDATE")
+        self.assertEqual(updates[0][1][0][0], jobs.JobState.INTERRUPTED.value)
+        self.assertFalse(self.connection.in_transaction)
+        self.assertEqual(taken.state, jobs.JobState.RUNNING)
+        self.assertIsNone(taken.result)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.RUNNING)
+        self.assertEqual(row.result, {"resume_count": 2})
+        # the same job can be transitioned again with the fault removed
+        self.queue.mark_interrupted(taken, {"movies": 3})
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(row.result["resume_count"], 2)
+        self.assertEqual(row.result["movies"], 3)
+        self.assertEqual(row.result["interrupted_reason"], "app shutdown")
+        self.assertEqual(taken.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(taken.result, row.result)
 
     def test_a_start_after_a_graceful_stop_actually_runs(self):
         """Issue #660 round 14, finding 4: start() clears _stop, so a worker
