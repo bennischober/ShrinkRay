@@ -31,11 +31,20 @@
     sourceBytes?: number | null
   } = $props()
 
-  let frozenNow = $state<number | null>(null)
+  /** The wall clock the summary's `finishes ≈ HH:MM` is computed against. It is
+   * state, not a one-shot derived, so it keeps advancing while the card is on
+   * screen (issue #631 review: a derived clock froze at mount). The interval
+   * exists only while the component is mounted, the data is live and a running
+   * work is displayed; the derived presence flag keeps a progress event from
+   * restarting it. */
+  const running = $derived(progress != null)
+  let now = $state(Date.now())
   $effect(() => {
-    if (!stale) frozenNow = Date.now()
+    if (stale || !running) return
+    now = Date.now()
+    const timer = setInterval(() => (now = Date.now()), 1000)
+    return () => clearInterval(timer)
   })
-  const now = $derived(stale ? frozenNow ?? Date.now() : Date.now())
   const summary = $derived(workSummary(progress, now, stale))
   const eta = $derived(progressEta(progress))
   const stage = $derived(progress?.stage ?? null)
