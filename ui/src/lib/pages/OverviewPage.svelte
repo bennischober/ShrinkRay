@@ -281,7 +281,11 @@
       running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
       etaSeconds: progressEta(runningProgress),
       queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
+      needYou: failedJobs.length,
+      failed: failedJobs.filter((j) => j.state === 'failed').length,
       watching: status?.watcher === 'running',
+      // stale data is not a snapshot of the queue's current state (issue #633)
+      snapshotPresent: status != null && !stale,
     })}
   </div>
 

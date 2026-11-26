@@ -70,6 +70,8 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **A running folder search states its movie index** ([#690](https://github.com/bennischober/ShrinkRay/issues/690), [#727](https://github.com/bennischober/ShrinkRay/pull/727)): the CRF search's summary named only the probe position, so the folder job's `file N of M` counter never appeared during the hours a folder search runs. The `crf-search` summary now states the running file's 1-based position before the search position (`file 4 of 12 · CRF search · probe 2 of 4`); a one-file job states `file 1 of 1`. The merge, event schema and ETA logic are unchanged.
 
+- **The Overview's status line names a failure and never claims an all-clear it cannot see** ([#679](https://github.com/bennischober/ShrinkRay/issues/679), [#728](https://github.com/bennischober/ShrinkRay/pull/728)): the page's first line read `● Idle — all caught up · watching for new files` whenever no job ran, even while the failure panel below it listed lost work, and before the first snapshot arrived it claimed the watcher was watching a queue it had never seen. The line now counts the jobs that need the operator (`● 2 need you — 1 failed · the watcher is watching`), keeps that count visible while a job runs, and says `● Connecting…` — never all caught up — while the snapshot is missing or stale.
+
 ## [0.6.1] - 2026-11-06
 
 ### Fixed

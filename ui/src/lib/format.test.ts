@@ -279,23 +279,51 @@ describe('statusAnswer', () => {
   // issue #633: the page must answer "is everything OK?" first, in one line
   it('says what is running, how long is left and what is waiting', () => {
     expect(
-      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, watching: true }),
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, needYou: 0, failed: 0, watching: true, snapshotPresent: true }),
     ).toBe('● Working — encoding a.mkv, about 1 h 50 min left · 7 files waiting')
   })
 
   it('says it is idle when nothing is running, and whether it is watching', () => {
-    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: true })).toBe(
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 0, failed: 0, watching: true, snapshotPresent: true })).toBe(
       '● Idle — all caught up · watching for new files',
     )
-    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: false })).toBe(
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 0, failed: 0, watching: false, snapshotPresent: true })).toBe(
       '● Idle — all caught up · the watcher is off',
     )
   })
 
   it('names one waiting file in the singular', () => {
     expect(
-      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: null, queued: 1, watching: true }),
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: null, queued: 1, needYou: 0, failed: 0, watching: true, snapshotPresent: true }),
     ).toBe('● Working — encoding a.mkv · 1 file waiting')
+  })
+
+  // issue #679: the line is the page's first answer to "is anything wrong?",
+  // so it must never read all caught up while a failure exists
+  it('names the failure when nothing is running (issue #679)', () => {
+    expect(
+      statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 2, failed: 1, watching: true, snapshotPresent: true }),
+    ).toBe('● 2 need you — 1 failed · the watcher is watching')
+  })
+
+  it('keeps a failure visible while work runs (issue #679)', () => {
+    expect(
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, needYou: 2, failed: 1, watching: true, snapshotPresent: true }),
+    ).toBe('● Working — encoding a.mkv, about 1 h 50 min left · 2 need you — 1 failed · 7 files waiting')
+  })
+
+  // issue #679: with no snapshot the line knows neither the queue nor the
+  // watcher, so it makes no all-clear claim
+  it('says it is connecting when the snapshot is missing (issue #679)', () => {
+    expect(
+      statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 0, failed: 0, watching: false, snapshotPresent: false }),
+    ).toBe('● Connecting…')
+  })
+
+  it('keeps a known failure visible while the snapshot is missing (issue #679)', () => {
+    expect(
+      statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 2, failed: 1, watching: true, snapshotPresent: false }),
+    ).toBe('● Connecting… · 2 need you — 1 failed')
   })
 })
 

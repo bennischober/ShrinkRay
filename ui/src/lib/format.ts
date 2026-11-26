@@ -358,24 +358,47 @@ export function titleBuckets(
 }
 
 /** The one line the Overview answers "is everything OK?" with, first on the
- * page (issue #633): the state, what it is doing, how long is left and how
- * much is waiting — never the poll mode, the database path or a count of
- * sources. The operator reads one sentence and knows whether to act. */
+ * page (issues #633, #679): the state, what it is doing, how long is left and
+ * what is waiting — never the poll mode, the database path or a count of
+ * sources. The operator reads one sentence and knows whether to act.
+ *
+ * `needYou` counts the jobs holding lost work (a failure, or a swap the
+ * operator declined — issue #665); `failed` counts those that failed outright.
+ * A failure is named in both the working and the idle branch, and
+ * `snapshotPresent: false` (loading or stale) makes no claim about the queue
+ * or the watcher — an all-clear is only drawn from a snapshot that is here. */
 export function statusAnswer(input: {
   running: { movie?: string | null } | null
   etaSeconds: number | null
   queued: number
+  needYou: number
+  failed: number
   watching: boolean
+  snapshotPresent: boolean
 }): string {
+  const failure =
+    input.needYou > 0
+      ? input.failed > 0
+        ? `${input.needYou} need you — ${input.failed} failed`
+        : `${input.needYou} need you`
+      : ''
   if (input.running) {
     const parts = [`encoding ${input.running.movie ?? 'a file'}`]
     const left = eta(input.etaSeconds)
     if (left) parts.push(left)
     let line = `● Working — ${parts.join(', ')}`
+    if (failure) line += ` · ${failure}`
     if (input.queued > 0) {
       line += ` · ${input.queued} file${input.queued === 1 ? '' : 's'} waiting`
     }
     return line
+  }
+  if (!input.snapshotPresent) {
+    return failure ? `● Connecting… · ${failure}` : '● Connecting…'
+  }
+  if (failure) {
+    const tail = input.watching ? 'the watcher is watching' : 'the watcher is off'
+    return `● ${failure} · ${tail}`
   }
   const tail = input.watching ? 'watching for new files' : 'the watcher is off'
   return `● Idle — all caught up · ${tail}`
