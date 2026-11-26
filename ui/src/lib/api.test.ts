@@ -74,7 +74,7 @@ describe('movieOutcome', () => {
 
 describe('isFailedOutcome', () => {
   // the rail's roll-up and the note must agree on what counts as work lost
-  it('counts a failed movie and a declined swap, never a busy or HDR skip', () => {
+  it('counts a failed movie or plan entry and a declined swap, never a busy or HDR skip', () => {
     expect(isFailedOutcome({ movie: 'a', state: 'failed' })).toBe(true)
     expect(
       isFailedOutcome({ movie: 'b', state: 'skipped', error: 'the swap was declined: subtitles' }),
@@ -82,6 +82,8 @@ describe('isFailedOutcome', () => {
     expect(isFailedOutcome({ movie: 'c', state: 'skipped', error: 'hdr not supported' })).toBe(false)
     expect(isFailedOutcome({ movie: 'd', state: 'skipped', error: 'the file was busy' })).toBe(false)
     expect(isFailedOutcome({ movie: 'e', state: 'encoded' })).toBe(false)
+    expect(isFailedOutcome({ movie: 'f', state: 'skip' })).toBe(false)
+    expect(isFailedOutcome({ movie: 'g', state: 'error' })).toBe(true)
   })
 })
 
@@ -127,10 +129,24 @@ describe('failedOutcomeNote', () => {
     expect(failedOutcomeNote(j)).toContain('/m/b')
   })
 
-  it('is empty for clean done, failed jobs, non-encodes', () => {
+  it('names the failed movies of a partially-done plan (issue #685)', () => {
+    const j = job({
+      kind: 'plan',
+      result: {
+        plans: [
+          { movie: '/m/a', state: 'encode' },
+          { movie: '/m/b', state: 'error', error: 'boom' },
+        ],
+      },
+    })
+    expect(failedOutcomeNote(j)).toContain('1 of 2 failed')
+    expect(failedOutcomeNote(j)).toContain('/m/b')
+  })
+
+  it('is empty for clean done, failed jobs, and kinds with no outcome list', () => {
     expect(failedOutcomeNote(job({ state: 'done' }))).toBe('')
     expect(failedOutcomeNote(job({ state: 'failed' }))).toBe('')
-    expect(failedOutcomeNote(job({ kind: 'plan', state: 'done' }))).toBe('')
+    expect(failedOutcomeNote(job({ kind: 'scan', state: 'done' }))).toBe('')
   })
 })
 

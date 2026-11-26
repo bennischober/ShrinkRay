@@ -218,6 +218,21 @@ describe('resultSummary', () => {
     expect(resultSummary([{ movie: 'a', state: 'already_encoded' }])).toBe('1 already encoded')
   })
 
+  it('summarises a plan in the plan vocabulary (issue #685)', () => {
+    // plan entries carry the stored states jobs.py writes: encode -> would
+    // encode, skip -> already efficient; the encode words must not leak in
+    const s = resultSummary([
+      { movie: 'a', state: 'encode' },
+      { movie: 'b', state: 'encode' },
+      { movie: 'c', state: 'encode' },
+      { movie: 'd', state: 'skip', reason: 'already efficient' },
+      { movie: 'e', state: 'skip', reason: 'target unreachable' },
+      { movie: 'f', state: 'skip', reason: 'below min size' },
+      { movie: 'g', state: 'skip', reason: 'hdr not supported' },
+    ])
+    expect(s).toBe('3 would encode · 4 already efficient')
+  })
+
   it('says nothing when the payload carries no outcomes', () => {
     expect(resultSummary([])).toBe('')
   })
