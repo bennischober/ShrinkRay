@@ -59,19 +59,23 @@ function renderOverview(
   movies: Movie[] = [movie()],
   history?: Job[],
   savedTotalGb = 0.5,
+  failedJobs: Job[] = [],
+  statusOverride: Status | null = status,
+  stale = false,
 ) {
   return render(OverviewPage, {
     movies,
     history: history ?? (runningJobs.length ? runningJobs : [job()]),
-    status,
+    status: statusOverride,
     targetVmaf: 96,
     savedTotalGb,
     measuredCount: 0,
     missingMovies: [],
     runningJobs,
-    failedJobs: [],
+    failedJobs,
     scanPaths: ['/m'],
     outputDir: '/out',
+    stale,
     ondismiss: () => {},
     ongoto: () => {},
     onopenmovie: () => {},
@@ -130,6 +134,37 @@ describe('OverviewPage VMAF display (issue #599)', () => {
     })
     renderOverview([running])
     expect(screen.getAllByText(/● Working — encoding/).length).toBeGreaterThan(0)
+  })
+
+  it('says what needs the operator when a failure exists and nothing runs (issue #679)', () => {
+    // two lost-work jobs: one failed outright, one a done encode whose swap
+    // was declined (#665) — the line must name both, never all caught up
+    const failed = job({ id: 7, state: 'failed', error: 'the source vanished mid-encode', result: null })
+    const declined = job({
+      id: 8,
+      kind: 'encode',
+      state: 'done',
+      result: {
+        outcomes: [{ movie: 'b.mkv', state: 'skipped', error: 'the swap was declined: verification failed' }],
+      },
+    })
+    const { container } = renderOverview([], [movie()], [failed, declined], 0.5, [failed, declined])
+    expect(container.querySelector('.status-line')?.textContent).toContain(
+      '● 2 need you — 1 failed · the watcher is watching',
+    )
+    expect(container.textContent).not.toContain('all caught up')
+  })
+
+  it('says it is connecting when there is no snapshot (issue #679)', () => {
+    const { container } = renderOverview([], [movie()], undefined, 0.5, [], null)
+    expect(container.querySelector('.status-line')?.textContent).toContain('● Connecting…')
+    expect(container.textContent).not.toContain('all caught up')
+  })
+
+  it('does not say all caught up from stale data (issue #633)', () => {
+    const { container } = renderOverview([], [movie()], undefined, 0.5, [], status, true)
+    expect(container.querySelector('.status-line')?.textContent).toContain('● Connecting…')
+    expect(container.textContent).not.toContain('all caught up')
   })
 
   it('does not show the Setup panel: its facts are elsewhere or not actionable (issue #633)', () => {
