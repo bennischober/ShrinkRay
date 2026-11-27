@@ -51,6 +51,10 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          # cache ~/.npm so `npm ci` reinstalls from local tarballs instead of
+          # re-downloading the whole dependency tree on every run
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
 
       - name: Install UI dependencies
         run: npm ci
@@ -70,6 +74,17 @@ jobs:
 
       # the dashboard's layout checks (issue #628): every page at 320, 390,
       # 1024 and 1440 px, in dark and light, against a fixture, with no resident app
+      # the chromium download is ~150 MB per run; the cache keeps installed
+      # browsers across runs, and `playwright install` only fetches revisions
+      # missing from the cache, so a stale entry is safe, never wrong
+      - name: Restore the Playwright browser cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
         working-directory: ui
