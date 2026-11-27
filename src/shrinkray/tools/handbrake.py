@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TypedDict
 
 HANDBRAKE_BINARY = "HandBrakeCLI"
 PROBE_TIMEOUT = 60  # seconds
@@ -215,7 +216,16 @@ _PROGRESS_LINE = re.compile(
 )
 
 
-def parse_progress_line(line: str) -> dict | None:
+class ProgressFacts(TypedDict):
+    """The facts one HandBrake progress line reports (issue #631)."""
+
+    percent: float
+    fps: float | None
+    avg_fps: float | None
+    eta_seconds: int | None
+
+
+def parse_progress_line(line: str) -> ProgressFacts | None:
     """Parses one HandBrake progress line into its reported facts.
 
     The line carries everything the dashboard shows for the final encode —
@@ -229,8 +239,8 @@ def parse_progress_line(line: str) -> dict | None:
         line (str): One stdout line (already split on ``\\r``/``\\n``).
 
     Returns:
-        dict | None: ``{"percent", "fps", "avg_fps", "eta_seconds"}`` or None
-            when the line carries no percent. ``fps``/``avg_fps``/
+        ProgressFacts | None: ``{"percent", "fps", "avg_fps", "eta_seconds"}``
+            or None when the line carries no percent. ``fps``/``avg_fps``/
             ``eta_seconds`` are None when the line does not print them.
     """
     match = _PROGRESS_LINE.search(line)

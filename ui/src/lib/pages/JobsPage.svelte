@@ -247,7 +247,7 @@
               <!-- the running file is a per-movie stage of the folder job
                    (#602/#631): name and link the title it is working on,
                    while the row's FILE cell keeps showing the folder -->
-              <div class="running-file mono" data-running-movie>
+              <div class="running-file mono">
                 <a
                   class="movie-link"
                   href={`#/movie/${encodeURIComponent(singleMoviePath(job)!)}`}

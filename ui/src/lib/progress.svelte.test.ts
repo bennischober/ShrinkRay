@@ -95,7 +95,7 @@ describe('progress store', () => {
     expect(FakeEventSource.instances[0].url).toBe('/api/events?token=s3cret')
   })
 
-  it('hello replaces the whole map and rebuilds the probe trail', () => {
+  it('hello replaces the file model and rebuilds the probe trail', () => {
     vi.useFakeTimers()
     vi.setSystemTime(1000)
     mod.connectEvents()
@@ -121,13 +121,12 @@ describe('progress store', () => {
         },
       },
     })
-    expect(mod.progressFor(1)?.run).toEqual({ done: 3, total: 12 })
     const view = mod.fileProgressFor(1)
+    expect(view?.run).toEqual({ done: 3, total: 12 })
     expect(view?.probes).toHaveLength(2)
     expect(view?.probe?.crf).toBe(24)
     // a later quiet hello clears stale entries
     es.emit('hello', { jobs: {} })
-    expect(mod.progressFor(1)).toBeNull()
     expect(mod.fileProgressFor(1)).toBeNull()
   })
 
@@ -171,7 +170,7 @@ describe('progress store', () => {
       file: { movie: 'old.mkv', path: '/old.mkv', stage: 'encode', step: 5, steps: 7 },
       encode: { percent: 99 },
     })
-    expect(mod.progressFor(1)).toBeNull()
+    expect(mod.fileProgressFor(1)).toBeNull()
     es.emit('message', {
       job_id: 1,
       v: 1,
@@ -180,7 +179,6 @@ describe('progress store', () => {
       file: { movie: 'new.mkv', path: '/new.mkv', stage: 'encode', step: 5, steps: 7 },
       encode: { percent: 10 },
     })
-    expect(mod.progressFor(1)?.v).toBe(1)
     expect(mod.fileProgressFor(1)?.movie).toBe('new.mkv')
   })
 
@@ -204,8 +202,8 @@ describe('progress store', () => {
     expect(view?.stage).toBe('encode')
     expect(view?.step).toBe(5)
     expect(view?.encode?.percent).toBe(40)
-    expect(mod.progressFor(null)).toBeNull()
-    expect(mod.progressFor(999)).toBeNull()
+    expect(mod.fileProgressFor(null)).toBeNull()
+    expect(mod.fileProgressFor(999)).toBeNull()
   })
 
   it('carries cache provenance and renders the reused wording (issue #631)', () => {
@@ -429,7 +427,7 @@ describe('progress store', () => {
     expect(view?.probe?.vmaf).toBeNull()
   })
 
-  it('a stage row event keeps its own job_id and does not feed the file model', () => {
+  it('a stage row event does not feed the file model', () => {
     mod.connectEvents()
     const es = FakeEventSource.instances[0]
     es.open()
@@ -441,7 +439,6 @@ describe('progress store', () => {
       file: { movie: 'a.mkv', path: '/a.mkv', stage: 'crf-search', step: 4, steps: 7 },
       probe: probe(1, 30, 94.8, false),
     })
-    expect(mod.progressFor(9)?.probe?.vmaf).toBe(94.8)
     expect(mod.fileProgressFor(9)).toBeNull()
   })
 

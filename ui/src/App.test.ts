@@ -42,7 +42,6 @@ vi.mock('./lib/progress.svelte', async (importOriginal) => {
   return {
     ...actual,
     connectEvents: () => {},
-    progressFor: () => null,
     fileProgressFor: () => null,
     eventsConnected: () => mode === 'live',
     resetEvents: () => {},

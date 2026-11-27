@@ -140,13 +140,6 @@ export function measuredAtLabel(value: string | null | undefined): string {
     .replace(',', '')
 }
 
-/** The same estimate for a table cell, where the column header already says
- * what it is: `~9 h 56 min`, never `about ... left`. */
-export function etaShort(seconds: number | null | undefined): string {
-  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return ''
-  return `~${duration(seconds)}`
-}
-
 export function span(
   startIso: string | null | undefined,
   endIso: string | null | undefined,

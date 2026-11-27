@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, eta, etaShort, finishesAt, fps, groupJobs, isStageRow, kindWord, percent, queueLabel, queuedFileCount, queuePaceSeconds, reclaimedBytes, reclaimedTotalBytes, relative, resultSummary, savedPercent, span, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, finishesAt, fps, groupJobs, isStageRow, kindWord, percent, queueLabel, queuedFileCount, queuePaceSeconds, reclaimedBytes, reclaimedTotalBytes, relative, resultSummary, savedPercent, span, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
 import type { Movie } from './api'
 
 describe('duration', () => {
@@ -362,13 +362,6 @@ describe('queueLabel', () => {
   it('says what the rail count counts, in the right number', () => {
     expect(queueLabel(1)).toBe('1 job in the queue')
     expect(queueLabel(3)).toBe('3 jobs in the queue')
-  })
-})
-
-describe('etaShort', () => {
-  it('drops the sentence the column header already carries', () => {
-    expect(etaShort(90 * 60)).toBe('~1 h 30 min')
-    expect(etaShort(null)).toBe('')
   })
 })
 

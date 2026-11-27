@@ -105,12 +105,6 @@ let fileByJob = $state<Record<number, FileProgressView>>({})
 let connected = $state(false)
 let es: EventSource | null = null
 
-/** Returns the latest merged event for a job (null: none known). */
-export function progressFor(jobId: number | null): ProgressData | null {
-  if (jobId === null) return null
-  return progressByJob[jobId] ?? null
-}
-
 /** Returns the accumulated view model for a running folder job (null: none). */
 export function fileProgressFor(jobId: number | null): FileProgressView | null {
   if (jobId === null) return null
