@@ -828,6 +828,7 @@ def plan(
     of a real encode run.
     """
     from shrinkray.engine.plan import plan_quality
+    from shrinkray.engine.watch import check_stability
 
     config = load_config(config_file=config_file)
     # the flag wins; without it the config's required VMAF applies (issue #252)
@@ -884,12 +885,43 @@ def plan(
         total_input = total_output = 0
         plans: list = []
         errors = 0
+        waits = 0
+        wait_rows: list[tuple[str, str]] = []
         cancel = signals.enter_context(_cancel_on_terminal_close())
         for movie in movies:
             # a signal that landed while no child ran (recording the previous
             # plan) is honoured here: plan_quality's crop pass would not see it
             if cancel.is_set():
                 raise _EncodeCancelled("cancelled by user")
+            # the stability witness, the same one encode asks (issues #437,
+            # #479, #587): a prediction made from a torn file is not a
+            # prediction, and a stored plan row under a stalled download's
+            # identity outlives it. plan reports at once - it is a prediction
+            # command, not a waiter: a young file or a stalled sparse download
+            # is listed as not decidable yet, with the witness's reason, and
+            # neither probed nor recorded.
+            try:
+                stability = check_stability(movie)
+            except OSError as e:
+                table.add_row(movie.name, "[red]error[/red]", "", "", "", "", str(e))
+                errors += 1
+                continue
+            if not stability.settled:
+                # the reason comes from the witness itself (#587's review):
+                # the CLI builds no sentence of its own, so the wording
+                # lives with the verdict it explains
+                table.add_row(
+                    movie.name,
+                    "[yellow]wait[/yellow]",
+                    "",
+                    "",
+                    "",
+                    "",
+                    stability.not_settled_reason,
+                )
+                wait_rows.append((movie.name, stability.not_settled_reason))
+                waits += 1
+                continue
             try:
                 result = plan_quality(
                     movie,
@@ -962,6 +994,17 @@ def plan(
 
         if not no_table:
             console.print(table)
+        if waits:
+            # a wait row is not an error row, but a scripted run (--no-table)
+            # during a copy must still say WHAT it did not decide, with the
+            # witness's reason (the takeover audit): the table carries the
+            # rows, --no-table printed only a count
+            if no_table:
+                for name, reason in wait_rows:
+                    console.print(f"[yellow]wait[/yellow] {name}: {reason}")
+            console.print(
+                f"[yellow]{waits} file(s) not complete yet; plan them again later.[/yellow]"
+            )
         if errors:
             if plans:
                 console.print(

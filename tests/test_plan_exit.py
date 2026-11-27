@@ -49,6 +49,7 @@ class TestPlanExitCode(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.movie = self.root / "one.mkv"
         self.movie.write_bytes(b"x" * 8)
+        os.utime(self.movie, (0, 0))  # old enough for the witness (#587)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -80,6 +81,7 @@ class TestPlanExitCode(unittest.TestCase):
         """One unreadable file must not sink a library-wide plan."""
         second = self.root / "two.mkv"
         second.write_bytes(b"x" * 8)
+        os.utime(second, (0, 0))  # old enough for the witness (#587)
 
         def fake_plan(movie, **kwargs):
             if movie.name == "one.mkv":
@@ -123,6 +125,7 @@ class TestPlanAppliesTheEligibilityGates(unittest.TestCase):
             root = Path(tmp)
             movie = root / "one.mkv"
             movie.write_bytes(b"x" * 8)
+            os.utime(movie, (0, 0))  # old enough for the witness (#587)
             config_file = root / "config.json"
             config_file.write_text(
                 '{"eligibility": {"min_source_height": 2160, "min_source_size_gb": 4.0,'
@@ -163,6 +166,7 @@ class TestPlanUsesTheConfiguredVmaf(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             movie = Path(tmp) / "one.mkv"
             movie.write_bytes(b"x" * 8)
+            os.utime(movie, (0, 0))  # old enough for the witness (#587)
             config_file = Path(tmp) / "config.json"
             config_file.write_text('{"quality": {"target_vmaf": 94.0}}', encoding="utf-8")
             seen: dict = {}

@@ -79,8 +79,9 @@ def _prediction(movie: Path) -> SimpleNamespace:
 def _movie(root: Path, content: bytes) -> Path:
     movie = root / "movie.mkv"
     movie.write_bytes(content)
-    # old enough for the completeness witness (#586): the resident jobs ask
-    # it before the engine, so a fresh fixture would be skipped not planned
+    # old enough for the completeness witness (#586/#587): the resident jobs
+    # and plan ask it before the engine, so a fresh fixture would be
+    # skipped or reported, never planned
     os.utime(movie, (0, 0))
     return movie
 
@@ -624,6 +625,8 @@ class TestEngineSkipPathGuard(unittest.TestCase):
             movie_b = root / "b.mkv"
             movie_a.write_bytes(b"x" * 16)
             movie_b.write_bytes(b"x" * 16)
+            os.utime(movie_a, (0, 0))  # old enough for the witness (#587)
+            os.utime(movie_b, (0, 0))
             # the record path needs a database: without --db the connection is
             # None and the record call (the code under test) never runs
             db_file = root / "metadata.db"

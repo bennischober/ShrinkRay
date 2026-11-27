@@ -326,11 +326,11 @@ class Stability:
     def not_settled_reason(self) -> str:
         """Why the file may not be decided on yet, worded for the operator.
 
-        The single source of that wording (#587's review): the boot
-        backlog's plan and encode jobs (#586) report this property
-        instead of building their own sentence, so the wording lives with
-        the verdict it explains. Only asked of a verdict that is not
-        `settled`: a settled verdict has no reason.
+        The single source of that wording (#587's review): `plan`'s wait
+        row (#587) and the boot backlog's plan and encode jobs (#586)
+        report this property instead of building their own sentences, so
+        the wording lives with the verdict it explains. Only asked of a
+        verdict that is not `settled`: a settled verdict has no reason.
 
         Returns:
             str: The witness's reason: `incomplete`'s own wording when the

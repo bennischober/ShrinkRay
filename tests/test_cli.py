@@ -443,6 +443,7 @@ class TestPresetConfigFallback(unittest.TestCase):
             root = Path(tmp).resolve()
             movie = root / "movie.mkv"
             movie.write_bytes(b"x" * 16)
+            os.utime(movie, (0, 0))  # old enough for the witness (#587)
             cfg = self._config_file(root)
             captured: dict = {}
 
@@ -483,6 +484,7 @@ class TestPresetConfigFallback(unittest.TestCase):
             root = Path(tmp).resolve()
             movie = root / "movie.mkv"
             movie.write_bytes(b"x" * 16)
+            os.utime(movie, (0, 0))  # old enough for the witness (#587)
             cfg = self._config_file(root)
             captured: dict = {}
 
@@ -519,6 +521,7 @@ class TestPresetConfigFallback(unittest.TestCase):
             root = Path(tmp).resolve()
             movie = root / "movie.mkv"
             movie.write_bytes(b"x" * 16)
+            os.utime(movie, (0, 0))  # old enough for the witness (#587)
             cfg = self._config_file(root)
             captured: dict = {}
 
@@ -782,6 +785,7 @@ class TestCancelOnTerminalClose(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             movie = Path(tmp).resolve() / "movie.mkv"
             movie.write_bytes(b"x" * 16)
+            os.utime(movie, (0, 0))  # old enough for the witness (#587)
             with (
                 patch("shrinkray.service.all_problems", return_value=[]),
                 patch(
@@ -855,6 +859,7 @@ class TestCancelOnTerminalClose(unittest.TestCase):
             movies = [lib / "a.mkv", lib / "b.mkv"]
             for m in movies:
                 m.write_bytes(b"x" * 16)
+                os.utime(m, (0, 0))  # old enough for the witness (#587)
 
             def fake_plan(movie_in, **kwargs):
                 os.kill(os.getpid(), signal.SIGINT)  # ctrl+c, no child running
