@@ -370,18 +370,6 @@
     padding: 6px 10px;
     max-width: 260px;
   }
-  /* visually hidden, SR-audible (the phone cards' column heads) */
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-    border: 0;
-  }
   .spacer { flex: 1; }
 
   .bulk-bar {
@@ -523,7 +511,7 @@
   }
   /* below 768px a row becomes a card: the desktop columns clip on a phone, and
      only the checkbox and a truncated title were visible (issue #636). The column
-     heads stay in the accessibility tree, hidden visually only, so every card
+     heads stay in the accessibility tree, clipped to a 1px box, so every card
      cell still has its table header (issue #698). */
   @media (max-width: 768px) {
     .lib-table { min-width: 0; }
