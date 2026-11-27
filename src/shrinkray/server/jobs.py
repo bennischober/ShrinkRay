@@ -24,7 +24,12 @@ from enum import Enum
 from pathlib import Path
 
 from shrinkray.config import Conf, encode_window_open, refresh_config
+from shrinkray.engine.pause import read_pending_cancel_requests, remove_cancel_request
 from shrinkray.engine.pipeline import cap_threads
+from shrinkray.engine.progress import event as progress_event
+from shrinkray.engine.progress import file_state, with_run
+from shrinkray.engine.progress import merge as merge_progress
+from shrinkray.engine.progress import provenance as progress_provenance
 from shrinkray.logger import file_scope, log, log_error
 from shrinkray.replace import STAGING_DIR_PREFIX
 from shrinkray.tools.process import Cancelled, apply_config, apply_reloaded_config
@@ -38,6 +43,11 @@ ProgressCallback = Callable[[dict], None]
 
 JOB_RETENTION = 100
 
+# how often the cancel-request poller looks at the data folder. It is its own
+# thread because the worker's idle loop does not turn during a running encode:
+# a cancel for a multi-hour job must arrive while that job holds the worker.
+CANCEL_POLL_SECONDS = 1.0
+
 # live progress is FLOW, not state: it is never persisted (a running job's
 # row keeps result = NULL) and dies with the process. The bus fans each
 # engine callback out to every SSE subscriber; each subscriber gets a
@@ -45,6 +55,31 @@ JOB_RETENTION = 100
 # percent matters) and a seed of the latest event per job on connect, so a
 # late-joining tab renders the running band instantly.
 MAILBOX_SIZE = 64
+
+
+def utc_timestamp() -> str:
+    """Returns the current UTC time in the jobs table's ``datetime('now')`` shape."""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+
+
+def merge_job_result(result: dict | None, extra: dict) -> dict:
+    """Returns a copy of a job result with ``extra`` merged over it.
+
+    The resume ledger (``resumed_at``/``resume_count``) lives in the result
+    JSON, so every write that is not a final outcome must merge instead of
+    replacing the column: a shutdown cancellation, a crash recovery and the boot
+    resume each preserve what the previous attempt recorded (issue #622).
+
+    Args:
+        result (dict | None): The row's stored result, if any.
+        extra (dict): The keys to add or replace.
+
+    Returns:
+        dict: The merged result.
+    """
+    merged = dict(result or {})
+    merged.update(extra)
+    return merged
 
 
 class JobState(str, Enum):
@@ -55,6 +90,12 @@ class JobState(str, Enum):
     DONE = "done"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # a shutdown interrupted the job: the state is the durable discriminator
+    # an operator cancel lacks, and the boot resume step re-queues the row
+    INTERRUPTED = "interrupted"
+
+
+TERMINAL_STATES = frozenset({JobState.DONE, JobState.FAILED, JobState.CANCELLED})
 
 
 class JobKind(str, Enum):
@@ -178,12 +219,18 @@ class ProgressBus:
             data (dict): The engine's progress data (JSON-able).
         """
         with self._lock:
-            self._last[job_id] = data
+            # MERGE, never replace (issue #631): a percent tick carries no
+            # run/file counter, so replacing the latest event would wipe the
+            # folder's 3/12 and the probes measured so far. The hello frame
+            # seeds this merged state, so a reload mid-search rebuilds the
+            # whole picture.
+            merged = merge_progress(self._last.get(job_id), data)
+            self._last[job_id] = merged
             for box in self._subs.values():
                 if box.full():
                     with contextlib.suppress(queue.Empty):
                         box.get_nowait()  # drop-oldest
-                box.put_nowait((job_id, data))
+                box.put_nowait((job_id, merged))
 
     def subscribe(self) -> tuple[int, "queue.Queue", list[tuple[int, dict]]]:
         """Registers a subscriber and returns its mailbox and seed events.
@@ -269,6 +316,10 @@ class JobQueue:
         self._lock = threading.Lock()
         self._pending: list[Job] = []
         self._cancel_events: dict[int, threading.Event] = {}
+        # the operator-cancel mark for a RUNNING job (issue #622): the worker's
+        # cancel branches read it before the shutdown flag, so an operator cancel
+        # whose unwind is still running when a shutdown lands stays cancelled
+        self._operator_cancelled: set[int] = set()
         self._wake = threading.Event()
         self._load_pending()
 
@@ -462,21 +513,47 @@ class JobQueue:
     def finish(self, job: Job, result: dict) -> None:
         """Marks a job as done and stores its result.
 
+        The row is bookkeeping; the artifact is the truth (issue #681): a
+        finished encode's verified output has already replaced the source path
+        when this runs, so a failed commit cannot undo the swap. The commit is
+        attempted BEFORE the in-memory state changes: on failure the transaction
+        is rolled back, the job is restored to its pre-transition state (still
+        re-transitionable), and the error propagates to the caller. The row stays
+        running; the next start's stale-row recovery marks it interrupted.
+        A folder row is re-queued, and the re-run skips the file as AV1 output
+        instead of re-encoding it (#650); a per-file stage row stays history.
+        A caller may also retry this write. If no caller does, the row's outcome
+        is lost; the artifact is still the truth.
+
         Args:
             job (Job): The finished job.
             result (dict): The engine summary (JSON-able).
         """
+        previous_state = job.state
+        previous_result = job.result
+        with self._conn_gate():
+            try:
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                    (JobState.DONE.value, json.dumps(result), job.id),
+                )
+                self._prune_history()
+                self._connection.commit()
+            except Exception:
+                # the failed commit did NOT end the transaction - the DONE
+                # UPDATE is still pending and the next successful commit
+                # would persist it - so roll back before restoring, exactly
+                # like take_next/cancel (issue #660 round 17, finding 3);
+                # the job is not done, so restore RUNNING and re-raise
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                job.state = previous_state
+                job.result = previous_result
+                raise
         job.state = JobState.DONE
         job.result = result
-        with self._conn_gate():
-            self._connection.execute(
-                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
-                (JobState.DONE.value, json.dumps(result), job.id),
-            )
-            self._prune_history()
-            if self._bus is not None and job.id is not None:
-                self._bus.forget(job.id)
-            self._connection.commit()
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
 
     def _prune_history(self) -> None:
         """Hard-deletes terminated jobs beyond the retention cap.
@@ -492,10 +569,10 @@ class JobQueue:
             self._connection.execute(
                 """
                 DELETE FROM jobs
-                 WHERE state IN ('done', 'failed', 'cancelled')
+                 WHERE state IN ('done', 'failed', 'cancelled', 'interrupted')
                    AND id NOT IN (
                        SELECT id FROM jobs
-                        WHERE state IN ('done', 'failed', 'cancelled')
+                        WHERE state IN ('done', 'failed', 'cancelled', 'interrupted')
                         ORDER BY id DESC
                         LIMIT ?
                    )
@@ -514,18 +591,33 @@ class JobQueue:
             job (Job): The failed job.
             error (str): The failure message.
         """
+        previous_state = job.state
+        previous_error = job.error
+        with self._conn_gate():
+            try:
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, error = ?, result = NULL, "
+                    "finished_at = datetime('now') WHERE id = ?",
+                    (JobState.FAILED.value, error, job.id),
+                )
+                self._prune_history()
+                self._connection.commit()
+            except Exception:
+                # the failed commit did NOT end the transaction - the FAILED
+                # UPDATE is still pending and the next successful commit
+                # would persist it - so roll back before restoring, exactly
+                # like take_next/cancel (issue #660 round 17, finding 3);
+                # the job is not failed, so restore its pre-transition state
+                # and re-raise
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                job.state = previous_state
+                job.error = previous_error
+                raise
         job.state = JobState.FAILED
         job.error = error
-        with self._conn_gate():
-            self._connection.execute(
-                "UPDATE jobs SET state = ?, error = ?, result = NULL, "
-                "finished_at = datetime('now') WHERE id = ?",
-                (JobState.FAILED.value, error, job.id),
-            )
-            self._prune_history()
-            if self._bus is not None and job.id is not None:
-                self._bus.forget(job.id)
-            self._connection.commit()
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
 
     def mark_cancelled(self, job: Job, result: dict | None = None) -> None:
         """Marks a job as cancelled (user request, not a failure).
@@ -539,20 +631,86 @@ class JobQueue:
             job (Job): The cancelled job.
             result (dict | None): The engine's partial result, if any.
         """
-        job.state = JobState.CANCELLED
+        previous_state = job.state
         with self._conn_gate():
-            self._connection.execute(
-                "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
-                (
-                    JobState.CANCELLED.value,
-                    json.dumps(result) if result is not None else None,
-                    job.id,
-                ),
-            )
-            self._prune_history()
-            if self._bus is not None and job.id is not None:
-                self._bus.forget(job.id)
-            self._connection.commit()
+            try:
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                    (
+                        JobState.CANCELLED.value,
+                        json.dumps(result) if result is not None else None,
+                        job.id,
+                    ),
+                )
+                self._prune_history()
+                self._connection.commit()
+            except Exception:
+                # the failed commit did NOT end the transaction - the
+                # CANCELLED UPDATE is still pending and the next successful
+                # commit would persist it - so roll back before restoring,
+                # exactly like take_next/cancel (issue #660 round 17,
+                # finding 3); the job is not cancelled, so restore RUNNING
+                # and re-raise
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                job.state = previous_state
+                raise
+        job.state = JobState.CANCELLED
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
+
+    def mark_interrupted(self, job: Job, result: dict | None = None) -> None:
+        """Marks a job as interrupted by an app shutdown (issue #622).
+
+        The state is the durable discriminator an operator cancel lacks: the next
+        boot re-queues this row instead of leaving it cancelled. The result JSON
+        is MERGED, never replaced - it carries the resume ledger
+        (``resumed_at``/``resume_count``) an earlier boot wrote, and a graceful
+        stop must not reset that ledger or the resume cap could never fire.
+
+        Args:
+            job (Job): The interrupted job.
+            result (dict | None): The engine's partial result, if any.
+        """
+        previous_state = job.state
+        previous_result = job.result
+        with self._conn_gate():
+            try:
+                row = self._connection.execute(
+                    "SELECT result FROM jobs WHERE id = ?", (job.id,)
+                ).fetchone()
+                existing = json.loads(row["result"]) if row and row["result"] else None
+                merged = merge_job_result(
+                    existing,
+                    {
+                        **(result or {}),
+                        "interrupted_at": utc_timestamp(),
+                        "interrupted_reason": "app shutdown",
+                    },
+                )
+                self._connection.execute(
+                    "UPDATE jobs SET state = ?, result = ?, finished_at = datetime('now') WHERE id = ?",
+                    (JobState.INTERRUPTED.value, json.dumps(merged), job.id),
+                )
+                self._prune_history()
+                self._connection.commit()
+            except Exception:
+                # the failed commit did NOT end the transaction - the
+                # INTERRUPTED UPDATE is still pending and the next successful
+                # commit would persist it - so roll back before restoring,
+                # exactly like take_next/cancel (issue #660 round 17,
+                # finding 3); the job is not interrupted, so restore its
+                # pre-transition state (including the merged result) and
+                # re-raise
+                with contextlib.suppress(Exception):
+                    self._connection.rollback()
+                job.state = previous_state
+                job.result = previous_result
+                raise
+        job.state = JobState.INTERRUPTED
+        job.result = merged
+        if self._bus is not None and job.id is not None:
+            self._bus.forget(job.id)
 
     def cancel(self, job_id: int) -> bool:
         """Requests cancellation of a queued job (or signals a running one).
@@ -603,6 +761,11 @@ class JobQueue:
                         break
                 else:
                     event = self._cancel_events.get(job_id)
+                    if event is not None:
+                        # a running cancel is the operator's intent, not the
+                        # shutdown's (issue #622): the worker's cancel branches
+                        # read this mark before the stop flag
+                        self._operator_cancelled.add(job_id)
             if cancelled is not None:
                 try:
                     self._connection.execute(
@@ -643,13 +806,34 @@ class JobQueue:
             self._cancel_events[job_id] = event
 
     def unregister_cancel_event(self, job_id: int) -> None:
-        """Removes the cancel event of a finished job.
+        """Removes the cancel event and operator mark of a finished job.
 
         Args:
             job_id (int): The job's id.
         """
         with self._lock:
             self._cancel_events.pop(job_id, None)
+            self._operator_cancelled.discard(job_id)
+
+    def take_operator_cancel(self, job_id: int) -> bool:
+        """Returns whether an operator cancelled the job, clearing the mark.
+
+        The worker's cancel branches call this before checking the shutdown
+        flag: an operator cancel whose unwind is still running when a shutdown
+        lands is still the operator's cancel and must stay cancelled (issue
+        #622).
+
+        Args:
+            job_id (int): The job's id.
+
+        Returns:
+            bool: True when JobQueue.cancel signalled this running job.
+        """
+        with self._lock:
+            if job_id in self._operator_cancelled:
+                self._operator_cancelled.discard(job_id)
+                return True
+            return False
 
     def cancel_event(self, job_id: int) -> threading.Event | None:
         """Returns the cancel event of a job, if registered.
@@ -675,6 +859,42 @@ class JobQueue:
         woken = self._wake.wait(timeout)
         self._wake.clear()
         return woken
+
+    def queued_jobs(self) -> list[Job]:
+        """Returns the pending backlog: every queued and running job, oldest first.
+
+        This is a database read, not the in-memory `_pending` snapshot: after a
+        restart the worker is started before the boot backlog runs, so the first
+        restored job is usually already taken (`take_next` removed it from
+        `_pending`) but still `running` in the database — a caller deciding
+        whether work is already pending must see it (issue #626).
+
+        Returns:
+            list[Job]: The queued and running jobs in enqueue order.
+        """
+        with self._conn_gate():
+            rows = self._connection.execute(
+                "SELECT * FROM jobs WHERE state IN (?, ?) ORDER BY id",
+                (JobState.QUEUED.value, JobState.RUNNING.value),
+            ).fetchall()
+        return [_row_to_job(row) for row in rows]
+
+    def interrupted_jobs(self) -> list[Job]:
+        """Returns the jobs an interruption left behind, oldest first.
+
+        These are the rows the boot resume step re-queues (issue #622); the
+        resume happens before the worker starts, so the oldest id is the first
+        work the app does after a restart.
+
+        Returns:
+            list[Job]: The interrupted jobs in id order.
+        """
+        with self._conn_gate():
+            rows = self._connection.execute(
+                "SELECT * FROM jobs WHERE state = ? ORDER BY id",
+                (JobState.INTERRUPTED.value,),
+            ).fetchall()
+        return [_row_to_job(row) for row in rows]
 
     def all_jobs(self, limit: int = 100) -> list[Job]:
         """Returns the recent jobs (history), newest first.
@@ -835,7 +1055,13 @@ def _hold_while_paused(
 
     def report(reason: str) -> None:
         if progress:
-            progress({"stage": "paused", "detail": reason, "movie": movie.name})
+            progress(
+                progress_event(
+                    "paused",
+                    file=file_state(movie.name, str(movie), "paused"),
+                    detail=reason,
+                )
+            )
 
     wait_while_paused(_db_file_of(connection).resolve().parent, cancel, on_pause=report)
 
@@ -864,7 +1090,13 @@ def execute_scan(
     if cancel.is_set():
         return {"cancelled": True}
     if progress:
-        progress({"stage": "scan", "detail": "scanning library"})
+        progress(
+            progress_event(
+                "scan",
+                run={"done": 0, "total": None},
+                detail="scanning library",
+            )
+        )
 
     config = load_config()
     apply_config(config)
@@ -876,13 +1108,11 @@ def execute_scan(
         """Persists each finished movie immediately (progressive UI)."""
         if progress and not cancel.is_set():
             progress(
-                {
-                    "stage": "scan",
-                    "detail": error or f"scanned {data['name']}" if data else "scanning",
-                    "done": index,
-                    "total": None,
-                    "movie": data["name"] if data else None,
-                }
+                progress_event(
+                    "scan",
+                    run={"done": index, "total": None},
+                    detail=error or f"scanned {data['name']}" if data else "scanning",
+                )
             )
 
     # the category roots: the resident app's allowed roots - the same roots
@@ -1023,19 +1253,17 @@ def execute_plan(
             # detail page), so the witness's skip is a "skip" too
             log(f"Plan for '{movie.name}': skip ({stability.not_settled_reason})")
             plans.append(
-                {"movie": movie.name, "state": "skip", "reason": stability.not_settled_reason}
-            )
-            continue
-        if progress:
-            progress(
                 {
-                    "stage": "probe",
-                    "detail": f"probing {movie.name}",
-                    "done": index,
-                    "total": total,
                     "movie": movie.name,
+                    "state": "skip",
+                    "crf": None,
+                    "vmaf": None,
+                    "estimated_size": 0,
+                    "saved_percent": 0.0,
+                    "reason": stability.not_settled_reason,
                 }
             )
+            continue
         # one precedence for every entry point (issue #526): the resident
         # job reads the same keys as the CLI - an unset count leaves density
         # (sample_every) in charge instead of the old fixed default of 3
@@ -1049,6 +1277,16 @@ def execute_plan(
             decision_row = queue.stage(
                 JobKind.DECISION, {"paths": [str(movie)], "pipeline": "plan"}
             )
+            if progress:
+                progress(
+                    progress_event(
+                        "decision",
+                        file=file_state(movie.name, str(movie), "decision"),
+                        run={"done": index, "total": total},
+                        detail=f"deciding {movie.name}",
+                        stage_job_id=decision_row.id,
+                    )
+                )
             try:
                 # the [i/N] prefix on this file's decision lines (issue #471)
                 with file_scope(index + 1, total):
@@ -1116,12 +1354,17 @@ def execute_plan(
                 data: dict,
                 row_ref: list[Job | None] = plan_row,
                 job_queue: JobQueue = plan_queue,
+                done: int = index,
+                total_files: int = total,
             ) -> None:
-                if progress is not None:
-                    progress(data)
+                event = with_run(data, done, total_files)
                 row = row_ref[0]
+                if row is not None and row.id is not None:
+                    event["stage_job_id"] = row.id
+                if progress is not None:
+                    progress(event)
                 if row is not None:
-                    job_queue.report_progress(row, data)
+                    job_queue.report_progress(row, event)
 
             try:
                 with file_scope(index + 1, total):
@@ -1148,17 +1391,33 @@ def execute_plan(
                 queue.fail_stage(search_row, str(e))
                 plans.append({"movie": movie.name, "state": "error", "error": str(e)})
                 continue
+            stage_source, stage_measured_at = progress_provenance(
+                result.probes,
+                crf_source=getattr(result, "crf_source", None),
+                plan_created_at=getattr(result, "plan_created_at", None),
+            )
             queue.finish_stage(
                 search_row,
                 {
                     "crf": result.chosen_crf,
                     "vmaf": result.achieved_vmaf,
                     "reason": result.skipped_reason,
+                    "source": stage_source,
+                    "measured_at": stage_measured_at,
                 },
             )
         else:
             # a direct executor call (the one-shot CLI, tests): no queue, so
             # the single-call engine path keeps the old shape
+            if progress:
+                progress(
+                    progress_event(
+                        "decision",
+                        file=file_state(movie.name, str(movie), "decision"),
+                        run={"done": index, "total": total},
+                        detail=f"deciding {movie.name}",
+                    )
+                )
             try:
                 with file_scope(index + 1, total):
                     result = plan_quality(
@@ -1420,17 +1679,33 @@ def _encode_measured(
         # loop-variable capture in a closure).
         active_row: list[Job | None] = [None]
 
-        def report_stage_progress(data: dict, row_ref: list[Job | None] = active_row) -> None:
-            if progress is not None:
-                progress(data)
+        def report_stage_progress(
+            data: dict,
+            row_ref: list[Job | None] = active_row,
+            done: int = index,
+            total_files: int = total,
+        ) -> None:
+            event = with_run(data, done, total_files)
             row = row_ref[0]
+            if row is not None and row.id is not None:
+                event["stage_job_id"] = row.id
+            if progress is not None:
+                progress(event)
             if queue is not None and row is not None:
-                queue.report_progress(row, data)
+                queue.report_progress(row, event)
 
         sample_every, sample_count, sample_seconds = config.probe_settings()
         if queue is not None:
             decision_row = queue.stage(
                 JobKind.DECISION, {"paths": [str(movie)], "pipeline": "encode"}
+            )
+            active_row[0] = decision_row
+            report_stage_progress(
+                progress_event(
+                    "decision",
+                    file=file_state(movie.name, str(movie), "decision"),
+                    detail=f"deciding {movie.name}",
+                )
             )
             try:
                 decision = decide_quality(
@@ -1494,6 +1769,7 @@ def _encode_measured(
                         "vmaf": stored["achieved_vmaf"],
                         "reason": stored["skipped_reason"],
                         "source": "plan",
+                        "measured_at": dict(stored).get("created_at"),
                     },
                 )
             else:
@@ -1521,12 +1797,19 @@ def _encode_measured(
                     queue.fail_stage(search_row, str(e))
                     outcomes.append({"movie": movie.name, "state": "skipped", "error": str(e)})
                     continue
+                stage_source, stage_measured_at = progress_provenance(
+                    prediction.probes,
+                    crf_source=getattr(prediction, "crf_source", None),
+                    plan_created_at=getattr(prediction, "plan_created_at", None),
+                )
                 queue.finish_stage(
                     search_row,
                     {
                         "crf": prediction.chosen_crf,
                         "vmaf": prediction.achieved_vmaf,
                         "reason": prediction.skipped_reason,
+                        "source": stage_source,
+                        "measured_at": stage_measured_at,
                     },
                 )
                 # the prediction is recorded so the encode below REUSES it instead of
@@ -1557,16 +1840,6 @@ def _encode_measured(
                     continue
             encode_row = queue.stage(JobKind.ENCODE, {"paths": [str(movie)], "pipeline": "encode"})
             active_row[0] = encode_row
-        if progress:
-            progress(
-                {
-                    "stage": "probe",
-                    "detail": f"probing {movie.name}",
-                    "done": index,
-                    "total": total,
-                    "movie": movie.name,
-                }
-            )
         try:
             # hold the encode slot on the MOVIE'S OWN DIRECTORY (in place): that
             # is where the staging copy and the swap's two renames happen, so it
@@ -1624,6 +1897,13 @@ def _encode_measured(
                     final_output=movie if in_place else None,
                 )
                 if in_place and outcome.encoded:
+                    report_stage_progress(
+                        progress_event(
+                            "swap",
+                            file=file_state(movie.name, str(movie), "swap"),
+                            detail="swapping the verified output into place",
+                        )
+                    )
                     swap = swap_encode_into_place(
                         connection,
                         movie,
@@ -1639,6 +1919,17 @@ def _encode_measured(
                         input_mtime=getattr(result, "input_mtime", None),
                     )
                     declined = not swap.replaced
+                    report_stage_progress(
+                        progress_event(
+                            "swap",
+                            file=file_state(movie.name, str(movie), "swap"),
+                            detail=(
+                                "swapped; the original is retained"
+                                if swap.replaced
+                                else f"swap declined: {swap.reason}"
+                            ),
+                        )
+                    )
                 else:
                     declined = False
         except EncodeBusyError as e:
@@ -1693,13 +1984,12 @@ def _encode_measured(
         outcomes.append(entry)
         if progress:
             progress(
-                {
-                    "stage": "encode",
-                    "detail": f"{movie.name}: {entry['state']}",
-                    "done": index + 1,
-                    "total": total,
-                    "movie": movie.name,
-                }
+                progress_event(
+                    "encode",
+                    file=file_state(movie.name, str(movie), "encode"),
+                    run={"done": index + 1, "total": total},
+                    detail=f"{movie.name}: {entry['state']}",
+                )
             )
     return {"outcomes": outcomes, "cancelled": cancel.is_set()}
 
@@ -1719,18 +2009,31 @@ class JobWorker:
     is reported as interrupted on the next start).
     """
 
-    def __init__(self, connection: sqlite3.Connection, queue: JobQueue) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        queue: JobQueue,
+        state_dir: Path | None = None,
+    ) -> None:
         """Initializes the worker.
 
         Args:
             connection (sqlite3.Connection): The database connection the
                 worker owns while executing jobs.
             queue (JobQueue): The queue to consume.
+            state_dir (Path | None): The data folder holding the terminal
+                UI's cancel requests; None disables the cancel surface.
         """
         self.connection = connection
         self.queue = queue
+        self._state_dir = state_dir
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
+        # the cancel-request poller's own thread (issue #621): the worker's
+        # idle loop does not turn during a running encode, so a cancel for a
+        # multi-hour job would never be seen without a second reader.
+        self._cancel_thread: threading.Thread | None = None
+        self._cancel_poll_done = threading.Event()
         # the running job's cancel event: a shutdown must terminate the
         # encode child, not leave it running unattended (issue #431
         # review, round 2 finding 1 - the measurement path has opted out of
@@ -1752,6 +2055,7 @@ class JobWorker:
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="job-worker", daemon=True)
         self._thread.start()
+        self._start_cancel_poller()
 
     def stop(self, join_timeout: float = 30.0) -> None:
         """Signals the worker to stop and joins it.
@@ -1782,6 +2086,10 @@ class JobWorker:
             # race it (review round 5, finding 3)
             self._running_cancel.set()
             self._thread.join(timeout=join_timeout)
+        # the poller must be joined BEFORE the caller closes the database: a
+        # late cancel write after the close would race it (issue #621)
+        if self._cancel_thread is not None:
+            self._cancel_thread.join(timeout=join_timeout)
 
     def request_stop(self) -> None:
         """Signals the worker to stop without joining it.
@@ -1798,6 +2106,83 @@ class JobWorker:
         if self._running_cancel is not None:
             self._running_cancel.set()
         self.queue._wake.set()
+
+    def _start_cancel_poller(self) -> None:
+        """Starts the cancel-request poller (no-op without a data folder)."""
+        if self._state_dir is None:
+            return
+        self._cancel_poll_done.clear()
+        self._cancel_thread = threading.Thread(
+            target=self._cancel_poll_loop, name="cancel-poller", daemon=True
+        )
+        self._cancel_thread.start()
+
+    def _cancel_poll_loop(self) -> None:
+        """Consumes the terminal UI's cancel requests until the worker stops.
+
+        A dead poller silently ends the cancel surface, so an exception is
+        logged and the loop continues: one unreadable request must not take the
+        rest down with it.
+        """
+        try:
+            while not self._stop.is_set():
+                self._poll_cancel_requests()
+                self._cancel_poll_done.set()
+                self._stop.wait(CANCEL_POLL_SECONDS)
+        finally:
+            self._cancel_poll_done.set()
+
+    def _poll_cancel_requests(self) -> None:
+        """Applies every pending cancel request once (poller thread)."""
+        if self._state_dir is None:
+            return
+        try:
+            pending = read_pending_cancel_requests(self._state_dir)
+        except Exception as e:
+            log_error(f"Cancel poller could not read the requests: {e}")
+            return
+        for job_id in pending:
+            try:
+                self._apply_cancel_request(job_id)
+            except Exception as e:
+                log_error(f"Cancel poller failed for job #{job_id}: {e}")
+
+    def _apply_cancel_request(self, job_id: int) -> None:
+        """Applies one cancel request, leaving the file until the job ends.
+
+        A request for an already terminal job is consumed. A request accepted on
+        a queued job is left for the next poll, which sees the terminal row; one
+        accepted on a running job is left until its unwind writes the terminal
+        state. A take-window or unknown request is left for a later poll.
+
+        Args:
+            job_id (int): The requested job id.
+        """
+        if self._state_dir is None:
+            return
+        job = self.queue.get(job_id)
+        if job is None:
+            log(f"Cancel request for job #{job_id} ignored: no such job; left for a later poll")
+            return
+        if job.state in TERMINAL_STATES:
+            remove_cancel_request(self._state_dir, job_id)
+            log(f"Cancel request for job #{job_id} consumed: the job is already {job.state.value}")
+            return
+        if job.state is JobState.INTERRUPTED:
+            # the boot resume step applies this request (issue #622);
+            # consuming it here would lose the operator's intent before the
+            # restart that resumes the row
+            log(
+                f"Cancel request for job #{job_id} left for the boot resume: the job is interrupted"
+            )
+            return
+        if self.queue.cancel(job_id):
+            log(f"Cancel request for job #{job_id} accepted; the request stays until the job ends")
+        else:
+            log(
+                f"Cancel request for job #{job_id} not applied yet "
+                "(take window or unknown id); left for a later poll"
+            )
 
     def _run(self) -> None:
         """Consumes jobs until stopped.
@@ -1869,6 +2254,7 @@ class JobWorker:
         if job.id is None:  # not persisted => programming error
             self.queue.fail(job, "job has no id")
             return
+        job_id = job.id
         if cancel is None:
             cancel = threading.Event()
         self._running_cancel = cancel
@@ -1881,38 +2267,47 @@ class JobWorker:
         result: dict | None = None
         failure: str | None = None
         cancelled = False
+        interrupted = False
+
+        def record_cancel(partial: dict | None) -> bool:
+            """Writes the cancel outcome and returns whether a shutdown caused it.
+
+            The operator mark is read BEFORE the stop flag (issue #622): an
+            operator cancel whose unwind is still running when a shutdown lands
+            is still the operator's cancel, never an interruption.
+            """
+            operator_cancelled = self.queue.take_operator_cancel(job_id)
+            shutdown = self._stop.is_set() and not operator_cancelled
+            if shutdown:
+                self.queue.mark_interrupted(job, partial)
+            else:
+                self.queue.mark_cancelled(job, partial)
+            return shutdown
 
         def progress(data: dict) -> None:
             """Persists live progress for the API/UI (worker thread only)."""
             if not cancel.is_set():
                 self.queue.report_progress(job, data)
 
+        unknown_kind = job.kind not in (JobKind.SCAN, JobKind.PLAN, JobKind.ENCODE)
         try:
-            if job.kind == JobKind.SCAN:
+            if unknown_kind:
+                result = {}
+            elif job.kind == JobKind.SCAN:
                 result = execute_scan(job, self.connection, cancel, progress=progress)
             elif job.kind == JobKind.PLAN:
                 result = execute_plan(
                     job, self.connection, cancel, progress=progress, queue=self.queue
                 )
-            elif job.kind == JobKind.ENCODE:
+            else:
                 result = execute_encode(
                     job, self.connection, cancel, progress=progress, queue=self.queue
                 )
-            else:
-                self.queue.fail(job, f"unknown job kind: {job.kind}")
-                return
-            if result.get("cancelled"):
-                # a graceful cancel carries the engine's partial result —
-                # the UI renders outcomes on cancelled encode rows
-                cancelled = True
-                self.queue.mark_cancelled(job, result)
-            else:
-                self.queue.finish(job, result)
         except Cancelled:
             # the engine raised between checkpoints (subprocess terminated);
             # partial probe/output artifacts are cleaned by the engine
-            cancelled = True
-            self.queue.mark_cancelled(job)
+            interrupted = record_cancel(None)
+            cancelled = not interrupted
         except Exception as e:
             from shrinkray.telemetry import save_failure
 
@@ -1921,8 +2316,22 @@ class JobWorker:
                 kind=f"job-{job.kind.value}",
                 context={"job_id": job.id, "payload": job.payload},
             )
-            self.queue.fail(job, f"{type(e).__name__}: {e}")
             failure = f"{type(e).__name__}: {e}"
+            self.queue.fail(job, failure)
+        else:
+            # the terminal write runs OUTSIDE the engine's exception boundary
+            # (issue #681): a failed commit restores the job and re-raises, so
+            # it must surface as the iteration's failure, never be re-recorded
+            # as a job failure by the except above
+            if unknown_kind:
+                self.queue.fail(job, f"unknown job kind: {job.kind}")
+            elif result.get("cancelled"):
+                # a graceful cancel carries the engine's partial result —
+                # the UI renders outcomes on cancelled encode rows
+                interrupted = record_cancel(result)
+                cancelled = not interrupted
+            else:
+                self.queue.finish(job, result)
         finally:
             self._running_cancel = None
             self.queue.unregister_cancel_event(job.id)
@@ -1930,20 +2339,35 @@ class JobWorker:
             # duration is measured, never subtracted from console stamps; the
             # line carries the outcome counts and, on failure, the error - a
             # failed job's transcript must not read like success
+            outcome = self._outcome_counts(result, interrupted=interrupted) if result else ""
+            if interrupted:
+                # the interrupted state is the discriminator the issue exists
+                # for, so the verb itself must say it: a partial result with
+                # no cancelled item would otherwise read like a normal finish
+                # (issue #622 review)
+                verb = "interrupted"
+                outcome = f" - {outcome}" if outcome else ""
+            elif cancelled:
+                verb = "finished"
+                outcome = f", {outcome}" if outcome else ", cancelled"
+            else:
+                verb = "finished"
+                outcome = f" - {outcome}" if outcome else ""
             log(
-                f"Job #{job.id} ({job.kind.value}) finished in "
+                f"Job #{job.id} ({job.kind.value}) {verb} in "
                 f"{time.perf_counter() - started:.0f}s"
-                + (f" - {self._outcome_counts(result)}" if result else "")
-                + (", cancelled" if cancelled else "")
+                + outcome
                 + (f" - FAILED: {failure}" if failure else "")
             )
 
     @staticmethod
-    def _outcome_counts(result: dict) -> str:
+    def _outcome_counts(result: dict, *, interrupted: bool = False) -> str:
         """Counts the result's per-item outcomes for the job end line.
 
         Args:
             result (dict): The executor's result dict.
+            interrupted (bool): True when a shutdown caused the cancel, so the
+                cancelled bucket reads interrupted (issue #622).
 
         Returns:
             str: A short summary like ``6 to encode, 2 skipped, 0 failed``.
@@ -1965,4 +2389,5 @@ class JobWorker:
             summary = f"{encode_like} to encode, {skipped} skipped, {failed} failed"
         else:
             summary = f"{encode_like} encoded, {skipped} skipped, {failed} failed"
-        return summary + (f", {cancelled} cancelled" if cancelled else "")
+        word = "interrupted" if interrupted else "cancelled"
+        return summary + (f", {cancelled} {word}" if cancelled else "")

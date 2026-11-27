@@ -1,0 +1,345 @@
+{
+  "status": {
+    "queue": [],
+    "watcher": "running",
+    "database": "/data/metadata.db",
+    "rss_mib": 51.4,
+    "config_error": null,
+    "paused": null,
+    "encode_window": null,
+    "reveal_available": false
+  },
+  "library": [
+    {
+      "path": "/media/Filme/Lang/Ein sehr langer Filmtitel mit Untertitel und Jahreszahl (2019) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay x265 10bit HDR DTS-HD MA 7.1-GRP.mkv",
+      "name": "Ein sehr langer Filmtitel mit Untertitel und Jahreszahl (2019) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay x265 10bit HDR DTS-HD MA 7.1-GRP",
+      "category": "Filme/Lang",
+      "duration": "02:00:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2400000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Ohne Leerzeichen/Kein.einzelnes.Leerzeichen.und.ein.sehr.langer.Name.der.die.Spalte.umbricht.2021.1080p.WEB-DL.x264-GRP.mkv",
+      "name": "Kein.einzelnes.Leerzeichen.und.ein.sehr.langer.Name.der.die.Spalte.umbricht.2021.1080p.WEB-DL.x264-GRP",
+      "category": "Filme/Ohne Leerzeichen",
+      "duration": "02:01:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2401000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Asien/東京物語 (1953) 1080p BluRay x264-GRP.mkv",
+      "name": "東京物語 (1953) 1080p BluRay x264-GRP",
+      "category": "Filme/Asien",
+      "duration": "02:02:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2402000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Arabisch/فيلم عربي طويل جدا (2018) 1080p WEB-DL.mkv",
+      "name": "فيلم عربي طويل جدا (2018) 1080p WEB-DL",
+      "category": "Filme/Arabisch",
+      "duration": "02:03:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2403000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Emoji/🎬 emoji title 🍿 (2020) 1080p.mkv",
+      "name": "🎬 emoji title 🍿 (2020) 1080p",
+      "category": "Filme/Emoji",
+      "duration": "02:04:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2404000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Quadrat/Supercalifragilisticexpialidocious² (2019) 1080p.mkv",
+      "name": "Supercalifragilisticexpialidocious² (2019) 1080p",
+      "category": "Filme/Quadrat",
+      "duration": "02:05:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2405000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Kurz/Zwei Wörter (2017) 1080p.mkv",
+      "name": "Zwei Wörter (2017) 1080p",
+      "category": "Filme/Kurz",
+      "duration": "02:06:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2406000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Kurz/A B C (2016) 1080p.mkv",
+      "name": "A B C (2016) 1080p",
+      "category": "Filme/Kurz",
+      "duration": "02:07:00",
+      "codec": "hevc",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 2407000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Lang/Ein sehr langer Filmtitel mit genau zweihundert Zeichen: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (2022) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay Remux HDR10 DTS-HD MA 7.1-GRP.mkv",
+      "name": "Ein sehr langer Filmtitel mit genau zweihundert Zeichen: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (2022) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay Remux HDR10 DTS-HD MA 7.1-GRP",
+      "category": "Filme/Lang",
+      "duration": "02:10:00",
+      "codec": "h264",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 3400000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "D:\\Movies\\Zerberus Archiv\\Die Festplatte atmet noch einmal Ein Windows Pfad Test (1984) 2160p.mkv",
+      "name": "Die Festplatte atmet noch einmal Ein Windows Pfad Test (1984) 2160p",
+      "category": "Movies/Zerberus Archiv",
+      "duration": "02:11:00",
+      "codec": "h264",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 3500000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "\\\\ZERBERUS\\Media\\Filme\\Netzwerkfreigabe mit Umlauten ÄÖÜ (1999) 1080p.mkv",
+      "name": "Netzwerkfreigabe mit Umlauten ÄÖÜ (1999) 1080p",
+      "category": "Media/Filme",
+      "duration": "02:12:00",
+      "codec": "h264",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 3600000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    },
+    {
+      "path": "D:/Movies/Mixed/Schrägstrich im Windows Laufwerk (2024) 1080p.mkv",
+      "name": "Schrägstrich im Windows Laufwerk (2024) 1080p",
+      "category": "Movies/Mixed",
+      "duration": "02:13:00",
+      "codec": "h264",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "size": 3700000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    }
+  ],
+  "jobs": [
+    {
+      "id": 1,
+      "kind": "encode",
+      "state": "done",
+      "created_at": "2026-11-14T10:00:00Z",
+      "started_at": "2026-11-14T10:00:05Z",
+      "finished_at": "2026-11-14T11:32:00Z",
+      "payload": {
+        "paths": [
+          "/media/Filme/Lang/Ein sehr langer Filmtitel mit genau zweihundert Zeichen: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (2022) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay Remux HDR10 DTS-HD MA 7.1-GRP.mkv"
+        ]
+      },
+      "result": {
+        "outcomes": [
+          {
+            "movie": "Ein sehr langer Filmtitel mit genau zweihundert Zeichen: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (2022) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay Remux HDR10 DTS-HD MA 7.1-GRP",
+            "state": "encoded",
+            "crf": 30,
+            "vmaf": 96.2,
+            "input_size": 4200000000,
+            "output_size": 1400000000,
+            "saved_percent": 66
+          }
+        ]
+      },
+      "error": null
+    },
+    {
+      "id": 2,
+      "kind": "encode",
+      "state": "done",
+      "created_at": "2026-11-14T10:05:00Z",
+      "started_at": "2026-11-14T10:05:10Z",
+      "finished_at": "2026-11-14T11:40:00Z",
+      "payload": {
+        "paths": [
+          "D:\\Movies\\Zerberus Archiv\\Die Festplatte atmet noch einmal Ein Windows Pfad Test (1984) 2160p.mkv"
+        ]
+      },
+      "result": {
+        "outcomes": [
+          {
+            "movie": "Die Festplatte atmet noch einmal Ein Windows Pfad Test (1984) 2160p",
+            "state": "encoded",
+            "crf": 28,
+            "vmaf": 95.8,
+            "input_size": 3400000000,
+            "output_size": 1200000000,
+            "saved_percent": 64
+          }
+        ]
+      },
+      "error": null
+    },
+    {
+      "id": 3,
+      "kind": "plan",
+      "state": "done",
+      "created_at": "2026-11-14T11:00:00Z",
+      "started_at": "2026-11-14T11:00:02Z",
+      "finished_at": "2026-11-14T11:00:40Z",
+      "payload": {
+        "paths": [
+          "\\\\ZERBERUS\\Media\\Filme\\Netzwerkfreigabe mit Umlauten ÄÖÜ (1999) 1080p.mkv"
+        ]
+      },
+      "result": {
+        "plans": [
+          {
+            "movie": "Netzwerkfreigabe mit Umlauten ÄÖÜ (1999) 1080p",
+            "state": "skip",
+            "crf": null,
+            "estimated_size": 3400000000,
+            "saved_percent": 0,
+            "reason": "hdr not supported"
+          }
+        ]
+      },
+      "error": null
+    },
+    {
+      "id": 4,
+      "kind": "encode",
+      "state": "failed",
+      "created_at": "2026-11-14T11:10:00Z",
+      "started_at": "2026-11-14T11:10:03Z",
+      "finished_at": "2026-11-14T11:11:30Z",
+      "payload": {
+        "paths": [
+          "D:/Movies/Mixed/Schrägstrich im Windows Laufwerk (2024) 1080p.mkv"
+        ]
+      },
+      "result": null,
+      "error": "HandBrakeCLI exited with code 1"
+    },
+    {
+      "id": 5,
+      "kind": "encode",
+      "state": "queued",
+      "created_at": "2026-11-14T11:50:00Z",
+      "started_at": null,
+      "finished_at": null,
+      "payload": {
+        "paths": [
+          "/media/Filme/Asien/東京物語 (1953) 1080p BluRay x264-GRP.mkv"
+        ]
+      },
+      "result": null,
+      "error": null
+    }
+  ],
+  "retained": [],
+  "config": {
+    "quality": {
+      "target_vmaf": 96
+    }
+  },
+  "movie": {
+    "file": {
+      "path": "/media/Filme/Lang/Ein sehr langer Filmtitel mit Untertitel und Jahreszahl (2019) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay x265 10bit HDR DTS-HD MA 7.1-GRP.mkv",
+      "name": "Ein sehr langer Filmtitel mit Untertitel und Jahreszahl (2019) [EN+FR+DE+ES+IT+JA+KO+ZH] 2160p UHD BluRay x265 10bit HDR DTS-HD MA 7.1-GRP",
+      "category": "Filme/Lang",
+      "duration": "02:00:00",
+      "codec": "hevc",
+      "resolution": [3840, 2160],
+      "size": 2400000000,
+      "hdr": false,
+      "generation": 1
+    },
+    "history": [
+      {
+        "id": 1,
+        "preset": "p5",
+        "crf": 30,
+        "vmaf": 96.1,
+        "input_size": 2400000000,
+        "output_size": 900000000,
+        "saved_percent": 62.5,
+        "encoder_preset": "p5",
+        "input_bitrate": 5300,
+        "output_bitrate": 2000,
+        "generation": 1,
+        "outcome": "applied",
+        "outcome_reason": null,
+        "encoded_at": "2026-11-14T10:00:00.000Z"
+      }
+    ],
+    "plan": null
+  },
+  "events": []
+}

@@ -94,3 +94,8 @@ ISSUES.md
 /test_media/*
 !/test_media/README.md
 .import_linter_cache/
+
+# Playwright output (issue #628): screenshots, traces and the report are
+# CI artifacts, never committed
+test-results/
+playwright-report/

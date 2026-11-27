@@ -18,12 +18,13 @@ worker's stop joins (2 x 30s), the child's kill window (terminate_tree's
 SIGTERM/SIGKILL plus the pipe drains), the watcher's join (10s). The compose
 comment on `stop_grace_period: 120s` carries the full budget (issue #431); a
 raw `docker stop -t` below that kills the container mid-unwind, and the job is
-recovered as failed (`interrupted by app restart`) on the next boot (the
-fallback, not the contract). The stop signals (SIGTERM, and SIGBREAK on
-Windows) are ignored for the whole window - uvicorn's capture, the re-raise
-after it, and the teardown (a second SIGTERM mid-join would otherwise kill
-the process with the CANCELLED row unwritten); a hard kill (`-9`, OOM) leaves
-the job to the boot-time recovery instead.
+recovered as interrupted (`interrupted by app restart`) on the next boot and
+resumed as the same row (issue #622; the fallback, not the contract). The
+stop signals (SIGTERM, and SIGBREAK on Windows) are ignored for the whole
+window - uvicorn's capture, the re-raise after it, and the teardown (a second
+SIGTERM mid-join would otherwise kill the process with the CANCELLED row
+unwritten); a hard kill (`-9`, OOM) takes the same boot-time recovery, with
+the killed run's encode lock left to its heartbeat.
 
 > **Direction (issue #244).** The deployment target is an **Unraid Community App**
 > (PRODUCT.md "Deployment target"): the WebUI button opens the read-only dashboard,
@@ -395,6 +396,13 @@ kind, queue depth, whether a job is running, encodes and bytes reclaimed, the
 stall-watchdog count, retained-original totals, the catalog size and the free
 space on the library filesystem. Every value is a query over state that already
 exists - the route measures nothing new.
+
+`shrinkray_bytes_reclaimed_total` is a **gauge**, not a counter: it can fall when
+a swap is declined or a restored original stops corroborating a record, because it
+counts only the applied rows the library's records still corroborate. The
+dashboard's RECLAIMED figure is a different, deliberately named quantity - the
+per-title library delta plus output-directory savings (issue #646) - so the two
+intentionally differ on a multi-hop in-place chain.
 
 ## Not problems
 

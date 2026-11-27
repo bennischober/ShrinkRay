@@ -1,0 +1,139 @@
+{
+  "status": {
+    "queue": [],
+    "watcher": "stopped",
+    "watcher_error": "the watcher did not start: ffmpeg not found on PATH",
+    "worker": "stopped",
+    "worker_error": "the job worker gave up: HandBrakeCLI not found",
+    "database": "/data/metadata.db",
+    "rss_mib": 44.9,
+    "config_error": "config.json failed to validate: quality.target_vmaf must be between 50 and 100",
+    "paused": null,
+    "encode_window": null,
+    "reveal_available": false
+  },
+  "library": [
+    {
+      "path": "/media/Filme/Verschollen/Der verschwundene Film (2017) 1080p BluRay x264-GRP.mkv",
+      "name": "Der verschwundene Film (2017) 1080p BluRay x264-GRP",
+      "category": "Filme/Verschollen",
+      "duration": "01:47:00",
+      "codec": "h264",
+      "resolution": [1920, 1080],
+      "size": 3100000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "missing": true,
+      "missing_since": "2026-11-12T03:00:00.000Z",
+      "encode": null
+    },
+    {
+      "path": "/media/Filme/Da/Anderer Titel (2021) 2160p WEB-DL.mkv",
+      "name": "Anderer Titel (2021) 2160p WEB-DL",
+      "category": "Filme/Da",
+      "duration": "02:14:00",
+      "codec": "hevc",
+      "resolution": [3840, 2160],
+      "size": 8800000000,
+      "reclaimed_bytes": 0,
+      "hdr": false,
+      "encode": null
+    }
+  ],
+  "jobs": [
+    {
+      "id": 1,
+      "kind": "encode",
+      "state": "failed",
+      "created_at": "2026-11-14T11:00:00.000Z",
+      "started_at": "2026-11-14T11:00:01.000Z",
+      "finished_at": "2026-11-14T11:02:00.000Z",
+      "payload": { "paths": ["/media/Filme/Verschollen/Der verschwundene Film (2017) 1080p BluRay x264-GRP.mkv"] },
+      "result": null,
+      "error": "the source vanished mid-encode: [Errno 2] No such file or directory"
+    },
+    {
+      "id": 2,
+      "kind": "scan",
+      "state": "failed",
+      "created_at": "2026-11-14T10:30:00.000Z",
+      "started_at": "2026-11-14T10:30:01.000Z",
+      "finished_at": "2026-11-14T10:31:00.000Z",
+      "payload": { "paths": ["/media/Filme"] },
+      "result": { "outcomes": [{ "movie": "*", "state": "skipped", "error": "2 files vanished during the scan" }] },
+      "error": "2 files vanished during the scan"
+    },
+    {
+      "id": 3,
+      "kind": "encode",
+      "state": "done",
+      "created_at": "2026-11-14T09:00:00.000Z",
+      "started_at": "2026-11-14T09:00:01.000Z",
+      "finished_at": "2026-11-14T09:12:00.000Z",
+      "payload": { "paths": ["/media/Filme/Da/Anderer Titel (2021) 2160p WEB-DL.mkv"] },
+      "result": {
+        "outcomes": [{
+          "movie": "Anderer Titel (2021) 2160p WEB-DL",
+          "state": "skipped",
+          "error": "the swap was declined: video verification failed (the encode is discarded)"
+        }]
+      },
+      "error": null
+    }
+  ],
+  "retained": [
+    {
+      "source_path": "/media/Filme/Da/Anderer Titel (2021) 2160p WEB-DL.mkv",
+      "retained_path": "/media/Filme/Da/Anderer Titel (2021) 2160p WEB-DL.mkv.shrinkray-original",
+      "size_before": 8800000000,
+      "size_after": 3200000000,
+      "created_at": "2026-11-13T18:00:00.000Z",
+      "present": true
+    },
+    {
+      "source_path": "/media/Filme/Weg/Ganz fort (2015) 1080p.mkv",
+      "retained_path": "/media/Filme/Weg/Ganz fort (2015) 1080p.mkv.shrinkray-original",
+      "size_before": 4000000000,
+      "size_after": 1500000000,
+      "created_at": "2026-11-10T09:00:00.000Z",
+      "present": false
+    }
+  ],
+  "config": {
+    "quality": { "target_vmaf": 96 },
+    "config_error": "config.json failed to validate: quality.target_vmaf must be between 50 and 100"
+  },
+  "movie": {
+    "file": {
+      "path": "/media/Filme/Da/Anderer Titel (2021) 2160p WEB-DL.mkv",
+      "name": "Anderer Titel (2021) 2160p WEB-DL",
+      "category": "Filme/Da",
+      "duration": "02:14:00",
+      "codec": "hevc",
+      "resolution": [3840, 2160],
+      "size": 8800000000,
+      "hdr": false,
+      "generation": 1
+    },
+    "history": [
+      {
+        "id": 1,
+        "preset": "p5",
+        "crf": 28,
+        "vmaf": 96.3,
+        "input_size": 8800000000,
+        "output_size": 3200000000,
+        "saved_percent": 63.6,
+        "encoder_preset": "p5",
+        "input_bitrate": 8800,
+        "output_bitrate": 3200,
+        "generation": 1,
+        "outcome": "discarded",
+        "outcome_reason": "the swap was declined: video verification failed",
+        "encoded_at": "2026-11-13T18:00:00.000Z"
+      }
+    ],
+    "plan": null
+  },
+  "events": []
+}

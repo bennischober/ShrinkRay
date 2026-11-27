@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { humanizeError, failedOutcomeNote, type Job, type JobOutcome } from '../api'
-  import { bytes, crf, elapsedSeconds, etaShort, groupJobs, isStageRow, kindWord, progressLabel, relative, remainingSeconds, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
-  import { progressFor } from '../progress.svelte'
+  import { humanizeError, failedOutcomeNote, type Job, type JobOutcome, type Movie } from '../api'
+  import { bytes, crf, eta, groupJobs, isStageRow, kindWord, relative, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
+  import { fileProgressFor, progressEta } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
   import PageHeader from '../components/PageHeader.svelte'
-  import ProgressBar from '../components/ProgressBar.svelte'
+  import QueueOutlook from '../components/QueueOutlook.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
+  import WorkProgress from '../components/WorkProgress.svelte'
   import type { Tone } from '../components/tone'
 
   /** The run log as an event log: every job with its timestamps, wall
@@ -14,36 +15,50 @@
 
   let {
     history,
+    movies = [],
+    recent = [],
+    targetVmaf = 96,
     onopenMovie,
     stale = false,
   }: {
     history: Job[]
-    /** Open a movie's detail page (single-movie jobs link to their title). */
+    /** the library, for the running file's source size */
+    movies?: Movie[]
+    /** the last real encodes by recency, for the queue outlook */
+    recent?: { encode_seconds: number; input_size: number }[]
+    targetVmaf?: number
+    /** Open a movie's detail page (a row's movie link, single-movie or the
+     * running file, names its title). */
     onopenMovie: (path: string) => void
     /** The shell's data is no longer current: the clock stops so a frozen
      * elapsed time and ETA cannot keep looking live (issue #629). */
     stale?: boolean
   } = $props()
 
-  /** True when the job targeted exactly one movie FILE (the UI's
-   * per-movie actions) — such rows link to the title's detail page.
-   * Folder-scoped jobs (scan-all, plan-all) link nothing: their payload
-   * names a directory, not a title. */
+  const progress = (job: Job) => fileProgressFor(job.id)
+
+  /** The library's movie paths, the directory guard below: a payload path is a
+   * title only when the snapshot's library knows it (issue #703). */
+  const moviePaths = $derived(new Set(movies.map((m) => m.path)))
+
+  /** The movie a row may link to. A running job names the file it is
+   * working on through the shared progress model (#631); a single-movie job
+   * names its one target in the payload. A folder job's single payload path
+   * is a directory, so it links only when the library knows the path as a
+   * movie — a directory is never a title page (issue #703). */
   function singleMoviePath(job: Job): string | null {
+    const running = job.state === 'running' ? progress(job)?.path ?? null : null
+    if (running) return running
     const paths = job.payload.paths as string[] | undefined
-    return paths?.length === 1 ? paths[0] : null
+    if (paths?.length !== 1) return null
+    return moviePaths.has(paths[0]) ? paths[0] : null
   }
 
-  const progress = (job: Job) => progressFor(job.id)
-
-  /** How much of the job's work is done, as a fraction: the final encode reports
-   * a frame percent, a CRF search reports a sample count (`done`/`total`, #690).
-   * Null when neither is known, so the row states no estimate. */
-  function workFraction(p: { percent?: number; done?: number; total?: number | null } | null): number | null {
-    if (!p) return null
-    if (p.done != null && p.total != null && p.total > 0) return p.done / p.total
-    if (p.percent != null) return p.percent / 100
-    return null
+  /** The path the FILE cell shows: the job's own target, so a folder job
+   * keeps showing its folder while the running file gets its own line. */
+  function rowPath(job: Job): string | null {
+    const paths = job.payload.paths as string[] | undefined
+    return paths?.length === 1 ? paths[0] : null
   }
 
   let now = $state(Date.now())
@@ -87,6 +102,7 @@
       // teal would say "clean" while the row says PARTIAL
       return failedOutcomeNote(job) !== '' ? 'partial' : 'ok'
     }
+    if (job.state === 'interrupted') return 'warn'
     return job.state === 'failed' ? 'bad' : job.state === 'running' ? 'run' : 'dim'
   }
 
@@ -106,14 +122,14 @@
   // Filter state persists per session (library sort persists; the jobs
   // filters resetting on F5 was the round-6 granularity inconsistency)
   type KindFilter = 'all' | 'scan' | 'plan' | 'decision' | 'crf-search' | 'encode' | 'legacy'
-  type StateFilter = 'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled'
+  type StateFilter = 'all' | 'running' | 'queued' | 'done' | 'partial' | 'failed' | 'cancelled' | 'interrupted'
   const storedKind = sessionStorage.getItem('ms.jobsKind')
   const storedState = sessionStorage.getItem('ms.jobsState')
   let kindFilter = $state<KindFilter>(
     ['all', 'scan', 'plan', 'decision', 'crf-search', 'encode', 'legacy'].includes(storedKind ?? '') ? (storedKind as KindFilter) : 'all'
   )
   let stateFilter = $state<StateFilter>(
-    ['all', 'running', 'queued', 'done', 'partial', 'failed', 'cancelled'].includes(storedState ?? '')
+    ['all', 'running', 'queued', 'done', 'partial', 'failed', 'cancelled', 'interrupted'].includes(storedState ?? '')
       ? (storedState as StateFilter)
       : 'all'
   )
@@ -182,6 +198,7 @@
           <option value="partial">{stateWord('partial')}</option>
           <option value="failed">{stateWord('failed')}</option>
           <option value="cancelled">{stateWord('cancelled')}</option>
+          <option value="interrupted">{stateWord('interrupted')}</option>
         </select>
       </div>
     {/if}
@@ -199,20 +216,24 @@
             <span class="id">{job.id}</span>
             <span class="kind">{kindWord(job.kind)}</span>
             <span class="file">
-              {#if singleMoviePath(job)}
-                <!-- single-movie jobs link to the title: the two audit
-                     trails reference each other -->
-                <button class="movie-link" onclick={() => onopenMovie(singleMoviePath(job)!)} title="Open the movie's detail page">
-                  <FileName path={(job.payload.paths as string[])[0]} />
-                </button>
+              {#if rowPath(job)}
+                {#if singleMoviePath(job) === rowPath(job)}
+                  <!-- single-movie jobs link to the title: the two audit
+                       trails reference each other -->
+                  <button class="movie-link" onclick={() => onopenMovie(rowPath(job)!)} title="Open the movie's detail page">
+                    <FileName path={rowPath(job)!} />
+                  </button>
+                {:else}
+                  <FileName path={rowPath(job)!} />
+                {/if}
               {/if}
             </span>
             <span class="state"><StatusBadge
               label={`${stateWord(job.state)}${job.state === 'done' && failedOutcomeNote(job) !== '' ? ' · Partial' : ''}${liveElapsed(job) ? ` · ${liveElapsed(job)}` : ''}`}
-              tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'run' ? 'work' : 'dim'}
+              tone={stateClass(job) === 'ok' ? 'ok' : stateClass(job) === 'partial' ? 'work' : stateClass(job) === 'bad' ? 'fail' : stateClass(job) === 'warn' ? 'work' : stateClass(job) === 'run' ? 'work' : 'dim'}
             /></span>
             <span class="when" title={job.started_at ?? 'not started yet'}>{cols.started ? relative(job.started_at) : ''}</span>
-            <span class="dur" title={job.state === 'running' ? 'time left, estimated from the work done in this step' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (etaShort(remainingSeconds(progress(job)?.elapsed ?? elapsedSeconds(job.started_at, new Date(now)), workFraction(progress(job)))) || '…') : ''}</span>
+            <span class="dur" data-work-duration title={job.state === 'running' ? 'the shared running-work ETA, same words as the summary' : undefined}>{cols.duration ? span(job.started_at, job.finished_at) : job.state === 'running' ? (eta(progressEta(progress(job))) || '…') : ''}</span>
             <span class="ops">
               <button class="mini" onclick={() => toggleExpand(job.id)} aria-expanded={job.id !== null && expanded.has(job.id)}>
                 {job.id !== null && expanded.has(job.id) ? 'HIDE' : 'DETAIL'}
@@ -222,7 +243,22 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
-            <ProgressBar percent={p?.percent ?? null} stale={stale} stage={progressLabel(p?.stage, p?.movie, p?.detail, p?.percent)} />
+            {#if singleMoviePath(job) && singleMoviePath(job) !== rowPath(job)}
+              <!-- the running file is a per-movie stage of the folder job
+                   (#602/#631): name and link the title it is working on,
+                   while the row's FILE cell keeps showing the folder -->
+              <div class="running-file mono">
+                <a
+                  class="movie-link"
+                  href={`#/movie/${encodeURIComponent(singleMoviePath(job)!)}`}
+                  onclick={() => onopenMovie(singleMoviePath(job)!)}
+                  title="Open the movie's detail page"
+                >
+                  <FileName path={singleMoviePath(job)!} />
+                </a>
+              </div>
+            {/if}
+            <WorkProgress progress={p} {stale} detail {targetVmaf} sourceBytes={movies.find((m) => m.path === p?.path)?.size ?? null} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
           {:else if job.state === 'done' && failedOutcomeNote(job)}
@@ -305,6 +341,7 @@
         <span>ACTIVE</span>
         <span class="section-count mono">{activeRows.length} running or waiting</span>
       </div>
+      <QueueOutlook jobs={groups.queued} {recent} />
       {#if activeRows.length === 0}
         <div class="dim pad">nothing running — the watcher is idle</div>
       {:else}
@@ -381,8 +418,11 @@
     color: var(--teal-ink);
     cursor: pointer;
     font: inherit;
+    text-decoration: none;
   }
   .movie-link:hover { text-decoration: underline; }
+  .running-file { padding: 0 0 6px; min-width: 0; }
+  .running-file .movie-link { display: inline-block; max-width: 100%; }
         .log {
     border: 1px solid var(--seam);
     border-radius: var(--radius);
@@ -496,7 +536,9 @@
     }
     .state { grid-area: state; }
     .when { grid-area: when; }
-    .dur { grid-area: dur; }
+    /* the shared ETA wording is longer than the old `~1 min`: let it wrap
+       inside its auto track instead of widening the row past the phone */
+    .dur { grid-area: dur; white-space: normal; overflow-wrap: anywhere; }
     .ops { grid-area: ops; justify-self: end; }
   }
 </style>

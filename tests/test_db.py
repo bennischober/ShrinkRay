@@ -1,5 +1,6 @@
 """Database layer tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
+import json
 import os
 import sqlite3
 import tempfile
@@ -801,7 +802,11 @@ class TestDb(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             original = root / "movie.mkv"
+            original.write_bytes(b"x" * 1000)
             reencode = root / "movie_reencoded.mkv"
+            # the artifact the row describes: the identity rule asks for the
+            # file's actual size (issue #647)
+            reencode.write_bytes(b"x" * 500)
 
             file_id = db.upsert_file(self.connection, self._record(str(original)))
             db.add_encode(
@@ -818,8 +823,164 @@ class TestDb(unittest.TestCase):
             )
             # the re-encode input is the output of generation 1
             self.assertEqual(service.derive_generation(self.connection, reencode), 2)
-            # an unrelated file stays generation 1
-            self.assertEqual(service.derive_generation(self.connection, root / "other.mkv"), 1)
+            # an unrelated file (which exists, with no ancestry) stays 1
+            other = root / "other.mkv"
+            other.write_bytes(b"x")
+            self.assertEqual(service.derive_generation(self.connection, other), 1)
+
+    def test_a_discarded_attempt_is_never_ancestry_or_finished(self):
+        """The outcome filter (issue #647, round 4): a discarded attempt can
+        carry a path claim (`set_encode_output` sets the path without
+        touching the outcome - the contract the decline path pins). The row
+        is history: it is neither ancestry for the generation derivation nor
+        a finished encode for the resume rule."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "a.mkv"
+            movie.write_bytes(b"x" * 400)
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            encode_id = db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(movie),
+            )
+            # the decline discards the outcome; the path claim remains (the
+            # contract set_encode_output pins: setting a path never
+            # resurrects a discarded row)
+            connection = self.connection
+            connection.execute(
+                "UPDATE encodes SET outcome = 'discarded' WHERE id = ?",
+                (encode_id,),
+            )
+            db.set_encode_output(self.connection, encode_id, str(movie))
+            self.connection.commit()
+            row = self.connection.execute(
+                "SELECT outcome, output_file, output_size FROM encodes WHERE id = ?",
+                (encode_id,),
+            ).fetchone()
+            self.assertEqual(row["outcome"], "discarded")
+            # the path claim matches the file's size - and still is not ancestry
+            self.assertIsNone(db.latest_ancestry(self.connection, str(movie), 400))
+            self.assertEqual(service.derive_generation(self.connection, movie), 1)
+            # and the resume rule does not call the file finished
+            self.assertFalse(db.has_output_for_latest_encode(self.connection, file_id, movie))
+
+    def test_a_vanished_source_does_not_crash_the_recording(self):
+        """The designed "source changed during the encode" outcome (issue
+        #647, round 5): the row is recorded BEFORE the swap, so the ancestry
+        input is the size the encode read - not a fresh stat. A source that
+        vanished during a multi-hour encode reaches the swap's own decline
+        (the original is untouched) instead of crashing the job."""
+
+        from shrinkray import service
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 1000)
+            db.upsert_file(self.connection, self._record(str(movie)))
+            result = service.record_quality_results(
+                self.connection,
+                movie,
+                QualityResult(
+                    input=movie,
+                    output=root / ".shrinkray-x/movie.mkv",
+                    success=True,
+                    target_vmaf=96.0,
+                    chosen_crf=21,
+                    achieved_vmaf=95.5,
+                    input_size=1000,
+                    output_size=400,
+                ),
+                config_helper.Conf(),
+                final_output=movie,
+            )
+            self.assertTrue(result.encoded)
+            # the swap: the artifact took the source's path
+            movie.write_bytes(b"x" * 400)
+            # the SECOND encode reads the file (400) - and the source
+            # vanishes during it; the result carries the size as read.
+            # THE SOURCE IS GONE: recording must not stat it.
+            movie.unlink()
+            second = service.record_quality_results(
+                self.connection,
+                movie,
+                QualityResult(
+                    input=movie,
+                    output=root / ".shrinkray-y/movie.mkv",
+                    success=True,
+                    target_vmaf=96.0,
+                    chosen_crf=20,
+                    achieved_vmaf=95.8,
+                    input_size=400,
+                    output_size=300,
+                ),
+                config_helper.Conf(),
+                final_output=movie,
+            )
+            self.assertTrue(second.encoded)
+            row = self.connection.execute(
+                "SELECT generation FROM encodes ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            # the file (as the encode read it) WAS the first row's output
+            self.assertEqual(row["generation"], 2)
+            # the size=None stat path: a vanished file has no ancestry and
+            # never raises
+            self.assertEqual(service.derive_generation(self.connection, movie), 1)
+
+    def test_derive_generation_restored_original_is_generation_1(self):
+        """The identity rule on the write side (issue #647, round 3): a path
+        claim counts as ancestry only when the row's recorded output is the
+        file the path now carries. A restored original (its size no longer
+        matches any row's output) is generation 1 again - its re-encode
+        starts a fresh chain instead of writing a false generation-2 link."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 1000)  # the restored original's size
+
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            # two in-place encodes claim the movie's path (1000->500->400)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=str(movie),
+                generation=1,
+            )
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>90",
+                "svt_av1",
+                500,
+                400,
+                20.0,
+                output_file=str(movie),
+                generation=2,
+            )
+            # the encoded state: the file IS the latest row's output
+            movie.write_bytes(b"x" * 400)
+            self.assertEqual(service.derive_generation(self.connection, movie), 3)
+            # the restore: no row's output matches the file any more
+            movie.write_bytes(b"x" * 1000)
+            self.assertEqual(service.derive_generation(self.connection, movie), 1)
 
     def test_add_encode_with_drift_fields(self):
         file_id = db.upsert_file(self.connection, self._record("a.mkv"))
@@ -1017,6 +1178,395 @@ class TestDb(unittest.TestCase):
                 app_module.state.shutdown()
                 app_module.state = None
 
+    def test_library_hides_an_encode_whose_file_no_longer_matches(self):
+        """The identity rule on the library surface (issue #647): an encode
+        record is history, not the current state. When the file's size no
+        longer matches the recorded output (a restored original), the
+        library entry carries no encode block; when the sizes match again,
+        the record is presented."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "restored.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path),
+                    mtime=100.0,
+                    size=1000,
+                    name="restored",
+                    category="Cat",
+                ),
+            )
+            # an in-place encode: the row's output_file is the file's own
+            # path - that is the claim the identity rule checks
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=movie_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                # the scan's record says 1000 bytes; the row claims 500: the
+                # record is not the file on disk
+                self.connection.execute("UPDATE files SET size = 1000 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "restored")
+                self.assertIsNone(entry["encode"])
+                # the encoded state's size back in the record: presented again
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "restored")
+                self.assertIsNotNone(entry["encode"])
+                self.assertEqual(entry["encode"]["saved_percent"], 50.0)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_the_latest_row_is_the_one_the_identity_rule_judges(self):
+        """The visibility rule applies to the LATEST encode row, not to the
+        latest row that happens to pass a filter (issue #647, round 2): a
+        library with an earlier out-of-place encode (E1, its artifact at its
+        own output path) and a later in-place encode (E2) whose file was
+        restored must show NO current encode - the latest row is what
+        changed, and an older row is not the file's current state."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "chained.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path), mtime=100.0, size=1000, name="chained", category="Cat"
+                ),
+            )
+            # E1: an out-of-place encode (its artifact at its own path)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(Path(media_tmp) / "elsewhere.mkv"),
+            )
+            # E2: a later in-place encode (its output took the file's path)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>90",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=movie_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                # the encoded state: E2 is the current encode
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "chained")
+                self.assertEqual(entry["encode"]["saved_percent"], 50.0)
+                # the restore: E2's identity fails - and E1 must NOT fall
+                # back in as the current encode
+                self.connection.execute("UPDATE files SET size = 1000 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                body = client.get("/api/library").json()
+                entry = next(e for e in body if e["name"] == "chained")
+                self.assertIsNone(entry["encode"])
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_a_restore_busts_the_library_etag(self):
+        """The identity signal is part of the ETag fingerprints (issue #647):
+        a restore rewrites a file's size WITHOUT touching any encode row, and
+        the restored original's mtime is typically not the library maximum -
+        so the max-mtime term alone would serve a 304 / library:null and the
+        dashboard would keep the stale ENCODED entry (the #625 stale-cache
+        class). The fingerprint carries the exact SET of mismatching in-place
+        row ids."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            # file A carries the library's max mtime and never changes
+            a_path = str(Path(media_tmp) / "a.mkv")
+            Path(a_path).write_bytes(b"x" * 100)
+            # file B is encoded in place, then restored by hand
+            b_path = str(Path(media_tmp) / "b.mkv")
+            Path(b_path).write_bytes(b"x" * 1000)
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(a_path), mtime=900.0, size=100, name="a", category="Cat"),
+            )
+            b_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(b_path), mtime=100.0, size=500, name="b", category="Cat"),
+            )
+            db.add_encode(
+                self.connection,
+                b_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=b_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                first = client.get("/api/library")
+                etag = first.headers["ETag"]
+                cached = client.get("/api/library", headers={"If-None-Match": etag})
+                self.assertEqual(cached.status_code, 304)
+                # the restore: the file is back to the ORIGINAL size, its
+                # mtime stays BELOW file A's maximum
+                self.connection.execute(
+                    "UPDATE files SET size = 1000, mtime = 150.0 WHERE id = ?",
+                    (b_id,),
+                )
+                self.connection.commit()
+                second = client.get("/api/library", headers={"If-None-Match": etag})
+                self.assertEqual(second.status_code, 200)
+                entry = next(e for e in second.json() if e["name"] == "b")
+                self.assertIsNone(entry["encode"])
+                # the SNAPSHOT's fingerprint carries the same term: the
+                # restore must move it too, or the dashboard's poll keeps a
+                # stale library behind an unchanged fingerprint
+                # the snapshot's payload carries the library etag the UI's
+                # poll compares (the same fingerprint term)
+                fp_before = client.get("/api/snapshot").json()["library_etag"]
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (b_id,))
+                self.connection.commit()
+                fp_after = client.get("/api/snapshot").json()["library_etag"]
+                self.assertNotEqual(fp_before, fp_after)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_movie_route_generation_follows_the_identity_rule(self):
+        """The detail page's GENERATION chip is a current-state surface
+        (issue #647, round 3): a restored original's /api/movie says
+        generation 1 - the stale in-place row's path claim is history, not
+        ancestry."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "restored.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path), mtime=100.0, size=1000, name="restored", category="Cat"
+                ),
+            )
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=movie_path,
+                generation=1,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                body = client.get("/api/movie", params={"path": movie_path}).json()
+                self.assertEqual(body["file"]["generation"], 1)
+                # the encoded state: the file IS the row's output - generation 2
+                self.connection.execute("UPDATE files SET size = 500 WHERE id = ?", (file_id,))
+                self.connection.commit()
+                Path(movie_path).write_bytes(b"x" * 500)
+                body = client.get("/api/movie", params={"path": movie_path}).json()
+                self.assertEqual(body["file"]["generation"], 2)
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_the_snapshot_hides_a_restored_original_too(self):
+        """The snapshot carries the same rule as the library (issue #647):
+        an applied in-place row whose size no longer matches is hidden, and
+        an OUT-OF-PLACE latest row (an output-dir run's artifact at its own
+        path) stays visible - the deployment the gauge must agree with."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            movie_path = str(Path(media_tmp) / "restored.mkv")
+            Path(movie_path).write_bytes(b"x" * 1000)
+            file_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=Path(movie_path), mtime=100.0, size=1000, name="restored", category="Cat"
+                ),
+            )
+            # the latest row: out-of-place (its artifact at its own path)
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                400,
+                60.0,
+                output_file=str(Path(media_tmp) / "elsewhere.mkv"),
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                body = client.get("/api/snapshot").json()
+                entry = next(m for m in body["library"] if m["name"] == "restored")
+                self.assertIsNotNone(entry["encode"])
+                self.assertEqual(entry["encode"]["saved_percent"], 60.0)
+                # an in-place latest row with a size mismatch: hidden
+                db.add_encode(
+                    self.connection,
+                    file_id,
+                    "VMAF>90",
+                    "svt_av1",
+                    1000,
+                    500,
+                    50.0,
+                    output_file=movie_path,
+                )
+                self.connection.commit()
+                body = client.get("/api/snapshot").json()
+                entry = next(m for m in body["library"] if m["name"] == "restored")
+                self.assertIsNone(entry["encode"])
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
+    def test_a_chain_restore_busts_the_library_etag(self):
+        """The ETag signal is the exact SET of mismatching row ids, not a
+        count (issue #647, round 3): a chain restore can move the mismatch
+        from one applied row to another and leave the count unchanged - the
+        fingerprint must still change, or the dashboard keeps the stale
+        entry behind a 304."""
+
+        from fastapi.testclient import TestClient
+
+        import shrinkray.server.app as app_module
+        from shrinkray.server.app import AppState
+        from shrinkray.server.app import app as fast_app
+
+        with tempfile.TemporaryDirectory() as media_tmp:
+            a_path = str(Path(media_tmp) / "a.mkv")
+            Path(a_path).write_bytes(b"x" * 100)
+            b_path = str(Path(media_tmp) / "b.mkv")
+            Path(b_path).write_bytes(b"x" * 1000)
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(a_path), mtime=900.0, size=100, name="a", category="Cat"),
+            )
+            b_id = db.upsert_file(
+                self.connection,
+                db.MovieRecord(path=Path(b_path), mtime=100.0, size=400, name="b", category="Cat"),
+            )
+            # the chain: two in-place encodes (1000->500, then 500->400)
+            db.add_encode(
+                self.connection,
+                b_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=b_path,
+            )
+            db.add_encode(
+                self.connection,
+                b_id,
+                "VMAF>90",
+                "svt_av1",
+                500,
+                400,
+                20.0,
+                output_file=b_path,
+            )
+            self.connection.commit()
+
+            app_module.state = AppState(Path(self.tmp.name) / "test.db")
+            app_module.allow_roots([Path(media_tmp), Path(self.tmp.name)])
+            try:
+                client = TestClient(fast_app)
+                # the encoded state (size 400): the latest row matches, the
+                # EARLIER row mismatches - the mismatch count is 1
+                first = client.get("/api/library")
+                etag = first.headers["ETag"]
+                # the restore to the intermediate generation's size (500):
+                # the latest row mismatches now, the earlier one matches -
+                # the COUNT is still 1, but the SET of mismatching ids moved
+                self.connection.execute(
+                    "UPDATE files SET size = 500, mtime = 150.0 WHERE id = ?",
+                    (b_id,),
+                )
+                self.connection.commit()
+                second = client.get("/api/library", headers={"If-None-Match": etag})
+                self.assertEqual(second.status_code, 200)
+                entry = next(e for e in second.json() if e["name"] == "b")
+                self.assertIsNone(entry["encode"])
+            finally:
+                app_module.state.shutdown()
+                app_module.state = None
+
     def test_movie_detail_av1_plan_is_never_served_as_a_prediction(self):
         """The output format is never a source (issue #650): the movie-detail
         route must not serve a stored plan row for an AV1 file as a
@@ -1079,6 +1629,68 @@ class TestDb(unittest.TestCase):
             finally:
                 app_module.state.shutdown()
                 app_module.state = None
+
+    def test_recent_encodes_are_the_newest_five_by_recency(self):
+        """Issue #631: the queue outlook's pace is the last real encodes by
+        `encoded_at`, not the last five titles alphabetically. A discarded
+        attempt reclaimed nothing and is not a pace sample."""
+        from shrinkray.server.app import _recent_encodes
+
+        file_id = db.upsert_file(
+            self.connection,
+            db.MovieRecord(
+                path=Path(self.tmp.name) / "pace.mkv",
+                mtime=100.0,
+                size=1024**3,
+                name="pace",
+                category="Cat",
+            ),
+        )
+        # the oldest encode is the slow one; the newest five are 60 s
+        for day, seconds in enumerate([9999, 60, 60, 60, 60, 60, 60], start=1):
+            encode_id = db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>96",
+                "svt_av1",
+                1024**3,
+                512 * 1024**2,
+                50.0,
+                encode_seconds=seconds,
+            )
+            self.connection.execute(
+                "UPDATE encodes SET encoded_at = ? WHERE id = ?",
+                (f"2026-11-{day:02d} 12:00:00", encode_id),
+            )
+        # a discarded attempt is not a real encode
+        discarded = db.add_encode(
+            self.connection,
+            file_id,
+            "VMAF>96",
+            "svt_av1",
+            1024**3,
+            512 * 1024**2,
+            50.0,
+            encode_seconds=9999,
+            outcome="discarded",
+        )
+        self.connection.execute(
+            "UPDATE encodes SET encoded_at = '2026-11-08 12:00:00' WHERE id = ?",
+            (discarded,),
+        )
+        self.connection.commit()
+        recent = _recent_encodes(self.connection)
+        self.assertEqual([row["encode_seconds"] for row in recent], [60, 60, 60, 60, 60])
+
+    def test_probe_measured_at_is_readable(self):
+        """The cache row keeps its original measurement time for provenance
+        (maintainer 2026-11-14, issue #631); the two-tuple entry stays."""
+        db.save_probe_score(self.connection, "measured-key", 95.5, 123)
+        self.connection.commit()
+        self.assertEqual(db.get_probe_entry(self.connection, "measured-key"), (95.5, 123))
+        measured_at = db.get_probe_measured_at(self.connection, "measured-key")
+        self.assertIsNotNone(measured_at)
+        self.assertIsNone(db.get_probe_measured_at(self.connection, "missing-key"))
 
     def test_movie_detail_endpoint(self):
         """GET /api/movie returns the file facts plus the COMPLETE encode
@@ -1186,13 +1798,24 @@ class TestDb(unittest.TestCase):
                 # ── plan: the prediction display's data ──
                 # no plan recorded => the key exists, is None
                 self.assertIsNone(child_body["plan"])
+                from shrinkray.engine.search import SampleProbe
+
                 db.save_plan(
                     self.connection,
                     file_id,
                     chosen_crf=21,
                     achieved_vmaf=95.47,
                     crop=None,
-                    probes=[],
+                    probes=[
+                        SampleProbe(
+                            crf=30,
+                            vmaf=94.8,
+                            cached=True,
+                            measured_at="2026-11-14 08:12:00",
+                        ),
+                        SampleProbe(crf=24, vmaf=96.6),
+                        SampleProbe(crf=21, vmaf=95.47),
+                    ],
                     skipped_reason=None,
                     estimated_size=450,
                     input_mtime=Path(movie_path).stat().st_mtime,
@@ -1214,6 +1837,21 @@ class TestDb(unittest.TestCase):
                 self.assertIsNone(plan_body["skipped_reason"])
                 self.assertFalse(plan_body["stale"])
                 self.assertEqual(plan_body["target_vmaf"], 95.0)
+                # the persisted probe trail rides along (issue #631): one
+                # object per probe, in the order the search measured them
+                self.assertEqual(
+                    plan_body["probes"],
+                    [
+                        {
+                            "crf": 30,
+                            "vmaf": 94.8,
+                            "measured_at": "2026-11-14 08:12:00",
+                            "cached": True,
+                        },
+                        {"crf": 24, "vmaf": 96.6, "measured_at": None, "cached": False},
+                        {"crf": 21, "vmaf": 95.47, "measured_at": None, "cached": False},
+                    ],
+                )
                 # a changed file flips the staleness flag (mtime+size guard);
                 # the file only exists physically from this write on
                 Path(movie_path).write_bytes(b"x" * (1000 + 8))
@@ -1398,6 +2036,10 @@ class TestDb(unittest.TestCase):
             status_only = client.get("/api/status").json()
             for key in status_only:
                 self.assertIn(key, body["status"], f"snapshot.status lost /api/status key {key!r}")
+            # the queue outlook's recency source rides both status surfaces
+            # (issue #631): the library list is category/name-ordered
+            self.assertIn("recent_encodes", status_only)
+            self.assertEqual(status_only["recent_encodes"], body["status"]["recent_encodes"])
             # value parity for the three DERIVED fields (review finding 2,
             # PR #347): both handlers compute them from the same inputs, so
             # equality holds here and pins the handlers against drift.
@@ -1763,8 +2405,8 @@ class TestDb(unittest.TestCase):
             self.assertFalse(
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
-            # output exists and is non-empty => finished
-            (out / "c.mkv").write_bytes(b"encoded data")
+            # output exists with the RECORDED size => finished
+            (out / "c.mkv").write_bytes(b"x" * 50)
             self.assertTrue(
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
@@ -1773,11 +2415,20 @@ class TestDb(unittest.TestCase):
             self.assertFalse(
                 db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
             )
+            # a different-size file at the path (a restored original, issue
+            # #647) => not finished: the record is history, not the state
+            (out / "c.mkv").write_bytes(b"y" * 123)
+            self.assertFalse(
+                db.has_output_for_latest_encode(self.connection, file_id, out / "c.mkv")
+            )
 
-    def test_finished_movies_excludes_truncated_output(self):
-        """The quality-mode resume set excludes truncated outputs (debris):
-        the db says encoded and the file is non-empty, but the duration does
-        not verify => re-encode instead of skip-forever."""
+    def test_finished_movies_excludes_a_same_size_foreign_file(self):
+        """The quality-mode resume set excludes debris the identity rule
+        cannot see (issue #647): the file carries the RECORDED size but the
+        duration does not verify - a same-size replaced or corrupt file (a
+        truncated one is smaller and fails the identity check first; a crash
+        mid-write leaves no row at all) - so the duration check stays the
+        second line of defence => re-encode instead of skip-forever."""
 
         from shrinkray import service
 
@@ -1787,7 +2438,7 @@ class TestDb(unittest.TestCase):
             movie.write_bytes(b"x")
             out_dir = root / "enc"
             out_dir.mkdir()
-            (out_dir / "movie.mkv").write_bytes(b"truncated debris")
+            (out_dir / "movie.mkv").write_bytes(b"x" * 500)
             file_id = db.upsert_file(self.connection, self._record(str(movie)))
             db.add_encode(self.connection, file_id, "VMAF>95", "svt_av1", 1000, 500, 50.0)
             with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=False):
@@ -1796,6 +2447,41 @@ class TestDb(unittest.TestCase):
             with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True):
                 finished = service.finished_movies(self.connection, [movie], out_dir)
             self.assertEqual(finished, {str(movie)})
+
+    def test_finished_movies_restored_original_is_not_finished(self):
+        """The identity rule (issue #647): a recorded in-place encode does not
+        make the PATH finished forever - the file at the path must BE the
+        recorded output. Replacing it with a different-size file (the
+        documented restore: delete the AV1 output, rename the retained
+        original back) must drop the movie from the resume set, so the
+        watcher re-decides and re-encodes it instead of skipping it as
+        already_encoded."""
+
+        from shrinkray import service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 1000)  # the restored original's size
+            out_dir = root / "enc"
+            out_dir.mkdir()
+            file_id = db.upsert_file(self.connection, self._record(str(movie)))
+            # an in-place encode: the output took the source's path
+            db.add_encode(
+                self.connection,
+                file_id,
+                "VMAF>95",
+                "svt_av1",
+                1000,
+                500,
+                50.0,
+                output_file=str(movie),
+            )
+            # the duration verifies (the identity check is what must exclude
+            # the file, not a truncation verdict)
+            with mock.patch("shrinkray.engine.pipeline.durations_match", return_value=True):
+                finished = service.finished_movies(self.connection, [movie], out_dir)
+            self.assertEqual(finished, set())
 
     def test_records_effective_target_vmaf(self):
         """The preset column carries the engine's EFFECTIVE target (what the
@@ -2372,6 +3058,71 @@ class TestDb(unittest.TestCase):
             issues = [f.issue for f in findings]
             self.assertIn("encode output vanished", issues)
 
+    def test_doctor_silence_on_a_restored_original(self):
+        """A restored original is history, not a vanished output (issue
+        #706): an applied own-path row whose file's size no longer matches
+        the row's output_size gets no finding from doctor."""
+
+        from shrinkray import service
+        from shrinkray.engine.plan import QualityResult
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"x" * 8)
+            db.upsert_file(self.connection, self._record(str(movie)))
+            service.record_quality_results(
+                self.connection,
+                movie,
+                QualityResult(
+                    input=movie,
+                    output=root / ".shrinkray-x" / "movie.mkv",
+                    success=True,
+                    target_vmaf=96.0,
+                    chosen_crf=21,
+                    achieved_vmaf=95.5,
+                    input_size=8,
+                    output_size=400,
+                ),
+                config_helper.Conf(),
+                final_output=movie,
+            )
+            row = self.connection.execute(
+                "SELECT output_file, output_size, outcome FROM encodes ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            self.assertEqual(row["output_file"], str(movie))
+            self.assertEqual(row["outcome"], "applied")
+            # the restore: the original's bytes are back at the path - a
+            # different size than the row's output_size
+            movie.write_bytes(b"restored original")
+            findings = service.doctor(self.connection)
+            self.assertEqual([f for f in findings if f.movie == str(movie)], [])
+
+    def test_output_claim_is_current_classifies_the_restored_original(self):
+        """The predicate behind doctor's silence (issue #706): an applied
+        own-path row is current only when the actual size matches the
+        recorded output_size - a mismatch is a restored original."""
+
+        self.assertTrue(
+            db.output_claim_is_current("applied", "/lib/movie.mkv", "/lib/movie.mkv", 400, 400)
+        )
+        # the restored original: own path, applied, but the bytes differ
+        self.assertFalse(
+            db.output_claim_is_current("applied", "/lib/movie.mkv", "/lib/movie.mkv", 400, 17)
+        )
+        # nothing at the path is not a current claim either
+        self.assertFalse(
+            db.output_claim_is_current("applied", "/lib/movie.mkv", "/lib/movie.mkv", 400, None)
+        )
+        # a discarded attempt's claim is never current, even at the same size
+        self.assertFalse(
+            db.output_claim_is_current("discarded", "/lib/movie.mkv", "/lib/movie.mkv", 400, 400)
+        )
+        # an out-of-place claim cannot be identity-checked against its file row
+        self.assertFalse(
+            db.output_claim_is_current("applied", "/lib/enc/movie.mkv", "/lib/movie.mkv", 400, 400)
+        )
+
     def test_doctor_probe_all_detects_corruption(self):
         """--probe-all ffprobes every row: a file that exists but does not
         probe is reported as unprobeable; a probeable one is silent."""
@@ -2472,7 +3223,10 @@ class TestInPlaceAuditTrail(unittest.TestCase):
         self.assertEqual(row["output_file"], str(self.movie))
 
     def test_the_generation_chain_links_an_in_place_reencode(self) -> None:
-        """A second in-place encode of the same path is generation 2."""
+        """A second in-place encode of the same path is generation 2: the
+        swap made the file BE the first encode's output, so the ancestry
+        identity (issue #647) holds - the file's size matches the row's
+        recorded output."""
         from shrinkray import service
 
         service.record_quality_results(
@@ -2482,10 +3236,25 @@ class TestInPlaceAuditTrail(unittest.TestCase):
             config_helper.Conf(),
             final_output=self.movie,
         )
+        # the swap: the artifact took the source's path (the mocked encode
+        # skips it; the real flow's file IS the recorded output now)
+        self.movie.write_bytes(b"x" * 400)
+        # the second encode reads the file at its post-swap size
+        from shrinkray.engine.plan import QualityResult
+
         second = service.record_quality_results(
             self.connection,
             self.movie,
-            self._result(self.root / ".shrinkray-y/movie.mkv"),
+            QualityResult(
+                input=self.movie,
+                output=self.root / ".shrinkray-y/movie.mkv",
+                success=True,
+                target_vmaf=96.0,
+                chosen_crf=20,
+                achieved_vmaf=95.8,
+                input_size=400,
+                output_size=300,
+            ),
             config_helper.Conf(),
             final_output=self.movie,
         )
@@ -2519,6 +3288,255 @@ class TestInPlaceAuditTrail(unittest.TestCase):
         self.assertIsNone(row["output_file"])
 
 
+class TestInterruptedJobResume(unittest.TestCase):
+    """Issue #622: a shutdown or crash interruption is its own state and the
+    next boot resumes the same row without app.auto_backlog. An operator cancel
+    is never resumed; a stage row is history; a resume cap stops a crash loop."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.db_file = Path(self.tmp.name) / "metadata.db"
+
+    def _seed(
+        self,
+        kind: jobs.JobKind,
+        payload: dict,
+        *,
+        state: str,
+        result: dict | None = None,
+        started_at: str | None = None,
+    ) -> int:
+        connection = db.connect(self.db_file)
+        try:
+            queue = JobQueue(connection)
+            job = queue.enqueue(jobs.Job(kind=kind, payload=payload))
+            connection.execute(
+                "UPDATE jobs SET state = ?, started_at = ?, result = ? WHERE id = ?",
+                (
+                    state,
+                    started_at,
+                    json.dumps(result) if result is not None else None,
+                    job.id,
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        return job.id
+
+    def _boot(self):
+        from shrinkray.server import app as app_module
+
+        state = app_module.AppState(self.db_file)
+        self.addCleanup(state.shutdown)
+        return state
+
+    def test_a_shutdown_row_is_re_queued_with_its_id_and_clean_bookkeeping(self) -> None:
+        """The same row is re-queued: its id is kept, the terminal
+        bookkeeping is cleared, and a finished attempt leaves error NULL."""
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"path": str(Path(self.tmp.name) / "movies")},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+        queued = state.queue.get(job_id)
+        self.assertEqual(queued.id, job_id)
+        self.assertEqual(queued.state, jobs.JobState.QUEUED)
+        self.assertIsNone(queued.error)
+        self.assertIsNone(queued.finished_at)
+        self.assertIsNone(queued.started_at)
+        taken = state.queue.take_next()
+        self.assertEqual(taken.id, job_id)
+        with mock.patch(
+            "shrinkray.server.jobs.execute_scan",
+            return_value={"movies": 0, "categories": 0, "errors": []},
+        ):
+            state.worker._execute(taken)
+        finished = state.queue.get(job_id)
+        self.assertEqual(finished.state, jobs.JobState.DONE)
+        self.assertIsNone(finished.error)
+
+    def test_an_operator_cancelled_row_does_not_resume(self) -> None:
+        connection = db.connect(self.db_file)
+        try:
+            queue = JobQueue(connection)
+            job = queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+            self.assertTrue(queue.cancel(job.id))
+        finally:
+            connection.close()
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        reloaded = state.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+
+    def test_the_resumed_row_is_taken_before_a_newer_queued_row(self) -> None:
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"path": "/library"},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        connection = db.connect(self.db_file)
+        try:
+            newer = JobQueue(connection).enqueue(
+                jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["/newer"]})
+            )
+        finally:
+            connection.close()
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+        first = state.queue.take_next()
+        second = state.queue.take_next()
+        self.assertEqual(first.id, job_id)
+        self.assertEqual(second.id, newer.id)
+
+    def test_a_resumed_row_dedupes_against_the_boot_backlog(self) -> None:
+        """Issue #626: the resumed scan has the backlog's kind and payload,
+        so the backlog keeps it instead of enqueueing a second one."""
+        from shrinkray.server import app as app_module
+
+        root = Path(self.tmp.name) / "library"
+        root.mkdir()
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"paths": [str(root)]},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+        self.assertEqual(app_module.auto_backlog(state, [root], enabled=True), ["plan", "encode"])
+        scans = [job for job in state.queue.queued_jobs() if job.kind is jobs.JobKind.SCAN]
+        self.assertEqual([job.id for job in scans], [job_id])
+
+    def test_an_interrupted_stage_row_is_not_re_queued(self) -> None:
+        job_id = self._seed(
+            jobs.JobKind.CRF_SEARCH,
+            {"paths": ["/m/a.mkv"], "pipeline": "plan"},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        reloaded = state.queue.get(job_id)
+        self.assertEqual(reloaded.state, jobs.JobState.INTERRUPTED)
+        self.assertIsNone(state.queue.take_next())
+
+    def test_a_crash_loop_accumulates_the_resume_count_and_then_stops(self) -> None:
+        """Three hard-killed attempts prove the recovery merge preserves the
+        ledger; the fourth boot hits the cap and leaves the row interrupted."""
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"path": "/library"},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        for expected in (1, 2, 3):
+            state = self._boot()
+            self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+            queued = state.queue.get(job_id)
+            self.assertEqual(queued.result["resume_count"], expected)
+            # the attempt is taken and the process dies before a terminal
+            # write: the running row is the hard kill's leftover
+            self.assertEqual(state.queue.take_next().id, job_id)
+            state.shutdown()
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        capped = state.queue.get(job_id)
+        self.assertEqual(capped.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(capped.result["resume_count"], 3)
+        self.assertTrue(capped.result["resume_cap_reached"])
+
+    def test_a_graceful_stop_preserves_the_resume_ledger(self) -> None:
+        """The interrupted write itself must merge, not replace, the result:
+        three docker-stop cycles accumulate the ledger and the cap fires."""
+        from shrinkray.tools.process import Cancelled
+
+        job_id = self._seed(
+            jobs.JobKind.SCAN,
+            {"path": "/library"},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        for expected in (1, 2, 3):
+            state = self._boot()
+            self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+            taken = state.queue.take_next()
+            self.assertEqual(taken.id, job_id)
+            state.worker._stop.set()
+            with mock.patch(
+                "shrinkray.server.jobs.execute_scan",
+                side_effect=Cancelled("docker stop"),
+            ):
+                state.worker._execute(taken)
+            interrupted = state.queue.get(job_id)
+            self.assertEqual(interrupted.state, jobs.JobState.INTERRUPTED)
+            self.assertEqual(interrupted.result["resume_count"], expected)
+            state.shutdown()
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        capped = state.queue.get(job_id)
+        self.assertEqual(capped.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(capped.result["resume_count"], 3)
+        self.assertTrue(capped.result["resume_cap_reached"])
+
+    def test_a_row_at_the_resume_cap_stays_interrupted(self) -> None:
+        job_id = self._seed(
+            jobs.JobKind.PLAN,
+            {"paths": ["/library"]},
+            state="interrupted",
+            started_at="2026-01-01 00:00:00",
+            result={"resumed_at": "2026-01-01 00:00:00", "resume_count": 3},
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        capped = state.queue.get(job_id)
+        self.assertEqual(capped.state, jobs.JobState.INTERRUPTED)
+        self.assertTrue(capped.result["resume_cap_reached"])
+        self.assertIsNone(state.queue.take_next())
+
+    def test_a_pending_cancel_request_wins_over_the_resume(self) -> None:
+        from shrinkray.engine import pause
+
+        job_id = self._seed(
+            jobs.JobKind.PLAN,
+            {"paths": ["/library"]},
+            state="interrupted",
+            started_at="2026-01-01 00:00:00",
+            result={"resumed_at": "2026-01-01 00:00:00", "resume_count": 1},
+        )
+        request = pause.write_cancel_request(Path(self.tmp.name), job_id)
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [])
+        cancelled = state.queue.get(job_id)
+        self.assertEqual(cancelled.state, jobs.JobState.CANCELLED)
+        self.assertFalse(request.exists())
+
+    def test_a_hard_killed_running_row_is_recovered_and_resumed(self) -> None:
+        """A process killed before its terminal write leaves the row running;
+        the next boot marks it interrupted and re-queues it. The stale encode
+        lock the killed process left is the expected busy-skip (guard_encodes
+        raises at once, never waits), so the resumed attempt is expected to
+        record a skipped outcome rather than a second writer; this test pins the
+        recovery and resume, not the lock's own timing."""
+        job_id = self._seed(
+            jobs.JobKind.ENCODE,
+            {"paths": ["/library/a.mkv"], "quality": True},
+            state="running",
+            started_at="2026-01-01 00:00:00",
+        )
+        state = self._boot()
+        self.assertEqual(state.resume_interrupted_jobs(), [job_id])
+        resumed = state.queue.get(job_id)
+        self.assertEqual(resumed.state, jobs.JobState.QUEUED)
+        self.assertEqual(resumed.result["resume_count"], 1)
+        self.assertEqual(state.queue.take_next().id, job_id)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -2542,8 +3560,9 @@ class TestStaleJobRecoveryAnnouncement(unittest.TestCase):
         queue = JobQueue(connection)
         job = queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["D:/Movies"]}))
         connection.execute(
-            "UPDATE jobs SET state = 'running', started_at = '2026-01-01 00:00:00' WHERE id = ?",
-            (job.id,),
+            "UPDATE jobs SET state = 'running', started_at = '2026-01-01 00:00:00', "
+            "result = ? WHERE id = ?",
+            (json.dumps({"resumed_at": "2026-01-01 00:00:00", "resume_count": 2}), job.id),
         )
         connection.commit()
         connection.close()
@@ -2551,9 +3570,15 @@ class TestStaleJobRecoveryAnnouncement(unittest.TestCase):
         sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
         try:
             state = AppState(db_file)
+            recovered = state.queue.get(job.id)
         finally:
             logger.remove(sink_id)
         state.shutdown()
         text = "".join(captured)
         self.assertIn(f"Recovering job #{job.id} (plan)", text, text)
         self.assertIn("interrupted by app restart", text)
+        # issue #622: the row is interrupted, not failed, and the resume
+        # ledger it already carried survives the recovery write
+        self.assertEqual(recovered.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(recovered.result["resume_count"], 2)
+        self.assertEqual(recovered.result["interrupted_reason"], "interrupted by app restart")
