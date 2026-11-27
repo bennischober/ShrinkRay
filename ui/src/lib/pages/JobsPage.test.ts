@@ -13,12 +13,27 @@ vi.mock('../progress.svelte', async (importOriginal) => {
     progressEta: (view: { etaSeconds?: number | null } | null) => view?.etaSeconds ?? null,
   }
 })
-import type { Job } from '../api'
+import type { Job, Movie } from '../api'
 
 /** The jobs page is the audit trail — the render test pins the contract a
  * reader depends on: the legend count, the absence of steering controls, the
  * expandable detail with payload JSON, and the PARTIAL state for a done job
  * with failed outcomes. Callbacks are spies; assertions are on the DOM. */
+
+function movie(path: string): Movie {
+  return {
+    path,
+    name: (path.split('/').pop() ?? path).replace(/\.[^.]+$/, ''),
+    category: 'Filme',
+    duration: null,
+    codec: null,
+    resolution: null,
+    size: 1_000_000_000,
+    reclaimed_bytes: 0,
+    hdr: false,
+    encode: null,
+  }
+}
 
 function job(overrides: Partial<Job> = {}): Job {
   return {
@@ -266,13 +281,97 @@ describe('JobsPage render', () => {
   })
 
   it('single-movie jobs link to the detail page', () => {
-    const j = job({ payload: { paths: ['/m/a'] } })
+    const path = '/media/Filme/Titel 0 (2000).mkv'
+    const opened: string[] = []
+    const j = job({ payload: { paths: [path] } })
     const { container } = render(JobsPage, {
       history: [j],
+      movies: [movie(path)],
+      onopenMovie: (p) => opened.push(p),
+    })
+    const link = container.querySelector<HTMLButtonElement>('.file button.movie-link')
+    expect(link).toBeTruthy()
+    fireEvent.click(link!)
+    expect(opened).toEqual([path])
+  })
+
+  it('a running per-movie stage row links to the title it names (issue #703)', () => {
+    const path = '/media/Filme/Titel 0 (2000).mkv'
+    progressStub = {
+      stage: 'crf-search',
+      movie: 'Titel 0 (2000)',
+      path,
+      step: 4,
+      steps: 7,
+      probe: { index: 1, count: 3, crf: 30, vmaf: 95.0, predicted_bytes: null, passed: false },
+      probes: [],
+      etaSeconds: 40 * 60,
+    }
+    const folder = job({
+      id: 3,
+      kind: 'encode',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      result: null,
+      payload: { paths: ['/media/Filme'], quality: true },
+    })
+    const { container } = render(JobsPage, {
+      history: [folder],
+      movies: [movie(path)],
       onopenMovie: () => {},
     })
-    const link = container.querySelector<HTMLButtonElement>('button.movie-link')
+    const link = container.querySelector<HTMLAnchorElement>('.entry.running a.movie-link')
     expect(link).toBeTruthy()
+    expect(link!.getAttribute('href')).toBe(`#/movie/${encodeURIComponent(path)}`)
+    expect(link!.textContent).toContain('Titel 0 (2000).mkv')
+    progressStub = null
+  })
+
+  it('the folder-level row keeps showing the folder and stays unlinked (issue #703)', () => {
+    const path = '/media/Filme/Titel 0 (2000).mkv'
+    progressStub = {
+      stage: 'crf-search',
+      movie: 'Titel 0 (2000)',
+      path,
+      step: 4,
+      steps: 7,
+      probes: [],
+    }
+    const folder = job({
+      id: 3,
+      kind: 'encode',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      result: null,
+      payload: { paths: ['/media/Filme'], quality: true },
+    })
+    const { container } = render(JobsPage, {
+      history: [folder],
+      movies: [movie(path)],
+      onopenMovie: () => {},
+    })
+    const file = container.querySelector('.entry.running .file')!
+    expect(file.textContent).toContain('Filme')
+    expect(file.querySelector('a, button')).toBeNull()
+    progressStub = null
+  })
+
+  it('a directory path never links (issue #703)', () => {
+    const folder = job({
+      id: 4,
+      kind: 'plan',
+      state: 'done',
+      payload: { paths: ['/media/Filme'], quality: true },
+      result: { plans: [] },
+    })
+    const { container } = render(JobsPage, {
+      history: [folder],
+      movies: [movie('/media/Filme/Titel 0 (2000).mkv')],
+      onopenMovie: () => {},
+    })
+    expect(container.querySelector('.movie-link')).toBeNull()
   })
 
   it('folder-scoped jobs do not claim a single movie link', () => {
@@ -347,13 +446,18 @@ describe('JobsPage render', () => {
   it('gives the filename its own cell, never the KIND column (issue #630, case 13)', () => {
     // a long name inside the 104 px KIND column wrapped character by character
     // and drew over the start time: it needs a cell that can shrink
+    const path = '/m/a-very-long-movie-name-that-would-wrap.mkv'
     const encode = job({
       id: 5,
       kind: 'encode',
       state: 'done',
-      payload: { paths: ['/m/a-very-long-movie-name-that-would-wrap.mkv'] },
+      payload: { paths: [path] },
     })
-    const { container } = render(JobsPage, { history: [encode], onopenMovie: () => {} })
+    const { container } = render(JobsPage, {
+      history: [encode],
+      movies: [movie(path)],
+      onopenMovie: () => {},
+    })
     const row = container.querySelector('.entry')!
     expect(row.querySelector('.kind .movie-link')).toBeNull()
     expect(row.querySelector('.file .movie-link')).not.toBeNull()
