@@ -2,7 +2,7 @@
 
 All notable changes to ShrinkRay are documented here. Releases are tagged in git; the GitHub release for each tag carries the same notes.
 
-## [Unreleased]
+## [0.7.0] - 2026-11-27
 
 ### Changed
 
@@ -500,6 +500,7 @@ The MetaDataScrapper era ends with this release: the tool is renamed to **Shrink
 - Supply-chain hardening: uv malware-check gate, 7-day new-package cooldown with security-fix exemption, CodeQL-recognized path sanitization.
 - No secrets in tracked files: integration tokens live in environment variables by construction.
 
+[0.7.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.7.0
 [0.6.1]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.6.1
 [0.6.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.6.0
 [0.5.0]: https://github.com/bennischober/ShrinkRay/releases/tag/v0.5.0
