@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -429,6 +430,7 @@ class TestStructuredEventSequence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x" * 16)
+            os.utime(movie, (0, 0))  # old enough for the witness (#586)
             db_file = Path(tmp) / "metadata.db"
             from shrinkray import db
 
@@ -708,6 +710,7 @@ class TestSwapEvent(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             movie = Path(tmp) / "movie.mkv"
             movie.write_bytes(b"x" * 16)
+            os.utime(movie, (0, 0))  # old enough for the witness (#586)
             db_file = Path(tmp) / "metadata.db"
             from shrinkray import db
 
