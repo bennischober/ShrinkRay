@@ -40,8 +40,8 @@ jobs:
       - name: Audit dependencies
         run: uv audit --locked
 
-  ui:
-    name: UI (build + check)
+  ui-static:
+    name: UI (static)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -72,8 +72,37 @@ jobs:
         run: npm run build
         working-directory: ui
 
-      # the dashboard's layout checks (issue #628): every page at 320, 390,
-      # 1024 and 1440 px, in dark and light, against a fixture, with no resident app
+  # the dashboard's layout checks (issue #628): every page at 320, 390, 1024 and
+  # 1440 px, in dark and light, against a fixture, with no resident app. One job
+  # per viewport project (issue #735): the four projects run the identical suite,
+  # so the matrix is balanced by construction, and each job's dev server and
+  # browser are its own — a server crash or stale module graph is contained to
+  # one project and a failure names its viewport. `workers` stays 1 (the config's
+  # comment records the measured drift of parallel workers sharing one server).
+  ui-browser:
+    name: Browser checks (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    strategy:
+      # one red project must not cancel the others: the full failure set and
+      # their screenshots are the point of a per-project split
+      fail-fast: false
+      matrix:
+        project: [ desktop-1440, desktop-1024, phone-390, phone-320 ]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        run: npm ci
+        working-directory: ui
+
       # the chromium download is ~150 MB per run; the cache keeps installed
       # browsers across runs, and `playwright install` only fetches revisions
       # missing from the cache, so a stale entry is safe, never wrong
@@ -90,13 +119,32 @@ jobs:
         working-directory: ui
 
       - name: Browser checks
-        run: npm run test:e2e
+        run: npm run test:e2e -- --project=${{ matrix.project }}
         working-directory: ui
 
+      # upload-artifact v4+ names must be unique per matrix job
       - name: Upload the screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dashboard-screenshots
+          name: dashboard-screenshots-${{ matrix.project }}
           path: ui/test-results/screenshots
           if-no-files-found: ignore
+
+  # the branch ruleset's required status check is the context NAME
+  # `UI (build + check)`; this gate keeps that name and fails explicitly when any
+  # UI job below failed. `if: always()` because a job whose needs failed is
+  # skipped by default, and a skipped required check never reports (issue #735)
+  ui:
+    name: UI (build + check)
+    needs: [ ui-static, ui-browser ]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every UI job
+        env:
+          STATIC: ${{ needs.ui-static.result }}
+          BROWSER: ${{ needs.ui-browser.result }}
+        run: |
+          test "$STATIC" = success
+          test "$BROWSER" = success
