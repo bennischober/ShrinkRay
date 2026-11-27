@@ -104,7 +104,9 @@ function outcome(id: number): Record<string, unknown> {
  * finished jobs with mixed outcomes and a 2 000-title library. */
 export function busy(): Fixture {
   const jobs: Job[] = [job(1, 'running', 'encode', 3)]
-  jobs[0].payload = { paths: ['/media/Filme/Titel 0 (2000).mkv'] }
+  // the folder job names the folder, never a title: its single payload path is
+  // a directory, so the row shows it unlinked (issue #703)
+  jobs[0].payload = { paths: ['/media/Filme'], quality: true }
   // #602's real topology: the folder job runs and its per-file stage row is
   // also RUNNING with a higher id, so all_jobs (newest-first) returns the
   // stage row first. The folder job owns the file model (issue #631).

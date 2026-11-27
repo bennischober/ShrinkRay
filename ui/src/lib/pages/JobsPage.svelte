@@ -27,23 +27,39 @@
     /** the last real encodes by recency, for the queue outlook */
     recent?: { encode_seconds: number; input_size: number }[]
     targetVmaf?: number
-    /** Open a movie's detail page (single-movie jobs link to their title). */
+    /** Open a movie's detail page (a row's movie link, single-movie or the
+     * running file, names its title). */
     onopenMovie: (path: string) => void
     /** The shell's data is no longer current: the clock stops so a frozen
      * elapsed time and ETA cannot keep looking live (issue #629). */
     stale?: boolean
   } = $props()
 
-  /** True when the job targeted exactly one movie FILE (the UI's
-   * per-movie actions) — such rows link to the title's detail page.
-   * Folder-scoped jobs (scan-all, plan-all) link nothing: their payload
-   * names a directory, not a title. */
+  const progress = (job: Job) => fileProgressFor(job.id)
+
+  /** The library's movie paths, the directory guard below: a payload path is a
+   * title only when the snapshot's library knows it (issue #703). */
+  const moviePaths = $derived(new Set(movies.map((m) => m.path)))
+
+  /** The movie a row may link to. A running job names the file it is
+   * working on through the shared progress model (#631); a single-movie job
+   * names its one target in the payload. A folder job's single payload path
+   * is a directory, so it links only when the library knows the path as a
+   * movie — a directory is never a title page (issue #703). */
   function singleMoviePath(job: Job): string | null {
+    const running = job.state === 'running' ? progress(job)?.path ?? null : null
+    if (running) return running
+    const paths = job.payload.paths as string[] | undefined
+    if (paths?.length !== 1) return null
+    return moviePaths.has(paths[0]) ? paths[0] : null
+  }
+
+  /** The path the FILE cell shows: the job's own target, so a folder job
+   * keeps showing its folder while the running file gets its own line. */
+  function rowPath(job: Job): string | null {
     const paths = job.payload.paths as string[] | undefined
     return paths?.length === 1 ? paths[0] : null
   }
-
-  const progress = (job: Job) => fileProgressFor(job.id)
 
   let now = $state(Date.now())
   $effect(() => {
@@ -200,12 +216,16 @@
             <span class="id">{job.id}</span>
             <span class="kind">{kindWord(job.kind)}</span>
             <span class="file">
-              {#if singleMoviePath(job)}
-                <!-- single-movie jobs link to the title: the two audit
-                     trails reference each other -->
-                <button class="movie-link" onclick={() => onopenMovie(singleMoviePath(job)!)} title="Open the movie's detail page">
-                  <FileName path={(job.payload.paths as string[])[0]} />
-                </button>
+              {#if rowPath(job)}
+                {#if singleMoviePath(job) === rowPath(job)}
+                  <!-- single-movie jobs link to the title: the two audit
+                       trails reference each other -->
+                  <button class="movie-link" onclick={() => onopenMovie(rowPath(job)!)} title="Open the movie's detail page">
+                    <FileName path={rowPath(job)!} />
+                  </button>
+                {:else}
+                  <FileName path={rowPath(job)!} />
+                {/if}
               {/if}
             </span>
             <span class="state"><StatusBadge
@@ -223,6 +243,21 @@
 
           {#if job.state === 'running'}
             {@const p = progress(job)}
+            {#if singleMoviePath(job) && singleMoviePath(job) !== rowPath(job)}
+              <!-- the running file is a per-movie stage of the folder job
+                   (#602/#631): name and link the title it is working on,
+                   while the row's FILE cell keeps showing the folder -->
+              <div class="running-file mono" data-running-movie>
+                <a
+                  class="movie-link"
+                  href={`#/movie/${encodeURIComponent(singleMoviePath(job)!)}`}
+                  onclick={() => onopenMovie(singleMoviePath(job)!)}
+                  title="Open the movie's detail page"
+                >
+                  <FileName path={singleMoviePath(job)!} />
+                </a>
+              </div>
+            {/if}
             <WorkProgress progress={p} {stale} detail {targetVmaf} sourceBytes={movies.find((m) => m.path === p?.path)?.size ?? null} />
           {:else if job.state === 'queued' && queuedNote(job)}
             <div class="mono dim note">{queuedNote(job)}</div>
@@ -383,8 +418,11 @@
     color: var(--teal-ink);
     cursor: pointer;
     font: inherit;
+    text-decoration: none;
   }
   .movie-link:hover { text-decoration: underline; }
+  .running-file { padding: 0 0 6px; min-width: 0; }
+  .running-file .movie-link { display: inline-block; max-width: 100%; }
         .log {
     border: 1px solid var(--seam);
     border-radius: var(--radius);

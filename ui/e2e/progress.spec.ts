@@ -37,6 +37,17 @@ test('the same running file shows the same progress on all four pages (issue #63
       const duration = page.locator('.entry.running [data-work-duration]').first()
       await expect(duration).toBeVisible()
       jobsDuration = (await duration.textContent())?.trim() ?? ''
+      // issue #703: the folder row keeps the folder, unlinked; the running
+      // file is the per-movie stage row and links to its title page
+      const folder = page.locator('.entry.running .file').first()
+      await expect(folder).toContainText('Filme')
+      await expect(folder.locator('a')).toHaveCount(0)
+      const movieLink = page.locator('.entry.running a.movie-link').first()
+      await expect(movieLink).toHaveAttribute(
+        'href',
+        `#/movie/${encodeURIComponent(TITLE)}`,
+      )
+      await expect(movieLink).toContainText('Titel 0 (2000).mkv')
     }
     await page.screenshot({
       path: `test-results/screenshots/progress-${target.name}-${testInfo.project.name}.png`,
