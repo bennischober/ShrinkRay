@@ -538,8 +538,7 @@
       </div>
       <div class="plan-list">
         <!-- SR context: the visual head row is aria-hidden (the round-4
-             pattern), so screen readers get the column contract here —
-             same pattern as the library table's sr-only caption -->
+             pattern), so screen readers get the column contract here -->
         <span class="sr-only">The plan table: per title the planned state, CRF, VMAF, size and saving, and the measured values once encoded. Measured cells name their predicted value in the tooltip.</span>
         <div class="plan-row plan-head mono legend" aria-hidden="true">
           <span class="p-name">TITLE</span>

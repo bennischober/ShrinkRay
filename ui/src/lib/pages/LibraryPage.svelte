@@ -232,103 +232,112 @@
 
   <!-- ══ table view (the catalog is a table; the grid was demoted away) ══ -->
   <div class="table-wrap">
-      <table>
-        <caption class="sr-only">The library catalog: one row per title with size, decision state and encode metrics. Column heads are sort buttons.</caption>
-        <thead>
-          <tr>
-            <th class="chk">
+    <div
+      class="lib-table"
+      role="table"
+      aria-label="The library catalog: one row per title with size, decision state and encode metrics."
+    >
+      <div class="lib-head" role="rowgroup">
+        <div class="lib-row" role="row">
+          <div class="lib-cell chk" role="columnheader" aria-label="Select">
+            <input
+              type="checkbox"
+              checked={filtered.length > 0 && filtered.every((m) => selectedPaths.has(m.path))}
+              onchange={(e) => onselectall(e.currentTarget.checked, filtered.map((m) => m.path))}
+              aria-label="Select all filtered"
+            />
+          </div>
+          <div class="lib-cell" role="columnheader" aria-label="Title" aria-sort={ariaSort('name')}>
+            <button class="sort legend" onclick={() => toggleSort('name')} aria-pressed={sortKey === 'name'}>Title{sortMark('name')}</button>
+          </div>
+          <div class="lib-cell" role="columnheader" aria-label="Category" aria-sort={ariaSort('category')}>
+            <button class="sort legend" onclick={() => toggleSort('category')} aria-pressed={sortKey === 'category'}>Category{sortMark('category')}</button>
+          </div>
+          <div class="lib-cell num" role="columnheader" aria-label="Size" aria-sort={ariaSort('size')}>
+            <button class="sort legend" onclick={() => toggleSort('size')} aria-pressed={sortKey === 'size'}>Size{sortMark('size')}</button>
+          </div>
+          <div class="lib-cell legend" role="columnheader" aria-label="Decision">Decision</div>
+          <div class="lib-cell legend num" role="columnheader" aria-label="CRF">CRF</div>
+          <div class="lib-cell num" role="columnheader" aria-label="VMAF" aria-sort={ariaSort('vmaf')}>
+            <button class="sort legend" onclick={() => toggleSort('vmaf')} aria-pressed={sortKey === 'vmaf'}>VMAF{sortMark('vmaf')}</button>
+          </div>
+          <div class="lib-cell num" role="columnheader" aria-label="Saved" aria-sort={ariaSort('saved')}>
+            <button class="sort legend" onclick={() => toggleSort('saved')} aria-pressed={sortKey === 'saved'}>Saved{sortMark('saved')}</button>
+          </div>
+        </div>
+      </div>
+      <div class="lib-body" role="rowgroup">
+        {#each filtered as movie (movie.path)}
+          {@const decision = decisionOf(movie)}
+          <div
+            class="lib-row"
+            role="row"
+            class:row-selected={selectedPaths.has(movie.path)}
+            class:in-work={runningProgress?.path != null && movie.path === runningProgress.path}
+          >
+            <div class="lib-cell chk" role="cell">
               <input
                 type="checkbox"
-                checked={filtered.length > 0 && filtered.every((m) => selectedPaths.has(m.path))}
-                onchange={(e) => onselectall(e.currentTarget.checked, filtered.map((m) => m.path))}
-                aria-label="Select all filtered"
+                checked={selectedPaths.has(movie.path)}
+                onchange={(e) => ontoggle(movie.path, e.currentTarget.checked)}
+                aria-label="Select {movie.name}"
               />
-            </th>
-            <th aria-sort={ariaSort('name')}>
-              <button class="sort legend" onclick={() => toggleSort('name')} aria-pressed={sortKey === 'name'}>Title{sortMark('name')}</button>
-            </th>
-            <th aria-sort={ariaSort('category')}>
-              <button class="sort legend" onclick={() => toggleSort('category')} aria-pressed={sortKey === 'category'}>Category{sortMark('category')}</button>
-            </th>
-            <th class="num" aria-sort={ariaSort('size')}>
-              <button class="sort legend" onclick={() => toggleSort('size')} aria-pressed={sortKey === 'size'}>Size{sortMark('size')}</button>
-            </th>
-            <th class="legend">Decision</th>
-            <th class="legend num">CRF</th>
-            <th class="num" aria-sort={ariaSort('vmaf')}>
-              <button class="sort legend" onclick={() => toggleSort('vmaf')} aria-pressed={sortKey === 'vmaf'}>VMAF{sortMark('vmaf')}</button>
-            </th>
-            <th class="num" aria-sort={ariaSort('saved')}>
-              <button class="sort legend" onclick={() => toggleSort('saved')} aria-pressed={sortKey === 'saved'}>Saved{sortMark('saved')}</button>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each filtered as movie (movie.path)}
-            {@const decision = decisionOf(movie)}
-            <tr
-              class:row-selected={selectedPaths.has(movie.path)}
-              class:in-work={runningProgress?.path != null && movie.path === runningProgress.path}
-            >
-              <td class="chk">
-                <input
-                  type="checkbox"
-                  checked={selectedPaths.has(movie.path)}
-                  onchange={(e) => ontoggle(movie.path, e.currentTarget.checked)}
-                  aria-label="Select {movie.name}"
-                />
-              </td>
-              <td data-label="Title">
-                <button class="name-btn" onclick={() => onopenmovie(movie)}>
-                  {movie.name}
-                  {#if movie.hdr}<span class="mono hdr">HDR</span>{/if}
-                  {#if (movie.encode?.generation ?? 1) >= 2}<span class="mono gen-badge" title="Generation {movie.encode?.generation}: this file is itself the output of a previous encode">GEN {movie.encode?.generation}</span>{/if}
-                </button>
-              </td>
-              <td class="dim" data-label="Category">{movie.category}</td>
-              <td class="mono num" data-label="Size">{bytes(movie.size)}</td>
-              <td data-label="Decision">
-                {#if runningProgress?.path != null && movie.path === runningProgress.path}
-                  <WorkProgress progress={runningProgress} {stale} />
+            </div>
+            <div class="lib-cell title" role="cell" data-label="Title">
+              <button class="name-btn" onclick={() => onopenmovie(movie)}>
+                {movie.name}
+                {#if movie.hdr}<span class="mono hdr">HDR</span>{/if}
+                {#if (movie.encode?.generation ?? 1) >= 2}<span class="mono gen-badge" title="Generation {movie.encode?.generation}: this file is itself the output of a previous encode">GEN {movie.encode?.generation}</span>{/if}
+              </button>
+            </div>
+            <div class="lib-cell category dim" role="cell" data-label="Category">{movie.category}</div>
+            <div class="lib-cell mono num" role="cell" data-label="Size">{bytes(movie.size)}</div>
+            <div class="lib-cell" role="cell" data-label="Decision">
+              {#if runningProgress?.path != null && movie.path === runningProgress.path}
+                <WorkProgress progress={runningProgress} {stale} />
+              {:else}
+                {#if decision.bare}
+                  <!-- bare swatch: the state stays visible to sighted users via
+                       the legend, but the cell must not be silent for SR users -->
+                  <span
+                    class="chip untouched bare-swatch"
+                    role="img"
+                    aria-label="Decision: untouched"
+                    title="Untouched"
+                  ></span>
                 {:else}
-                  {#if decision.bare}
-                    <!-- bare swatch: the state stays visible to sighted users via
-                         the legend, but the cell must not be silent for SR users -->
-                    <span
-                      class="chip untouched bare-swatch"
-                      role="img"
-                      aria-label="Decision: untouched"
-                      title="Untouched"
-                    ></span>
-                  {:else}
-                    <span class="chip {decision.cls}" title={decision.title}><span class="swatch"></span>{decision.label}</span>
-                  {/if}
+                  <span class="chip {decision.cls}" title={decision.title}><span class="swatch"></span>{decision.label}</span>
                 {/if}
-              </td>
-              <td class="mono num" data-label="CRF">{movie.encode?.crf ?? '—'}</td>
-              <td class="mono num measured" data-label="VMAF">{vmaf(movie.encode?.vmaf, targetVmaf)}</td>
-              <td class="mono num" data-label="Saved" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
-                {#if movie.encode?.outcome === 'discarded'}
-                  {@const reason = movie.encode.outcome_reason ?? 'the swap was declined'}
-                  <span class="bad" title={`${reason} (original untouched)`}>discarded</span>
-                {:else if movie.encode}
-                  {@const saved = savedPercent(movie.encode.saved_percent)}
-                  <span title={saved.grew ? 'the re-encode is larger than the source' : ''}>{saved.text}</span>
-                {:else}
-                  —
-                {/if}
-              </td>
-            </tr>
+              {/if}
+            </div>
+            <div class="lib-cell mono num" role="cell" data-label="CRF">{movie.encode?.crf ?? '—'}</div>
+            <div class="lib-cell mono num measured" role="cell" data-label="VMAF">{vmaf(movie.encode?.vmaf, targetVmaf)}</div>
+            <div class="lib-cell mono num" role="cell" data-label="Saved" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
+              {#if movie.encode?.outcome === 'discarded'}
+                {@const reason = movie.encode.outcome_reason ?? 'the swap was declined'}
+                <span class="bad" title={`${reason} (original untouched)`}>discarded</span>
+              {:else if movie.encode}
+                {@const saved = savedPercent(movie.encode.saved_percent)}
+                <span title={saved.grew ? 'the re-encode is larger than the source' : ''}>{saved.text}</span>
+              {:else}
+                —
+              {/if}
+            </div>
+          </div>
+        {:else}
+          {#if movies.length === 0}
+            <div class="lib-row" role="row">
+              <div class="lib-cell empty-cell" role="cell"><EmptyState title="Nothing scanned yet" hint="the resident app's scan fills this library on its own" /></div>
+            </div>
           {:else}
-            {#if movies.length === 0}
-              <tr><td colspan="8"><EmptyState title="Nothing scanned yet" hint="the resident app's scan fills this library on its own" /></td></tr>
-            {:else}
-              <tr><td colspan="8"><EmptyState title="No titles match" hint="adjust the search or clear a filter" /></td></tr>
-            {/if}
-          {/each}
-        </tbody>
-      </table>
+            <div class="lib-row" role="row">
+              <div class="lib-cell empty-cell" role="cell"><EmptyState title="No titles match" hint="adjust the search or clear a filter" /></div>
+            </div>
+          {/if}
+        {/each}
+      </div>
     </div>
+  </div>
 </div>
 
 <style>
@@ -360,18 +369,6 @@
     color: var(--ink);
     padding: 6px 10px;
     max-width: 260px;
-  }
-  /* visually hidden, SR-audible (table caption) */
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-    border: 0;
   }
   .spacer { flex: 1; }
 
@@ -419,17 +416,48 @@
     background: var(--panel);
     overflow: auto;
   }
-  table { width: 100%; border-collapse: collapse; }
-  thead tr { border-bottom: 1px solid var(--seam); }
-  th {
-    padding: 8px 12px;
-    text-align: left;
+  /* The catalog is one role-based structure at every width (issue #698):
+     the roles live on divs, so the accessibility tree does not depend on the
+     display mode that turns rows into phone cards. The desktop grid reproduces
+     the native table's column widths; the sum of its minimum tracks is the
+     table's min-width, so narrower desktop widths scroll inside the wrap
+     exactly as the native table did. */
+  .lib-table {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 1105px;
+  }
+  .lib-head {
     position: sticky;
     top: 0;
-    background: var(--panel);
     z-index: 1;
+    background: var(--panel);
+    border-bottom: 1px solid var(--seam);
   }
-  th.num { text-align: right; }
+  .lib-row {
+    display: grid;
+    grid-template-columns: 34px 205px 163px 134px minmax(360px, 1fr) 61px 72px 76px;
+    align-items: center;
+  }
+  .lib-cell {
+    min-width: 0;
+    padding: 7px 12px;
+    white-space: nowrap;
+  }
+  .lib-head .lib-cell {
+    padding: 8px 12px;
+    text-align: left;
+    background: var(--panel);
+  }
+  .lib-cell.num { text-align: right; }
+  .lib-cell.chk { text-align: center; }
+  .lib-cell.chk input { accent-color: var(--teal); }
+  .lib-cell.title, .lib-cell.category { overflow: hidden; text-overflow: ellipsis; }
+  .lib-body .lib-row { border-bottom: 1px solid var(--row-line); }
+  .lib-body .lib-row.row-selected { background: var(--hatch-select); }
+  .lib-body .lib-row.in-work { background: var(--hatch-progress); }
+  .lib-cell.empty-cell { grid-column: 1 / -1; }
   .sort {
     background: transparent;
     border: none;
@@ -439,7 +467,7 @@
     text-transform: inherit;
     cursor: pointer;
     /* a11y pass: the button is the hit target - 24px minimum and readable
-       interactive type even though the th label is legend-sized */
+       interactive type even though the column label is legend-sized */
     font-size: var(--fs-data);
     min-height: 24px;
     padding: 2px 0;
@@ -447,14 +475,6 @@
     text-align: inherit;
   }
   .sort:hover { color: var(--ink); }
-  td {
-    padding: 7px 12px;
-    border-bottom: 1px solid var(--row-line);
-    white-space: nowrap;
-  }
-  td.num { text-align: right; }
-  td.chk { text-align: center; width: 34px; }
-  td.chk input { accent-color: var(--teal); }
   .name-btn {
     background: transparent;
     border: none;
@@ -469,8 +489,6 @@
     white-space: nowrap;
   }
   .name-btn:hover { color: var(--teal-ink); text-decoration: underline; }
-  tr.row-selected td { background: var(--hatch-select); }
-  tr.in-work td { background: var(--hatch-progress); }
   .measured { color: var(--teal-ink); font-weight: 600; }
   .hdr {
     margin-left: 8px;
@@ -492,18 +510,37 @@
     border-radius: 2px;
   }
   /* below 768px a row becomes a card: the desktop columns clip on a phone, and
-     only the checkbox and a truncated title were visible (issue #636) */
+     only the checkbox and a truncated title were visible (issue #636). The column
+     heads stay in the accessibility tree, clipped to a 1px box, so every card
+     cell still has its table header (issue #698). */
   @media (max-width: 768px) {
-    table, thead, tbody, tr, td { display: block; width: auto; }
-    thead { display: none; }
-    tbody tr {
+    .lib-table { min-width: 0; }
+    .lib-head {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    /* the visually hidden head is not a tab stop: the bulk bar and the card's
+       own checkbox carry selection on a phone, and the columnheaders keep
+       their names through aria-label while their sort buttons are hidden */
+    .lib-head input, .lib-head .sort { display: none; }
+    .lib-body .lib-row {
+      display: block;
       border: 1px solid var(--row-line);
       border-radius: var(--radius);
       background: var(--panel);
       padding: 10px 12px;
       margin-bottom: 8px;
     }
-    tbody td {
+    .lib-body .lib-row.row-selected { background: var(--hatch-select); }
+    .lib-body .lib-row.in-work { background: var(--hatch-progress); }
+    .lib-body .lib-cell {
       border: none;
       padding: 2px 0;
       white-space: normal;
@@ -513,7 +550,7 @@
       align-items: baseline;
       gap: 12px;
     }
-    tbody td::before {
+    .lib-body .lib-cell::before {
       content: attr(data-label);
       flex: 0 0 auto;
       font-size: 10px;
@@ -522,17 +559,23 @@
       color: var(--ink-dim);
     }
     /* the title is the card's heading, not a label/value row: full width, wraps */
-    tbody td[data-label='Title'] {
+    .lib-body .lib-cell.title {
       display: block;
       padding-bottom: 6px;
+      overflow: visible;
     }
-    tbody td[data-label='Title']::before { display: none; }
-    tbody td[data-label='Title'] .name-btn {
+    .lib-body .lib-cell.title::before { display: none; }
+    .lib-body .lib-cell.title .name-btn {
       white-space: normal;
       word-break: break-word;
       text-align: left;
     }
-    tbody td.chk { padding-bottom: 6px; }
-    tbody td.chk::before { content: ''; flex: 0 0 auto; }
+    .lib-body .lib-cell.chk { width: 34px; padding-bottom: 6px; }
+    .lib-body .lib-cell.chk::before { content: ''; flex: 0 0 auto; }
+    .lib-body .lib-cell.empty-cell {
+      display: block;
+      padding: 0;
+    }
+    .lib-body .lib-cell.empty-cell::before { display: none; }
   }
 </style>

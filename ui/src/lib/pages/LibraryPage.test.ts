@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/svelte'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, render, screen, within } from '@testing-library/svelte'
 import LibraryPage from './LibraryPage.svelte'
 import type { Movie } from '../api'
 
@@ -30,11 +30,25 @@ function renderLibrary(overrides: Record<string, unknown> = {}) {
 }
 
 describe('LibraryPage', () => {
+  afterEach(() => cleanup())
+
   // issue #630, case 12: the bar said "tick checkboxes for bulk work", but
   // ticking only sums the plan estimate — it never queues anything
   it('says what ticking a title does, not a bulk action it cannot perform', () => {
     renderLibrary()
     expect(screen.getByText(/tick titles to sum their plan estimate/)).toBeTruthy()
     expect(screen.queryByText(/bulk work/)).toBeNull()
+  })
+
+  // issue #698: below 768px the cards must keep the table structure the
+  // desktop table had; the roles live on divs, so CSS can never strip them
+  it('pins the table, rowgroup, row, columnheader and cell roles', () => {
+    renderLibrary()
+    const table = screen.getByRole('table', { name: /library catalog/i })
+    expect(within(table).getAllByRole('rowgroup')).toHaveLength(2)
+    expect(within(table).getAllByRole('row')).toHaveLength(3)
+    expect(within(table).getAllByRole('columnheader')).toHaveLength(8)
+    expect(within(table).getAllByRole('cell')).toHaveLength(16)
+    expect(within(table).getByRole('columnheader', { name: /Title/ })).toBeTruthy()
   })
 })

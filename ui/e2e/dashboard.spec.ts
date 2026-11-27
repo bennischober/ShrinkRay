@@ -104,11 +104,11 @@ async function findOverlappingBoxes(page: Page): Promise<string[]> {
     const overlaps = (a: DOMRect, b: DOMRect) =>
       Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 &&
       Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1
-    // a row's own children: table cells (`tr`) and the card-like rows
-    // (the jobs page's `.row`, the overview's `.fail-row`, `.plan-row`,
-    // `.bar-row` and `.stat`)
+    // a row's own children: table cells (`tr`), the library's role-based
+    // rows (`.lib-row`, issue #698), and the card-like rows (the jobs page's
+    // `.row`, the overview's `.fail-row`, `.plan-row`, `.bar-row` and `.stat`)
     const rows = document.querySelectorAll<HTMLElement>(
-      'main tr, main .entry .row, main .fail-row, main .plan-row, main .bar-row, main .stat',
+      'main tr, main .lib-row, main .entry .row, main .fail-row, main .plan-row, main .bar-row, main .stat',
     )
     for (const row of rows) {
       const rects = Array.from(row.children)
@@ -241,7 +241,7 @@ for (const scenario of SCENARIOS) {
           // template a later row is another copy of.
           await page.evaluate(() => {
             document.querySelectorAll('.pages.hidden').forEach((el) => el.remove())
-            document.querySelectorAll('tbody tr:nth-child(n+3)').forEach((el) => el.remove())
+            document.querySelectorAll('tbody tr:nth-child(n+3), .lib-body .lib-row:nth-child(n+3)').forEach((el) => el.remove())
             document.querySelectorAll('.log > :nth-child(n+5)').forEach((el) => el.remove())
           })
           const axe = await new AxeBuilder({ page })
