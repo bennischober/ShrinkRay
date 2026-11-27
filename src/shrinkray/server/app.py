@@ -33,11 +33,24 @@ from shrinkray import __version__, db
 from shrinkray.config import Conf, encode_window_open, load_config, refresh_config
 from shrinkray.engine import watch as watch_mod
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
-from shrinkray.engine.pause import pause_reason
+from shrinkray.engine.pause import (
+    pause_reason,
+    read_pending_cancel_requests,
+    remove_cancel_request,
+)
 from shrinkray.engine.pipeline import cap_threads
 from shrinkray.engine.search import DEFAULT_TARGET_VMAF
 from shrinkray.logger import log, log_error, log_warning
-from shrinkray.server.jobs import Job, JobKind, JobQueue, JobWorker, ProgressBus
+from shrinkray.server.jobs import (
+    Job,
+    JobKind,
+    JobQueue,
+    JobState,
+    JobWorker,
+    ProgressBus,
+    merge_job_result,
+    utc_timestamp,
+)
 from shrinkray.server.metrics import CONTENT_TYPE, render_metrics
 from shrinkray.tools.process import apply_config, apply_reloaded_config
 
@@ -63,7 +76,60 @@ _file_token: str | None = None
 # not config.json: it is deployment shape, like SHRINKRAY_TOKEN.
 WATCH_OUTPUT_ENV = "SHRINKRAY_WATCH_OUTPUT"
 
+# how many times one row may be re-queued after an interruption (issue #622):
+# a crash loop must not repeat forever
+MAX_RESUME_ATTEMPTS = 3
+
 _T = TypeVar("_T")
+
+# issue #646: the dashboard's reclaimed figure is the true per-title library
+# delta plus the savings output-directory/legacy rows recorded outside the
+# library. Both surfaces read it from ONE set-based join over encodes+files - no
+# per-title chain walk runs inside the snapshot lock. An applied in-place row
+# that claims the file's own path AND matches its current size corroborates the
+# library's current state (both halves of the #647 predicate; a restored original
+# matches none, so it reclaims nothing), so the library delta starts at the
+# chain's first applied in-place row's input and ends at the file's current
+# size; every applied output-directory/legacy row adds its own
+# input-minus-output. A discarded attempt (#625) is not applied and contributes
+# nothing; a missing file contributes nothing; every term clamps at 0.
+_LIBRARY_FROM = """
+            FROM files f
+            LEFT JOIN encodes e ON e.id = (
+                SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
+            )
+            LEFT JOIN (
+                SELECT e.file_id,
+                       MIN(CASE WHEN e.output_file = f.path THEN e.id END)
+                           AS first_in_place_id,
+                       MAX(CASE
+                               WHEN e.output_file = f.path AND e.output_size = f.size
+                               THEN 1 ELSE 0
+                           END) AS has_current_in_place,
+                       SUM(CASE
+                               WHEN e.output_file IS NULL OR e.output_file != f.path
+                               THEN MAX(e.input_size - e.output_size, 0)
+                               ELSE 0
+                           END) AS output_dir_savings
+                FROM encodes e JOIN files f ON f.id = e.file_id
+                WHERE e.outcome = 'applied'
+                GROUP BY e.file_id
+            ) reclaimed ON reclaimed.file_id = f.id
+            LEFT JOIN encodes first_in_place ON first_in_place.id = reclaimed.first_in_place_id
+"""
+
+_RECLAIMED_COLUMN = """
+                    CASE
+                        WHEN COALESCE(f.missing_scans, 0) > 0 THEN 0
+                        ELSE COALESCE(
+                            CASE
+                                WHEN reclaimed.has_current_in_place = 1
+                                THEN MAX(first_in_place.input_size - f.size, 0)
+                                ELSE 0
+                            END, 0)
+                            + COALESCE(reclaimed.output_dir_savings, 0)
+                    END AS reclaimed_bytes
+"""
 
 
 def _configured_token() -> str | None:
@@ -367,9 +433,9 @@ class AppState:
     def __init__(self, db_file: Path) -> None:
         """Initializes the app state.
 
-        Jobs left 'running' by a previous app instance are marked failed
-        (interrupted): the worker is single-threaded, so a running state in
-        the database without a live worker is stale by definition.
+        Jobs left 'running' by a previous app instance are marked interrupted
+        and resumed on boot: the worker is single-threaded, so a running state
+        in the database without a live worker is stale by definition.
 
         Args:
             db_file (Path): The sqlite database file.
@@ -380,7 +446,10 @@ class AppState:
         try:
             self.bus = ProgressBus()
             self.queue = JobQueue(self.connection, bus=self.bus, connection_lock=self.db_lock)
-            self.worker = JobWorker(self.connection, self.queue)
+            # the db file's folder is the data folder the terminal UI shares
+            # its cancel requests in (issue #621); the same folder the pause
+            # flag lives in
+            self.worker = JobWorker(self.connection, self.queue, state_dir=db_file.resolve().parent)
             with self.db_lock:
                 self._recover_stale_jobs()
         except BaseException:
@@ -413,32 +482,126 @@ class AppState:
             return fn(self.connection)
 
     def _recover_stale_jobs(self) -> None:
-        """Marks jobs left running by a previous app instance as failed.
+        """Marks jobs left running by a previous app instance as interrupted.
 
-        The result column stays NULL (live progress was never persisted):
-        the row becomes a plain failed-trail entry.
+        The row is not failed: it becomes ``interrupted``. The boot resume
+        step re-queues a folder row; a per-file stage row stays history. The
+        result column is MERGED, never replaced - it carries the resume ledger
+        (``resumed_at``/``resume_count``) an earlier boot wrote, and a crash
+        loop must not wipe it (issue #622).
         """
         # announce each recovered row (issue #471): the one event that
         # explains why the previous run's work stopped is the one event the
         # transcript omitted
         rows = self.connection.execute(
-            "SELECT id, kind, started_at FROM jobs WHERE state = ?", ("running",)
+            "SELECT id, kind, started_at, result FROM jobs WHERE state = ?", ("running",)
         ).fetchall()
+        interrupted_at = utc_timestamp()
         for row in rows:
             log(
                 f"Recovering job #{row['id']} ({row['kind']}) started "
                 f"{row['started_at']}: interrupted by app restart"
             )
-        self.connection.execute(
-            "UPDATE jobs SET state = ?, error = ?, result = NULL, "
-            "finished_at = datetime('now') WHERE state = ?",
-            (
-                "failed",
-                "interrupted by app restart",
-                "running",
-            ),
-        )
+            result = json.loads(row["result"]) if row["result"] else None
+            merged = merge_job_result(
+                result,
+                {
+                    "interrupted_at": interrupted_at,
+                    "interrupted_reason": "interrupted by app restart",
+                },
+            )
+            self.connection.execute(
+                "UPDATE jobs SET state = ?, error = NULL, result = ?, "
+                "finished_at = datetime('now') WHERE id = ?",
+                (
+                    JobState.INTERRUPTED.value,
+                    json.dumps(merged),
+                    row["id"],
+                ),
+            )
         self.connection.commit()
+
+    def resume_interrupted_jobs(self) -> list[int]:
+        """Re-queues the jobs an interruption left behind (issue #622).
+
+        Runs at boot after the stale-row recovery and before the worker starts,
+        so the resumed row is the first work the app does. The same row keeps
+        its id and only its terminal bookkeeping is cleared: a queued row has no
+        error, finish or start time, and the result JSON keeps the resume
+        ledger (``resumed_at``/``resume_count``) with one more attempt. The
+        original id order restores the scan -> plan -> encode chain ahead of
+        anything enqueued later.
+
+        A pending cancel request from the terminal UI's surface is applied
+        instead: the operator's intent survives the restart and the row stays
+        cancelled. A per-file stage row (payload carries ``pipeline``) is
+        history, never resumed. A row at MAX_RESUME_ATTEMPTS stays interrupted
+        with a note in its result JSON, so a crash loop cannot repeat forever.
+
+        Returns:
+            list[int]: The re-queued job ids, oldest first.
+        """
+        state_dir = self.db_file.resolve().parent
+        try:
+            pending_cancels = set(read_pending_cancel_requests(state_dir))
+        except OSError as e:
+            # the cancel surface must not stop the boot: the request stays on
+            # disk for the poller, and the interrupted rows still resume
+            log_error(f"could not read pending cancel requests: {e}")
+            pending_cancels = set()
+        resumed: list[int] = []
+        with self.db_lock:
+            for job in self.queue.interrupted_jobs():
+                job_id = job.id
+                if job_id is None:  # a stored row always has an id
+                    continue
+                if job.payload.get("pipeline"):
+                    if job_id in pending_cancels:
+                        remove_cancel_request(state_dir, job_id)
+                        log(
+                            f"Cancel request for interrupted stage job #{job_id} "
+                            "consumed: stage rows are never resumed"
+                        )
+                    continue
+                if job_id in pending_cancels:
+                    self.queue.mark_cancelled(job, job.result)
+                    remove_cancel_request(state_dir, job_id)
+                    log(
+                        f"Cancel request for interrupted job #{job_id} applied: "
+                        "the row is cancelled"
+                    )
+                    continue
+                result = dict(job.result or {})
+                count = int(result.get("resume_count", 0))
+                if count >= MAX_RESUME_ATTEMPTS:
+                    result["resume_cap_reached"] = True
+                    self.connection.execute(
+                        "UPDATE jobs SET result = ? WHERE id = ?",
+                        (json.dumps(result), job_id),
+                    )
+                    log(
+                        f"Interrupted job #{job_id} ({job.kind.value}) left "
+                        f"interrupted: the resume cap ({MAX_RESUME_ATTEMPTS}) was reached"
+                    )
+                    continue
+                result["resumed_at"] = utc_timestamp()
+                result["resume_count"] = count + 1
+                self.connection.execute(
+                    "UPDATE jobs SET state = ?, error = NULL, finished_at = NULL, "
+                    "started_at = NULL, result = ? WHERE id = ?",
+                    (JobState.QUEUED.value, json.dumps(result), job_id),
+                )
+                log(
+                    f"Resuming interrupted job #{job_id} ({job.kind.value}) started "
+                    f"{job.started_at}: re-queued (resume {count + 1}/{MAX_RESUME_ATTEMPTS})"
+                )
+                resumed.append(job_id)
+            self.connection.commit()
+        if resumed:
+            # the queue loaded its pending list in __init__, before these rows
+            # were queued again: reload it so take_next sees them in id order
+            self.queue._load_pending()
+        return resumed
 
     def shutdown(self) -> None:
         """Stops the worker and closes the database.
@@ -840,6 +1003,7 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         lambda c: [j for j in s.queue.all_jobs(limit=10) if j.state.value in ("running", "queued")]
     )
 
+    recent_encodes = s.with_lock(_recent_encodes)
     rss = rss_mib()
     # the worker fields come from one fixed-order read pair (issue #660
     # round 13, finding 2 / round 14, finding 2): a give-up landing between
@@ -859,6 +1023,10 @@ def status(conn: sqlite3.Connection = Depends(db_access)) -> dict:
         "worker_error": fatal,
         "database": str(s.db_file),
         "rss_mib": round(rss, 1) if rss is not None else None,
+        # the last real encodes by RECENCY, for the queue outlook's rough
+        # time (issue #631): /api/library is ordered by category/name, so the
+        # UI cannot derive the newest five from it
+        "recent_encodes": recent_encodes,
         # an edited config.json that was NOT applied (issue #247): the app
         # keeps running on the previous settings, and the operator must see why
         "config_error": config_module.config_error,
@@ -982,6 +1150,9 @@ def snapshot(
             # by the state transition itself.
             "jobs_fp": tuple((j.id, j.state.value) for j in jobs),
             "rss_mib": rss_mib(),
+            # the queue outlook's measured pace is the NEWEST encodes by
+            # recency, not the library's category/name order (issue #631)
+            "recent_encodes": _recent_encodes(c),
         }
 
     data = s.with_lock(read)
@@ -1007,6 +1178,7 @@ def snapshot(
                     "codec": r["codec"],
                     "resolution": [r["width"], r["height"]],
                     "size": r["size"],
+                    "reclaimed_bytes": r["reclaimed_bytes"],
                     "hdr": bool(r["hdr"]),
                     "missing": bool(r["missing_scans"]),
                     "missing_since": r["missing_since"],
@@ -1047,7 +1219,7 @@ def snapshot(
                     else None,
                 }
                 for r in c.execute(
-                    """
+                    f"""
                     SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                            f.size, f.hdr, f.missing_scans, f.missing_since,
                            e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
@@ -1055,11 +1227,9 @@ def snapshot(
                            e.encode_seconds,
                            e.probe_count, e.probe_seconds, e.tool_versions,
                            e.generation, e.input_bitrate, e.output_bitrate,
-                           e.outcome, e.outcome_reason, e.output_file
-                    FROM files f
-                    LEFT JOIN encodes e ON e.id = (
-                        SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
-                    )
+                           e.outcome, e.outcome_reason, e.output_file,
+                           {_RECLAIMED_COLUMN}
+                    {_LIBRARY_FROM}
                     ORDER BY f.category, f.name
                     """
                 ).fetchall()
@@ -1082,6 +1252,9 @@ def snapshot(
             "worker_error": fatal,
             "database": str(s.db_file),
             "rss_mib": round(data["rss_mib"], 1) if data["rss_mib"] is not None else None,
+            # the last real encodes by recency, for the queue outlook (issue
+            # #631): the library list is category/name-ordered, not recent
+            "recent_encodes": data["recent_encodes"],
             # the snapshot is the UI's one state channel (App.svelte reads
             # snap.status alone): it must carry the same fields /api/status
             # does, or the built surfaces behind them can never render
@@ -1195,7 +1368,8 @@ def library(
     the identity rule's mismatching-row id set - issue #647: a restore
     moves no encode row and may not move the max mtime), so an unchanged
     library answers 304 without a payload - the UI's 3-second poll becomes
-    nearly free.
+    nearly free. Each entry also carries `reclaimed_bytes`, the per-title
+    library delta plus output-directory savings (issue #646).
 
     Args:
         conn: The database connection (db_access dependency).
@@ -1228,17 +1402,15 @@ def library(
         return Response(status_code=304, headers={"ETag": etag})
     rows = s.with_lock(
         lambda c: c.execute(
-            """
+            f"""
             SELECT f.path, f.name, f.category, f.duration, f.codec, f.width, f.height,
                    f.size, f.hdr, f.missing_scans, f.missing_since,
                    e.preset, e.chosen_crf, e.achieved_vmaf, e.input_size, e.output_size,
                    e.saved_percent, e.encoder_preset, e.probe_encoder_preset,
                    e.encode_seconds, e.outcome, e.outcome_reason, e.output_file,
-                   e.probe_count, e.probe_seconds, e.tool_versions
-            FROM files f
-            LEFT JOIN encodes e ON e.id = (
-                SELECT id FROM encodes WHERE file_id = f.id ORDER BY id DESC LIMIT 1
-            )
+                   e.probe_count, e.probe_seconds, e.tool_versions,
+                   {_RECLAIMED_COLUMN}
+            {_LIBRARY_FROM}
             ORDER BY f.category, f.name
             """
         ).fetchall()
@@ -1252,6 +1424,7 @@ def library(
             "codec": r["codec"],
             "resolution": [r["width"], r["height"]],
             "size": r["size"],
+            "reclaimed_bytes": r["reclaimed_bytes"],
             "hdr": bool(r["hdr"]),
             "missing": bool(r["missing_scans"]),
             "missing_since": r["missing_since"],
@@ -1388,7 +1561,7 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
             """
             SELECT p.chosen_crf, p.achieved_vmaf, p.skipped_reason,
                    p.estimated_size, p.created_at, p.input_mtime, p.input_size,
-                   p.encoder, p.encoder_preset, p.target_vmaf
+                   p.encoder, p.encoder_preset, p.target_vmaf, p.probes
             FROM plans p JOIN files f ON f.id = p.file_id
             WHERE f.path = ?
             """,
@@ -1416,6 +1589,7 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "target_vmaf": None,
                 "stale": False,
                 "estimate_note": None,
+                "probes": [],
             }
         elif plan_row is not None:
             try:
@@ -1437,6 +1611,12 @@ def movie_detail(path: str, conn: sqlite3.Connection = Depends(db_access)) -> di
                 "probe_encoder_preset": plan_row["encoder_preset"],
                 "target_vmaf": plan_row["target_vmaf"],
                 "stale": not file_ok,
+                # the persisted probe trail (issue #631): what the search
+                # measured, so the title page can show it. The search does not
+                # compute a predicted size per probe, so the pairs carry only
+                # crf/vmaf (the plan's estimated_size is the whole-file
+                # prediction).
+                "probes": _plan_probes(plan_row["probes"]),
                 # the HDR estimate bias note (issue #98): derived, not stored -
                 # the files row's hdr flag is the same one the plan used
                 "estimate_note": (
@@ -1500,6 +1680,89 @@ def reveal(request: RevealRequest) -> dict:
 # the /report route was removed with issue #202 (Zef-X: "report is a fossil");
 # `shrinkray report` was removed with it. The provenance surface is the
 # dashboard's per-title chain and `shrinkray retained`.
+
+
+def _plan_probes(raw: str | None) -> list[dict]:
+    """Parses a stored plan's probe trail (``[(crf, vmaf)]`` JSON).
+
+    The plans table has carried the pairs since #98; the route exposes them as
+    objects so the title page can render one row per probe (issue #631). A
+    damaged or missing column is an empty trail, never a crash: the plan's
+    chosen CRF and VMAF are the decision, and the trail is the evidence.
+
+    Args:
+        raw (str | None): The plans.probes JSON column.
+
+    Returns:
+        list[dict]: [{"crf": int, "vmaf": float}, ...] in stored order.
+    """
+    try:
+        pairs = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    probes: list[dict] = []
+    for pair in pairs:
+        try:
+            if len(pair) >= 4:
+                crf, vmaf, measured_at, cached = pair[0], pair[1], pair[2], pair[3]
+            elif len(pair) == 3:
+                crf, vmaf, measured_at = pair
+                cached = False
+            else:
+                crf, vmaf = pair
+                measured_at = None
+                cached = False
+            probes.append(
+                {
+                    "crf": int(crf),
+                    "vmaf": float(vmaf),
+                    "measured_at": None if measured_at is None else str(measured_at),
+                    "cached": bool(cached),
+                }
+            )
+        except (TypeError, ValueError, IndexError):
+            continue
+    return probes
+
+
+# how many recent encodes the queue outlook reads (issue #631): enough for
+# a measured seconds-per-GB pace, small enough to be the "recent" window
+RECENT_ENCODES_LIMIT = 5
+
+
+def _recent_encodes(
+    connection: sqlite3.Connection, limit: int = RECENT_ENCODES_LIMIT
+) -> list[dict]:
+    """Returns the last real encodes by recency, newest first (issue #631).
+
+    `/api/library` is ordered by category/name, so taking its last five measured
+    titles gives an alphabetical window, not the newest five encodes. This reads
+    the encodes table by `encoded_at` instead. Only applied rows are real
+    encodes: a discarded attempt reclaimed nothing and is not a pace sample.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        limit (int): How many rows to return.
+
+    Returns:
+        list[dict]: [{"encode_seconds": float, "input_size": int}, ...],
+            newest first.
+    """
+    rows = connection.execute(
+        """
+        SELECT encode_seconds, input_size FROM encodes
+        WHERE outcome = 'applied'
+          AND encode_seconds IS NOT NULL
+          AND input_size > 0
+        ORDER BY encoded_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        {"encode_seconds": float(row["encode_seconds"]), "input_size": int(row["input_size"])}
+        for row in rows
+    ]
 
 
 def _default_roots() -> list[Path]:
@@ -1673,6 +1936,10 @@ def run_app(
     # effect
     apply_config(load_config(config_file=config_file))
     _recover_interrupted_swaps()
+    # the resume runs before the worker and before the backlog (issue #622):
+    # an interrupted row is re-queued as the first work of this start, with no
+    # dependence on app.auto_backlog
+    state.resume_interrupted_jobs()
     state.worker.start()
     auto_backlog(state, list(_allowed_roots), enabled=load_config().auto_backlog)
     watch_output = os.environ.get(WATCH_OUTPUT_ENV, "") or None
@@ -1835,10 +2102,15 @@ def auto_backlog(state: "AppState", roots: list[Path], *, enabled: bool) -> list
     without a client. It is off unless `app.auto_backlog` is set, because a
     developer's dashboard must not start encoding their library.
 
-    The three jobs are enqueued together, not chained on completion: the queue is
-    FIFO and the worker is single-threaded, so they run in this order by
-    construction. A restart does not re-encode finished files, because the encode
-    job consults the database and skips what it already recorded.
+    On a fresh boot all three jobs are enqueued, not chained on completion:
+    the queue is FIFO and the worker is single-threaded, so they run in this
+    order by construction. On a restart the dedupe (issue #626) keeps an
+    identical pending job (same kind and payload, queued or already running)
+    instead of enqueueing it a second time. An interrupted job does not depend
+    on this switch: the boot resume step re-queues the same row before this
+    backlog runs, with or without `app.auto_backlog` (issue #622). A finished
+    file is not re-encoded either, because the encode job consults the
+    database and skips what it already recorded.
 
     Args:
         state (AppState): The app state (queue and validated roots).

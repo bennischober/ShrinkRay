@@ -37,12 +37,16 @@ vi.mock('./lib/api', () => ({
   TOKEN_KEY: 'shrinkray.token',
 }))
 
-vi.mock('./lib/progress.svelte', () => ({
-  connectEvents: () => {},
-  progressFor: () => null,
-  eventsConnected: () => mode === 'live',
-  resetEvents: () => {},
-}))
+vi.mock('./lib/progress.svelte', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/progress.svelte')>()
+  return {
+    ...actual,
+    connectEvents: () => {},
+    fileProgressFor: () => null,
+    eventsConnected: () => mode === 'live',
+    resetEvents: () => {},
+  }
+})
 
 import App from './App.svelte'
 

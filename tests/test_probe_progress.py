@@ -5,8 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from shrinkray import db as shrinkray_db
 from shrinkray.engine import pipeline as engine_pipeline
 from shrinkray.engine import plan as engine_plan
+from shrinkray.engine import progress as engine_progress
 from shrinkray.engine import samples as engine_samples
 from shrinkray.engine import search as engine_search
 from shrinkray.tools import ffprobe as tools_ffprobe
@@ -146,8 +148,18 @@ class TestProbeProgress(unittest.TestCase):
             [e["detail"] for e in events],
             ["extracting sample 1/3", "extracting sample 2/3", "extracting sample 3/3"],
         )
-        self.assertEqual([e["done"] for e in events], [0, 1, 2])
-        self.assertEqual(events[0]["total"], 3)
+        self.assertEqual(
+            [e["sample"] for e in events],
+            [
+                {"index": 1, "count": 3},
+                {"index": 2, "count": 3},
+                {"index": 3, "count": 3},
+            ],
+        )
+        # samples never ride done/total: that counter is the folder job's
+        self.assertNotIn("done", events[0])
+        self.assertNotIn("total", events[0])
+        self.assertEqual(events[0]["file"]["stage"], "samples")
 
     def test_find_optimal_crf_reports_probe_steps(self):
         """The CRF bisect emits a start event per probe encode and a result
@@ -176,11 +188,221 @@ class TestProbeProgress(unittest.TestCase):
         details = [e["detail"] for e in events]
         self.assertTrue(any("probe encode" in d for d in details))
         self.assertTrue(all("VMAF" in d for d in details[1::2]))  # result events
-        self.assertEqual(events[-1]["probes_done"], len(probes))
+        # every completed probe carries its numeric crf/vmaf, its position and
+        # the search's known step count (issue #631)
+        self.assertEqual(events[-1]["probe"]["index"], len(probes))
+        self.assertEqual(events[-1]["probe"]["vmaf"], probes[-1].vmaf)
+        self.assertEqual(events[-1]["probe"]["crf"], probes[-1].crf)
+        self.assertIsInstance(events[-1]["probe"]["passed"], bool)
+        self.assertEqual(events[-1]["file"]["stage"], "crf-search")
+        self.assertEqual(events[-1]["file"]["step"], 4)
+        self.assertEqual(events[-1]["probe"]["count"], len(probes))
+
+    def test_probe_count_is_the_searchs_actual_step_count(self):
+        """Issue #631: the count is the search's actual step sequence, not the
+        remaining CRF bracket. The search knows the total only when it finishes;
+        the live events carry null, and the final event carries the real count."""
+        events: list[dict] = []
+        with (
+            patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(
+                engine_search,
+                "probe_crf",
+                side_effect=lambda samples, crf, *a, **k: 96.6 if crf in (23, 26, 27) else 95.9,
+            ),
+        ):
+            chosen, achieved, probes = engine_search.find_optimal_crf(
+                Path("movie.mkv"),
+                Path("work"),
+                "hb",
+                target_vmaf=96.0,
+                crf_range=(14, 32),
+                sample_count=1,
+                sample_seconds=10.0,
+                progress=events.append,
+            )
+        self.assertEqual([p.crf for p in probes], [23, 28, 25, 24])
+        self.assertEqual(chosen, 23)
+        self.assertEqual(len(probes), 4)
+        self.assertEqual(events[-1]["probe"]["count"], len(probes))
+        self.assertEqual(events[-1]["probe"]["index"], len(probes))
+        # the final probe row is the REAL last probe (24), never the chosen
+        # decision (23): the merge replaces probes by index, so reusing the
+        # chosen row here would delete the last measured probe (issue #631)
+        self.assertEqual(events[-1]["probe"]["crf"], probes[-1].crf)
+        self.assertEqual(events[-1]["probe"]["vmaf"], probes[-1].vmaf)
+        self.assertEqual(events[-1]["probe"]["crf"], 24)
+        self.assertNotEqual(events[-1]["probe"]["crf"], chosen)
+        # the decision rides ONLY in the chosen field
+        self.assertEqual(events[-1]["chosen"]["crf"], chosen)
+        self.assertEqual(events[-1]["chosen"]["vmaf"], achieved)
+        live = [e for e in events if e["detail"].startswith("probe encode")]
+        self.assertTrue(live)
+        self.assertTrue(all(e["probe"]["count"] is None for e in live))
+
+    def test_the_merged_probe_trail_ends_with_the_real_last_probe(self):
+        """Issue #631: merging the real-bracket event sequence must produce the
+        trail [(1,23),(2,28),(3,25),(4,24)] and chosen 23, not duplicate 23 at
+        the last row (the old final-event bug)."""
+        events: list[dict] = []
+        with (
+            patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(
+                engine_search,
+                "probe_crf",
+                side_effect=lambda samples, crf, *a, **k: 96.6 if crf in (23, 26, 27) else 95.9,
+            ),
+        ):
+            _chosen, _achieved, _probes = engine_search.find_optimal_crf(
+                Path("movie.mkv"),
+                Path("work"),
+                "hb",
+                target_vmaf=96.0,
+                crf_range=(14, 32),
+                sample_count=1,
+                sample_seconds=10.0,
+                progress=events.append,
+            )
+        merged = None
+        for event in events:
+            merged = engine_progress.merge(merged, event)
+        self.assertIsNotNone(merged)
+        self.assertEqual(
+            [(p["index"], p["crf"], p["vmaf"]) for p in merged["probes"]],
+            [(1, 23, 96.6), (2, 28, 95.9), (3, 25, 95.9), (4, 24, 95.9)],
+        )
+        self.assertEqual(merged["probe"]["crf"], 24)
+        self.assertEqual(merged["probe"]["vmaf"], 95.9)
+        self.assertEqual(merged["chosen"]["crf"], 23)
+        self.assertEqual(merged["chosen"]["vmaf"], 96.6)
+
+    def test_a_real_probe_cache_hit_reaches_cache_status(self):
+        """A seeded probe_cache row is read through the real _cached_or_none
+        path: no fabricated collector, no probe encode (review M4, #631)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            movie = root / "movie.mkv"
+            movie.write_bytes(b"movie")
+            sample = root / "sample.mkv"
+            sample.write_bytes(b"sample")
+            db_file = root / "shrinkray.db"
+            connection = shrinkray_db.connect(db_file)
+            try:
+                recipe = tools_vmaf.vmaf_recipe(crop=None)
+                key = engine_search.probe_cache_key(
+                    movie,
+                    0.0,
+                    10.0,
+                    24,
+                    "svt_av1",
+                    "5",
+                    None,
+                    None,
+                    tools_vmaf._tool_versions("HandBrakeCLI"),
+                    recipe.identifier(),
+                )
+                shrinkray_db.save_probe_score(connection, key, 95.5, 123)
+                measured_at = shrinkray_db.get_probe_measured_at(connection, key)
+            finally:
+                connection.close()
+            self.assertIsNotNone(measured_at)
+            statuses: list[tuple[bool, str | None]] = []
+            events: list[dict] = []
+            score = engine_search.probe_crf(
+                [(sample, 0.0)],
+                24,
+                root,
+                "HandBrakeCLI",
+                movie,
+                10.0,
+                "svt_av1",
+                "5",
+                recipe=recipe,
+                db_file=db_file,
+                cache_status=statuses,
+                progress=events.append,
+            )
+            self.assertEqual(score, 95.5)
+            self.assertEqual(statuses, [(True, measured_at)])
+            self.assertTrue(events)
+
+    def test_cached_replay_reports_cache_provenance(self):
+        """A cached probe replay is source=cache with the stored measured_at, and
+        the final probe row is the cached row (maintainer 2026-11-14, #631)."""
+        events: list[dict] = []
+        measured_at = "2026-11-14 08:12:00"
+
+        def cached_probe(samples, crf, *args, **kwargs):
+            kwargs["cache_status"].append((True, measured_at))
+            return 96.2
+
+        with (
+            patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(engine_search, "probe_crf", side_effect=cached_probe),
+        ):
+            chosen, achieved, probes = engine_search.find_optimal_crf(
+                Path("movie.mkv"),
+                Path("work"),
+                "hb",
+                target_vmaf=96.0,
+                crf_range=(14, 32),
+                sample_count=1,
+                sample_seconds=10.0,
+                progress=events.append,
+            )
+        self.assertEqual(chosen, probes[-1].crf)
+        self.assertEqual(achieved, probes[-1].vmaf)
+        self.assertTrue(all(p.cached for p in probes))
+        self.assertTrue(all(p.measured_at == measured_at for p in probes))
+        self.assertEqual(events[-1]["chosen"]["source"], "cache")
+        self.assertEqual(events[-1]["source"], "cache")
+        self.assertEqual(events[-1]["measured_at"], measured_at)
+        self.assertTrue(events[-1]["probe"]["cached"])
+        self.assertEqual(events[-1]["probe"]["measured_at"], measured_at)
+        self.assertTrue(
+            all(
+                e["probe"].get("cached")
+                for e in events
+                if e.get("probe") and str(e.get("detail", "")).startswith("CRF ")
+            )
+        )
+
+    def test_live_probe_reports_measured_provenance(self):
+        """A live probe is source=measured with no measured_at, never cache."""
+        events: list[dict] = []
+
+        def live_probe(samples, crf, *args, **kwargs):
+            kwargs["cache_status"].append((False, None))
+            return 95.4
+
+        with (
+            patch.object(engine_search, "extract_samples", return_value=[(Path("s0.mkv"), 10.0)]),
+            patch.object(engine_search, "probe_crf", side_effect=live_probe),
+        ):
+            _chosen, _achieved, probes = engine_search.find_optimal_crf(
+                Path("movie.mkv"),
+                Path("work"),
+                "hb",
+                target_vmaf=96.0,
+                crf_range=(14, 32),
+                sample_count=1,
+                sample_seconds=10.0,
+                progress=events.append,
+            )
+        self.assertTrue(probes)
+        self.assertTrue(all(not p.cached for p in probes))
+        self.assertTrue(all(p.measured_at is None for p in probes))
+        self.assertEqual(events[-1]["chosen"]["source"], "measured")
+        self.assertEqual(events[-1]["source"], "measured")
+        self.assertIsNone(events[-1]["measured_at"])
+        self.assertFalse(events[-1]["probe"]["cached"])
+        self.assertIsNone(events[-1]["probe"]["measured_at"])
 
     def test_probe_crf_reports_each_sample(self):
-        """Issue #690: a probe states the sample it is on, so a running search
-        has a position (and an ETA) instead of showing nothing for hours."""
+        """Issue #690: probe_crf emits one event per sample, naming the
+        within-probe sample in `detail`. This direct call passes no probe_index,
+        so `probe.index` is None; find_optimal_crf supplies the search
+        position (see test_find_optimal_crf_reports_probe_steps)."""
         events: list[dict] = []
 
         def fake_run(command, cancel=None):
@@ -189,7 +411,7 @@ class TestProbeProgress(unittest.TestCase):
 
         with (
             patch.object(engine_search, "probe_cache_key", return_value="k"),
-            patch.object(engine_search, "_cached_or_none", return_value=(None, None, None)),
+            patch.object(engine_search, "_cached_or_none", return_value=(None, None, None, None)),
             patch.object(
                 engine_search,
                 "build_encode_command",
@@ -215,14 +437,12 @@ class TestProbeProgress(unittest.TestCase):
             [e["detail"] for e in events],
             ["sample 1/2 (CRF 30)", "sample 2/2 (CRF 30)"],
         )
-        self.assertEqual([e["done"] for e in events], [0, 1])
-        self.assertEqual(events[0]["total"], 2)
-        self.assertEqual(events[0]["crf"], 30)
-        # the probe's OWN elapsed time is what an ETA divides: without it the
-        # page falls back to the job's elapsed and swings the estimate by an
-        # order of magnitude on every new probe (issue #690 review)
-        self.assertIsInstance(events[0]["elapsed"], float)
-        self.assertGreaterEqual(events[1]["elapsed"], events[0]["elapsed"])
+        self.assertEqual([e["probe"]["index"] for e in events], [None, None])
+        self.assertEqual([e["probe"]["crf"] for e in events], [30, 30])
+        # a probe's per-sample tick has no measured VMAF yet; the completed
+        # probe event (find_optimal_crf's) carries it
+        self.assertIsNone(events[0]["probe"]["vmaf"])
+        self.assertEqual(events[0]["file"]["stage"], "crf-search")
 
     def test_estimate_size_factor_reports_size_probe(self):
         """The skip-check size probe emits its step event."""

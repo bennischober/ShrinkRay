@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { queueLabel } from './lib/format'
+  import { queueLabel, reclaimedTotalBytes } from './lib/format'
   import { onMount } from 'svelte'
   import {
     api,
@@ -20,7 +20,8 @@
   import ConfigPage from './lib/pages/ConfigPage.svelte'
   import RetainedPage from './lib/pages/RetainedPage.svelte'
   import MovieDetailPage from './lib/pages/MovieDetailPage.svelte'
-  import { connectEvents, eventsConnected, progressFor, resetEvents } from './lib/progress.svelte'
+  import { connectEvents, eventsConnected, fileProgressFor, resetEvents } from './lib/progress.svelte'
+  import { isStageRow } from './lib/format'
   import { deriveConnection, freshnessText, POLL_ACTIVE, POLL_HIDDEN, POLL_IDLE } from './lib/connection'
 
   type Page = 'overview' | 'library' | 'jobs' | 'retained' | 'config'
@@ -256,6 +257,19 @@
   // resident-memory window that fed it — no panel shows the trend, so no
   // code accumulates one.
 
+  // Hidden pages stay mounted so their in-memory state survives a tab
+  // switch, but a hidden page must not re-render the full collection on
+  // every poll (issue #661): with the busy fixture, the four hidden pages
+  // were up to 31 192 of the 31 333 live nodes, and their re-render was the
+  // 1 s+ busy tick on a page as small as Config. They receive stable empty
+  // collections instead; the visible page gets the real ones in the same
+  // update, so nothing shown changes.
+  const NO_MOVIES: Movie[] = []
+  const NO_JOBS: Job[] = []
+  const NO_RETAINED: RetainedFile[] = []
+  const NO_PATHS: string[] = []
+  const NO_PLAN_SAVINGS: readonly (readonly [string, number])[] = []
+
   // ── refresh loop ──
   async function refresh() {
     try {
@@ -367,8 +381,18 @@
   }
 
   let dismissed = $state<Set<number>>(new Set())
+  // #602 stage rows are per-file detail rows, never the running-work owner:
+  // the folder job carries the file model and must be the binding target.
+  // During any encode/plan the stage row is newest, so without this filter
+  // `runningJob` picks it and every surface renders "starting…" (issue #631).
   const runningJobs = $derived(
-    history.filter((j) => (j.state === 'running' || j.state === 'queued') && j.id !== null && !dismissed.has(j.id))
+    history.filter(
+      (j) =>
+        (j.state === 'running' || j.state === 'queued') &&
+        j.id !== null &&
+        !dismissed.has(j.id) &&
+        !isStageRow(j),
+    ),
   )
   // failed work: jobs that FAILED, and DONE jobs whose per-movie outcomes
   // failed (the engine completed but the work did not — a green DONE must
@@ -389,7 +413,7 @@
     dismissed = new Set([...dismissed, id])
   }
   const runningJob = $derived(runningJobs.find((j) => j.state === 'running') ?? null)
-  const runningProgress = $derived(runningJob !== null ? progressFor(runningJob.id) : null)
+  const runningProgress = $derived(runningJob !== null ? fileProgressFor(runningJob.id) : null)
 
   const missingMovies = $derived(movies.filter((m) => m.missing))
 
@@ -403,17 +427,11 @@
   })
 
   const savedTotalGb = $derived(
-    movies.reduce((sum, m) => {
-      // only an APPLIED encode reclaimed anything (issue #625): a discarded
-      // attempt's sizes describe an artifact that was thrown away
-      if (!m.encode || m.encode.outcome === 'discarded') return sum
-      // the identity rule (issue #647): a file the scans report missing has
-      // nothing on disk - its record reclaims nothing, like /metrics'
-      // gauge, so the two totals agree
-      if (m.missing) return sum
-      if (m.encode.saved_percent == null) return sum
-      return sum + ((m.encode.input_size ?? 0) - (m.encode.output_size ?? 0))
-    }, 0) / 1024 ** 3
+    // the server's per-title library delta + output-dir savings (#646);
+    // reclaimedTotalBytes owns the #625/#647 guard so the stat card and the
+    // category bars cannot disagree. The total intentionally differs from
+    // /metrics' corroborated row sum on a multi-hop chain.
+    reclaimedTotalBytes(movies) / 1024 ** 3
   )
   const measuredCount = $derived(movies.filter((m) => m.encode?.vmaf != null).length)
 </script>
@@ -559,6 +577,8 @@
         movie={detailMovie}
         {targetVmaf}
         allJobs={history}
+        {runningProgress}
+        stale={connectionState === 'stale'}
         revealAvailable={status?.reveal_available ?? false}
         onclose={closeDetail}
         onjobs={() => goto('jobs')}
@@ -567,18 +587,19 @@
     {:else}
       <div class="pages" class:hidden={page !== 'overview'}>
         <OverviewPage
-          {movies}
-          {history}
+          movies={page === 'overview' ? movies : NO_MOVIES}
+          history={page === 'overview' ? history : NO_JOBS}
           {status}
           {targetVmaf}
-          {savedTotalGb}
-          {measuredCount}
-          {missingMovies}
-          {runningJobs}
-          {failedJobs}
-          {scanPaths}
-          {outputDir}
-          {retainedFiles}
+          savedTotalGb={page === 'overview' ? savedTotalGb : 0}
+          measuredCount={page === 'overview' ? measuredCount : 0}
+          missingMovies={page === 'overview' ? missingMovies : NO_MOVIES}
+          runningJobs={page === 'overview' ? runningJobs : NO_JOBS}
+          runningProgress={page === 'overview' ? runningProgress : null}
+          failedJobs={page === 'overview' ? failedJobs : NO_JOBS}
+          scanPaths={page === 'overview' ? scanPaths : NO_PATHS}
+          outputDir={page === 'overview' ? outputDir : ''}
+          retainedFiles={page === 'overview' ? retainedFiles : NO_RETAINED}
           stale={connectionState === 'stale'}
           ondismiss={dismissFailed}
           ongoto={goto}
@@ -587,17 +608,24 @@
       </div>
       <div class="pages" class:hidden={page !== 'library'}>
         <LibraryPage
-          {movies}
+          movies={page === 'library' ? movies : NO_MOVIES}
           {selectedPaths}
           {targetVmaf}
-          runningMovie={runningProgress?.movie ?? null}
-          runningPercent={runningProgress?.percent ?? null}
-          plannedPaths={planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)}
-          planSavings={planEntries.flatMap((p) =>
-            p.state === 'encode' && p.saved_percent != null && p.saved_percent > 0
-              ? [[p.movie, p.saved_percent] as const]
-              : [],
-          )}
+          runningProgress={page === 'library' ? runningProgress : null}
+          plannedPaths={
+            page === 'library'
+              ? planEntries.filter((p) => p.state === 'encode').map((p) => p.movie)
+              : NO_PATHS
+          }
+          planSavings={
+            page === 'library'
+              ? planEntries.flatMap((p) =>
+                  p.state === 'encode' && p.saved_percent != null && p.saved_percent > 0
+                    ? [[p.movie, p.saved_percent] as const]
+                    : [],
+                )
+              : NO_PLAN_SAVINGS
+          }
           onopenmovie={(m) => openDetail(m, 'library')}
           stale={connectionState === 'stale'}
           ontoggle={(path, checked) => {
@@ -616,13 +644,27 @@
         />
       </div>
       <div class="pages" class:hidden={page !== 'jobs'}>
-        <JobsPage {history} stale={connectionState === 'stale'} onopenMovie={(p) => openDetailFromJobs(p)} />
+        <JobsPage
+          history={page === 'jobs' ? history : NO_JOBS}
+          movies={page === 'jobs' ? movies : NO_MOVIES}
+          recent={page === 'jobs' ? (status?.recent_encodes ?? []) : []}
+          {targetVmaf}
+          stale={connectionState === 'stale'}
+          onopenMovie={(p) => openDetailFromJobs(p)}
+        />
       </div>
       <div class="pages" class:hidden={page !== 'retained'}>
-        <RetainedPage files={retainedFiles} onrecover={() => void loadRetained()} />
+        <RetainedPage
+          files={page === 'retained' ? retainedFiles : NO_RETAINED}
+          onrecover={() => void loadRetained()}
+        />
       </div>
       <div class="pages" class:hidden={page !== 'config'}>
-        <ConfigPage {scanPaths} {outputDir} {targetVmaf} />
+        <ConfigPage
+          scanPaths={page === 'config' ? scanPaths : NO_PATHS}
+          outputDir={page === 'config' ? outputDir : ''}
+          {targetVmaf}
+        />
       </div>
     {/if}
     {/if}

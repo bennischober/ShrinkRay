@@ -1,8 +1,10 @@
 <script lang="ts">
   import { humanizeError, isFailedOutcome, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
-  import { bytes, duration, kindWord, percent, progressLabel, relative, savedPercent, span, statusAnswer, titleBuckets, vmaf, verdictWord } from '../format'
+  import { bytes, kindWord, percent, reclaimedBytes, relative, savedPercent, span, statusAnswer, titleBuckets, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
-  import { progressFor } from '../progress.svelte'
+  import QueueOutlook from '../components/QueueOutlook.svelte'
+  import WorkProgress from '../components/WorkProgress.svelte'
+  import { progressEta, type FileProgressView } from '../progress.svelte'
 
   /** Path equality that survives separator and case differences. */
   function pathEq(a: string, b: string): boolean {
@@ -18,6 +20,7 @@
     measuredCount,
     missingMovies,
     runningJobs,
+    runningProgress = null,
     failedJobs,
     scanPaths,
     outputDir,
@@ -35,6 +38,8 @@
     measuredCount: number
     missingMovies: Movie[]
     runningJobs: Job[]
+    /** the ONE accumulated model for the running file (issue #631) */
+    runningProgress?: FileProgressView | null
     failedJobs: Job[]
     scanPaths: string[]
     outputDir: string
@@ -74,55 +79,12 @@
   )
 
   const runningJob = $derived(runningJobs.find((j) => j.state === 'running') ?? null)
-  const runningProgress = $derived(runningJob !== null ? progressFor(runningJob.id) : null)
+  const runningSource = $derived(
+    runningProgress?.path != null
+      ? movies.find((m) => m.path === runningProgress.path) ?? null
+      : null
+  )
 
-  // ETA: measured throughput (schema v5: encode_seconds per GB across all
-  // recorded encodes) where available, proportional fallback otherwise
-  const throughputSecPerGb = $derived.by(() => {
-    const measuredEncodes = movies.filter(
-      (m) => m.encode?.encode_seconds != null && (m.encode.input_size ?? 0) > 0
-    )
-    if (measuredEncodes.length === 0) return null
-    const totalSeconds = measuredEncodes.reduce((sum, m) => sum + (m.encode?.encode_seconds ?? 0), 0)
-    const totalGb = measuredEncodes.reduce((sum, m) => sum + (m.encode?.input_size ?? 0) / 1024 ** 3, 0)
-    return totalGb > 0 ? totalSeconds / totalGb : null
-  })
-  const eta = $derived.by(() => {
-    if (!runningJob || !runningJob.started_at) return null
-    const elapsedSec = Math.max(0, (Date.now() - Date.parse(runningJob.started_at.endsWith('Z') || runningJob.started_at.includes('+') ? runningJob.started_at : runningJob.started_at + 'Z')) / 1000)
-    if (runningProgress?.percent != null && runningProgress.percent > 1) {
-      // proportional: percent implies total wall time
-      const totalSec = elapsedSec / (runningProgress.percent / 100)
-      return Math.max(0, totalSec - elapsedSec)
-    }
-    if (throughputSecPerGb != null && runningProgress?.movie) {
-      const movie = movies.find((m) => m.name === runningProgress.movie)
-      const gb = (movie?.size ?? 0) / 1024 ** 3
-      if (gb > 0) return Math.max(0, gb * throughputSecPerGb - elapsedSec)
-    }
-    return null
-  })
-  function fmtEta(seconds: number | null): string {
-    if (seconds == null) return '—'
-    const m = Math.round(seconds / 60)
-    if (m < 60) return `~${m}m remaining`
-    return `~${Math.floor(m / 60)}h ${m % 60}m remaining`
-  }
-
-  // the estimate divides a clock, so it is frozen while the data is old rather
-  // than recomputed into a countdown nothing is backing (issue #629)
-  let frozenEta = $state<number | null>(null)
-  $effect(() => {
-    if (!stale) frozenEta = eta
-  })
-  const shownEta = $derived(stale ? frozenEta : eta)
-
-  // every elapsed statement reads the same clock, so none of them keeps
-  // counting up while the data is old (issue #629)
-  let shownClock = $state(Date.now())
-  $effect(() => {
-    if (!stale) shownClock = Date.now()
-  })
 
   // completion moment: the last finished encode run, stated (peak-end)
   interface OutcomeEntry {
@@ -184,18 +146,10 @@
       const bar = map.get(m.category) ?? { name: m.category, titles: 0, sizeGb: 0, reclaimedGb: 0 }
       bar.titles += 1
       bar.sizeGb += (m.size ?? 0) / 1024 ** 3
-      // only an APPLIED encode reclaimed anything (issue #625): a discarded
-      // attempt's sizes describe an artifact that was thrown away. A file
-      // the scans report missing has nothing on disk (issue #647) - the
-      // bar agrees with /metrics' gauge
-      if (
-        !m.missing &&
-        m.encode?.outcome !== 'discarded' &&
-        m.encode?.saved_percent != null &&
-        m.encode.saved_percent > 0
-      ) {
-        bar.reclaimedGb += ((m.encode.input_size ?? 0) - (m.encode.output_size ?? 0)) / 1024 ** 3
-      }
+      // the server's per-title library delta + output-dir savings (#646);
+      // reclaimedBytes owns the #625/#647 guard, so this bar and the
+      // RECLAIMED stat read one field through one rule and never disagree
+      bar.reclaimedGb += reclaimedBytes(m) / 1024 ** 3
       map.set(m.category, bar)
     }
     return [...map.values()].sort((a, b) => b.sizeGb - a.sizeGb)
@@ -325,9 +279,13 @@
   <div class="status-line mono" class:work={runningJob !== null}>
     {statusAnswer({
       running: runningJob ? { movie: runningProgress?.movie ?? null } : null,
-      etaSeconds: shownEta,
+      etaSeconds: progressEta(runningProgress),
       queued: status?.queue?.filter((j) => j.state === 'queued').length ?? 0,
+      needYou: failedJobs.length,
+      failed: failedJobs.filter((j) => j.state === 'failed').length,
       watching: status?.watcher === 'running',
+      // stale data is not a snapshot of the queue's current state (issue #633)
+      snapshotPresent: status != null && !stale,
     })}
   </div>
 
@@ -345,7 +303,7 @@
     <button class="stat" onclick={() => ongoto('library')}>
       <span class="legend">RECLAIMED</span>
       <span class="stat-v mono">{bytes(savedTotalGb * 1024 ** 3)}</span>
-      <span class="stat-sub mono dim">of {bytes(totalSizeGb * 1024 ** 3)} library</span>
+      <span class="stat-sub mono dim">library delta + output-dir · of {bytes(totalSizeGb * 1024 ** 3)} library</span>
     </button>
     {#if reclaimable}
       <button class="stat" onclick={() => ongoto('library')} title="Plan-predicted savings on the {reclaimable.count} titles the last plan queued for encode — realized when they encode. Titles without a measured prediction are excluded, not estimated.">
@@ -368,17 +326,15 @@
     <div class="running">
       <div class="running-head">
         <span class="legend amber">Working · {kindWord(runningJob.kind)}</span>
-        <span class="mono dim">{runningProgress?.done != null && runningProgress?.total != null ? `${runningProgress.done}/${runningProgress.total} · ` : ''}{runningProgress?.percent != null ? `${runningProgress.percent}%` : ''}</span>
       </div>
       <div class="running-title">{runningProgress?.movie || (runningJob.payload?.path as string)?.split(/[\\/]/).pop() || kindWord(runningJob.kind)}</div>
-      <div class="trace" role="progressbar" aria-valuenow={runningProgress?.percent ?? undefined} aria-valuemin="0" aria-valuemax="100" aria-label="encode progress">
-        <div class="fill" style="width: {runningProgress?.percent ?? 2}%"></div>
-      </div>
-      <div class="mono dim detail">
-        {progressLabel(runningProgress?.stage, null, runningProgress?.detail, runningProgress?.percent)}
-        · started {relative(runningJob.started_at, new Date(shownClock))}
-        · {fmtEta(shownEta)}
-      </div>
+      <WorkProgress
+        progress={runningProgress}
+        {stale}
+        detail
+        {targetVmaf}
+        sourceBytes={runningSource?.size ?? null}
+      />
     </div>
   {:else}
     {#if runSummary}
@@ -397,6 +353,8 @@
       </div>
     {/if}
   {/if}
+
+  <QueueOutlook jobs={status?.queue ?? []} recent={status?.recent_encodes ?? []} />
 
   <div class="cols">
     <!-- ══ failures ══ -->
@@ -580,8 +538,7 @@
       </div>
       <div class="plan-list">
         <!-- SR context: the visual head row is aria-hidden (the round-4
-             pattern), so screen readers get the column contract here —
-             same pattern as the library table's sr-only caption -->
+             pattern), so screen readers get the column contract here -->
         <span class="sr-only">The plan table: per title the planned state, CRF, VMAF, size and saving, and the measured values once encoded. Measured cells name their predicted value in the tooltip.</span>
         <div class="plan-row plan-head mono legend" aria-hidden="true">
           <span class="p-name">TITLE</span>
@@ -714,14 +671,6 @@
   }
   .running-head { display: flex; justify-content: space-between; align-items: center; }
   .running-title { font-weight: 600; font-size: 14px; }
-  .trace {
-    height: 10px;
-    border-radius: 5px;
-    background: var(--hatch-work);
-    overflow: hidden;
-  }
-  .fill { height: 100%; background: var(--teal); }
-  .detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .quiet-strip {
     display: flex;
     justify-content: space-between;

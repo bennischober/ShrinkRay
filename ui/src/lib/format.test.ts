@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { absolute, bitrate, bytes, crf, duration, elapsedSeconds, eta, etaShort, remainingSeconds, groupJobs, isStageRow, kindWord, percent, progressLabel, queueLabel, relative, resultSummary, savedPercent, span, stageWord, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
+import { absolute, bitrate, bytes, crf, duration, eta, finishesAt, fps, groupJobs, isStageRow, kindWord, percent, queueLabel, queuedFileCount, queuePaceSeconds, reclaimedBytes, reclaimedTotalBytes, relative, resultSummary, savedPercent, span, stateWord, statusAnswer, timeColumns, titleBuckets, verdictWord, vmaf } from './format'
+import type { Movie } from './api'
 
 describe('duration', () => {
   it('renders the unit boundaries', () => {
@@ -144,46 +145,11 @@ describe('stateWord', () => {
     expect(stateWord('partial')).toBe('Partial')
     expect(stateWord('failed')).toBe('Failed')
     expect(stateWord('cancelled')).toBe('Cancelled')
+    expect(stateWord('interrupted')).toBe('Interrupted')
   })
 
   it('keeps an unknown state visible instead of blanking it', () => {
     expect(stateWord('reconciling')).toBe('reconciling')
-  })
-})
-
-describe('stageWord', () => {
-  // issue #631: a multi-step job must say which step it is on, so a CRF
-  // probe cannot look like the final encode
-  it('names the step the job is on', () => {
-    expect(stageWord('probe')).toBe('probing')
-    expect(stageWord('encode')).toBe('encoding')
-    expect(stageWord('scan')).toBe('scanning')
-    expect(stageWord('paused')).toBe('paused')
-  })
-
-  it('shows a stage it has never heard of as itself, not as nothing', () => {
-    expect(stageWord('verify')).toBe('verify')
-    expect(stageWord(null)).toBe('')
-  })
-})
-
-describe('progressLabel', () => {
-  // issue #631: the bar must say what is happening, not just how far
-  it('names the step, the file and what the engine reported', () => {
-    expect(progressLabel('probe', 'a.mkv', 'CRF 24: VMAF 96.41', 42)).toBe(
-      'probing · a.mkv · CRF 24: VMAF 96.41',
-    )
-  })
-
-  it('does not say the step twice when the engine names it already', () => {
-    // two live emissions do exactly this: "scanning library", "probing a.mkv"
-    expect(progressLabel('scan', null, 'scanning library', 10)).toBe('scanning library')
-    expect(progressLabel('probe', 'a.mkv', 'probing a.mkv', 20)).toBe('a.mkv · probing a.mkv')
-  })
-
-  it('falls back to a state word only when the payload carries nothing else', () => {
-    expect(progressLabel(null, null, null, 42)).toBe('working')
-    expect(progressLabel(null, null, null, null)).toBe('starting…')
   })
 })
 
@@ -252,6 +218,21 @@ describe('resultSummary', () => {
     expect(resultSummary([{ movie: 'a', state: 'already_encoded' }])).toBe('1 already encoded')
   })
 
+  it('summarises a plan in the plan vocabulary (issue #685)', () => {
+    // plan entries carry the stored states jobs.py writes: encode -> would
+    // encode, skip -> already efficient; the encode words must not leak in
+    const s = resultSummary([
+      { movie: 'a', state: 'encode' },
+      { movie: 'b', state: 'encode' },
+      { movie: 'c', state: 'encode' },
+      { movie: 'd', state: 'skip', reason: 'already efficient' },
+      { movie: 'e', state: 'skip', reason: 'target unreachable' },
+      { movie: 'f', state: 'skip', reason: 'below min size' },
+      { movie: 'g', state: 'skip', reason: 'hdr not supported' },
+    ])
+    expect(s).toBe('3 would encode · 4 already efficient')
+  })
+
   it('says nothing when the payload carries no outcomes', () => {
     expect(resultSummary([])).toBe('')
   })
@@ -313,23 +294,51 @@ describe('statusAnswer', () => {
   // issue #633: the page must answer "is everything OK?" first, in one line
   it('says what is running, how long is left and what is waiting', () => {
     expect(
-      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, watching: true }),
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, needYou: 0, failed: 0, watching: true, snapshotPresent: true }),
     ).toBe('● Working — encoding a.mkv, about 1 h 50 min left · 7 files waiting')
   })
 
   it('says it is idle when nothing is running, and whether it is watching', () => {
-    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: true })).toBe(
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 0, failed: 0, watching: true, snapshotPresent: true })).toBe(
       '● Idle — all caught up · watching for new files',
     )
-    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, watching: false })).toBe(
+    expect(statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 0, failed: 0, watching: false, snapshotPresent: true })).toBe(
       '● Idle — all caught up · the watcher is off',
     )
   })
 
   it('names one waiting file in the singular', () => {
     expect(
-      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: null, queued: 1, watching: true }),
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: null, queued: 1, needYou: 0, failed: 0, watching: true, snapshotPresent: true }),
     ).toBe('● Working — encoding a.mkv · 1 file waiting')
+  })
+
+  // issue #679: the line is the page's first answer to "is anything wrong?",
+  // so it must never read all caught up while a failure exists
+  it('names the failure when nothing is running (issue #679)', () => {
+    expect(
+      statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 2, failed: 1, watching: true, snapshotPresent: true }),
+    ).toBe('● 2 need you — 1 failed · the watcher is watching')
+  })
+
+  it('keeps a failure visible while work runs (issue #679)', () => {
+    expect(
+      statusAnswer({ running: { movie: 'a.mkv' }, etaSeconds: 6600, queued: 7, needYou: 2, failed: 1, watching: true, snapshotPresent: true }),
+    ).toBe('● Working — encoding a.mkv, about 1 h 50 min left · 2 need you — 1 failed · 7 files waiting')
+  })
+
+  // issue #679: with no snapshot the line knows neither the queue nor the
+  // watcher, so it makes no all-clear claim
+  it('says it is connecting when the snapshot is missing (issue #679)', () => {
+    expect(
+      statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 0, failed: 0, watching: false, snapshotPresent: false }),
+    ).toBe('● Connecting…')
+  })
+
+  it('keeps a known failure visible while the snapshot is missing (issue #679)', () => {
+    expect(
+      statusAnswer({ running: null, etaSeconds: null, queued: 0, needYou: 2, failed: 1, watching: true, snapshotPresent: false }),
+    ).toBe('● Connecting… · 2 need you — 1 failed')
   })
 })
 
@@ -356,26 +365,87 @@ describe('queueLabel', () => {
   })
 })
 
-describe('remainingSeconds', () => {
-  const now = new Date('2026-11-15T12:00:00Z')
-
-  it('scales the step elapsed time by the work fraction done', () => {
-    // 30 min elapsed at 25% implies 2 h total, so 90 min left
-    expect(remainingSeconds(30 * 60, 0.25)).toBe(90 * 60)
-  })
-
-  it('says nothing it cannot estimate', () => {
-    expect(remainingSeconds(30 * 60, null)).toBeNull()
-    expect(remainingSeconds(30 * 60, 0)).toBeNull()
-    expect(remainingSeconds(null, 0.4)).toBeNull()
-    // a finished fraction has nothing left to estimate
-    expect(remainingSeconds(30 * 60, 1)).toBeNull()
+describe('finishesAt (issue #631)', () => {
+  it('shows the wall time only beyond 10 min', () => {
+    const now = Date.UTC(2026, 10, 14, 19, 50)
+    expect(finishesAt(600, now)).toBe('')
+    expect(finishesAt(601, now)).toMatch(/^finishes ≈ \d{2}:\d{2}$/)
   })
 })
 
-describe('etaShort', () => {
-  it('drops the sentence the column header already carries', () => {
-    expect(etaShort(90 * 60)).toBe('~1 h 30 min')
-    expect(etaShort(null)).toBe('')
+describe('fps (issue #631)', () => {
+  it('labels the frame rate', () => {
+    expect(fps(12.34)).toBe('12.3 fps')
+    expect(fps(null)).toBe('—')
+  })
+})
+
+describe('reclaimedBytes (issue #646)', () => {
+  function movie(overrides: Partial<Movie> = {}): Movie {
+    return {
+      path: '/m/a.mkv',
+      name: 'a.mkv',
+      category: 'C',
+      duration: '01:00:00',
+      codec: 'h264',
+      resolution: [1920, 1080],
+      size: 400,
+      reclaimed_bytes: 600,
+      hdr: false,
+      encode: null,
+      ...overrides,
+    } as Movie
+  }
+
+  it('reads the server field, never the latest hop', () => {
+    // the encode row describes one hop (500 -> 400); the server's
+    // reclaimed_bytes describes the whole chain (1000 -> 400)
+    expect(
+      reclaimedBytes(
+        movie({
+          encode: {
+            preset: 'VMAF>95',
+            crf: 20,
+            vmaf: 95.5,
+            input_size: 500,
+            output_size: 400,
+            saved_percent: 20,
+            outcome: 'applied',
+          },
+        }),
+      ),
+    ).toBe(600)
+  })
+
+  it('sums the same per-title field the bars group', () => {
+    const movies = [
+      movie({ reclaimed_bytes: 600 }),
+      movie({ path: '/m/b.mkv', name: 'b.mkv', reclaimed_bytes: 1 }),
+      movie({ path: '/m/c.mkv', name: 'c.mkv', missing: true, reclaimed_bytes: 5000 }),
+    ]
+    expect(reclaimedTotalBytes(movies)).toBe(601)
+  })
+
+  it('keeps the missing guard but never zeroes a discarded latest row', () => {
+    expect(reclaimedBytes(movie({ missing: true, reclaimed_bytes: 600 }))).toBe(0)
+    // #625 applies to the discarded ROW: its own sizes are gone, but the
+    // server's corroborated chain delta is still real
+    expect(
+      reclaimedBytes(
+        movie({
+          reclaimed_bytes: 600,
+          encode: {
+            preset: 'VMAF>95',
+            crf: 20,
+            vmaf: 95.5,
+            input_size: 1000,
+            output_size: 500,
+            saved_percent: 50,
+            outcome: 'discarded',
+          },
+        }),
+      ),
+    ).toBe(600)
+    expect(reclaimedBytes(movie({ reclaimed_bytes: -1 }))).toBe(0)
   })
 })
