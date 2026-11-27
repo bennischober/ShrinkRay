@@ -19,7 +19,8 @@ ui/
 ├── src/lib/api.ts              # the ONLY network client + hand-mirrored API types
 ├── src/lib/format.ts           # the shared formatter layer (issue #627; #655 lists the rest)
 ├── src/lib/components/          # the shared vocabulary: PageHeader, StatusBadge,
-│                               # FileName, Time, ProgressBar, EmptyState, Panel
+│                               # FileName, Time, ProgressBar, EmptyState, Panel,
+│                               # WorkProgress (the one running-work surface), QueueOutlook
 ├── src/lib/progress.svelte.ts  # the ONLY EventSource (rune store, flow not state)
 ├── src/lib/pages/              # Overview, Library, Jobs, Retained, Config, MovieDetail
 │                               # + HintButton/HintMark (the shared hint glyphs)
@@ -33,7 +34,8 @@ ui/
 | Add/change a server call | `src/lib/api.ts` | `api`; mirror the FastAPI field |
 | New page or route | `src/App.svelte` | `PAGES`, rail nav, shortcut map |
 | Shared state, poll cadence | `src/App.svelte` | 1 s busy / 3 s idle / 10 s hidden |
-| Live progress | `src/lib/progress.svelte.ts` | `hello` seeds the map, `data` ticks |
+| Live progress | `src/lib/progress.svelte.ts` | `hello` seeds and rebuilds, `data` merges into the per-file model |
+| Running-work rendering | `src/lib/components/WorkProgress.svelte` | the ONE summary/stepper/probe table every page renders |
 | Token prompt and 401 | `src/lib/api.ts` | `TOKEN_KEY`, `isAuthFailure` |
 | Colors, type, spacing | `src/tokens.css` | `:root[data-theme='dark'\|'light']` |
 
@@ -47,10 +49,44 @@ ui/
   from `src/lib/format.ts` and the DESIGN.md Glossary (#655 tracks the sites still to move); a page never formats a value it
   shows with a hand-rolled `toFixed`/`toLocale*`/`1024 **`. Values that feed geometry
   rather than text — SVG coordinates, bar widths, axis positions — stay numbers.
+- **Fixtures and the browser check**: `ui/fixtures/*.json` are invented scenarios
+  (`empty`, `nasty-names`, `failures`; `busy` and `huge` are generated in
+  `fixtures/generated.ts`, and `busy-changing` is the #661 discrimination scenario:
+  the busy workload whose library payload moves on every poll) served by
+  `fixtureMock.ts`, a `serve`-only Vite plugin, so a page renders with no resident
+  app: run `npm run dev`, then open
+  `http://localhost:5173/?fixture=<name>` — the query belongs on the BROWSER URL, not
+  on the npm command. `offline` and `locked` are status scenarios: the mock answers
+  503 / 401 on every route and the shell renders its loading state / token prompt
+  against them. The mock validates the name against `FIXTURES` in `src/lib/fixtures.ts`
+  before it touches the filesystem, so an unknown or traversing name is a 400, never
+  a file read. `npm run test:e2e` (Playwright, `e2e/`) renders every page at 320,
+  390, 1024 and 1440 px in dark and light and fails on a page that scrolls sideways,
+  an element outside the viewport, two text boxes drawn over each other, a console
+  error, or a serious axe violation. axe sees the shell and the first rows of a
+  repeated list — the busy fixture mounts every page, and a scan of all of it does
+  not return. `e2e/known-failures.json` lists the cases that fail today, each with
+  the failure it allowlists (`expected`) and its reproduction command (`repro`); it
+  fails when a listed case starts passing, so it can only shrink. Adding a scenario
+  is adding its JSON plus its name in `FIXTURES` (`src/lib/fixtures.ts`) — a scale
+  scenario in `fixtures/generated.ts`, a status scenario in `fixtureMock.ts`'s
+  `STATUS_SCENARIOS`. The `overlap-probe` fixture is the synthetic overlap proof
+  (issue #628, review round 5 B3): the dev mock draws a clearly-labeled two-box
+  overlay over a Jobs row for that fixture name only, and
+  `npm run test:e2e:overlap-probe` runs the e2e test that expects the overlap
+  check to report it — the real Jobs overlap is not reproducible (#632 fixed its
+  cause), so the check's sensitivity is proven on a deliberately defective page
+  instead.
 - **One network boundary**: every `fetch` lives in `api.ts`; `progress.svelte.ts` owns the
   only `EventSource` (token as `?token=` — it cannot set a header).
 - **Flow is not state**: SSE carries progress only; the snapshot poll is the state channel.
-  Progress is never persisted and never polled.
+  Progress is never persisted and never polled. The one progress model
+  (`progress.svelte.ts`) accumulates events per running FILE — stage, stepper
+  position, probe trail, chosen CRF, encode percent/fps and the one ETA — and
+  every page renders it through `components/WorkProgress.svelte` (Overview's Now
+  card, Jobs' running entry, Library's status cell, the title page). The canonical
+  summary line is identical everywhere; `hello` rebuilds the model, including the
+  probes measured so far.
 - **Styling**: consume `var(--token)` from `tokens.css`, scoped `<style>` per component.
   The theme is `document.documentElement.dataset.theme` (`App.svelte`); tokens select on
   `:root[data-theme='dark'|'light']`. Faces are self-hosted in `src/fonts` — no CDN.
@@ -61,9 +97,10 @@ ui/
   happy-dom with `conditions: ['browser']` over `src/**/*.test.ts` (`api`, progress, JobsPage).
 
 ## ANTI-PATTERNS
-- **Calling an endpoint that does not exist.** The server has 12 GET routes plus one
-  `POST /api/reveal`; `POST /api/jobs` and `POST /api/watch/start|stop` are gone and the
-  root `README.md` still advertises them. The dashboard starts no work (issue #134).
+- **Calling an endpoint that does not exist.** The server has 15 GET routes plus one
+  `POST /api/reveal`; `POST /api/jobs` and `POST /api/watch/start|stop` are gone — the
+  root `README.md` no longer advertises them either. The dashboard starts no work
+  (issue #134).
 - `fetch`/`EventSource` in a component, or a locally re-declared API shape: extend
   `api.ts` instead — it mirrors the FastAPI JSON, so new server fields land there first.
 - Branching a component on theme, hardcoding a hex, or adding shadows/glow/blur. Depth is

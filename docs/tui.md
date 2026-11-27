@@ -1,7 +1,8 @@
 # Terminal surface: the TUI is the control surface
 
 Status: **decided 2026-10-25 (issue #244), built**: the pause (#250), the console banner
-(#251) and `shrinkray setup` on Textual (#252, `src/shrinkray/tui.py`). This replaces the
+(#251), `shrinkray setup` on Textual (#252, `src/shrinkray/tui.py`) and the job list with
+cancel requests (#621). This replaces the
 2026-10-23 note that scoped a TUI down to a live watch display (see *What this
 supersedes* below). PRODUCT.md's "The terminal is where the operator configures and
 controls" and "Deployment target" sections are the contract; this file records the
@@ -15,7 +16,7 @@ ShrinkRay has two interactive surfaces, split by role:
 |---------------|----------------------------------|---------------------------------------------------|
 | Job           | observe the resident mode        | configure and control                             |
 | Reached by    | any browser on the LAN (token)   | a shell on the host or in the container           |
-| Can change    | nothing (read-only, issue #134)  | the operator-facing settings, pause/resume, run one file |
+| Can change    | nothing (read-only, issue #134)  | the operator-facing settings, pause/resume, cancel a job, run one file |
 | Unraid button | WebUI                            | Console                                           |
 
 The trigger the old note named for a full TUI has arrived: terminal-first
@@ -33,9 +34,10 @@ window.
   the track filters,
   thread caps, the stall watchdog, priority, the eligibility gates (resolution floor
   upward only, minimum file size), extra codecs and file extensions, and backlog-on-start;
-  plus pause/resume of the backlog where a resident process runs. It edits those keys
-  only — every other value in `config.json` stays a hand edit (the field list is
-  `tui.fields_for`, one source of truth). It names the cost of a change before saving it (a setting in
+  plus pause/resume of the backlog and a job list that cancels a queued or running
+  job where a resident process runs. It edits those keys only — every other value
+  in `config.json` stays a hand edit (the field list is `tui.fields_for`, one source
+  of truth). It names the cost of a change before saving it (a setting in
   the plan fingerprint re-measures the library). A saved change applies at the next
   file. On a native install it edits that install's config.
 - **`shrinkray encode <path>`** — the existing Mode A command, unchanged, as the
@@ -51,8 +53,8 @@ window.
 ## Constraints the build must keep
 
 - **No network route for control.** The TUI reaches the resident process through the
-  state they already share on disk in `/data` (the config file, a pause flag). The
-  dashboard stays read-only by construction.
+  state they already share on disk in `/data` (the config file, a pause flag, a
+  cancel request). The dashboard stays read-only by construction.
 - **The CLI never requires the resident process.** The "watcher pauses during a manual
   encode" signal is written by the CLI to shared state and honoured by the watcher;
   the CLI does not call the server. A crashed CLI must not leave the watcher paused
@@ -61,6 +63,11 @@ window.
   is per output directory, so it could not stop a watcher working elsewhere;
   `engine/pause.py` keeps a `paused` flag (the TUI's switch: `set_operator_paused`) and
   one `manual-encodes/<pid>` marker per running CLI encode in the data folder.
+- **A cancel request is a file, not a route** (built, issue #621). The TUI writes
+  `cancel-requests/<job id>` atomically; the resident worker's own poller thread reads
+  it (the idle loop does not turn during a running encode) and calls the queue's cancel.
+  The file stays until the job is terminal, so a crash during the running job's unwind
+  cannot lose the operator's intent. The dashboard has no cancel control.
 - **Settings, not rules.** The TUI exposes what PRODUCT.md leaves open. It cannot
   lower the 1080p floor, add a second encode mode, keep bars, or pick another output
   codec.
@@ -79,7 +86,9 @@ window.
   presets, probe
   density, probe window length), Resources (thread cap, stall watchdog, idle priority), Eligibility (height,
   width, size floors, extra codecs), Library (extensions, backlog on start), the pause
-  switch at the top when a data folder is known. Keys it does not show stay untouched.
+  switch and the job list at the top when a data folder is known. Keys it does not
+  show stay untouched. The job list opens the database `mode=ro` (it never creates or
+  migrates it), hides the per-file stage rows and writes only the cancel request file.
 
 ## What this supersedes
 

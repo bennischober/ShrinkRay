@@ -14,6 +14,8 @@
   import { kindWord, stateWord } from '../format'
   import FileName from '../components/FileName.svelte'
   import Time from '../components/Time.svelte'
+  import WorkProgress from '../components/WorkProgress.svelte'
+  import type { FileProgressView } from '../progress.svelte'
 
   /** The provenance page: everything recorded about one title — source
    * facts, the latest encode with every schema-v5 metric, the COMPLETE
@@ -24,6 +26,8 @@
     movie,
     targetVmaf,
     allJobs,
+    runningProgress = null,
+    stale = false,
     revealAvailable = false,
     onclose,
     onjobs,
@@ -34,6 +38,9 @@
     /** The snapshot's job list — filtering it locally beats refetching
      * /api/jobs per detail-open (zero extra round-trips). */
     allJobs: Job[]
+    /** the ONE accumulated model for the running file (issue #631) */
+    runningProgress?: FileProgressView | null
+    stale?: boolean
     /** the server reports whether this host can open a file manager (issue #239) */
     revealAvailable?: boolean
     onclose: () => void
@@ -55,6 +62,9 @@
   let revealBusy = $state(false)
   let revealError = $state<string | null>(null)
   let pageEl: HTMLElement | null = $state(null)
+  const isRunning = $derived(
+    runningProgress?.path != null && normPath(movie.path) === normPath(runningProgress.path)
+  )
 
   /** This movie's slice of the audit trail, newest first. Jobs may target
    * the containing FOLDER (plan-all/scan-all) or exact file paths (encode),
@@ -182,6 +192,23 @@
 
   /** Newest first for the history table. */
   const encodesDesc = $derived(encodes ? [...encodes].reverse() : [])
+
+  /** The most recent RECORD whose output claim matches the file being
+   * viewed (the identity rule, issue #647): only that row produced the
+   * file - an older row with a coinciding claim is history. The history is
+   * generation-ordered, so a restored original's re-encode (generation 1
+   * again) does NOT sort last - it lands among the older rows: the
+   * record's id, not the display position, says which row is the latest. */
+  const currentEncodeId = $derived.by(() => {
+    const matches = encodesDesc.filter(
+      (r) =>
+        r.outcome === 'applied' &&
+        r.output_file != null &&
+        normPath(r.output_file) === normPath(movie.path) &&
+        r.output_size === movie.size,
+    )
+    return matches.length ? Math.max(...matches.map((r) => r.id ?? -1)) : null
+  })
 
   // ── drift chart: the provenance chain as a shape ──
   // The chain table carries the numbers; the chart carries the SHAPE —
@@ -335,6 +362,19 @@
     </div>
   </section>
 
+  {#if isRunning}
+    <section class="panel running-panel">
+      <div class="panel-head"><span class="legend">IN WORK</span></div>
+      <WorkProgress
+        progress={runningProgress}
+        {stale}
+        detail
+        {targetVmaf}
+        sourceBytes={movie.size}
+      />
+    </section>
+  {/if}
+
   <div class="cols">
     <!-- ══ source facts ══ -->
     <section class="panel">
@@ -405,6 +445,16 @@
                   <span class="dim">samples — encode will confirm</span>
                 </div>
               {/if}
+            {/if}
+            {#if plan.probes && plan.probes.length > 0}
+              <div class="fact">
+                <span class="legend">PROBES</span>
+                <span class="mono probe-trail">
+                  {#each plan.probes as probe, i (i)}
+                    <span class="probe-row">CRF {probe.crf} → VMAF {vmaf(probe.vmaf, plan.target_vmaf ?? targetVmaf)}</span>
+                  {/each}
+                </span>
+              </div>
             {/if}
             <div class="fact">
               <span class="legend">PROBED</span>
@@ -560,7 +610,11 @@
             <span class="delta"></span>
           </div>
           {#each encodesDesc as rec, i (rec.id ?? `${rec.encoded_at}-${i}`)}
-            {@const producedThis = rec.output_file != null && normPath(rec.output_file) === normPath(movie.path)}
+            <!-- the identity rule (issue #647): the LATEST row matching the
+                 file's path and size is the one that produced it - an older
+                 row whose claim happens to coincide (a restore followed by a
+                 re-encode at the same size) is history, not the current state -->
+            {@const producedThis = rec.id != null && rec.id === currentEncodeId && rec.output_file != null && normPath(rec.output_file) === normPath(movie.path) && rec.output_size === movie.size}
             {@const fromElsewhere = rec.file_path != null && normPath(rec.file_path) !== normPath(movie.path)}
             <div class="enc-row">
               <span
@@ -758,6 +812,9 @@
      visible, never blocking (an encode may still override a skip) */
   .fact.big .result.warn { color: var(--amber); }
   .mono.warn { color: var(--amber); }
+  .running-panel { margin-bottom: 12px; }
+  .probe-trail { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .probe-row { white-space: nowrap; }
   .fact.plan-next {
     border-top: 1px solid var(--row-line);
     padding-top: 7px;

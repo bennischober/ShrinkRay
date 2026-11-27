@@ -1,6 +1,7 @@
 """Job queue and API path validation tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from shrinkray import db
+from shrinkray.engine import pause
 from shrinkray.engine import search as engine_search
 from shrinkray.server import jobs
 
@@ -78,6 +80,34 @@ def _prediction(movie, **_kwargs):
         input_bit_depth=None,
         tool_versions=None,
     )
+
+
+class _FlakyCommitOnce:
+    """The #660 fault seam: the next gated commit raises once.
+
+    The proxy delegates everything else to the real connection, so the real
+    terminal-write ordering runs. The first commit raises before the real commit
+    can end the transaction, leaving the terminal UPDATE pending exactly like the
+    observed ``SystemError`` (issues #649/#681).
+    """
+
+    def __init__(self, real):
+        self._real = real
+        self._failed = False
+        self.statements: list[tuple[str, tuple]] = []
+
+    def execute(self, sql, *args, **kwargs):
+        self.statements.append((sql, args))
+        return self._real.execute(sql, *args, **kwargs)
+
+    def commit(self):
+        if not self._failed:
+            self._failed = True
+            raise RuntimeError("the db blinked")
+        return self._real.commit()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
 
 
 class TestJobs(unittest.TestCase):
@@ -179,6 +209,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Some Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -232,6 +263,167 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(row["chosen_crf"], 21)
         self.assertEqual(row["path"], str(movie))
 
+    def test_backlog_jobs_ask_the_witness(self):
+        """Issue #586: the boot backlog's plan and encode jobs must not
+        decide on a file that is not complete. A young file and a stalled
+        sparse download - both catalogued by the boot scan - are skipped
+        with the witness's reason, neither probed nor encoded, and stay
+        eligible: only the settled file reaches the engine."""
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        if sys.platform == "win32":
+            # the same guards the witness's own tests use
+            # (tests/test_file_stability.py, #586's review)
+            self.skipTest("Windows reports no st_blocks")
+        root = Path(self.tmp.name)
+        young = root / "young.mkv"
+        young.write_bytes(b"x" * 64)  # fresh mtime: the witness must hold it back
+        sparse = root / "sparse.mkv"
+        sparse.write_bytes(b"x" * 4096)
+        os.truncate(sparse, 4 * 1024 * 1024)
+        os.utime(sparse, (0, 0))
+        if sparse.stat().st_blocks * 512 >= sparse.stat().st_size:
+            self.skipTest("this filesystem does not create sparse files")
+        settled = root / "settled.mkv"
+        settled.write_bytes(b"x" * 64)
+        os.utime(settled, (0, 0))
+        for movie in (young, sparse, settled):
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=movie,
+                    mtime=movie.stat().st_mtime,
+                    size=movie.stat().st_size,
+                    name=movie.name,
+                    category="Cat",
+                ),
+            )
+        self.connection.commit()
+        paths = [str(young), str(sparse), str(settled)]
+
+        # the plan job: the engine sees only the settled file, no plan row
+        # is stored for the unsettled ones, and each skip carries the reason
+        fake_result = _NS(
+            input=settled,
+            output=settled,
+            success=True,
+            target_vmaf=95.0,
+            min_saving_percent=15,
+            chosen_crf=21,
+            achieved_vmaf=95.47,
+            probes=[],
+            input_size=64,
+            output_size=32,
+            saved_percent=50.0,
+            error=None,
+            skipped_reason=None,
+            encoder_preset="3",
+            probe_encoder_preset="5",
+            crop=None,
+            crf_range=engine_search.DEFAULT_CRF_RANGE,
+            sample_count=3,
+            sample_seconds=10.0,
+            crop_sample_count=10,
+            vmaf_statistic="mean",
+            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+            hdr=False,
+            encoder="svt_av1",
+            input_mtime=None,  # a duck-typed result without the #436 field
+        )
+        planned: list[str] = []
+        plan_job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": paths}))
+
+        def fake_plan_quality(movie, **kwargs):
+            planned.append(movie.name)
+            return fake_result
+
+        with (
+            _patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan_quality),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            # the young file reads as young by the frozen clock, not by
+            # wall-clock luck (the independent review's closing note): the
+            # same freeze the witness's own suite applies around a real
+            # mtime (tests/test_file_stability.py) - a loaded CI runner may
+            # sit between the fixture write and the job's stat() for more
+            # than STABLE_MIN_AGE
+            _patch(
+                "shrinkray.engine.watch.time.time",
+                return_value=young.stat().st_mtime + 5.0,
+            ),
+        ):
+            result = jobs.execute_plan(plan_job, self.connection, threading.Event())
+        by_movie = {entry["movie"]: entry for entry in result["plans"]}
+        self.assertEqual(planned, ["settled.mkv"], "an unsettled file was probed")
+        # "skip", not "skipped": the dashboard matches only "skip" for plan
+        # entries (#586's review) - anything else renders as the red failed
+        # chip on the Overview and reads as planned on the detail page
+        self.assertEqual(by_movie["young.mkv"]["state"], "skip")
+        self.assertIn("not complete:", by_movie["young.mkv"]["reason"])
+        self.assertIn("last write", by_movie["young.mkv"]["reason"])
+        self.assertEqual(by_movie["sparse.mkv"]["state"], "skip")
+        self.assertIn("appears incomplete", by_movie["sparse.mkv"]["reason"])
+        self.assertEqual(by_movie["settled.mkv"]["state"], "encode")
+        unsettled_rows = self.connection.execute(
+            "SELECT COUNT(*) FROM plans p JOIN files f ON f.id = p.file_id WHERE f.path IN (?, ?)",
+            (str(young), str(sparse)),
+        ).fetchone()[0]
+        self.assertEqual(unsettled_rows, 0, "a plan row was recorded for an unsettled file")
+
+        # the encode job: the same witness, ahead of any probe or encode
+        encoded: list[str] = []
+        encode_job = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.ENCODE, payload={"paths": paths, "quality": True})
+        )
+
+        def fake_encode_with_quality(movie, *_args, **_kwargs):
+            encoded.append(movie.name)
+            if movie.name != "settled.mkv":
+                raise AssertionError("the mocked engine must not run for an unsettled file")
+            from types import SimpleNamespace as _NS
+
+            return _NS(
+                success=False,
+                skipped_reason="too short",
+                input=movie,
+                output=movie,
+                input_size=movie.stat().st_size,
+                output_size=movie.stat().st_size // 2,
+                saved_percent=50.0,
+                crop=None,
+                hdr=False,
+                error=None,
+                chosen_crf=None,
+                achieved_vmaf=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=fake_encode_with_quality,
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            # the same frozen clock as the plan job above: the witness
+            # must still hold the young file back
+            _patch(
+                "shrinkray.engine.watch.time.time",
+                return_value=young.stat().st_mtime + 5.0,
+            ),
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=False, skipped=True),
+            ),
+        ):
+            result = jobs.execute_encode(encode_job, self.connection, threading.Event())
+        outcomes = {entry["movie"]: entry for entry in result["outcomes"]}
+        self.assertEqual(encoded, ["settled.mkv"], "an unsettled file was probed or encoded")
+        # the text rides "error" like every other skipped outcome of the
+        # encode loop, so the movie detail page's hover shows it
+        self.assertEqual(outcomes["young.mkv"]["state"], "skipped")
+        self.assertIn("not complete:", outcomes["young.mkv"]["error"])
+        self.assertEqual(outcomes["sparse.mkv"]["state"], "skipped")
+        self.assertIn("appears incomplete", outcomes["sparse.mkv"]["error"])
+
     def test_a_plan_job_records_the_per_file_stages(self):
         """Issue #602: a file's pipeline is its own job rows - the decision
         (the gates) and the CRF search - each with its own state and outcome,
@@ -241,6 +433,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Staged Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -283,6 +476,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Rejected Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -335,6 +529,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Plan Write_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -400,6 +595,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Broken Probe_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -529,6 +725,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Live Progress_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -559,12 +756,45 @@ class TestJobs(unittest.TestCase):
         folder_events: list[dict] = []
 
         def fake_search(decision, *args, **kwargs):
-            kwargs["progress"]({"stage": "probe", "percent": 10.0, "movie": decision.input.name})
+            kwargs["progress"](
+                {
+                    "v": 1,
+                    "stage": "crf-search",
+                    "file": {
+                        "movie": decision.input.name,
+                        "path": str(decision.input),
+                        "stage": "crf-search",
+                        "step": 4,
+                        "steps": 7,
+                    },
+                    "probe": {
+                        "index": 1,
+                        "count": 3,
+                        "crf": 30,
+                        "vmaf": 96.1,
+                        "predicted_bytes": None,
+                        "passed": True,
+                    },
+                }
+            )
             seen.update(bus.latest())
             return _prediction(movie)
 
         def fake_encode(movie, output, *args, **kwargs):
-            kwargs["progress"]({"stage": "encode", "percent": 42.5, "movie": movie.name})
+            kwargs["progress"](
+                {
+                    "v": 1,
+                    "stage": "encode",
+                    "file": {
+                        "movie": movie.name,
+                        "path": str(movie),
+                        "stage": "encode",
+                        "step": 5,
+                        "steps": 7,
+                    },
+                    "encode": {"percent": 42.5, "fps": 12.3, "avg_fps": 12.1, "eta_seconds": 60},
+                }
+            )
             # the seed cache drops a row's progress when it finishes, so the
             # event is captured while the encode is still running
             seen.update(bus.latest())
@@ -606,13 +836,22 @@ class TestJobs(unittest.TestCase):
         encode_row = next(row for row in rows if row["kind"] == "encode")
         # both stage rows receive the engine's events...
         self.assertIn(search_row["id"], seen)
-        self.assertEqual(seen[search_row["id"]]["percent"], 10.0)
+        self.assertEqual(seen[search_row["id"]]["probe"]["vmaf"], 96.1)
+        self.assertEqual(seen[search_row["id"]]["stage_job_id"], search_row["id"])
         self.assertIn(encode_row["id"], seen)
-        self.assertEqual(seen[encode_row["id"]]["percent"], 42.5)
-        # ...and the folder job keeps receiving them too
-        folder_percents = [event.get("percent") for event in folder_events]
-        self.assertIn(10.0, folder_percents)
+        self.assertEqual(seen[encode_row["id"]]["encode"]["percent"], 42.5)
+        self.assertEqual(seen[encode_row["id"]]["encode"]["fps"], 12.3)
+        self.assertEqual(seen[encode_row["id"]]["stage_job_id"], encode_row["id"])
+        # ...and the folder job keeps receiving them too, carrying the stage
+        # row's id so the browser model can follow one file (issue #631)
+        folder_percents = [event.get("encode", {}).get("percent") for event in folder_events]
         self.assertIn(42.5, folder_percents)
+        folder_probes = [event.get("probe") for event in folder_events]
+        self.assertTrue(any(p and p.get("vmaf") == 96.1 for p in folder_probes))
+        probe_events = [e for e in folder_events if e.get("probe")]
+        self.assertEqual(probe_events[0]["stage_job_id"], search_row["id"])
+        encode_events = [e for e in folder_events if e.get("encode")]
+        self.assertEqual(encode_events[0]["stage_job_id"], encode_row["id"])
 
     def test_the_plan_path_search_row_reports_the_live_progress(self):
         """Issue #639: the plan job's crf-search row shows the search's live
@@ -622,6 +861,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Plan Progress_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -639,7 +879,27 @@ class TestJobs(unittest.TestCase):
         seen: dict[int, dict] = {}
 
         def fake_search(decision, *args, **kwargs):
-            kwargs["progress"]({"stage": "probe", "percent": 33.0, "movie": decision.input.name})
+            kwargs["progress"](
+                {
+                    "v": 1,
+                    "stage": "crf-search",
+                    "file": {
+                        "movie": decision.input.name,
+                        "path": str(decision.input),
+                        "stage": "crf-search",
+                        "step": 4,
+                        "steps": 7,
+                    },
+                    "probe": {
+                        "index": 1,
+                        "count": 3,
+                        "crf": 30,
+                        "vmaf": 96.1,
+                        "predicted_bytes": None,
+                        "passed": True,
+                    },
+                }
+            )
             seen.update(bus.latest())
             return _prediction(movie)
 
@@ -658,7 +918,8 @@ class TestJobs(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertIn(row["id"], seen)
-        self.assertEqual(seen[row["id"]]["percent"], 33.0)
+        self.assertEqual(seen[row["id"]]["probe"]["vmaf"], 96.1)
+        self.assertEqual(seen[row["id"]]["stage_job_id"], row["id"])
 
     def test_a_stored_plan_skips_the_queue_path_search(self):
         """Issue #602: a valid stored plan means the search already ran for
@@ -670,6 +931,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Reused Plan_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -727,6 +989,7 @@ class TestJobs(unittest.TestCase):
             [("decision", "done"), ("crf-search", "done"), ("encode", "done")],
         )
         self.assertIn('"source": "plan"', rows[1]["result"])
+        self.assertIn('"measured_at"', rows[1]["result"])
 
     def test_a_cancel_during_the_encode_marks_its_stage_row_cancelled(self):
         """Issue #602 review: the encode stage row must read cancelled on a
@@ -738,6 +1001,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Cancelled Encode_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -786,6 +1050,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Three Stages_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -844,6 +1109,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Preset Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -936,6 +1202,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Some Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)  # content irrelevant; resolution is mocked
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         job = self.queue.enqueue(
             jobs.Job(
                 kind=jobs.JobKind.ENCODE,
@@ -989,6 +1256,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Probe Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -1141,6 +1409,52 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(reloaded.state, jobs.JobState.DONE)
         self.assertEqual(reloaded.result, {"plans": []})
 
+    def test_queued_jobs_reads_queued_and_running_rows_from_the_database(self):
+        """`queued_jobs()` is the read the #626 boot dedupe keys on: it must
+        return the queued rows AND the taken (running) row, with kind and
+        payload read back from the database rather than the pending list."""
+        scan = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={"paths": ["/media/a"]}))
+        plan = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["/media/a"], "quality": True})
+        )
+        taken = self.queue.take_next()
+        self.assertEqual(taken.id, scan.id)
+        pending = self.queue.queued_jobs()
+        self.assertEqual(
+            [(job.id, job.kind, job.state) for job in pending],
+            [
+                (scan.id, jobs.JobKind.SCAN, jobs.JobState.RUNNING),
+                (plan.id, jobs.JobKind.PLAN, jobs.JobState.QUEUED),
+            ],
+        )
+        self.assertEqual(pending[0].payload, {"paths": ["/media/a"]})
+        self.assertEqual(pending[1].payload, {"paths": ["/media/a"], "quality": True})
+
+    def test_queued_jobs_lists_a_stage_row_as_running(self):
+        """A per-file stage row is written RUNNING directly (issue #602), so
+        the boot dedupe's read must see it as pending work."""
+        stage = self.queue.stage(jobs.JobKind.CRF_SEARCH, {"input": "/media/a.mkv"})
+        pending = self.queue.queued_jobs()
+        self.assertEqual(
+            [(job.id, job.kind, job.state) for job in pending],
+            [(stage.id, jobs.JobKind.CRF_SEARCH, jobs.JobState.RUNNING)],
+        )
+        self.assertEqual(pending[0].payload, {"input": "/media/a.mkv"})
+
+    def test_queued_jobs_excludes_cancelled_and_finished_rows(self):
+        """Only queued and running rows are pending; a cancelled or finished
+        row is history and must not make the boot dedupe keep a stale
+        backlog."""
+        cancelled = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        self.queue.cancel(cancelled.id)
+        finished = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={}))
+        taken = self.queue.take_next()
+        self.queue.finish(taken, {"plans": []})
+        # both rows are still in the database; only their state excludes them
+        self.assertEqual(self.queue.get(cancelled.id).state, jobs.JobState.CANCELLED)
+        self.assertEqual(self.queue.get(finished.id).state, jobs.JobState.DONE)
+        self.assertEqual(self.queue.queued_jobs(), [])
+
     def test_fail_stores_error(self):
         self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
         taken = self.queue.take_next()
@@ -1176,10 +1490,24 @@ class TestJobs(unittest.TestCase):
         q = jobs.JobQueue(self.connection, bus=bus)
         q.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
         taken = q.take_next()
-        q.report_progress(taken, {"percent": 10})
-        q.report_progress(taken, {"percent": 20})  # replaces, not accumulates
+        q.report_progress(taken, {"run": {"done": 2, "total": 7}})
+        q.report_progress(taken, {"stage": "encode", "encode": {"percent": 20}})
         sid, _box, seed = bus.subscribe()  # late subscriber
-        self.assertEqual(seed, [(taken.id, {"percent": 20})])
+        # the hello seed is the MERGED latest state: the percent tick did not
+        # erase the folder counter (issue #631)
+        self.assertEqual(
+            seed,
+            [
+                (
+                    taken.id,
+                    {
+                        "run": {"done": 2, "total": 7},
+                        "stage": "encode",
+                        "encode": {"percent": 20},
+                    },
+                )
+            ],
+        )
         # terminal write drops the job from the seed cache
         q.finish(taken, {"movies": 1})
         self.assertEqual(bus.latest(), {})
@@ -1249,6 +1577,186 @@ class TestJobs(unittest.TestCase):
         self.assertTrue(self.queue.cancel(taken.id))
         self.assertTrue(event.is_set())
         self.queue.unregister_cancel_event(taken.id)
+
+    def test_a_cancel_request_cancels_a_queued_job_from_the_poller_thread(self):
+        """Issue #621: the poller thread reads the terminal UI's request file,
+        cancels the queued row and removes the file once the row is terminal."""
+        state = Path(self.tmp.name)
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        request = pause.write_cancel_request(state, job.id)
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        worker._start_cancel_poller()
+        try:
+            self.assertTrue(worker._cancel_poll_done.wait(5.0), "the poller never ran")
+            self.assertEqual(self.queue.get(job.id).state, jobs.JobState.CANCELLED)
+            # accepted requests stay for the next poll, which sees the terminal row
+            self.assertTrue(request.exists())
+            worker._poll_cancel_requests()
+            self.assertFalse(request.exists())
+        finally:
+            worker.stop()
+
+    def test_a_running_cancel_marks_the_job_cancelled_with_its_partial_result(self):
+        """Issue #621: a request accepted on a running job sets the engine's
+        cancel event; the worker writes the engine's partial result on the row."""
+        state = Path(self.tmp.name)
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        started = threading.Event()
+
+        def fake_scan(job, connection, cancel, progress=None):
+            started.set()
+            self.assertTrue(cancel.wait(5.0), "the cancel event was never set")
+            return {"cancelled": True, "movies": 0}
+
+        with mock.patch.object(jobs, "execute_scan", side_effect=fake_scan):
+            runner = threading.Thread(target=worker._execute, args=(taken,))
+            runner.start()
+            self.assertTrue(started.wait(5.0), "the job never started")
+            request = pause.write_cancel_request(state, taken.id)
+            worker._poll_cancel_requests()
+            runner.join(timeout=10.0)
+        self.assertFalse(runner.is_alive())
+        reloaded = self.queue.get(taken.id)
+        self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+        self.assertEqual(reloaded.result, {"cancelled": True, "movies": 0})
+        self.assertTrue(request.exists(), "the request stays until the next poll")
+        worker._poll_cancel_requests()
+        self.assertFalse(request.exists())
+
+    def test_a_take_window_request_is_retained_until_the_job_is_cancellable(self):
+        """Issue #621: Queue.cancel returns False in the take window; the
+        request must stay on disk and apply when the job is cancellable."""
+        state = Path(self.tmp.name)
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        request = pause.write_cancel_request(state, job.id)
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        # the take window: the in-memory job is RUNNING while the row is QUEUED
+        job.state = jobs.JobState.RUNNING
+        worker._poll_cancel_requests()
+        self.assertTrue(request.exists(), "a take-window request must be retained")
+        self.assertEqual(self.queue.get(job.id).state, jobs.JobState.QUEUED)
+        job.state = jobs.JobState.QUEUED
+        worker._poll_cancel_requests()
+        self.assertEqual(self.queue.get(job.id).state, jobs.JobState.CANCELLED)
+        self.assertTrue(request.exists(), "the accepted request stays for the next poll")
+        worker._poll_cancel_requests()
+        self.assertFalse(request.exists())
+
+    def test_a_request_accepted_on_a_running_job_stays_during_the_unwind(self):
+        """Issue #621: a kill during the unwind must not lose the operator's
+        intent - the request stays while the row is still RUNNING."""
+        state = Path(self.tmp.name)
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        event = threading.Event()
+        self.queue.register_cancel_event(taken.id, event)
+        try:
+            worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+            request = pause.write_cancel_request(state, taken.id)
+            worker._poll_cancel_requests()
+            self.assertTrue(event.is_set())
+            self.assertEqual(self.queue.get(taken.id).state, jobs.JobState.RUNNING)
+            self.assertTrue(request.exists(), "the request was lost during the unwind")
+        finally:
+            self.queue.unregister_cancel_event(taken.id)
+
+    def test_stale_cancel_requests_are_ignored_or_removed(self):
+        """Issue #621: a non-integer filename is ignored without raising; a
+        request for a finished job is removed."""
+        state = Path(self.tmp.name)
+        finished = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        self.queue.finish(taken, {"plans": []})
+        folder = state / pause.CANCEL_REQUESTS
+        request = pause.write_cancel_request(state, finished.id)
+        stray = folder / "not-an-id"
+        stray.write_text("junk")
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        worker._poll_cancel_requests()
+        self.assertFalse(request.exists())
+        self.assertTrue(stray.exists(), "an invalid filename is ignored, not removed")
+
+    def test_the_poller_survives_a_commit_failure_and_keeps_consuming(self):
+        """Issue #621: a dead poller silently ends the cancel surface, so one
+        failed request is logged and the next request is still consumed."""
+        state = Path(self.tmp.name)
+        first = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        second = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        pause.write_cancel_request(state, first.id)
+        pause.write_cancel_request(state, second.id)
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+
+        class _FlakyCommit:
+            def __init__(self, real):
+                self._real = real
+                self._failed = False
+
+            def execute(self, *args, **kwargs):
+                return self._real.execute(*args, **kwargs)
+
+            def commit(self):
+                if not self._failed:
+                    self._failed = True
+                    raise RuntimeError("the db blinked")
+                return self._real.commit()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        with (
+            mock.patch.object(self.queue, "_connection", _FlakyCommit(self.queue._connection)),
+            mock.patch.object(jobs, "log_error") as log_error,
+        ):
+            worker._start_cancel_poller()
+            try:
+                self.assertTrue(worker._cancel_poll_done.wait(5.0), "the poller never ran")
+            finally:
+                worker.stop()
+        self.assertEqual(self.queue.get(first.id).state, jobs.JobState.QUEUED)
+        self.assertEqual(self.queue.get(second.id).state, jobs.JobState.CANCELLED)
+        self.assertTrue(log_error.called, "the failed request was not logged")
+        self.assertIsNotNone(worker._cancel_thread)
+        self.assertFalse(worker._cancel_thread.is_alive())
+
+    def test_stop_joins_the_cancel_poller_before_the_database_closes(self):
+        """Issue #621: the poller is joined before the caller closes the
+        database, so a late cancel write cannot race the close."""
+        from shrinkray.server import app as app_module
+
+        root = Path(self.tmp.name)
+        real_connection = db.connect(root / "metadata.db")
+        probe: dict = {}
+
+        class _CloseProbe:
+            def __init__(self, real):
+                self._real = real
+
+            def close(self):
+                probe["poller_alive"] = (
+                    state.worker._cancel_thread.is_alive()
+                    if state.worker._cancel_thread is not None
+                    else None
+                )
+                self._real.close()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        proxy = _CloseProbe(real_connection)
+        with mock.patch.object(app_module.db, "connect", return_value=proxy):
+            state = app_module.AppState(root / "metadata.db")
+        # the worker must not take the seeded job: the poller is the subject
+        state.queue.take_next = mock.Mock(return_value=None)
+        job = state.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        pause.write_cancel_request(root, job.id)
+        state.worker.start()
+        self.assertTrue(state.worker._cancel_poll_done.wait(5.0), "the poller never ran")
+        state.shutdown()
+        self.assertIsNotNone(state.worker._cancel_thread)
+        self.assertFalse(state.worker._cancel_thread.is_alive())
+        self.assertIs(probe.get("poller_alive"), False, "the poller was alive at the close")
 
     def test_worker_executes_job(self):
         payload = {"path": str(Path(self.tmp.name) / "movies")}
@@ -1525,6 +2033,138 @@ class TestJobs(unittest.TestCase):
         self.assertIsNotNone(second, "the job was stranded by the failed commit")
         self.assertEqual(second.id, job.id)
 
+    def test_a_failed_finish_commit_keeps_the_finished_job_retryable(self):
+        """Issue #681: a finished encode's row is bookkeeping, the artifact is
+        the truth. The worker's finish commit runs BEFORE the in-memory DONE; a
+        failed commit rolls back, restores RUNNING (still re-transitionable) and
+        propagates, and is never re-recorded as a job failure."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={"quality": True}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue)
+        result = {"outcomes": [{"movie": "a.mkv", "state": "encoded"}]}
+        flaky = _FlakyCommitOnce(self.connection)
+        with (
+            mock.patch.object(jobs, "execute_encode", return_value=result),
+            mock.patch.object(self.queue, "_connection", flaky),
+            self.assertRaises(RuntimeError),
+        ):
+            worker._execute(taken)
+        # the DONE UPDATE ran; the commit after it is what failed
+        updates = [(sql, args) for sql, args in flaky.statements if "UPDATE jobs SET state" in sql]
+        self.assertTrue(updates, "finish never ran its terminal UPDATE")
+        self.assertEqual(updates[0][1][0][0], jobs.JobState.DONE.value)
+        # the rollback ended the transaction: the DONE UPDATE cannot linger
+        self.assertFalse(self.connection.in_transaction)
+        # the in-memory state is the pre-transition RUNNING, not DONE
+        self.assertEqual(taken.state, jobs.JobState.RUNNING)
+        self.assertIsNone(taken.result)
+        # the row stayed retryable, not FAILED-with-NULL-result
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.RUNNING)
+        self.assertIsNone(row.result)
+        # the same job can be transitioned again with the fault removed
+        self.queue.finish(taken, result)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.DONE)
+        self.assertEqual(row.result, result)
+        self.assertEqual(taken.state, jobs.JobState.DONE)
+        self.assertEqual(taken.result, result)
+
+    def test_a_failed_fail_commit_keeps_the_failed_job_retryable(self):
+        """Issue #681: a failed job's error text is written only after the
+        commit. A failed commit rolls back and restores the pre-transition
+        RUNNING state, and the error propagates; the row is retryable."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        flaky = _FlakyCommitOnce(self.connection)
+        with (
+            mock.patch.object(self.queue, "_connection", flaky),
+            self.assertRaises(RuntimeError),
+        ):
+            self.queue.fail(taken, "RuntimeError: engine exploded")
+        updates = [(sql, args) for sql, args in flaky.statements if "UPDATE jobs SET state" in sql]
+        self.assertTrue(updates, "fail never ran its terminal UPDATE")
+        self.assertEqual(updates[0][1][0][0], jobs.JobState.FAILED.value)
+        self.assertFalse(self.connection.in_transaction)
+        self.assertEqual(taken.state, jobs.JobState.RUNNING)
+        self.assertIsNone(taken.error)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.RUNNING)
+        self.assertIsNone(row.error)
+        # the same job can be transitioned again with the fault removed
+        self.queue.fail(taken, "RuntimeError: engine exploded")
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.FAILED)
+        self.assertEqual(row.error, "RuntimeError: engine exploded")
+        self.assertIsNone(row.result)
+        self.assertEqual(taken.state, jobs.JobState.FAILED)
+        self.assertEqual(taken.error, "RuntimeError: engine exploded")
+
+    def test_a_failed_cancel_commit_keeps_the_cancelled_job_retryable(self):
+        """Issue #681: a cancel's partial result is written only after the
+        commit. A failed commit rolls back and restores RUNNING; the retried
+        write stores the cancellation, never a row stuck RUNNING."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.ENCODE, payload={}))
+        taken = self.queue.take_next()
+        partial = {"outcomes": [{"movie": "a.mkv", "state": "encoded"}]}
+        flaky = _FlakyCommitOnce(self.connection)
+        with (
+            mock.patch.object(self.queue, "_connection", flaky),
+            self.assertRaises(RuntimeError),
+        ):
+            self.queue.mark_cancelled(taken, partial)
+        updates = [(sql, args) for sql, args in flaky.statements if "UPDATE jobs SET state" in sql]
+        self.assertTrue(updates, "mark_cancelled never ran its terminal UPDATE")
+        self.assertEqual(updates[0][1][0][0], jobs.JobState.CANCELLED.value)
+        self.assertFalse(self.connection.in_transaction)
+        self.assertEqual(taken.state, jobs.JobState.RUNNING)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.RUNNING)
+        self.assertIsNone(row.result)
+        # the same job can be transitioned again with the fault removed
+        self.queue.mark_cancelled(taken, partial)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.CANCELLED)
+        self.assertEqual(row.result, partial)
+        self.assertEqual(taken.state, jobs.JobState.CANCELLED)
+
+    def test_a_failed_interrupted_commit_keeps_the_interrupted_job_retryable(self):
+        """Issue #681: the shutdown's interrupted write merges its resume
+        ledger only after the commit. A failed commit rolls back, restores the
+        pre-transition RUNNING state, and leaves the row's ledger intact; the
+        retried write merges the partial result."""
+        self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        self.connection.execute(
+            "UPDATE jobs SET result = ? WHERE id = ?",
+            ('{"resume_count": 2}', taken.id),
+        )
+        self.connection.commit()
+        flaky = _FlakyCommitOnce(self.connection)
+        with (
+            mock.patch.object(self.queue, "_connection", flaky),
+            self.assertRaises(RuntimeError),
+        ):
+            self.queue.mark_interrupted(taken, {"movies": 3})
+        updates = [(sql, args) for sql, args in flaky.statements if "UPDATE jobs SET state" in sql]
+        self.assertTrue(updates, "mark_interrupted never ran its terminal UPDATE")
+        self.assertEqual(updates[0][1][0][0], jobs.JobState.INTERRUPTED.value)
+        self.assertFalse(self.connection.in_transaction)
+        self.assertEqual(taken.state, jobs.JobState.RUNNING)
+        self.assertIsNone(taken.result)
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.RUNNING)
+        self.assertEqual(row.result, {"resume_count": 2})
+        # the same job can be transitioned again with the fault removed
+        self.queue.mark_interrupted(taken, {"movies": 3})
+        row = self.queue.get(taken.id)
+        self.assertEqual(row.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(row.result["resume_count"], 2)
+        self.assertEqual(row.result["movies"], 3)
+        self.assertEqual(row.result["interrupted_reason"], "app shutdown")
+        self.assertEqual(taken.state, jobs.JobState.INTERRUPTED)
+        self.assertEqual(taken.result, row.result)
+
     def test_a_start_after_a_graceful_stop_actually_runs(self):
         """Issue #660 round 14, finding 4: start() clears _stop, so a worker
         restarted after a graceful stop() runs instead of exiting at once
@@ -1606,7 +2246,9 @@ class TestJobs(unittest.TestCase):
         """Issue #431 (review round 2, finding 1): the measurement children run
         with the stall watchdog opted out, so a shutdown must set the running
         job's cancel event - the only kill path they have. stop() sets it
-        while the job is executing, and _execute clears it in its finally."""
+        while the job is executing, and _execute clears it in its finally.
+        Issue #622: the stop is a shutdown, not an operator cancel, so the row
+        reads interrupted and the next boot can resume it."""
         root = Path(self.tmp.name)
         job = self.queue.enqueue(
             jobs.Job(
@@ -1666,13 +2308,14 @@ class TestJobs(unittest.TestCase):
         )
         self.assertIsNone(worker._running_cancel, "the finally must clear the running event")
         reloaded = self.queue.get(job.id)
-        self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+        self.assertEqual(reloaded.state, jobs.JobState.INTERRUPTED)
 
     def test_worker_request_stop_is_non_blocking_and_reaches_the_child(self):
         """Issue #431 (review round 6, finding 2): the server's exit hook runs
         inside a signal handler, so it must arm the shutdown without joining -
         request_stop sets the flags and returns; the worker ends itself and the
-        running job's child terminates on its cancel event."""
+        running job's child terminates on its cancel event. The row reads
+        interrupted (issue #622), not cancelled."""
         root = Path(self.tmp.name)
         job = self.queue.enqueue(
             jobs.Job(
@@ -1715,7 +2358,101 @@ class TestJobs(unittest.TestCase):
         self.assertFalse(worker._thread.is_alive(), "the worker did not end itself")
         self.assertIsNone(worker._running_cancel, "the finally must clear the running event")
         reloaded = self.queue.get(job.id)
+        self.assertEqual(reloaded.state, jobs.JobState.INTERRUPTED)
+
+    def test_an_operator_cancel_whose_unwind_outlives_a_shutdown_stays_cancelled(self):
+        """Issue #622: the operator mark is read BEFORE the shutdown flag. A
+        cancel request accepted on the running job, then a shutdown while the
+        engine still unwinds, is still the operator's cancel - never an
+        interruption that the next boot would resume."""
+        from shrinkray.tools.process import Cancelled
+
+        state = Path(self.tmp.name)
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue, state_dir=state)
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_scan(job, connection, cancel, progress=None):
+            started.set()
+            self.assertTrue(cancel.wait(5.0), "the cancel event was never set")
+            release.wait(5.0)
+            raise Cancelled("operator cancel, then shutdown")
+
+        with mock.patch.object(jobs, "execute_scan", side_effect=slow_scan):
+            runner = threading.Thread(target=worker._execute, args=(taken,))
+            runner.start()
+            self.assertTrue(started.wait(5.0), "the job never started")
+            pause.write_cancel_request(state, taken.id)
+            worker._poll_cancel_requests()
+            # the operator cancel is accepted while the unwind is still
+            # running; the shutdown then lands before the engine raises
+            worker.request_stop()
+            release.set()
+            runner.join(timeout=10.0)
+        self.assertFalse(runner.is_alive())
+        reloaded = self.queue.get(job.id)
         self.assertEqual(reloaded.state, jobs.JobState.CANCELLED)
+
+    def test_the_end_line_says_interrupted_for_a_shutdown_cancelled_job(self):
+        """Issue #622: docker logs must tell a shutdown from an operator
+        cancel, so the end line names the interruption."""
+        from loguru import logger
+
+        from shrinkray.tools.process import Cancelled
+
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue)
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            worker._stop.set()  # the flag worker.stop()/request_stop() sets
+            with mock.patch.object(jobs, "execute_scan", side_effect=Cancelled("stop")):
+                worker._execute(taken)
+        finally:
+            logger.remove(sink_id)
+            worker._stop.clear()
+        text = "".join(captured)
+        self.assertIn(f"Job #{job.id} (scan) interrupted in", text, text)
+        self.assertNotIn("finished", text, text)
+        self.assertNotIn("cancelled", text, text)
+        self.assertEqual(self.queue.get(job.id).state, jobs.JobState.INTERRUPTED)
+
+    def test_the_end_line_says_interrupted_with_a_partial_result_and_no_cancelled_item(self):
+        """Issue #622 review: a shutdown-interrupted scan's partial result has
+        counts but no cancelled item; the end line must still name the
+        interruption instead of reading like a normal completion."""
+        from loguru import logger
+
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload={}))
+        taken = self.queue.take_next()
+        worker = jobs.JobWorker(self.connection, self.queue)
+        captured: list[str] = []
+        sink_id = logger.add(lambda message: captured.append(str(message)), level="INFO")
+        try:
+            worker._stop.set()  # the flag worker.stop()/request_stop() sets
+            with mock.patch.object(
+                jobs,
+                "execute_scan",
+                return_value={
+                    "movies": 3,
+                    "categories": 1,
+                    "errors": [],
+                    "cancelled": True,
+                },
+            ):
+                worker._execute(taken)
+        finally:
+            logger.remove(sink_id)
+            worker._stop.clear()
+        text = "".join(captured)
+        self.assertIn(f"Job #{job.id} (scan) interrupted in", text, text)
+        self.assertIn("3 scanned, 0 errors", text, text)
+        self.assertNotIn("finished", text, text)
+        self.assertNotIn("cancelled", text, text)
+        self.assertEqual(self.queue.get(job.id).state, jobs.JobState.INTERRUPTED)
 
     def test_next_poll_interval_helper_exists(self):
         # guard the cross-module dependency used by watch mode
@@ -1939,6 +2676,7 @@ class TestTranscriptBoundaries(unittest.TestCase):
 
         movie = Path(self.tmp.name) / "movie.mkv"
         movie.write_bytes(b"x" * 64)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
         worker = jobs.JobWorker(self.connection, self.queue)
         captured: list[str] = []
@@ -1991,6 +2729,20 @@ class TestTranscriptBoundaries(unittest.TestCase):
         self.assertEqual(
             counts({"movies": 3, "errors": ["a", "b"]}),
             "3 scanned, 2 errors",
+        )
+        # issue #622: a shutdown-cancelled job's cancelled items read
+        # interrupted, so docker logs tell the two outcomes apart
+        self.assertEqual(
+            counts(
+                {
+                    "outcomes": [
+                        {"state": "encoded"},
+                        {"state": "cancelled"},
+                    ]
+                },
+                interrupted=True,
+            ),
+            "1 encoded, 0 skipped, 0 failed, 1 interrupted",
         )
 
 

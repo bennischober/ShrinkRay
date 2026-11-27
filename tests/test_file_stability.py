@@ -23,7 +23,7 @@ import unittest
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 
 from shrinkray.engine import watch
 
@@ -82,6 +82,20 @@ class TestCheckStability(unittest.TestCase):
         self.assertEqual(verdict.young_for, 55.0)
         self.assertIsNone(verdict.incomplete)
         self.sleep.assert_not_called()
+
+    def test_the_young_reason_never_shows_a_negative_or_rounded_up_age(self) -> None:
+        """The reason is the only operator-facing explanation for a file
+        plan refused to decide, so it must survive clock skew and rounding:
+        a file whose mtime is ahead of the host clock (written over SMB by a
+        fast clock, or restored by `rsync -t` from one) clamps at 0 instead
+        of reading "only -3600 s ago", and an age the threshold away never
+        rounds up to the 60 s the sentence itself says it needs."""
+        skewed = watch.Stability(young_for=4200.0, incomplete=None)
+        self.assertIn("last write only 0 s ago", skewed.not_settled_reason)
+        self.assertIn("(needs 60 s of quiet)", skewed.not_settled_reason)
+        nearly = watch.Stability(young_for=0.4, incomplete=None)
+        self.assertIn("last write only 59 s ago", nearly.not_settled_reason)
+        self.assertIn("(needs 60 s of quiet)", nearly.not_settled_reason)
 
     def test_an_old_sparse_file_is_incomplete_with_a_reason(self) -> None:
         """A stalled sparse download: full size from the start, 41 % filled.
@@ -354,8 +368,15 @@ class TestCliCallsTheSeam(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.movie = self.root / "movie.mkv"
         self.movie.write_bytes(b"x" * 16)
+        # the ambient constants are pinned like the sibling classes' are (the
+        # env-derived values are re-read on every reload of engine.watch, and
+        # this class runs the REAL witness): the test's verdict must never
+        # depend on state a reload or an export left behind (issue #694)
+        self.stack = ExitStack()
+        self.stack.enter_context(patch.object(watch, "STABLE_MIN_AGE", 60.0))
 
     def tearDown(self) -> None:
+        self.stack.close()
         self.tmp.cleanup()
 
     def test_a_rejected_file_is_skipped_with_the_reason(self) -> None:
@@ -388,8 +409,20 @@ class TestCliCallsTheSeam(unittest.TestCase):
 
         old = time.time() - 3600
         os.utime(self.movie, (old, old))
+        # the whole test rests on the backdate having landed on the file the
+        # CLI will judge: assert it instead of assuming it (issue #694)
+        self.assertAlmostEqual(os.stat(self.movie).st_mtime, old, places=6)
+        # the sleep seam is scoped to the seam under test: watch's own `time`
+        # reference is replaced, so only a sleep the WAIT itself issues lands
+        # on the mock. A process-global patch (patching time.sleep through
+        # watch.time IS the global time module) would also record an unrelated
+        # thread's sleep during the invoke window - the recorded 14 x 0.05
+        # signature of #694 - a failure channel this test does not own. The
+        # assertion stays strict: one sleep through the seam still fails it.
+        sleep = Mock()
+        clock = SimpleNamespace(time=time.time, monotonic=time.monotonic, sleep=sleep)
         with (
-            patch("shrinkray.engine.watch.time.sleep") as sleep,
+            patch.object(watch, "time", clock),
             patch("shrinkray.service.all_problems", return_value=[]),
             patch("shrinkray.engine.pipeline.encode_with_quality") as engine,
         ):

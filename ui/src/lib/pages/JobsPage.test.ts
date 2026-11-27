@@ -4,14 +4,36 @@ import JobsPage from './JobsPage.svelte'
 
 // the running row's stage comes from the live progress store: a mutable stub
 // lets one test seed it without a stream (issue #630)
-let progressStub: { percent?: number; movie?: string | null; detail?: string | null; done?: number; total?: number | null; elapsed?: number } | null = null
-vi.mock('../progress.svelte', () => ({ progressFor: () => progressStub }))
-import type { Job } from '../api'
+let progressStub: Record<string, unknown> | null = null
+vi.mock('../progress.svelte', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../progress.svelte')>()
+  return {
+    ...actual,
+    fileProgressFor: () => progressStub,
+    progressEta: (view: { etaSeconds?: number | null } | null) => view?.etaSeconds ?? null,
+  }
+})
+import type { Job, Movie } from '../api'
 
 /** The jobs page is the audit trail — the render test pins the contract a
  * reader depends on: the legend count, the absence of steering controls, the
  * expandable detail with payload JSON, and the PARTIAL state for a done job
  * with failed outcomes. Callbacks are spies; assertions are on the DOM. */
+
+function movie(path: string): Movie {
+  return {
+    path,
+    name: (path.split('/').pop() ?? path).replace(/\.[^.]+$/, ''),
+    category: 'Filme',
+    duration: null,
+    codec: null,
+    resolution: null,
+    size: 1_000_000_000,
+    reclaimed_bytes: 0,
+    hdr: false,
+    encode: null,
+  }
+}
 
 function job(overrides: Partial<Job> = {}): Job {
   return {
@@ -71,6 +93,19 @@ describe('JobsPage render', () => {
     expect(screen.getByText(/still starting/)).toBeTruthy()
   })
 
+  it('an interrupted job says so in amber, and its filter exists (issue #622)', () => {
+    const { container } = render(JobsPage, {
+      history: [job({ state: 'interrupted', error: null })],
+      onopenMovie: () => {},
+    })
+    const stateSpan = container.querySelector('.state')!
+    expect(stateSpan.textContent).toContain('Interrupted')
+    // DESIGN.md's glossary: interrupted is amber, a half dot
+    expect(stateSpan.querySelector('.badge.work')).toBeTruthy()
+    const option = container.querySelector<HTMLOptionElement>('option[value="interrupted"]')!
+    expect(option.textContent).toBe('Interrupted')
+  })
+
   it('expands a row to show what the job did, not its raw payload (issue #632)', async () => {
     const movie = 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv'
     const j = job({
@@ -115,13 +150,21 @@ describe('JobsPage render', () => {
     // so the column carries the proportional estimate
     const started = new Date(Date.now() - 30 * 60_000).toISOString()
     const j = job({ state: 'running', started_at: started, finished_at: null })
-    progressStub = { percent: 25 }
+    progressStub = {
+      stage: 'encode',
+      movie: 'a.mkv',
+      path: '/m/a.mkv',
+      step: 5,
+      steps: 7,
+      encode: { percent: 25, fps: null, avg_fps: null, eta_seconds: null },
+      etaSeconds: 90 * 60,
+    }
     const { container } = render(JobsPage, {
       history: [j],
       onopenMovie: () => {},
     })
     const dur = container.querySelector('.dur')!
-    expect(dur.textContent).toContain('~1 h 30 min')
+    expect(dur.textContent).toContain('about 1 h 30 min left')
     expect(dur.textContent?.trim()).not.toBe('…')
     progressStub = null
   })
@@ -136,7 +179,7 @@ describe('JobsPage render', () => {
         plans: [
           {
             movie: 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv',
-            state: 'skipped',
+            state: 'skip',
             reason: 'already efficient',
             estimated_size: 5_000_000_000,
           },
@@ -152,6 +195,45 @@ describe('JobsPage render', () => {
     const detail = container.querySelector('.detail')!
     expect(detail.textContent).toContain('already efficient')
     expect(detail.textContent).toContain('4.66 GiB')
+  })
+
+  it('a plan row states what the plan found, not a bare DONE (issue #685)', () => {
+    const j = job({
+      kind: 'plan',
+      payload: { paths: ['/media'] },
+      result: {
+        plans: [
+          { movie: '/m/a', state: 'encode', crf: 30, estimated_size: 1_000_000_000, saved_percent: 40 },
+          { movie: '/m/b', state: 'encode', crf: 28, estimated_size: 2_000_000_000, saved_percent: 20 },
+          { movie: '/m/c', state: 'skip', reason: 'already efficient' },
+        ],
+      },
+    })
+    const { container } = render(JobsPage, { history: [j], onopenMovie: () => {} })
+    const note = container.querySelector('.note')!
+    expect(note.textContent?.trim()).toBe('2 would encode · 1 already efficient')
+    const state = container.querySelector('.state')!
+    expect(state.textContent).toContain('Done')
+    expect(state.textContent).not.toContain('Partial')
+  })
+
+  it('a plan with a failed entry is PARTIAL, with the failure named (issue #685)', () => {
+    const j = job({
+      kind: 'plan',
+      payload: { paths: ['/media'] },
+      result: {
+        plans: [
+          { movie: '/m/a', state: 'encode' },
+          { movie: '/m/b', state: 'error', error: 'boom' },
+        ],
+      },
+    })
+    const { container } = render(JobsPage, { history: [j], onopenMovie: () => {} })
+    const state = container.querySelector('.state')!
+    expect(state.textContent).toContain('Partial')
+    const note = container.querySelector('.error')!
+    expect(note.textContent).toContain('1 of 2 failed')
+    expect(note.textContent).toContain('/m/b')
   })
 
   it('a scan row lists the paths it could not read (issue #632 review)', async () => {
@@ -179,24 +261,117 @@ describe('JobsPage render', () => {
     // estimate from the samples already probed
     const started = new Date(Date.now() - 20 * 60_000).toISOString()
     const j = job({ kind: 'crf-search', state: 'running', started_at: started, finished_at: null })
-    progressStub = { done: 1, total: 3, detail: 'sample 2/3 (CRF 30)', elapsed: 20 * 60 }
+    progressStub = {
+      stage: 'crf-search',
+      movie: 'a.mkv',
+      path: '/m/a.mkv',
+      step: 4,
+      steps: 7,
+      probe: { index: 1, count: 3, crf: 30, vmaf: 95.0, predicted_bytes: null, passed: false },
+      probes: [],
+      etaSeconds: 40 * 60,
+    }
     const { container } = render(JobsPage, {
       history: [j],
       onopenMovie: () => {},
     })
     // 20 min for 1 of 3 samples implies 40 min left
-    expect(container.querySelector('.dur')!.textContent).toContain('~40 min')
+    expect(container.querySelector('.dur')!.textContent).toContain('about 40 min left')
     progressStub = null
   })
 
   it('single-movie jobs link to the detail page', () => {
-    const j = job({ payload: { paths: ['/m/a'] } })
+    const path = '/media/Filme/Titel 0 (2000).mkv'
+    const opened: string[] = []
+    const j = job({ payload: { paths: [path] } })
     const { container } = render(JobsPage, {
       history: [j],
+      movies: [movie(path)],
+      onopenMovie: (p) => opened.push(p),
+    })
+    const link = container.querySelector<HTMLButtonElement>('.file button.movie-link')
+    expect(link).toBeTruthy()
+    fireEvent.click(link!)
+    expect(opened).toEqual([path])
+  })
+
+  it('a running per-movie stage row links to the title it names (issue #703)', () => {
+    const path = '/media/Filme/Titel 0 (2000).mkv'
+    progressStub = {
+      stage: 'crf-search',
+      movie: 'Titel 0 (2000)',
+      path,
+      step: 4,
+      steps: 7,
+      probe: { index: 1, count: 3, crf: 30, vmaf: 95.0, predicted_bytes: null, passed: false },
+      probes: [],
+      etaSeconds: 40 * 60,
+    }
+    const folder = job({
+      id: 3,
+      kind: 'encode',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      result: null,
+      payload: { paths: ['/media/Filme'], quality: true },
+    })
+    const { container } = render(JobsPage, {
+      history: [folder],
+      movies: [movie(path)],
       onopenMovie: () => {},
     })
-    const link = container.querySelector<HTMLButtonElement>('button.movie-link')
+    const link = container.querySelector<HTMLAnchorElement>('.entry.running a.movie-link')
     expect(link).toBeTruthy()
+    expect(link!.getAttribute('href')).toBe(`#/movie/${encodeURIComponent(path)}`)
+    expect(link!.textContent).toContain('Titel 0 (2000).mkv')
+    progressStub = null
+  })
+
+  it('the folder-level row keeps showing the folder and stays unlinked (issue #703)', () => {
+    const path = '/media/Filme/Titel 0 (2000).mkv'
+    progressStub = {
+      stage: 'crf-search',
+      movie: 'Titel 0 (2000)',
+      path,
+      step: 4,
+      steps: 7,
+      probes: [],
+    }
+    const folder = job({
+      id: 3,
+      kind: 'encode',
+      state: 'running',
+      started_at: '2026-10-24T10:00:00Z',
+      finished_at: null,
+      result: null,
+      payload: { paths: ['/media/Filme'], quality: true },
+    })
+    const { container } = render(JobsPage, {
+      history: [folder],
+      movies: [movie(path)],
+      onopenMovie: () => {},
+    })
+    const file = container.querySelector('.entry.running .file')!
+    expect(file.textContent).toContain('Filme')
+    expect(file.querySelector('a, button')).toBeNull()
+    progressStub = null
+  })
+
+  it('a directory path never links (issue #703)', () => {
+    const folder = job({
+      id: 4,
+      kind: 'plan',
+      state: 'done',
+      payload: { paths: ['/media/Filme'], quality: true },
+      result: { plans: [] },
+    })
+    const { container } = render(JobsPage, {
+      history: [folder],
+      movies: [movie('/media/Filme/Titel 0 (2000).mkv')],
+      onopenMovie: () => {},
+    })
+    expect(container.querySelector('.movie-link')).toBeNull()
   })
 
   it('folder-scoped jobs do not claim a single movie link', () => {
@@ -241,11 +416,19 @@ describe('JobsPage render', () => {
   })
 
   it('a running row at 30 % says it is working, not starting (issue #630)', () => {
-    progressStub = { percent: 30.46, movie: null, detail: null }
+    progressStub = {
+      stage: 'encode',
+      movie: 'a.mkv',
+      path: '/m/a.mkv',
+      step: 5,
+      steps: 7,
+      encode: { percent: 30.46, fps: null, avg_fps: null, eta_seconds: null },
+    }
     const running = job({ id: 4, state: 'running', started_at: '2026-10-24T10:00:00Z', finished_at: null, result: null })
     const { container } = render(JobsPage, { history: [running], onopenMovie: () => {} })
     const text = (container.textContent ?? '').replace(/\s+/g, ' ')
-    expect(text).toContain('working')
+    expect(text).toContain('Encode')
+    expect(text).toContain('30.5%')
     expect(text).not.toContain('starting…')
     progressStub = null
   })
@@ -263,13 +446,18 @@ describe('JobsPage render', () => {
   it('gives the filename its own cell, never the KIND column (issue #630, case 13)', () => {
     // a long name inside the 104 px KIND column wrapped character by character
     // and drew over the start time: it needs a cell that can shrink
+    const path = '/m/a-very-long-movie-name-that-would-wrap.mkv'
     const encode = job({
       id: 5,
       kind: 'encode',
       state: 'done',
-      payload: { paths: ['/m/a-very-long-movie-name-that-would-wrap.mkv'] },
+      payload: { paths: [path] },
     })
-    const { container } = render(JobsPage, { history: [encode], onopenMovie: () => {} })
+    const { container } = render(JobsPage, {
+      history: [encode],
+      movies: [movie(path)],
+      onopenMovie: () => {},
+    })
     const row = container.querySelector('.entry')!
     expect(row.querySelector('.kind .movie-link')).toBeNull()
     expect(row.querySelector('.file .movie-link')).not.toBeNull()

@@ -21,6 +21,7 @@ Rules it keeps:
 
 import json
 import os
+import sqlite3
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,10 +30,16 @@ from typing import Any, ClassVar
 from textual.app import App, ComposeResult
 from textual.binding import BindingType
 from textual.containers import Horizontal, VerticalScroll
+from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, Static, Switch
 
 from shrinkray.config import Conf
-from shrinkray.engine.pause import operator_paused, pause_reason, set_operator_paused
+from shrinkray.engine.pause import (
+    operator_paused,
+    pause_reason,
+    set_operator_paused,
+    write_cancel_request,
+)
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,86 @@ class Field:
     def widget_id(self) -> str:
         """A Textual id for the field's input (ids allow no dots)."""
         return "f-" + self.key.replace(".", "-")
+
+
+@dataclass(frozen=True)
+class PendingJob:
+    """One queued or running job the terminal UI lists.
+
+    Attributes:
+        id (int): The job's database id.
+        kind (str): Its kind ("scan", "plan", "encode", ...).
+        state (str): "queued" or "running".
+        target (str): The first path the payload names, for the list line.
+    """
+
+    id: int
+    kind: str
+    state: str
+    target: str
+
+
+def read_pending_jobs(db_file: Path | None) -> list[PendingJob]:
+    """Reads the queued and running jobs from the database, read-only.
+
+    The connection is opened with ``mode=ro``: the terminal UI never creates,
+    migrates or writes the database (the server owns it). A missing or
+    undecodable database means no job list. Per-file stage rows (a payload
+    with ``"pipeline"``) are hidden: the folder job that owns them is the
+    one the operator cancels.
+
+    Args:
+        db_file (Path | None): The resident app's database file.
+
+    Returns:
+        list[PendingJob]: The queued and running jobs, oldest first.
+    """
+    if db_file is None:
+        return []
+    try:
+        if not db_file.is_file():
+            return []
+        connection = sqlite3.connect(f"{db_file.resolve().as_uri()}?mode=ro", uri=True)
+    except (OSError, sqlite3.Error):
+        return []
+    try:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            "SELECT id, kind, payload, state FROM jobs WHERE state IN (?, ?) ORDER BY id",
+            ("queued", "running"),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        connection.close()
+    jobs: list[PendingJob] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("pipeline"):
+            continue
+        jobs.append(
+            PendingJob(
+                id=int(row["id"]),
+                kind=str(row["kind"]),
+                state=str(row["state"]),
+                target=_payload_target(payload),
+            )
+        )
+    return jobs
+
+
+def _payload_target(payload: dict[str, Any]) -> str:
+    """Returns the first target a job payload names, for the list line."""
+    for key in ("path", "paths"):
+        value = payload.get(key)
+        if isinstance(value, list) and value:
+            return str(value[0])
+        if isinstance(value, str) and value:
+            return value
+    return ""
 
 
 def fields_for(defaults: Conf) -> list[Field]:
@@ -273,8 +360,100 @@ def save_config(path: Path, data: dict[str, Any]) -> None:
         raise
 
 
+class JobsScreen(Screen[None]):
+    """The read-only job list and the cancel action (issue #621)."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        ("escape", "app.pop_screen", "Back"),
+        ("r", "refresh", "Refresh"),
+    ]
+    CSS = """
+    #jobs-list { height: 1fr; padding: 0 1; }
+    .job-row { height: auto; }
+    .job-label { width: 1fr; padding-top: 1; }
+    #jobs-message { height: auto; }
+    #jobs-buttons { height: auto; margin-top: 1; }
+    """
+
+    def __init__(self, db_file: Path, state_dir: Path) -> None:
+        """Opens the list on one database and one data folder.
+
+        Args:
+            db_file (Path): The resident app's database file (read-only).
+            state_dir (Path): The data folder the cancel request is written to.
+        """
+        super().__init__()
+        self.db_file = db_file
+        self.state_dir = state_dir
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with VerticalScroll(id="jobs-list"):
+            yield Static("", id="jobs-message", markup=False)
+        with Horizontal(id="jobs-buttons"):
+            yield Button("Refresh", id="jobs-refresh")
+            yield Button("Back", id="jobs-back")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._refresh()
+
+    def _refresh(self) -> None:
+        """Re-reads the database and rebuilds the rows (read-only)."""
+        container = self.query_one("#jobs-list", VerticalScroll)
+        for child in list(container.children):
+            if child.id != "jobs-message":
+                child.remove()
+        jobs = read_pending_jobs(self.db_file)
+        message = self.query_one("#jobs-message", Static)
+        if not jobs:
+            message.update(f"No queued or running jobs in {self.db_file}.")
+            return
+        message.update(
+            f"{len(jobs)} queued or running job(s). Cancel writes a request; the server applies it."
+        )
+        for job in jobs:
+            container.mount(
+                Horizontal(
+                    Static(
+                        f"#{job.id}  {job.kind}  {job.state}  {job.target}",
+                        classes="job-label",
+                        markup=False,
+                    ),
+                    Button("Cancel", id=f"cancel-{job.id}", classes="job-cancel"),
+                    classes="job-row",
+                )
+            )
+
+    def action_refresh(self) -> None:
+        """Re-reads the job list."""
+        self._refresh()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "jobs-refresh":
+            self._refresh()
+        elif event.button.id == "jobs-back":
+            self.app.pop_screen()
+        elif event.button.id is not None and event.button.id.startswith("cancel-"):
+            self._cancel(int(event.button.id.removeprefix("cancel-")), event.button)
+
+    def _cancel(self, job_id: int, button: Button) -> None:
+        """Writes the cancel request; the row stays until the job ends."""
+        try:
+            write_cancel_request(self.state_dir, job_id)
+        except (OSError, ValueError) as e:
+            self.query_one("#jobs-message", Static).update(f"Not requested: {e}")
+            return
+        button.disabled = True
+        button.label = "Requested"
+        self.query_one("#jobs-message", Static).update(
+            f"Cancel requested for job #{job_id}; the server applies it "
+            "and the row stays until the job ends."
+        )
+
+
 class SetupApp(App[None]):
-    """The `shrinkray setup` screen: settings, the pause switch, save."""
+    """The `shrinkray setup` screen: settings, the pause switch, jobs, save."""
 
     TITLE = "ShrinkRay setup"
     CSS = """
@@ -292,17 +471,29 @@ class SetupApp(App[None]):
     """
     BINDINGS: ClassVar[list[BindingType]] = [("ctrl+s", "save", "Save"), ("q", "quit", "Quit")]
 
-    def __init__(self, config_path: Path, state_dir: Path | None) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        state_dir: Path | None,
+        db_file: Path | None = None,
+    ) -> None:
         """Opens the editor on one config file.
 
         Args:
             config_path (Path): The config.json the resident app reads.
-            state_dir (Path | None): The data folder holding the pause flag,
-                or None when there is no resident app to pause.
+            state_dir (Path | None): The data folder holding the pause flag and
+                the cancel requests, or None when there is no resident app.
+            db_file (Path | None): The resident app's database; None falls
+                back to state_dir/metadata.db (the container's default).
         """
         super().__init__()
         self.config_path = config_path
         self.state_dir = state_dir
+        self.db_file = (
+            db_file
+            if db_file is not None
+            else (state_dir / "metadata.db" if state_dir is not None else None)
+        )
         self.data: dict[str, Any] = (
             json.loads(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
         )
@@ -316,6 +507,7 @@ class SetupApp(App[None]):
                 with Horizontal(id="pause-row"):
                     yield Static("", id="pause-status", markup=False)
                     yield Button("Pause", id="pause")
+                    yield Button("Jobs", id="jobs")
             group = ""
             for field in self.fields:
                 if field.group != group:
@@ -429,6 +621,14 @@ class SetupApp(App[None]):
             self.exit()
         elif event.button.id == "pause":
             self.action_toggle_pause()
+        elif event.button.id == "jobs":
+            self.action_open_jobs()
+
+    def action_open_jobs(self) -> None:
+        """Opens the read-only job list (no-op without a data folder)."""
+        if self.state_dir is None or self.db_file is None:
+            return
+        self.push_screen(JobsScreen(self.db_file, self.state_dir))
 
     def action_toggle_pause(self) -> None:
         """Pauses or resumes the resident app (no-op without a data folder)."""

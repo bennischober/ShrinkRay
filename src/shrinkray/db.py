@@ -826,7 +826,17 @@ def save_plan(
             chosen_crf,
             achieved_vmaf,
             None if crop is None else ",".join(str(v) for v in crop),
-            json.dumps([(p.crf, p.vmaf) for p in probes]),
+            json.dumps(
+                [
+                    (
+                        p.crf,
+                        p.vmaf,
+                        getattr(p, "measured_at", None),
+                        bool(getattr(p, "cached", False)),
+                    )
+                    for p in probes
+                ]
+            ),
             skipped_reason,
             estimated_size,
             input_mtime,
@@ -899,6 +909,26 @@ def get_probe_entry(connection: sqlite3.Connection, key: str) -> tuple[float, in
         return None
     size = int(row["encoded_size"]) if row["encoded_size"] is not None else None
     return float(row["value"]), size
+
+
+def get_probe_measured_at(connection: sqlite3.Connection, key: str) -> str | None:
+    """Returns a cache row's measured_at, or None on a miss.
+
+    `created_at` is when this row was last measured: `save_probe_score` sets it on
+    insert and refreshes it on a re-measure, so a cached probe can say how old its
+    measurement is (the maintainer's 2026-11-14 cache-provenance requirement,
+    issue #631). Kept separate from `get_probe_entry` so callers that only need the
+    score/size keep their two-tuple contract.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        key (str): The sha256 cache key (probe_cache_key).
+
+    Returns:
+        str | None: The row's measured_at, or None when the key is absent.
+    """
+    row = connection.execute("SELECT created_at FROM probe_cache WHERE key = ?", (key,)).fetchone()
+    return None if row is None else str(row["created_at"])
 
 
 def get_valid_plan(
@@ -1325,16 +1355,55 @@ def get_latest_encode_output(connection: sqlite3.Connection, file_id: int) -> Pa
     return Path(latest["output_file"])
 
 
+def latest_ancestry(
+    connection: sqlite3.Connection, output_file: str, size: int
+) -> sqlite3.Row | None:
+    """Returns the latest encode row whose output the file at `output_file`
+    carries (the identity rule, issue #647).
+
+    The encodes table chains generations via `output_file`: a row's
+    `output_file` is the path of the file it produced. A path claim alone is
+    not enough - in-place encoding (#232) made the output path equal the
+    source path, so a restored original still carries the stale row's path
+    claim. The row counts as ancestry only when it is APPLIED (a discarded
+    attempt is history even when it carries a path claim) and its recorded
+    `output_size` matches the file's size; anything else is history, not the
+    current state, and the file's generation starts at 1 again.
+
+    Args:
+        connection (sqlite3.Connection): The database connection.
+        output_file (str): The path whose ancestry is asked about.
+        size (int): The file's size (the identity half) - the actual stat
+            when the caller holds the file, the scan's record when it holds
+            a file row.
+
+    Returns:
+        sqlite3.Row | None: The latest ancestry row, or None.
+    """
+    row = connection.execute(
+        """
+        SELECT * FROM encodes
+        WHERE output_file = ? AND output_size = ? AND outcome = 'applied'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (output_file, size),
+    ).fetchone()
+    return cast("sqlite3.Row | None", row)
+
+
 def has_output_for_latest_encode(
     connection: sqlite3.Connection,
     file_id: int,
     output_file: Path,
 ) -> bool:
-    """Checks whether the latest encode entry produced a still-existing output.
+    """Checks whether the latest encode entry produced the file at the path.
 
     Used for batch resume: a movie whose encode was recorded AND whose output
-    file still exists is considered finished; anything else (no record,
-    deleted output) must be (re-)encoded.
+    file still exists AT THE RECORDED SIZE is considered finished (issue
+    #647's identity rule: the record is history, not the state - in-place
+    encoding (#232) made the output path equal the source path, so a restored
+    original must not pass); anything else (no record, deleted output, a
+    different file at the path) must be (re-)encoded.
 
     Args:
         connection (sqlite3.Connection): The database connection.
@@ -1347,9 +1416,59 @@ def has_output_for_latest_encode(
     latest = get_latest_encode(connection, file_id)
     if latest is None:
         return False
+    if latest["outcome"] != "applied":
+        return False  # a skip marker or a discarded attempt: not an encode
     if latest["output_size"] <= 0:
         return False  # a skip marker, not a real encode
-    return output_file.is_file() and output_file.stat().st_size > 0
+    # the identity rule (issue #647): the file at the path must BE the
+    # recorded output. In-place encoding (#232) made the output path equal
+    # the source path, so a restored original passes a bare existence check -
+    # the record is history, not the state, and the movie must be re-decided.
+    if not (output_file.is_file() and output_file.stat().st_size > 0):
+        return False
+    return int(output_file.stat().st_size) == int(latest["output_size"])
+
+
+def output_claim_is_current(
+    outcome: str,
+    output_file: str,
+    file_path: str,
+    output_size: int,
+    actual_size: int | None,
+) -> bool:
+    """Checks whether an encode row's output claim still describes the bytes
+    at the claimed path (the identity rule, issue #647).
+
+    A row's ``output_file`` is a claim, not a state: in-place encoding (#232)
+    made the output path equal the source path, so a restored original still
+    carries an applied row's own-path claim while the bytes at the path are
+    the original's. The claim is current only when the row is APPLIED, claims
+    the file's own path, and the file's actual size matches the row's
+    recorded ``output_size`` - the same predicate ``latest_ancestry`` applies
+    (``WHERE output_file = ? AND output_size = ? AND outcome = 'applied'``).
+    A row pointing elsewhere cannot be identity-checked against its file row
+    and reads as not current; doctor keeps today's existence verdict for
+    those (issue #706).
+
+    Args:
+        outcome (str): The row's outcome - only an applied row's claim can
+            be current.
+        output_file (str): The path the row claims as its output.
+        file_path (str): The owning file row's own path.
+        output_size (int): The size the row recorded for its output.
+        actual_size (int | None): The size of the file actually at the
+            claimed path (None when nothing is there).
+
+    Returns:
+        bool: True when the claim still describes the bytes at the path.
+    """
+    if outcome != "applied":
+        return False
+    if output_file != file_path:
+        return False
+    if actual_size is None:
+        return False
+    return int(output_size) == int(actual_size)
 
 
 def get_encodes_for_file(connection: sqlite3.Connection, file_id: int) -> list[sqlite3.Row]:

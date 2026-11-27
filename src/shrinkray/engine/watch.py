@@ -327,14 +327,15 @@ class Stability:
         """Why the file may not be decided on yet, worded for the operator.
 
         The single source of that wording (#587's review): `plan`'s wait
-        row reports this property instead of building its own sentence, so
+        row (#587) and the boot backlog's plan and encode jobs (#586)
+        report this property instead of building their own sentences, so
         the wording lives with the verdict it explains. Only asked of a
         verdict that is not `settled`: a settled verdict has no reason.
 
         Returns:
             str: The witness's reason: `incomplete`'s own wording when the
-                sparse verdict judged the file, otherwise the remaining-age
-                sentence.
+                sparse verdict judged the file, otherwise the sentence
+                naming the time since the last write.
         """
         if self.incomplete is not None:
             return self.incomplete

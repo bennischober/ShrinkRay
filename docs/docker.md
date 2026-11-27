@@ -18,12 +18,13 @@ worker's stop joins (2 x 30s), the child's kill window (terminate_tree's
 SIGTERM/SIGKILL plus the pipe drains), the watcher's join (10s). The compose
 comment on `stop_grace_period: 120s` carries the full budget (issue #431); a
 raw `docker stop -t` below that kills the container mid-unwind, and the job is
-recovered as failed (`interrupted by app restart`) on the next boot (the
-fallback, not the contract). The stop signals (SIGTERM, and SIGBREAK on
-Windows) are ignored for the whole window - uvicorn's capture, the re-raise
-after it, and the teardown (a second SIGTERM mid-join would otherwise kill
-the process with the CANCELLED row unwritten); a hard kill (`-9`, OOM) leaves
-the job to the boot-time recovery instead.
+recovered as interrupted (`interrupted by app restart`) on the next boot and
+resumed as the same row (issue #622; the fallback, not the contract). The
+stop signals (SIGTERM, and SIGBREAK on Windows) are ignored for the whole
+window - uvicorn's capture, the re-raise after it, and the teardown (a second
+SIGTERM mid-join would otherwise kill the process with the CANCELLED row
+unwritten); a hard kill (`-9`, OOM) takes the same boot-time recovery, with
+the killed run's encode lock left to its heartbeat.
 
 > **Direction (issue #244).** The deployment target is an **Unraid Community App**
 > (PRODUCT.md "Deployment target"): the WebUI button opens the read-only dashboard,
@@ -305,7 +306,7 @@ only, so `docker exec <container> <command>` output stays clean; the shell itsel
 
 ## Adding files to the library
 
-The watcher, `shrinkray encode` and `shrinkray plan` leave a file alone until it looks complete: its last write is at least a minute old and, where the mount reports how much of a file is allocated, at least 90 % of its size is actually written to disk (`docs/encode-decision.md`, *Before any gate: is the file complete?*). The boot backlog (#586) does not check yet: a container that starts while a copy into `/media` is still being written can decide on the partial file. A `plan` run during a copy lists the file as not decidable yet and neither probes nor records it. And the witness cannot see everything. A download that reserves its whole size up front and then stalls looks complete, and so does a sparse download that stalls with less than 10 % left to write. On a mount that reports no allocation (0 blocks; the Unraid user share's reporting is not yet measured), only the age check applies, so any stalled download looks complete after a minute. A file on a network mount that caches metadata can look complete too.
+The watcher, `shrinkray encode`, `shrinkray plan` and the server's jobs leave a file alone until it looks complete: its last write is at least a minute old and, where the mount reports how much of a file is allocated, at least 90 % of its size is actually written to disk (`docs/encode-decision.md`, *Before any gate: is the file complete?*). A container that starts while a copy into `/media` is still being written reports the file in its boot backlog with the reason and leaves it for a later pass (#586); a `plan` run during a copy lists the file as not decidable yet and neither probes nor records it (#587). And the witness cannot see everything. A download that reserves its whole size up front and then stalls looks complete, and so does a sparse download that stalls with less than 10 % left to write. On a mount that reports no allocation (0 blocks; the Unraid user share's reporting is not yet measured), only the age check applies, so any stalled download looks complete after a minute. A file on a network mount that caches metadata can look complete too.
 
 The reliable setup leaves nothing for the witness to judge: **write new files outside the library, then move them in.** Point your downloader's incomplete folder outside the library, but on the same filesystem, and make sure the program that moves finished files sees both folders inside **one** mount. Then the move is a rename, which is atomic, so a half-written file never appears in the library. Across two mounts the move becomes a copy, even when both are the same disk: two separate bind mounts in the downloader's container are two mounts, and `rename` fails across them (EXDEV). The copy is not atomic, and the watcher and `shrinkray encode` then rely on the witness: the watcher re-judges the file on its next pass, and the CLI's `wait_until_settled` sleeps until the copy has been quiet for a minute (or skips it at its wait limit).
 
@@ -395,6 +396,13 @@ kind, queue depth, whether a job is running, encodes and bytes reclaimed, the
 stall-watchdog count, retained-original totals, the catalog size and the free
 space on the library filesystem. Every value is a query over state that already
 exists - the route measures nothing new.
+
+`shrinkray_bytes_reclaimed_total` is a **gauge**, not a counter: it can fall when
+a swap is declined or a restored original stops corroborating a record, because it
+counts only the applied rows the library's records still corroborate. The
+dashboard's RECLAIMED figure is a different, deliberately named quantity - the
+per-title library delta plus output-directory savings (issue #646) - so the two
+intentionally differ on a multi-hop in-place chain.
 
 ## Not problems
 

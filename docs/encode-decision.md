@@ -53,7 +53,7 @@ the frame on two real films where the safe rule kept 85%.
 
 ## Before any gate: is the file complete?
 
-A file that a copy or download is still writing must not be decided on: torn probes, and a cached decision under a torn identity, are the cost (issue #437). The watcher, the one-shot `shrinkray encode` and `shrinkray plan` ask one witness, `check_stability` (`engine/watch.py`), before any gate or sample. The witness answers from a single `stat()` and never sleeps (issue #479). The resident server's boot backlog (`auto_backlog`, on in the container image) does **not** ask it yet: its plan and encode jobs decide on whatever is on disk at boot (#586). `shrinkray plan` reports an unsettled file at once instead of waiting on it (#587): the file is listed as not decidable yet, with the reason, and is neither probed nor recorded; a later `shrinkray encode` still asks the witness before reusing a stored plan. The witness checks:
+A file that a copy or download is still writing must not be decided on: torn probes, and a cached decision under a torn identity, are the cost (issue #437). The watcher, the one-shot `shrinkray encode`, `shrinkray plan`, and the server's plan and encode jobs (`server/jobs.py`, covering the boot backlog, `auto_backlog` on in the container image) ask one witness, `check_stability` (`engine/watch.py`), before any gate or sample. The witness answers from a single `stat()` and never sleeps (issue #479). The jobs skip-and-leave like the watcher (#586): an unsettled file is reported with the reason and re-decided by a later pass, never probed or encoded from torn content. `shrinkray plan` reports an unsettled file at once instead of waiting on it (#587): the file is listed as not decidable yet, with the reason, and is neither probed nor recorded; a later `shrinkray encode` still asks the witness before reusing a stored plan. The witness checks:
 
 - **Age.** The last write is at least `STABLE_MIN_AGE` (60 s) old. Every write updates the modification time, so a file still being written always looks young. A preserved old timestamp (`cp -p`, `rsync -t`) is applied only after the data is written.
 - **Not sparse.** At least `SPARSE_ALLOCATED_FLOOR` (90 %) of the file's size is allocated on disk (`st_blocks × 512`). A download that reserves its full size as a sparse file and then stalls has the right size but holes in it. Only this check sees them, and only while they make up more than 10 % of the file. Video is already compressed, so filesystem compression (ZFS, btrfs) is expected to keep a finished file well above the floor; this is reasoned, not measured. When the platform reports no allocation (Windows), or reports 0 blocks for a non-empty file (some FUSE and SMB mounts), the age check alone applies. A file with nothing allocated is all zeros, which no probe reads as video.
@@ -302,6 +302,50 @@ the table is kept as the record of what the change had to fix.
 Item 3 also needed a schema migration: a plan stored while the flag existed was probed
 *without* a crop when the flag was off, so reusing it would encode the film with its bars kept.
 Migration 15 drops every stored plan rather than reuse one that describes an uncropped output.
+
+## The already-encoded resume rule and the identity rule
+
+A movie counts as **already encoded** (the batch resume check, the encode job's
+`already_encoded` outcome) when the database holds an APPLIED encode — not a skip
+marker and not a #625-discarded attempt — AND the file at the recorded output
+path **is that output**: it exists, is non-empty, and its size matches the row's
+`output_size`, AND the duration verifies (for an OUT-OF-PLACE row: the
+artifact at its own path against the source — the check that catches a
+same-size replaced or corrupt artifact; a TRUNCATED artifact is smaller than
+the record and fails the size identity first; for an IN-PLACE row the file
+would be compared with itself, so the size identity is the whole check there —
+a same-size foreign file at an in-place path is not detectable by these two
+checks, a named limit). A legacy row with no path claim (`output_file` IS NULL) falls back to
+the run's output directory, where the duration check does compare two different
+files (issue #647). The
+identity rule exists because in-place encoding (#232) made the output path equal
+the source path: without it, a restored original — the documented recovery path,
+delete the AV1 output and rename the retained `<name>.shrinkray-original` back —
+passes a bare existence check, the surfaces keep claiming savings that are no
+longer on disk, and the file silently drops out of the pipeline for good.
+
+The same rule governs the surfaces that present an encode as the file's CURRENT
+state: `/api/snapshot` and `/api/library` hide an applied encode from a library
+entry when the row claims the file's own path (`output_file` = the entry's path)
+and the scan's recorded size no longer matches the row's `output_size`, and the
+generation derivation (`db.latest_ancestry`, shared by `derive_generation` and
+the movie route) refuses a path claim whose recorded output is not the file the
+path now carries — a restored original is generation 1 again — and the movie
+page's provenance badge marks the most recent RECORD whose claim matches (the
+history is generation-ordered, so a re-encode of a restored original does NOT
+sort last - it lands among the older rows, before an older generation-2 row;
+the record id, not the display position, decides). Every
+other row stays visible exactly as it was: the #625 attempts and the skip
+markers (their `outcome` names them), rows whose artifact lives elsewhere (an
+output-directory run), and rows with no path claim (`output_file` IS NULL).
+`/metrics`' reclaimed gauge counts an applied row while the library's records
+still corroborate it: an in-place row while the file's recorded size matches
+the record, an output-directory row always (its artifact lives outside the
+library and the database cannot verify it), a legacy row with no path claim
+(`output_file` IS NULL) always, and never a file the scans report missing. A restored original is re-decided by the watcher and, if
+eligible, encoded again: a new row, the old one staying in the history.
+
+The dashboard's RECLAIMED figure (issue #646) is a different, deliberately named quantity: the true per-title library delta plus output-directory savings. For a title whose applied in-place row claims the file's own path AND its recorded output size matches the file's current size (both halves of the #647 identity predicate), the library delta is the chain's first applied in-place row's `input_size` minus the file's current size; every applied output-directory/legacy row adds its own `input_size - output_size`; every term clamps at 0, and a missing title contributes nothing. The two totals therefore intentionally differ on a multi-hop in-place chain - the dashboard reports the whole library delta, `/metrics` the corroborated row sum - and agree on output-directory rows. The RECLAIMED stat and the category bars read that server field; the client keeps only the missing-file guard, and a discarded latest row no longer zeroes the corroborated chain delta (#625 applies to the row, not the title).
 
 ## AV1 sources - decided
 

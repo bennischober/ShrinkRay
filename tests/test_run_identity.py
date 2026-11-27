@@ -79,8 +79,9 @@ def _prediction(movie: Path) -> SimpleNamespace:
 def _movie(root: Path, content: bytes) -> Path:
     movie = root / "movie.mkv"
     movie.write_bytes(content)
-    # old enough for the completeness witness (#587): plan asks it before
-    # the engine, so a fresh fixture would be reported instead of planned
+    # old enough for the completeness witness (#586/#587): the resident jobs
+    # and plan ask it before the engine, so a fresh fixture would be
+    # skipped or reported, never planned
     os.utime(movie, (0, 0))
     return movie
 
