@@ -886,6 +886,7 @@ def plan(
         plans: list = []
         errors = 0
         waits = 0
+        wait_rows: list[tuple[str, str]] = []
         cancel = signals.enter_context(_cancel_on_terminal_close())
         for movie in movies:
             # a signal that landed while no child ran (recording the previous
@@ -918,6 +919,7 @@ def plan(
                     "",
                     stability.not_settled_reason,
                 )
+                wait_rows.append((movie.name, stability.not_settled_reason))
                 waits += 1
                 continue
             try:
@@ -994,8 +996,12 @@ def plan(
             console.print(table)
         if waits:
             # a wait row is not an error row, but a scripted run (--no-table)
-            # during a copy must still say what it did not decide (#587's
-            # review): without this line the run printed nothing about it
+            # during a copy must still say WHAT it did not decide, with the
+            # witness's reason (the takeover audit): the table carries the
+            # rows, --no-table printed only a count
+            if no_table:
+                for name, reason in wait_rows:
+                    console.print(f"[yellow]wait[/yellow] {name}: {reason}")
             console.print(
                 f"[yellow]{waits} file(s) not complete yet; plan them again later.[/yellow]"
             )

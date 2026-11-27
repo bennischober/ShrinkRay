@@ -108,6 +108,10 @@ class TestPlanNoTable(unittest.TestCase):
         self.assertEqual(planned, [], "a young file was probed")
         self.assertIn("not complete yet; plan them again later", output)
         self.assertIn("1 file(s)", output)
+        # the takeover audit: --no-table must name the file and carry the
+        # witness's reason, not just the count
+        self.assertIn("wait young.mkv:", output)
+        self.assertIn("not complete: last write only 5 s ago", output)
 
     def test_plan_resolves_the_probe_windows(self) -> None:
         """The plan CLI resolves the probe windows with the one precedence
