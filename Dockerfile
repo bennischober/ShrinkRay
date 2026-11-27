@@ -27,9 +27,9 @@ RUN npm run build
 # measured with a different libvmaf would write incomparable scores.
 FROM debian:bookworm-slim AS toolchain
 
-ARG FFMPEG_VERSION=autobuild-2026-10-23-13-04
-ARG FFMPEG_ASSET=ffmpeg-N-127957-g935f29eaae-linux64-gpl.tar.xz
-ARG FFMPEG_SHA256=1eae7b6b6622dbda60b30c7b2f486224a6ea9980f2a4c2d2543eee4c8d269baa
+ARG FFMPEG_VERSION=autobuild-2026-11-27-12-42
+ARG FFMPEG_ASSET=ffmpeg-N-129333-g7fdb4c2341-linux64-gpl.tar.xz
+ARG FFMPEG_SHA256=bb1f342c70282ae16f030fddeef6d116fbd5dc95088b15b9e239d22abbc72bc7
 ARG HANDBRAKE_VERSION=1.11.2
 ARG HANDBRAKE_SHA256=12b046350f2422dc28783ff94229aff4ba5fe5e683431e057355d36163b2593a
 
@@ -54,7 +54,7 @@ RUN curl -fsSL -o /tmp/ffmpeg.tar.xz \
  && ln -s /opt/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg \
  && ln -s /opt/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe \
  && ffmpeg -hide_banner -h filter=libvmaf >/dev/null \
- && ffmpeg -version | head -1 | grep -q "N-127957-g935f29eaae"
+ && ffmpeg -version | head -1 | grep -q "N-129333-g7fdb4c2341"
 
 # HandBrakeCLI: no Linux binary is published, so it is compiled from the
 # pinned source. The version check is the gate: a mis-built binary must fail the
