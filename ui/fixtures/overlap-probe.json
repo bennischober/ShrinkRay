@@ -41,6 +41,7 @@
       "codec": "h264",
       "resolution": [1920, 1080],
       "size": 4200000000,
+      "reclaimed_bytes": 0,
       "hdr": false,
       "encode": null
     },
@@ -52,6 +53,7 @@
       "codec": "hevc",
       "resolution": [1920, 1080],
       "size": 5100000000,
+      "reclaimed_bytes": 0,
       "hdr": false,
       "encode": null
     }

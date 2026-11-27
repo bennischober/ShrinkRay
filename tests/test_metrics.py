@@ -63,6 +63,7 @@ class TestMetrics(unittest.TestCase):
         self.assertEqual(self._sample(body, "shrinkray_job_running"), "shrinkray_job_running 1")
         self.assertIn('shrinkray_jobs{state="done"} 1', body)
         self.assertIn('shrinkray_jobs{state="cancelled"} 0', body)
+        self.assertIn('shrinkray_jobs{state="interrupted"} 0', body)
 
     def _add_file(self, path: str = "/lib/a.mkv") -> int:
         cursor = self.connection.execute(

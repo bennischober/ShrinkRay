@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import PageHeader from './PageHeader.svelte'
 import StatusBadge from './StatusBadge.svelte'
@@ -7,6 +7,7 @@ import Time from './Time.svelte'
 import ProgressBar from './ProgressBar.svelte'
 import EmptyState from './EmptyState.svelte'
 import Panel from './Panel.svelte'
+import WorkProgress from './WorkProgress.svelte'
 
 const LONG_NAME =
   'Ein sehr langer Dateiname mit Ümlauten, 日本語, emoji 🎬 and a ² sign that must never break inside a word or overlap the next column (2015) - WEBDL-2160p HEVC.mkv'
@@ -74,6 +75,57 @@ describe('ProgressBar', () => {
   it('marks a stale bar without pretending it is live', () => {
     const { container } = render(ProgressBar, { percent: 10, stale: true })
     expect(container.querySelector('.progress.stale')).toBeTruthy()
+  })
+})
+
+describe('WorkProgress', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** A running encode with a 2 h ETA: above the 10 min threshold, so the
+   * summary carries the wall-clock `finishes ≈ HH:MM` line. */
+  const runningEncode = () =>
+    ({
+      stage: 'encode',
+      encode: { percent: 50, fps: null, avg_fps: null, eta_seconds: 7200 },
+      etaSmoothed: 7200,
+      encodeTicks: [],
+      probeTicks: [],
+    }) as never
+
+  it('advances the finishes time every second and clears the interval on unmount (issue #631)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-25T12:00:00Z'))
+    const { container, unmount } = render(WorkProgress, { progress: runningEncode() })
+    const summary = () =>
+      container.querySelector('[data-work-summary]')?.textContent ?? ''
+    const finishOf = (text: string) => text.match(/finishes ≈ (\d{2}:\d{2})/)?.[1]
+    // the line renders in the machine's local time, like every other clock in the UI
+    const localClock = (iso: string) =>
+      new Date(iso).toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      })
+
+    expect(finishOf(summary())).toBe(localClock('2026-10-25T14:00:00Z'))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(finishOf(summary())).toBe(localClock('2026-10-25T14:01:00Z'))
+
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('runs no clock without a running work or while the data is stale', () => {
+    vi.useFakeTimers()
+    const idle = render(WorkProgress, { progress: null })
+    expect(vi.getTimerCount()).toBe(0)
+    idle.unmount()
+
+    const stale = render(WorkProgress, { progress: runningEncode(), stale: true })
+    expect(vi.getTimerCount()).toBe(0)
+    stale.unmount()
   })
 })
 

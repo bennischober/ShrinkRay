@@ -7,17 +7,21 @@ test plugin, so each test drives it through asyncio.run from a sync method.
 import asyncio
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from textual.pilot import Pilot
 from textual.widgets import Input, Static, Switch
 
+from shrinkray import db
 from shrinkray.engine.pause import operator_paused
-from shrinkray.tui import SetupApp
+from shrinkray.server import jobs
+from shrinkray.tui import JobsScreen, SetupApp, read_pending_jobs
 
 
 def run(app: SetupApp, steps: Callable[[Pilot[None]], Awaitable[None]]) -> None:
@@ -226,6 +230,96 @@ class TestSetupApp(unittest.TestCase):
         self.assertEqual(self._saved(), {"handbrake": {"max_threads": 2}})
 
 
+class TestJobList(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data = Path(self.tmp.name)
+        self.config = self.data / "config.json"
+        self.config.write_text("{}", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _seed(self) -> tuple[Path, int, int, int]:
+        """Seeds a real database with one running and one queued job plus a
+        hidden per-file stage row."""
+        db_file = self.data / "metadata.db"
+        connection = db.connect(db_file)
+        try:
+            queue = jobs.JobQueue(connection)
+            running = queue.enqueue(
+                jobs.Job(kind=jobs.JobKind.SCAN, payload={"paths": ["/media/running"]})
+            )
+            queued = queue.enqueue(
+                jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": ["/media/queued"]})
+            )
+            taken = queue.take_next()
+            assert taken is not None
+            stage = queue.stage(
+                jobs.JobKind.CRF_SEARCH,
+                {"paths": ["/media/running"], "pipeline": "plan"},
+            )
+        finally:
+            connection.close()
+        return db_file, running.id, queued.id, stage.id
+
+    def test_the_job_list_reads_the_database_in_read_only_mode(self) -> None:
+        db_file, running, queued, _stage = self._seed()
+        before = db_file.read_bytes()
+        calls: list[tuple[str, dict]] = []
+        real_connect = sqlite3.connect
+
+        def recording_connect(database, *args, **kwargs):
+            calls.append((database, kwargs))
+            return real_connect(database, *args, **kwargs)
+
+        with mock.patch("shrinkray.tui.sqlite3.connect", side_effect=recording_connect):
+            listed = read_pending_jobs(db_file)
+        self.assertEqual([job.id for job in listed], [running, queued])
+        self.assertEqual(calls[0][1].get("uri"), True)
+        self.assertIn("mode=ro", calls[0][0])
+        self.assertEqual(db_file.read_bytes(), before, "the read-only list changed the database")
+
+    def test_a_missing_job_database_creates_no_file(self) -> None:
+        before = sorted(p.name for p in self.data.iterdir())
+        self.assertEqual(read_pending_jobs(self.data / "missing.db"), [])
+        self.assertEqual(sorted(p.name for p in self.data.iterdir()), before)
+
+    def test_the_job_screen_lists_jobs_and_writes_a_cancel_request(self) -> None:
+        db_file, running, queued, stage = self._seed()
+        app = SetupApp(self.config, self.data, db_file)
+
+        async def steps(pilot: Pilot[None]) -> None:
+            app.action_open_jobs()
+            await pilot.pause()
+            screen = app.screen
+            self.assertIsInstance(screen, JobsScreen)
+            labels = [str(widget.render()) for widget in screen.query(".job-label")]
+            self.assertTrue(any(f"#{running}" in label for label in labels))
+            self.assertTrue(any(f"#{queued}" in label for label in labels))
+            self.assertFalse(any(f"#{stage}" in label for label in labels))
+            await pilot.click(f"#cancel-{queued}")
+            self.assertTrue((self.data / "cancel-requests" / str(queued)).is_file())
+            self.assertIn(
+                "Cancel requested",
+                str(screen.query_one("#jobs-message", Static).render()),
+            )
+
+        run(app, steps)
+
+    def test_the_container_invocation_uses_the_data_folder_database(self) -> None:
+        app = SetupApp(self.config, self.data, None)
+        self.assertEqual(app.db_file, self.data / "metadata.db")
+
+    def test_the_whole_cancel_surface_is_hidden_without_a_data_folder(self) -> None:
+        app = SetupApp(self.config, None, None)
+
+        async def steps(pilot: Pilot[None]) -> None:
+            self.assertEqual(len(app.query("#jobs")), 0)
+
+        run(app, steps)
+
+
 class TestSetupCommand(unittest.TestCase):
     def test_it_refuses_to_run_without_a_terminal(self) -> None:
         from typer.testing import CliRunner
@@ -234,6 +328,31 @@ class TestSetupCommand(unittest.TestCase):
 
         result = CliRunner().invoke(app, ["setup"])
         self.assertEqual(result.exit_code, 1)
+
+    def test_setup_db_is_the_operator_database(self) -> None:
+        from shrinkray.__main__ import setup
+
+        captured: dict[str, Any] = {}
+
+        class _App:
+            def __init__(self, config_path, state_dir, db_file):
+                captured["config_path"] = config_path
+                captured["state_dir"] = state_dir
+                captured["db_file"] = db_file
+
+            def run(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp)
+            with (
+                mock.patch("shrinkray.tui.SetupApp", _App),
+                mock.patch("shrinkray.__main__.sys.stdin.isatty", return_value=True),
+                mock.patch("shrinkray.__main__.sys.stdout.isatty", return_value=True),
+            ):
+                setup(config_file=None, db_file=data / "library.db")
+        self.assertEqual(captured["state_dir"], data)
+        self.assertEqual(captured["db_file"], data / "library.db")
 
 
 if __name__ == "__main__":

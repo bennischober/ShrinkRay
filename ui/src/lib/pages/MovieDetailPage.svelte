@@ -14,6 +14,8 @@
   import { kindWord, stateWord } from '../format'
   import FileName from '../components/FileName.svelte'
   import Time from '../components/Time.svelte'
+  import WorkProgress from '../components/WorkProgress.svelte'
+  import type { FileProgressView } from '../progress.svelte'
 
   /** The provenance page: everything recorded about one title — source
    * facts, the latest encode with every schema-v5 metric, the COMPLETE
@@ -24,6 +26,8 @@
     movie,
     targetVmaf,
     allJobs,
+    runningProgress = null,
+    stale = false,
     revealAvailable = false,
     onclose,
     onjobs,
@@ -34,6 +38,9 @@
     /** The snapshot's job list — filtering it locally beats refetching
      * /api/jobs per detail-open (zero extra round-trips). */
     allJobs: Job[]
+    /** the ONE accumulated model for the running file (issue #631) */
+    runningProgress?: FileProgressView | null
+    stale?: boolean
     /** the server reports whether this host can open a file manager (issue #239) */
     revealAvailable?: boolean
     onclose: () => void
@@ -55,6 +62,9 @@
   let revealBusy = $state(false)
   let revealError = $state<string | null>(null)
   let pageEl: HTMLElement | null = $state(null)
+  const isRunning = $derived(
+    runningProgress?.path != null && normPath(movie.path) === normPath(runningProgress.path)
+  )
 
   /** This movie's slice of the audit trail, newest first. Jobs may target
    * the containing FOLDER (plan-all/scan-all) or exact file paths (encode),
@@ -352,6 +362,19 @@
     </div>
   </section>
 
+  {#if isRunning}
+    <section class="panel running-panel">
+      <div class="panel-head"><span class="legend">IN WORK</span></div>
+      <WorkProgress
+        progress={runningProgress}
+        {stale}
+        detail
+        {targetVmaf}
+        sourceBytes={movie.size}
+      />
+    </section>
+  {/if}
+
   <div class="cols">
     <!-- ══ source facts ══ -->
     <section class="panel">
@@ -422,6 +445,16 @@
                   <span class="dim">samples — encode will confirm</span>
                 </div>
               {/if}
+            {/if}
+            {#if plan.probes && plan.probes.length > 0}
+              <div class="fact">
+                <span class="legend">PROBES</span>
+                <span class="mono probe-trail">
+                  {#each plan.probes as probe, i (i)}
+                    <span class="probe-row">CRF {probe.crf} → VMAF {vmaf(probe.vmaf, plan.target_vmaf ?? targetVmaf)}</span>
+                  {/each}
+                </span>
+              </div>
             {/if}
             <div class="fact">
               <span class="legend">PROBED</span>
@@ -779,6 +812,9 @@
      visible, never blocking (an encode may still override a skip) */
   .fact.big .result.warn { color: var(--amber); }
   .mono.warn { color: var(--amber); }
+  .running-panel { margin-bottom: 12px; }
+  .probe-trail { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .probe-row { white-space: nowrap; }
   .fact.plan-next {
     border-top: 1px solid var(--row-line);
     padding-top: 7px;

@@ -17,7 +17,7 @@ from pathlib import Path
 
 CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
-_STATES = ("queued", "running", "done", "failed", "cancelled")
+_STATES = ("queued", "running", "done", "failed", "cancelled", "interrupted")
 
 
 def _family(name: str, kind: str, help_text: str, samples: list[str]) -> list[str]:
