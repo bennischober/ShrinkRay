@@ -23,6 +23,8 @@ from shrinkray.config import (
 from shrinkray.config import (
     DEFAULT_SAMPLE_SECONDS as DEFAULT_SAMPLE_SECONDS,
 )
+from shrinkray.engine.progress import event as progress_event
+from shrinkray.engine.progress import file_state
 from shrinkray.logger import log_warning
 from shrinkray.tools.ffprobe import FFPROBE_TIMEOUT
 from shrinkray.tools.process import Cancelled, _run
@@ -144,12 +146,12 @@ def extract_samples(
         _check_cancel(cancel)
         if progress:
             progress(
-                {
-                    "stage": "probe",
-                    "detail": f"extracting sample {index + 1}/{count}",
-                    "done": index,
-                    "total": count,
-                }
+                progress_event(
+                    "samples",
+                    file=file_state(movie.name, str(movie), "samples"),
+                    sample={"index": index + 1, "count": count},
+                    detail=f"extracting sample {index + 1}/{count}",
+                )
             )
         sample = workdir / f"sample_{index}.mkv"
         try:

@@ -439,7 +439,7 @@ class TestEncode(unittest.TestCase):
                     src,
                     out,
                     [sys.executable, str(stub)],
-                    progress=lambda d: percents.append(d["percent"]),
+                    progress=lambda d: percents.append(d["encode"]["percent"]),
                 )
             # ~40 \r-updates over ~12-40s of child runtime: the watchdog
             # (2s) must NEVER have fired despite updates being \r-only...
@@ -479,7 +479,7 @@ class TestEncode(unittest.TestCase):
                     src,
                     out,
                     [sys.executable, str(stub)],
-                    progress=lambda d: percents.append(d["percent"]),
+                    progress=lambda d: percents.append(d["encode"]["percent"]),
                 )
             self.assertIn(12.34, percents, f"percents: {percents}")
 
@@ -1267,8 +1267,14 @@ class TestEncodeLock(unittest.TestCase):
                 updates.append(kwargs)
 
         callback = _quality_progress_callback(FakeProgress(), "task1")
-        callback({"stage": "probe", "detail": "probe encode (CRF 22)"})
-        callback({"stage": "encode", "percent": 42.31, "movie": "m.mkv"})
+        callback({"stage": "crf-search", "detail": "probe encode (CRF 22)"})
+        callback(
+            {
+                "stage": "encode",
+                "file": {"movie": "m.mkv"},
+                "encode": {"percent": 42.31},
+            }
+        )
         self.assertEqual(
             updates,
             [
@@ -1332,7 +1338,13 @@ class TestEncodeLock(unittest.TestCase):
                 # the CLI's --encoder-preset reaches the engine (issue #31:
                 # the preset was a constant no caller could override)
                 self.assertEqual(captured["encoder_preset"], "6")
-                captured["progress"]({"stage": "encode", "percent": 10.0, "movie": "movie.mkv"})
+                captured["progress"](
+                    {
+                        "stage": "encode",
+                        "file": {"movie": "movie.mkv"},
+                        "encode": {"percent": 10.0},
+                    }
+                )
             finally:
                 connection.close()
 

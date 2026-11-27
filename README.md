@@ -352,7 +352,9 @@ browser are just two consumers of the same engine and database:
   (issue #134). The resident app plans and encodes its backlog and watches
   for changes on its own; settings and pause/resume live in the terminal
   (`shrinkray setup`)
-- jobs survive restarts; jobs interrupted by a restart are marked as failed
+- jobs survive restarts; a job a shutdown interrupted is re-queued as the
+  same row on the next start (issue #622), while a job the operator
+  cancelled stays cancelled
 
 The server binds to localhost by default. **Authentication is opt-in**, and binding to a
 non-loopback address without it is refused at startup: an open dashboard on a LAN is
@@ -524,8 +526,16 @@ Example [config.json](config.json):
 > **`app.auto_backlog` is off by default.** Set it to `true` (the container sets it) and a
 > started app enqueues the backlog for every allowlisted root with no client: a scan, then a
 > plan, then an encode of everything the plan marked worth encoding. The queue is FIFO and the
-> worker single-threaded, so the order holds by construction; a restart does not re-encode
-> finished files, because the database already records them as done.
+> worker single-threaded, so the order holds by construction. A restart does not stack a second
+> copy: an identical pending job (same kind and payload) is kept, not enqueued again
+> (issue #626), and finished files are not re-encoded either, because the database already
+> records them as done.
+>
+> A job a shutdown interrupted does not depend on this switch: every start re-queues the same
+> row before the worker starts, with or without `app.auto_backlog` (issue #622). The row keeps its
+> id, so an interrupted scan -> plan -> encode chain runs in its original order, and the work
+> already recorded in the database is skipped. An operator cancel is never resumed, and a crash loop
+> stops after three resumes with the row left `interrupted`.
 
 Three keys named "preset" with different meanings — the distinction:
 `handbrake.preset` is a legacy key the measured pipeline no longer reads

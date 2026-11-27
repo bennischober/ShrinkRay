@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Plugin } from 'vite'
-import { busy, huge } from './fixtures/generated.js'
+import { busy, busyCached, busyHistory, huge } from './fixtures/generated.js'
 import { FIXTURES, type Fixture } from './src/lib/fixtures.js'
 
 /** Which fixture key answers which GET route. */
@@ -92,13 +92,46 @@ export function fixtureMock(dir = resolve(process.cwd(), 'fixtures')): Plugin {
   const cache = new Map<string, Fixture>()
   /** fallback for cookieless clients (curl): the last `?fixture=` seen */
   let scenario: string | null = null
+  /** `busy-changing` moves the library on every poll (issue #661) */
+  let changingPoll = 0
+
+  /** One collection's ETag, the way the resident app tags them: the client
+   * sends its known tags as If-None-Match, and an unchanged collection comes
+   * back as null instead of a full payload (the poll is nearly free). The
+   * mock ignoring this was the artifact #661 measured: the real client keeps
+   * its arrays, but the dev server replaced 2 000 titles every second. */
+  function tag(prefix: string, value: string): string {
+    return `"fixture-${prefix}-${value}"`
+  }
+
+  function sentTags(req: { headers: Record<string, string | string[] | undefined> }): Set<string> {
+    const raw = req.headers['if-none-match']
+    const value = Array.isArray(raw) ? raw.join(', ') : (raw ?? '')
+    return new Set(
+      value
+        .split(',')
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0),
+    )
+  }
 
   function load(name: string): Fixture {
     const cached = cache.get(name)
     if (cached) return cached
     // the scale scenarios are generated (20 000 titles is megabytes of
-    // invented JSON for no extra coverage); the small ones are files
-    const generated = name === 'busy' ? busy : name === 'huge' ? huge : null
+    // invented JSON for no extra coverage); the small ones are files.
+    // `busy-changing` is the same workload with a payload that moves every
+    // poll (issue #661): the discrimination scenario for a mock-only fix.
+    const generated =
+      name === 'busy' || name === 'busy-changing'
+        ? busy
+        : name === 'busy-history'
+          ? busyHistory
+          : name === 'busy-cached'
+            ? busyCached
+            : name === 'huge'
+            ? huge
+            : null
     const fixture = generated
       ? generated()
       : (JSON.parse(readFileSync(resolve(dir, `${name}.json`), 'utf8')) as Fixture)
@@ -163,14 +196,26 @@ export function fixtureMock(dir = resolve(process.cwd(), 'fixtures')): Plugin {
         }
 
         res.setHeader('Content-Type', 'application/json')
-        res.setHeader('ETag', `"fixture-${active}"`)
+        const changing = active === 'busy-changing'
+        const libraryTag = tag('lib', changing ? String(++changingPoll) : active)
+        const jobsTag = tag('jobs', active)
+        // `busy-changing` is the one scenario whose library really moves:
+        // its first title's size grows by one byte per request, so the client
+        // receives a full (different) library every poll. Every other scenario
+        // is static, so its second poll comes back with both collections
+        // null — exactly what the resident app answers.
+        const library = changing
+          ? fixture.library.map((m, i) => (i === 0 ? { ...m, size: (m.size ?? 0) + changingPoll } : m))
+          : fixture.library
+        res.setHeader('ETag', libraryTag)
         if (url.pathname === '/api/snapshot') {
+          const sent = sentTags(req)
           res.end(JSON.stringify({
             status: fixture.status,
-            jobs: fixture.jobs,
-            jobs_etag: `fixture-${active}`,
-            library: fixture.library,
-            library_etag: `fixture-${active}`,
+            jobs: sent.has(jobsTag) ? null : fixture.jobs,
+            jobs_etag: jobsTag,
+            library: sent.has(libraryTag) ? null : library,
+            library_etag: libraryTag,
           }))
           return
         }
@@ -199,7 +244,17 @@ export function fixtureMock(dir = resolve(process.cwd(), 'fixtures')): Plugin {
         }
         const key = ROUTES[url.pathname]
         if (!key) return next()
-        res.end(JSON.stringify(fixture[key]))
+        // the library route is ETag-cached by api.libraryChanged, like the
+        // resident app's /api/library (304 with no body when unchanged)
+        if (url.pathname === '/api/library') {
+          res.setHeader('ETag', libraryTag)
+          if (sentTags(req).has(libraryTag)) {
+            res.statusCode = 304
+            res.end()
+            return
+          }
+        }
+        res.end(JSON.stringify(url.pathname === '/api/library' ? library : fixture[key]))
       })
     },
   }

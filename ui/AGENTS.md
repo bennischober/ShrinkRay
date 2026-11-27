@@ -19,7 +19,8 @@ ui/
 ├── src/lib/api.ts              # the ONLY network client + hand-mirrored API types
 ├── src/lib/format.ts           # the shared formatter layer (issue #627; #655 lists the rest)
 ├── src/lib/components/          # the shared vocabulary: PageHeader, StatusBadge,
-│                               # FileName, Time, ProgressBar, EmptyState, Panel
+│                               # FileName, Time, ProgressBar, EmptyState, Panel,
+│                               # WorkProgress (the one running-work surface), QueueOutlook
 ├── src/lib/progress.svelte.ts  # the ONLY EventSource (rune store, flow not state)
 ├── src/lib/pages/              # Overview, Library, Jobs, Retained, Config, MovieDetail
 │                               # + HintButton/HintMark (the shared hint glyphs)
@@ -33,7 +34,8 @@ ui/
 | Add/change a server call | `src/lib/api.ts` | `api`; mirror the FastAPI field |
 | New page or route | `src/App.svelte` | `PAGES`, rail nav, shortcut map |
 | Shared state, poll cadence | `src/App.svelte` | 1 s busy / 3 s idle / 10 s hidden |
-| Live progress | `src/lib/progress.svelte.ts` | `hello` seeds the map, `data` ticks |
+| Live progress | `src/lib/progress.svelte.ts` | `hello` seeds and rebuilds, `data` merges into the per-file model |
+| Running-work rendering | `src/lib/components/WorkProgress.svelte` | the ONE summary/stepper/probe table every page renders |
 | Token prompt and 401 | `src/lib/api.ts` | `TOKEN_KEY`, `isAuthFailure` |
 | Colors, type, spacing | `src/tokens.css` | `:root[data-theme='dark'\|'light']` |
 
@@ -49,8 +51,10 @@ ui/
   rather than text — SVG coordinates, bar widths, axis positions — stay numbers.
 - **Fixtures and the browser check**: `ui/fixtures/*.json` are invented scenarios
   (`empty`, `nasty-names`, `failures`; `busy` and `huge` are generated in
-  `fixtures/generated.ts`) served by `fixtureMock.ts`, a `serve`-only Vite plugin, so
-  a page renders with no resident app: run `npm run dev`, then open
+  `fixtures/generated.ts`, and `busy-changing` is the #661 discrimination scenario:
+  the busy workload whose library payload moves on every poll) served by
+  `fixtureMock.ts`, a `serve`-only Vite plugin, so a page renders with no resident
+  app: run `npm run dev`, then open
   `http://localhost:5173/?fixture=<name>` — the query belongs on the BROWSER URL, not
   on the npm command. `offline` and `locked` are status scenarios: the mock answers
   503 / 401 on every route and the shell renders its loading state / token prompt
@@ -76,7 +80,13 @@ ui/
 - **One network boundary**: every `fetch` lives in `api.ts`; `progress.svelte.ts` owns the
   only `EventSource` (token as `?token=` — it cannot set a header).
 - **Flow is not state**: SSE carries progress only; the snapshot poll is the state channel.
-  Progress is never persisted and never polled.
+  Progress is never persisted and never polled. The one progress model
+  (`progress.svelte.ts`) accumulates events per running FILE — stage, stepper
+  position, probe trail, chosen CRF, encode percent/fps and the one ETA — and
+  every page renders it through `components/WorkProgress.svelte` (Overview's Now
+  card, Jobs' running entry, Library's status cell, the title page). The canonical
+  summary line is identical everywhere; `hello` rebuilds the model, including the
+  probes measured so far.
 - **Styling**: consume `var(--token)` from `tokens.css`, scoped `<style>` per component.
   The theme is `document.documentElement.dataset.theme` (`App.svelte`); tokens select on
   `:root[data-theme='dark'|'light']`. Faces are self-hosted in `src/fonts` — no CDN.
