@@ -79,6 +79,9 @@ def _prediction(movie: Path) -> SimpleNamespace:
 def _movie(root: Path, content: bytes) -> Path:
     movie = root / "movie.mkv"
     movie.write_bytes(content)
+    # old enough for the completeness witness (#586): the resident jobs ask
+    # it before the engine, so a fresh fixture would be skipped not planned
+    os.utime(movie, (0, 0))
     return movie
 
 

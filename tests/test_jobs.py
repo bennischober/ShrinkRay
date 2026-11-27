@@ -1,6 +1,7 @@
 """Job queue and API path validation tests. Split from tests/test_shrinkray.py (2026-10-23)."""
 
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -208,6 +209,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Some Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -261,6 +263,167 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(row["chosen_crf"], 21)
         self.assertEqual(row["path"], str(movie))
 
+    def test_backlog_jobs_ask_the_witness(self):
+        """Issue #586: the boot backlog's plan and encode jobs must not
+        decide on a file that is not complete. A young file and a stalled
+        sparse download - both catalogued by the boot scan - are skipped
+        with the witness's reason, neither probed nor encoded, and stay
+        eligible: only the settled file reaches the engine."""
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        if sys.platform == "win32":
+            # the same guards the witness's own tests use
+            # (tests/test_file_stability.py, #586's review)
+            self.skipTest("Windows reports no st_blocks")
+        root = Path(self.tmp.name)
+        young = root / "young.mkv"
+        young.write_bytes(b"x" * 64)  # fresh mtime: the witness must hold it back
+        sparse = root / "sparse.mkv"
+        sparse.write_bytes(b"x" * 4096)
+        os.truncate(sparse, 4 * 1024 * 1024)
+        os.utime(sparse, (0, 0))
+        if sparse.stat().st_blocks * 512 >= sparse.stat().st_size:
+            self.skipTest("this filesystem does not create sparse files")
+        settled = root / "settled.mkv"
+        settled.write_bytes(b"x" * 64)
+        os.utime(settled, (0, 0))
+        for movie in (young, sparse, settled):
+            db.upsert_file(
+                self.connection,
+                db.MovieRecord(
+                    path=movie,
+                    mtime=movie.stat().st_mtime,
+                    size=movie.stat().st_size,
+                    name=movie.name,
+                    category="Cat",
+                ),
+            )
+        self.connection.commit()
+        paths = [str(young), str(sparse), str(settled)]
+
+        # the plan job: the engine sees only the settled file, no plan row
+        # is stored for the unsettled ones, and each skip carries the reason
+        fake_result = _NS(
+            input=settled,
+            output=settled,
+            success=True,
+            target_vmaf=95.0,
+            min_saving_percent=15,
+            chosen_crf=21,
+            achieved_vmaf=95.47,
+            probes=[],
+            input_size=64,
+            output_size=32,
+            saved_percent=50.0,
+            error=None,
+            skipped_reason=None,
+            encoder_preset="3",
+            probe_encoder_preset="5",
+            crop=None,
+            crf_range=engine_search.DEFAULT_CRF_RANGE,
+            sample_count=3,
+            sample_seconds=10.0,
+            crop_sample_count=10,
+            vmaf_statistic="mean",
+            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+            hdr=False,
+            encoder="svt_av1",
+            input_mtime=None,  # a duck-typed result without the #436 field
+        )
+        planned: list[str] = []
+        plan_job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": paths}))
+
+        def fake_plan_quality(movie, **kwargs):
+            planned.append(movie.name)
+            return fake_result
+
+        with (
+            _patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan_quality),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            # the young file reads as young by the frozen clock, not by
+            # wall-clock luck (the independent review's closing note): the
+            # same freeze the witness's own suite applies around a real
+            # mtime (tests/test_file_stability.py) - a loaded CI runner may
+            # sit between the fixture write and the job's stat() for more
+            # than STABLE_MIN_AGE
+            _patch(
+                "shrinkray.engine.watch.time.time",
+                return_value=young.stat().st_mtime + 5.0,
+            ),
+        ):
+            result = jobs.execute_plan(plan_job, self.connection, threading.Event())
+        by_movie = {entry["movie"]: entry for entry in result["plans"]}
+        self.assertEqual(planned, ["settled.mkv"], "an unsettled file was probed")
+        # "skip", not "skipped": the dashboard matches only "skip" for plan
+        # entries (#586's review) - anything else renders as the red failed
+        # chip on the Overview and reads as planned on the detail page
+        self.assertEqual(by_movie["young.mkv"]["state"], "skip")
+        self.assertIn("not complete:", by_movie["young.mkv"]["reason"])
+        self.assertIn("last write", by_movie["young.mkv"]["reason"])
+        self.assertEqual(by_movie["sparse.mkv"]["state"], "skip")
+        self.assertIn("appears incomplete", by_movie["sparse.mkv"]["reason"])
+        self.assertEqual(by_movie["settled.mkv"]["state"], "encode")
+        unsettled_rows = self.connection.execute(
+            "SELECT COUNT(*) FROM plans p JOIN files f ON f.id = p.file_id WHERE f.path IN (?, ?)",
+            (str(young), str(sparse)),
+        ).fetchone()[0]
+        self.assertEqual(unsettled_rows, 0, "a plan row was recorded for an unsettled file")
+
+        # the encode job: the same witness, ahead of any probe or encode
+        encoded: list[str] = []
+        encode_job = self.queue.enqueue(
+            jobs.Job(kind=jobs.JobKind.ENCODE, payload={"paths": paths, "quality": True})
+        )
+
+        def fake_encode_with_quality(movie, *_args, **_kwargs):
+            encoded.append(movie.name)
+            if movie.name != "settled.mkv":
+                raise AssertionError("the mocked engine must not run for an unsettled file")
+            from types import SimpleNamespace as _NS
+
+            return _NS(
+                success=False,
+                skipped_reason="too short",
+                input=movie,
+                output=movie,
+                input_size=movie.stat().st_size,
+                output_size=movie.stat().st_size // 2,
+                saved_percent=50.0,
+                crop=None,
+                hdr=False,
+                error=None,
+                chosen_crf=None,
+                achieved_vmaf=None,
+            )
+
+        with (
+            _patch(
+                "shrinkray.engine.pipeline.encode_with_quality",
+                side_effect=fake_encode_with_quality,
+            ),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            # the same frozen clock as the plan job above: the witness
+            # must still hold the young file back
+            _patch(
+                "shrinkray.engine.watch.time.time",
+                return_value=young.stat().st_mtime + 5.0,
+            ),
+            _patch(
+                "shrinkray.service.record_quality_results",
+                lambda *a, **k: _NS(encoded=False, skipped=True),
+            ),
+        ):
+            result = jobs.execute_encode(encode_job, self.connection, threading.Event())
+        outcomes = {entry["movie"]: entry for entry in result["outcomes"]}
+        self.assertEqual(encoded, ["settled.mkv"], "an unsettled file was probed or encoded")
+        # the text rides "error" like every other skipped outcome of the
+        # encode loop, so the movie detail page's hover shows it
+        self.assertEqual(outcomes["young.mkv"]["state"], "skipped")
+        self.assertIn("not complete:", outcomes["young.mkv"]["error"])
+        self.assertEqual(outcomes["sparse.mkv"]["state"], "skipped")
+        self.assertIn("appears incomplete", outcomes["sparse.mkv"]["error"])
+
     def test_a_plan_job_records_the_per_file_stages(self):
         """Issue #602: a file's pipeline is its own job rows - the decision
         (the gates) and the CRF search - each with its own state and outcome,
@@ -270,6 +433,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Staged Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -312,6 +476,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Rejected Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -364,6 +529,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Plan Write_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -429,6 +595,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Broken Probe_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -558,6 +725,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Live Progress_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -693,6 +861,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Plan Progress_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -762,6 +931,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Reused Plan_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -831,6 +1001,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Cancelled Encode_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -879,6 +1050,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Three Stages_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         out_dir = _Path(self.tmp.name) / "out"
         out_dir.mkdir()
         job = self.queue.enqueue(
@@ -937,6 +1109,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Preset Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -1029,6 +1202,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Some Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)  # content irrelevant; resolution is mocked
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         job = self.queue.enqueue(
             jobs.Job(
                 kind=jobs.JobKind.ENCODE,
@@ -1082,6 +1256,7 @@ class TestJobs(unittest.TestCase):
 
         movie = _Path(self.tmp.name) / "Probe Movie_t00.mkv"
         movie.write_bytes(b"x" * 16)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         db.upsert_file(
             self.connection,
             db.MovieRecord(
@@ -2501,6 +2676,7 @@ class TestTranscriptBoundaries(unittest.TestCase):
 
         movie = Path(self.tmp.name) / "movie.mkv"
         movie.write_bytes(b"x" * 64)
+        os.utime(movie, (0, 0))  # old enough for the witness (#586)
         job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(movie)]}))
         worker = jobs.JobWorker(self.connection, self.queue)
         captured: list[str] = []

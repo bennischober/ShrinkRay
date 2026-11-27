@@ -83,6 +83,20 @@ class TestCheckStability(unittest.TestCase):
         self.assertIsNone(verdict.incomplete)
         self.sleep.assert_not_called()
 
+    def test_the_young_reason_never_shows_a_negative_or_rounded_up_age(self) -> None:
+        """The reason is the only operator-facing explanation for a file
+        plan refused to decide, so it must survive clock skew and rounding:
+        a file whose mtime is ahead of the host clock (written over SMB by a
+        fast clock, or restored by `rsync -t` from one) clamps at 0 instead
+        of reading "only -3600 s ago", and an age the threshold away never
+        rounds up to the 60 s the sentence itself says it needs."""
+        skewed = watch.Stability(young_for=4200.0, incomplete=None)
+        self.assertIn("last write only 0 s ago", skewed.not_settled_reason)
+        self.assertIn("(needs 60 s of quiet)", skewed.not_settled_reason)
+        nearly = watch.Stability(young_for=0.4, incomplete=None)
+        self.assertIn("last write only 59 s ago", nearly.not_settled_reason)
+        self.assertIn("(needs 60 s of quiet)", nearly.not_settled_reason)
+
     def test_an_old_sparse_file_is_incomplete_with_a_reason(self) -> None:
         """A stalled sparse download: full size from the start, 41 % filled.
         The size never changed, so the old size re-check could not see it."""

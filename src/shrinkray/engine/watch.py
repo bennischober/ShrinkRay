@@ -322,6 +322,33 @@ class Stability:
         """True when the file may be decided on now."""
         return self.young_for == 0.0 and self.incomplete is None
 
+    @property
+    def not_settled_reason(self) -> str:
+        """Why the file may not be decided on yet, worded for the operator.
+
+        The single source of that wording (#587's review): the boot
+        backlog's plan and encode jobs (#586) report this property
+        instead of building their own sentence, so the wording lives with
+        the verdict it explains. Only asked of a verdict that is not
+        `settled`: a settled verdict has no reason.
+
+        Returns:
+            str: The witness's reason: `incomplete`'s own wording when the
+                sparse verdict judged the file, otherwise the sentence
+                naming the time since the last write.
+        """
+        if self.incomplete is not None:
+            return self.incomplete
+        # clamped at 0 for a clock-skewed future mtime (a file written by a
+        # fast clock must not read "only -3600 s ago") and floored, never
+        # rounded, so the sentence cannot claim the file is old enough at
+        # the very threshold it says it needs
+        age = max(0.0, STABLE_MIN_AGE - self.young_for)
+        return (
+            f"not complete: last write only {math.floor(age):.0f} s ago "
+            f"(needs {STABLE_MIN_AGE:g} s of quiet)"
+        )
+
 
 def _allocated_fraction(stat: os.stat_result) -> float | None:
     """The share of a file's size that is allocated on disk.
