@@ -25,7 +25,7 @@ export type Fixture = Omit<FixtureBody, 'status' | 'library' | 'jobs' | 'movie'>
   movie:
     | null
     | (Omit<MovieDetail, 'file'> & {
-        file: Omit<Movie, 'encode' | 'resolution'> & { resolution: number[] | null; generation?: number }
+        file: Omit<Movie, 'encode' | 'reclaimed_bytes' | 'resolution'> & { resolution: number[] | null; generation?: number }
       })
 }
 
@@ -56,6 +56,11 @@ export const FIXTURES = [
   'nasty-names',
   'failures',
   'busy',
+  // the #661 discrimination scenario: the busy workload whose library
+  // payload changes on every poll, so the ETag path cannot mask the cost
+  'busy-changing',
+  'busy-history',
+  'busy-cached',
   'huge',
   'offline',
   'locked',

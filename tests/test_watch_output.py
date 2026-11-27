@@ -305,6 +305,10 @@ class SlowShutdown:
         self.watch_thread = None
         self.watch_stop = mock.Mock()
 
+    def resume_interrupted_jobs(self):
+        # the boot resume step runs before the worker (issue #622)
+        return []
+
     def shutdown(self):
         self.shutdown_calls += 1
         signal.raise_signal(signal.SIGTERM)

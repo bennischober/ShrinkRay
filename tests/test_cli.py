@@ -1448,9 +1448,14 @@ class TestStartupBacklog(unittest.TestCase):
     def test_a_running_backlog_counts_as_pending(self) -> None:
         """A RUNNING row is pending for the dedupe (issue #626).
 
-        The mocked seam models the database read; a real running row cannot
-        exist at backlog time - `_recover_stale_jobs` marks it failed first -
-        so this pins the rule, not a reachable state.
+        A real running row can exist at backlog time: in run_app's boot
+        order the worker starts before auto_backlog, so the first restored
+        job is often already running when the dedupe reads the queue, and
+        queued_jobs() returns queued and running rows alike.
+        `_recover_stale_jobs` only marks the previous instance's leftover
+        running rows failed; it cannot prevent this one. The mocked
+        JobWorker keeps no real worker alive here, so the patched
+        queued_jobs() models that database read.
         """
         from shrinkray.server import app as app_module
         from shrinkray.server.jobs import Job, JobState

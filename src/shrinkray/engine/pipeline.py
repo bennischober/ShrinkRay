@@ -93,6 +93,8 @@ from shrinkray.engine.plan import (
 from shrinkray.engine.plan import (
     source_codec as source_codec,
 )
+from shrinkray.engine.progress import event as progress_event
+from shrinkray.engine.progress import file_state
 from shrinkray.engine.samples import (
     DEFAULT_SAMPLE_EVERY as DEFAULT_SAMPLE_EVERY,
 )
@@ -139,6 +141,12 @@ from shrinkray.engine.search import (
     probe_crf as probe_crf,
 )
 from shrinkray.engine.search import (
+    probe_measured_at as probe_measured_at,
+)
+from shrinkray.engine.search import (
+    probe_source as probe_source,
+)
+from shrinkray.engine.search import (
     sample_count_for as sample_count_for,
 )
 from shrinkray.engine.search import target_unreachable
@@ -158,6 +166,9 @@ from shrinkray.tools.handbrake import (
 )
 from shrinkray.tools.handbrake import (
     find_handbrake as find_handbrake,
+)
+from shrinkray.tools.handbrake import (
+    parse_progress_line as parse_progress_line,
 )
 from shrinkray.tools.process import (
     DEFAULT_STALL_MINUTES as DEFAULT_STALL_MINUTES,
@@ -634,17 +645,20 @@ def _encode_with_command(
                 *complete, pending = re.split(rb"[\r\n]", pending)
                 return [p.decode(errors="replace").strip() for p in complete]
 
-            def _on_percent(match: re.Match) -> bool:
-                """Handles one percent match: disk watchdog, live event.
+            def _on_percent(line: str) -> bool:
+                """Handles one progress line: disk watchdog, live event.
 
                 Args:
-                    match (re.Match): The percent regex match.
+                    line (str): The decoded stdout line.
 
                 Returns:
                     bool: True when the encode must abort (disk floor hit);
                     the main loop breaks then.
                 """
                 nonlocal cancelled, returncode, cancel_reason, stderr_bytes
+                parsed = parse_progress_line(line)
+                if parsed is None:
+                    return False
                 # disk watchdog: the preflight's prediction can be wrong
                 # (size estimate, another process consuming the
                 # drive). When free space drops to the
@@ -664,11 +678,11 @@ def _encode_with_command(
                     stderr_bytes = b"cancelled: disk space exhausted"
                     return True
                 progress(
-                    {
-                        "stage": "encode",
-                        "percent": float(match.group(1)),
-                        "movie": input_file.name,
-                    }
+                    progress_event(
+                        "encode",
+                        file=file_state(input_file.name, str(input_file), "encode"),
+                        encode=parsed,
+                    )
                 )
                 return False
 
@@ -681,11 +695,7 @@ def _encode_with_command(
                 Returns:
                     bool: True when the encode must abort (disk floor hit).
                 """
-                for line in _stdout_lines(raw):
-                    match = re.search(r"(\d{1,3}\.\d{2})\s*%", line)
-                    if match and _on_percent(match):
-                        return True
-                return False
+                return any(_on_percent(line) for line in _stdout_lines(raw))
 
             while True:
                 # cooperative cancel: checked every tick, silent child or not
@@ -739,14 +749,14 @@ def _encode_with_command(
             # prior percent line, and terminating an already-exited child
             # would turn a finished encode into a failure.
             if pending and not cancelled and not stall_failed:
-                match = re.search(r"(\d{1,3}\.\d{2})\s*%", pending.decode(errors="replace"))
-                if match:
+                parsed = parse_progress_line(pending.decode(errors="replace"))
+                if parsed is not None:
                     progress(
-                        {
-                            "stage": "encode",
-                            "percent": float(match.group(1)),
-                            "movie": input_file.name,
-                        }
+                        progress_event(
+                            "encode",
+                            file=file_state(input_file.name, str(input_file), "encode"),
+                            encode=parsed,
+                        )
                     )
             if not cancelled and not stall_failed:
                 # close FIRST, join second: closing our read-end breaks a
@@ -1020,6 +1030,14 @@ def _probe_movie(
 
     workdir = Path(tempfile.mkdtemp(prefix=probe_scratch_prefix(input_file)))
     try:
+        if progress:
+            progress(
+                progress_event(
+                    "bars",
+                    file=file_state(input_file.name, str(input_file), "bars"),
+                    detail="measuring black bars",
+                )
+            )
         # bar detection is part of every re-encode, never a flag: the encoder
         # is already re-encoding every frame, so the crop is free here and a
         # file with no bars simply proceeds uncropped. The timeline detector
@@ -1040,6 +1058,18 @@ def _probe_movie(
                 bit_depth=source_bit_depth,
             ),
         )
+        if progress:
+            progress(
+                progress_event(
+                    "bars",
+                    file=file_state(input_file.name, str(input_file), "bars"),
+                    detail=(
+                        f"cropping top {crop[0]}, bottom {crop[1]}, left {crop[2]}, right {crop[3]}"
+                        if crop is not None
+                        else "no stable black bars"
+                    ),
+                )
+            )
         if crop is not None:
             log(
                 f"Removing stable black bars of '{input_file.name}': "
@@ -1076,6 +1106,23 @@ def _probe_movie(
         # gate 7 before gate 8 (issue #591): an unreachable search is skipped
         # for its quality; no size verdict was measured for it
         if target_unreachable(crf, achieved, target_vmaf, crf_range):
+            if progress:
+                progress(
+                    progress_event(
+                        "crf-search",
+                        file=file_state(input_file.name, str(input_file), "crf-search"),
+                        target_vmaf=target_vmaf,
+                        chosen={
+                            "crf": crf,
+                            "vmaf": achieved,
+                            "predicted_bytes": None,
+                            "reason": "target unreachable",
+                            "source": probe_source(probes),
+                        },
+                        source=probe_source(probes),
+                        measured_at=probe_measured_at(probes),
+                    )
+                )
             raise SkipEncode(
                 f"target VMAF {target_vmaf} unreachable (best {achieved} at CRF {crf_range[0]})",
                 chosen_crf=crf,
@@ -1083,6 +1130,23 @@ def _probe_movie(
                 probe_count=len(probes),
             )
         if skip:
+            if progress:
+                progress(
+                    progress_event(
+                        "crf-search",
+                        file=file_state(input_file.name, str(input_file), "crf-search"),
+                        target_vmaf=target_vmaf,
+                        chosen={
+                            "crf": crf,
+                            "vmaf": achieved,
+                            "predicted_bytes": None,
+                            "reason": "no size gain",
+                            "source": probe_source(probes),
+                        },
+                        source=probe_source(probes),
+                        measured_at=probe_measured_at(probes),
+                    )
+                )
             raise SkipEncode(
                 "re-encode would not shrink the file",
                 chosen_crf=crf,
@@ -1094,11 +1158,45 @@ def _probe_movie(
         # applies, on the same factor the decision computed
         saving_percent = (1.0 - chosen_factor) * 100.0
         if saving_percent < min_saving_percent:
+            if progress:
+                progress(
+                    progress_event(
+                        "crf-search",
+                        file=file_state(input_file.name, str(input_file), "crf-search"),
+                        target_vmaf=target_vmaf,
+                        chosen={
+                            "crf": crf,
+                            "vmaf": achieved,
+                            "predicted_bytes": None,
+                            "reason": "saving below minimum",
+                            "source": probe_source(probes),
+                        },
+                        source=probe_source(probes),
+                        measured_at=probe_measured_at(probes),
+                    )
+                )
             raise SkipEncode(
                 f"predicted saving {saving_percent:.1f}% < required {min_saving_percent}%",
                 chosen_crf=crf,
                 achieved_vmaf=achieved,
                 probe_count=len(probes),
+            )
+        if progress:
+            progress(
+                progress_event(
+                    "crf-search",
+                    file=file_state(input_file.name, str(input_file), "crf-search"),
+                    target_vmaf=target_vmaf,
+                    chosen={
+                        "crf": crf,
+                        "vmaf": achieved,
+                        "predicted_bytes": int(input_file.stat().st_size * chosen_factor),
+                        "reason": None,
+                        "source": probe_source(probes),
+                    },
+                    source=probe_source(probes),
+                    measured_at=probe_measured_at(probes),
+                )
             )
         return crf, achieved, probes, crop
     finally:
@@ -1405,7 +1503,23 @@ def encode_with_quality(
         )
     crf_source: str | None = None
     plan_created_at: str | None = None
+    plan_event_probes: list[dict] = []
     if plan is not None:
+        plan_probes = _plan_probes(plan)
+        plan_measured_at = plan["created_at"]
+        plan_event_probes = [
+            {
+                "index": index,
+                "count": len(plan_probes),
+                "crf": probe.crf,
+                "vmaf": probe.vmaf,
+                "predicted_bytes": None,
+                "passed": probe.vmaf >= target_vmaf,
+                "cached": True,
+                "measured_at": probe.measured_at or plan_measured_at,
+            }
+            for index, probe in enumerate(plan_probes, start=1)
+        ]
         if plan["skipped_reason"]:
             # the plan already rejected this movie - trust the verdict,
             # no probing, no encode. The skip decision is as valuable
@@ -1413,10 +1527,23 @@ def encode_with_quality(
             reason = str(plan["skipped_reason"])
             if progress is not None:
                 progress(
-                    {
-                        "stage": "probe",
-                        "detail": f"using plan (probed {plan['created_at']}) · {reason}",
-                    }
+                    progress_event(
+                        "crf-search",
+                        file=file_state(input_file.name, str(input_file), "crf-search"),
+                        target_vmaf=target_vmaf,
+                        chosen={
+                            "crf": plan["chosen_crf"],
+                            "vmaf": plan["achieved_vmaf"],
+                            "predicted_bytes": None,
+                            "reason": reason,
+                            "source": "plan",
+                        },
+                        probes=plan_event_probes,
+                        probe=plan_event_probes[-1] if plan_event_probes else None,
+                        source="plan",
+                        measured_at=plan["created_at"],
+                        detail=f"using plan (probed {plan['created_at']}) · {reason}",
+                    )
                 )
             log(f"Using plan for '{input_file.name}' (probed {plan['created_at']}): {reason}")
             return QualityResult(
@@ -1452,10 +1579,23 @@ def encode_with_quality(
         plan_created_at = plan["created_at"]
         if progress is not None:
             progress(
-                {
-                    "stage": "probe",
-                    "detail": f"using plan (probed {plan['created_at']}) · CRF {crf}",
-                }
+                progress_event(
+                    "crf-search",
+                    file=file_state(input_file.name, str(input_file), "crf-search"),
+                    target_vmaf=target_vmaf,
+                    chosen={
+                        "crf": crf,
+                        "vmaf": achieved,
+                        "predicted_bytes": plan["estimated_size"],
+                        "reason": None,
+                        "source": "plan",
+                    },
+                    probes=plan_event_probes,
+                    probe=plan_event_probes[-1] if plan_event_probes else None,
+                    source="plan",
+                    measured_at=plan["created_at"],
+                    detail=f"using plan (probed {plan['created_at']}) · CRF {crf}",
+                )
             )
         log(f"Using plan for '{input_file.name}' (probed {plan['created_at']}): CRF {crf}")
     else:
@@ -1591,6 +1731,14 @@ def encode_with_quality(
     # report - not a success with a negative saved_percent. Reported before the
     # verification pass: measuring a file that is about to be discarded would
     # spend minutes on a number nobody keeps.
+    if progress is not None:
+        progress(
+            progress_event(
+                "verify",
+                file=file_state(input_file.name, str(input_file), "verify"),
+                detail="checking the encoded artifact",
+            )
+        )
     final_input_size = input_file.stat().st_size
     final_output_size = output_file.stat().st_size
     if final_output_size >= final_input_size:

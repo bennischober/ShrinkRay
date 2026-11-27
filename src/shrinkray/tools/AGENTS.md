@@ -17,7 +17,7 @@ reads belong in the matching `tools/` module, not in a fourth copy.
 |---|---|---|
 | the runner, priority, cgroups | `process.py` | `_run`, `spawn_kwargs`, `session_kwargs`, `terminate_tree`, `cpu_count`, `rss_mib`, `Cancelled`, `apply_config`, `DEFAULT_STALL_MINUTES` |
 | `ffprobe` | `ffprobe.py` | `FFPROBE_TIMEOUT = 60`, `run_ffprobe`, `probe_duration_seconds`, `get_data`, pure parse helpers |
-| `HandBrakeCLI` | `handbrake.py` | `find_handbrake`, `build_encode_command`, `supports_svt_av1`, `MIN_HANDBRAKE_VERSION = "1.6"` |
+| `HandBrakeCLI` | `handbrake.py` | `find_handbrake`, `build_encode_command`, `parse_progress_line` (percent/fps/avg/ETA, one parser), `supports_svt_av1`, `MIN_HANDBRAKE_VERSION = "1.6"` |
 | `ffmpeg` + libvmaf | `vmaf.py` | `measure_vmaf`, `build_vmaf_command`, `detect_vmaf_style`, `MAX_VMAF_THREADS = 8`, model path |
 
 ## THE RUNNER CONTRACT
