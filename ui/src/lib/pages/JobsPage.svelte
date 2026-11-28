@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job, type JobOutcome, type Movie } from '../api'
-  import { bytes, crf, duration, eta, groupJobs, isStageRow, kindWord, relative, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
+  import { bytes, crf, duration, eta, groupJobs, isStageRow, kindWord, reasonText, relative, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
   import { fileProgressFor, progressEta } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -288,7 +288,7 @@
                         {:else if typeof o.estimated_size === 'number'}
                           <span class="d-num">≈ {bytes(o.estimated_size)}</span>
                         {/if}
-                        {#if o.reason}<span class="d-why">{o.reason}</span>{/if}
+                        {#if o.reason}<span class="d-why">{reasonText(o.reason)}</span>{/if}
                         {#if o.error}<span class="d-why">{humanizeError(null, o.error)}</span>{/if}
                       </div>
                     {/each}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { type Movie } from '../api'
-  import { bytes, savedPercent, vmaf } from '../format'
+  import { bytes, reasonText, savedPercent, vmaf } from '../format'
   import EmptyState from '../components/EmptyState.svelte'
   import PageHeader from '../components/PageHeader.svelte'
   import WorkProgress from '../components/WorkProgress.svelte'
@@ -160,7 +160,7 @@
       return {
         label: 'DISCARDED',
         cls: 'skip',
-        title: `${movie.encode.outcome_reason ?? 'the swap was declined'} (original untouched)`,
+        title: `${reasonText(movie.encode.outcome_reason ?? 'the swap was declined')} (original untouched)`,
       }
     if (preset) return { label: 'ENCODED', cls: 'done' }
     if (plannedPaths.includes(movie.path)) return { label: 'PLANNED', cls: 'planned' }
@@ -314,7 +314,7 @@
             <div class="lib-cell mono num measured" role="cell" data-label="VMAF">{vmaf(movie.encode?.vmaf, targetVmaf)}</div>
             <div class="lib-cell mono num" role="cell" data-label="Saved" class:ok={movie.encode?.saved_percent != null && movie.encode.saved_percent > 0} class:bad={movie.encode?.saved_percent != null && movie.encode.saved_percent <= 0}>
               {#if movie.encode?.outcome === 'discarded'}
-                {@const reason = movie.encode.outcome_reason ?? 'the swap was declined'}
+                {@const reason = reasonText(movie.encode.outcome_reason ?? 'the swap was declined')}
                 <span class="bad" title={`${reason} (original untouched)`}>discarded</span>
               {:else if movie.encode}
                 {@const saved = savedPercent(movie.encode.saved_percent)}
