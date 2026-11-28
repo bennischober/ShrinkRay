@@ -409,6 +409,7 @@ class TestScanFlagProjection(unittest.TestCase):
         self.connection = db.connect(self.db_file)
         self.movie = self.root / "movie.mkv"
         self.movie.write_bytes(b"x" * 8)
+        os.utime(self.movie, (0, 0))  # settled, or the witness holds the crop logic back (#738)
         stat = self.movie.stat()
         db.upsert_file(
             self.connection,
@@ -810,6 +811,7 @@ class TestCropCacheKeysOnTheThreshold(unittest.TestCase):
         self.connection = db.connect(self.db_file)
         self.movie = self.root / "movie.mkv"
         self.movie.write_bytes(b"x" * 8)
+        os.utime(self.movie, (0, 0))  # settled, or the witness holds the crop logic back (#738)
         stat = self.movie.stat()
         db.upsert_file(
             self.connection,
