@@ -59,7 +59,18 @@ the killed run's encode lock left to its heartbeat.
   pinned source (no Linux CLI binary is published). Both are verified by sha256, and
   the build fails if `ffmpeg -h filter=libvmaf` fails or either version string
   does not match the pin: an image measuring with a different libvmaf would write
-  scores that are not comparable with anyone else's.
+  scores that are not comparable with anyone else's. The ffmpeg pin points at
+  BtbN's rolling `autobuild-*` tags, which upstream prunes after a few weeks: the
+  v0.7.0 release's image build failed on exactly that (issue #742). A weekly
+  scheduled check (`.github/workflows/pin-check.yml`) reads the pin from the
+  Dockerfile, verifies the asset URL still answers and the pinned digest still
+  matches BtbN's published `checksums.sha256`, and opens an issue when it rots -
+  so the re-pin happens on our schedule, not the release's. The re-pin procedure:
+  take the newest `autobuild-*` tag, its asset's digest from BtbN's
+  `checksums.sha256`, verify the download with `sha256sum -c` before committing,
+  and update the four pin values (version, asset, sha256, the built-version
+  grep). HandBrake's pin is a stable release tag and upstream does not prune it,
+  so only the ffmpeg pin is watched.
 - **Every command runs as the operator's user** (issue #248): `PUID`/`PGID`/`UMASK`
   at runtime, defaulting to 1000/1000/022 — see *Running as your user*.
 - **The baked config carries the common video containers** (issue #204): the

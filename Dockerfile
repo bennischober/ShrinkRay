@@ -45,6 +45,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # ffmpeg: downloaded at the pinned tag, verified against the pinned digest.
+#  The pin is a rolling BtbN autobuild tag that upstream prunes (issue #742): the
+#  weekly pin-check workflow watches it, and the re-pin procedure lives in
+#  docs/docker.md ('A pinned, checksummed toolchain').
 RUN curl -fsSL -o /tmp/ffmpeg.tar.xz \
       "https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_VERSION}/${FFMPEG_ASSET}" \
  && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
