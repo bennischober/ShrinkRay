@@ -40,8 +40,9 @@ jobs:
           echo "PIN_SHA256=$sha" >> "$GITHUB_ENV"
 
       - name: The pinned asset URL still answers
+        id: url-check
         run: |
-          code=$(curl -sSL --retry 3 --retry-delay 5 -o /dev/null -w '%{http_code}' \
+          code=$(curl -sSL --head --retry 3 --retry-delay 5 -o /dev/null -w '%{http_code}' \
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/${PIN_VERSION}/${PIN_ASSET}")
           if [ "$code" != "200" ]; then
             echo "::error::the pinned asset answered HTTP $code - the tag was likely pruned upstream (re-pin: docs/docker.md, 'A pinned, checksummed toolchain')"
@@ -49,6 +50,7 @@ jobs:
           fi
 
       - name: Our digest still matches BtbN's published checksum
+        id: digest-check
         run: |
           url="https://github.com/BtbN/FFmpeg-Builds/releases/download/${PIN_VERSION}/checksums.sha256"
           upstream=$(curl -fsSL --retry 3 --retry-delay 5 "$url" | grep " ${PIN_ASSET}\$" | cut -d' ' -f1)
@@ -61,9 +63,12 @@ jobs:
             exit 1
           fi
 
-      # a red run nobody sees protects nothing: the rot lands as an issue
+      # a red run nobody sees protects nothing - but ONLY the two check steps
+      # mean rot: a reformat that breaks the Dockerfile read, or a checkout
+      # failure, is a workflow defect and fails the run WITHOUT filing a false
+      # "rotted upstream" issue (review round 2)
       - name: Open or update the pin-rot issue
-        if: failure()
+        if: failure() && (steps.url-check.outcome == 'failure' || steps.digest-check.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

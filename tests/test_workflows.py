@@ -129,9 +129,19 @@ class TestFfmpegPinCheckWatchesTheDockerfile(unittest.TestCase):
 
     def test_a_rotted_pin_lands_in_an_issue(self) -> None:
         """A silent red run protects nothing: the failure path must create or
-        update an issue."""
+        update an issue - but only for the two CHECK steps' failures. A
+        Dockerfile reformat breaking the read step, or a checkout failure, is
+        a workflow defect and must file no false "rotted upstream" issue."""
         text = PIN_CHECK_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("if: failure()", text)
+        self.assertIn("id: url-check", text)
+        self.assertIn("id: digest-check", text)
+        self.assertIn(
+            "steps.url-check.outcome == 'failure'",
+            text,
+            "the issue step must key on the check steps' outcomes, not a bare "
+            "failure() that files a false rot issue for any workflow defect",
+        )
+        self.assertIn("steps.digest-check.outcome == 'failure'", text)
         self.assertIn("gh issue create", text)
 
 
