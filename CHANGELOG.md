@@ -2,6 +2,12 @@
 
 All notable changes to ShrinkRay are documented here. Releases are tagged in git; the GitHub release for each tag carries the same notes.
 
+## [Unreleased]
+
+### Added
+
+- **A weekly check watches the container's ffmpeg pin** ([#742](https://github.com/bennischober/ShrinkRay/issues/742), [#744](https://github.com/bennischober/ShrinkRay/pull/744)): the image's ffmpeg comes from a dated BtbN autobuild tag that upstream prunes after a few weeks, and the v0.7.0 release's container build failed on exactly that rot. A scheduled workflow now reads the pin from the Dockerfile, verifies the asset URL still answers and the pinned digest still matches BtbN's published `checksums.sha256`, and opens an issue when it rots - so a re-pin happens on our schedule, not mid-release. The re-pin procedure is documented in `docs/docker.md`.
+
 ## [0.7.0] - 2026-11-27
 
 ### Changed
