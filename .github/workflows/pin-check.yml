@@ -41,7 +41,7 @@ jobs:
 
       - name: The pinned asset URL still answers
         run: |
-          code=$(curl -sSL -o /dev/null -w '%{http_code}' \
+          code=$(curl -sSL --retry 3 --retry-delay 5 -o /dev/null -w '%{http_code}' \
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/${PIN_VERSION}/${PIN_ASSET}")
           if [ "$code" != "200" ]; then
             echo "::error::the pinned asset answered HTTP $code - the tag was likely pruned upstream (re-pin: docs/docker.md, 'A pinned, checksummed toolchain')"
@@ -51,7 +51,7 @@ jobs:
       - name: Our digest still matches BtbN's published checksum
         run: |
           url="https://github.com/BtbN/FFmpeg-Builds/releases/download/${PIN_VERSION}/checksums.sha256"
-          upstream=$(curl -fsSL "$url" | grep " ${PIN_ASSET}\$" | cut -d' ' -f1)
+          upstream=$(curl -fsSL --retry 3 --retry-delay 5 "$url" | grep " ${PIN_ASSET}\$" | cut -d' ' -f1)
           if [ -z "$upstream" ]; then
             echo "::error::BtbN's checksums.sha256 does not list ${PIN_ASSET}"
             exit 1

@@ -81,6 +81,8 @@ class TestCodeqlActionIsPinnedUniformly(unittest.TestCase):
 
 # `ARG FFMPEG_SHA256=<64-hex>`
 FFMPEG_SHA_ARG_RE = re.compile(r"^ARG FFMPEG_SHA256=([0-9a-f]{64})$", re.M)
+FFMPEG_VERSION_ARG_RE = re.compile(r"^ARG FFMPEG_VERSION=(\S+)$", re.M)
+FFMPEG_ASSET_ARG_RE = re.compile(r"^ARG FFMPEG_ASSET=(\S+)$", re.M)
 
 
 class TestFfmpegPinCheckWatchesTheDockerfile(unittest.TestCase):
@@ -112,6 +114,18 @@ class TestFfmpegPinCheckWatchesTheDockerfile(unittest.TestCase):
             "the workflow restates the pin's digest - a re-pin of the Dockerfile "
             "alone would go unnoticed",
         )
+        for regex, name in (
+            (FFMPEG_VERSION_ARG_RE, "FFMPEG_VERSION"),
+            (FFMPEG_ASSET_ARG_RE, "FFMPEG_ASSET"),
+        ):
+            value = regex.search(dockerfile)
+            self.assertIsNotNone(value, f"the Dockerfile lost its {name} ARG")
+            self.assertNotIn(
+                value.group(1),
+                text,
+                f"the workflow restates {name}'s value - a re-pin of the Dockerfile "
+                "alone would go unnoticed",
+            )
 
     def test_a_rotted_pin_lands_in_an_issue(self) -> None:
         """A silent red run protects nothing: the failure path must create or
