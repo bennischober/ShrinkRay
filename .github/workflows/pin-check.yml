@@ -16,10 +16,17 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  # a workflow_dispatch racing the weekly run must not double-file the rot issue
+  group: pin-check
+  cancel-in-progress: true
+
 jobs:
   ffmpeg-pin:
     name: The pinned ffmpeg build is still upstream
     runs-on: ubuntu-latest
+    # a stalled connection must not hold a runner for GitHub's 360-minute default
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -42,7 +49,7 @@ jobs:
       - name: The pinned asset URL still answers
         id: url-check
         run: |
-          code=$(curl -sSL --head --retry 3 --retry-delay 5 -o /dev/null -w '%{http_code}' \
+          code=$(curl -sSL --head --retry 3 --retry-delay 5 --connect-timeout 15 --max-time 120 -o /dev/null -w '%{http_code}' \
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/${PIN_VERSION}/${PIN_ASSET}")
           if [ "$code" != "200" ]; then
             echo "::error::the pinned asset answered HTTP $code - the tag was likely pruned upstream (re-pin: docs/docker.md, 'A pinned, checksummed toolchain')"
@@ -53,7 +60,7 @@ jobs:
         id: digest-check
         run: |
           url="https://github.com/BtbN/FFmpeg-Builds/releases/download/${PIN_VERSION}/checksums.sha256"
-          upstream=$(curl -fsSL --retry 3 --retry-delay 5 "$url" | grep " ${PIN_ASSET}\$" | cut -d' ' -f1)
+          upstream=$(curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 15 --max-time 120 "$url" | grep " ${PIN_ASSET}\$" | cut -d' ' -f1)
           if [ -z "$upstream" ]; then
             echo "::error::BtbN's checksums.sha256 does not list ${PIN_ASSET}"
             exit 1

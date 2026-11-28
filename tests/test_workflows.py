@@ -93,10 +93,14 @@ class TestFfmpegPinCheckWatchesTheDockerfile(unittest.TestCase):
     the failure in an issue."""
 
     def test_the_pin_check_is_scheduled(self) -> None:
-        """A check that never runs protects nothing."""
+        """A check that never runs protects nothing, and one that hangs holds a
+        runner for GitHub's 360-minute default: the schedule, the job timeout
+        and the racing-dispatch dedupe are all part of the contract."""
         text = PIN_CHECK_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("schedule:", text)
         self.assertIn("cron:", text)
+        self.assertIn("timeout-minutes:", text)
+        self.assertIn("concurrency:", text)
 
     def test_the_check_reads_the_pin_from_the_dockerfile(self) -> None:
         """A re-pin that edits only the Dockerfile must be picked up: the
