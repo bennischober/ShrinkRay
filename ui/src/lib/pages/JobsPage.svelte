@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, failedOutcomeNote, type Job, type JobOutcome, type Movie } from '../api'
-  import { bytes, crf, eta, groupJobs, isStageRow, kindWord, relative, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
+  import { bytes, crf, duration, eta, groupJobs, isStageRow, kindWord, relative, resultSummary, span, stateWord, timeColumns, vmaf } from '../format'
   import { fileProgressFor, progressEta } from '../progress.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import FileName from '../components/FileName.svelte'
@@ -75,10 +75,7 @@
       ? job.started_at
       : job.started_at + 'Z'
     const seconds = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000))
-    const h = Math.floor(seconds / 3600)
-    const m = Math.floor((seconds % 3600) / 60)
-    const s = seconds % 60
-    return h > 0 ? `${h}h${String(m).padStart(2, '0')}m` : `${m}m${String(s).padStart(2, '0')}s`
+    return duration(seconds)
   }
 
   const queuedNote = (job: Job) => {

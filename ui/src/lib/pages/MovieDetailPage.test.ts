@@ -211,6 +211,25 @@ describe('MovieDetailPage provenance badge (issue #647)', () => {
 })
 
 describe('MovieDetailPage job trail (issue #616)', () => {
+  it('renders the trail kind as the glossary word, never the raw enum (issue #655)', async () => {
+    // the kind cell is the row's second span: a regression to the raw enum
+    // ("crf-search" instead of "CRF search") must fail this pin
+    vi.mocked(api.movie).mockResolvedValue({ file: movie(), history: [], plan: null })
+    render(MovieDetailPage, {
+      movie: movie(),
+      targetVmaf: 96,
+      allJobs: [job({ kind: 'crf-search' }), job({ id: 2, kind: 'encode' })],
+      onclose: () => {},
+      onjobs: () => {},
+    })
+    const trail = screen.getByText('JOB TRAIL').closest('section')!
+    await waitFor(() => expect(trail.querySelectorAll('.hist-row').length).toBe(2))
+    const rows = [...trail.querySelectorAll('.hist-row')]
+    // newest first: #2 (encode), then #1 (crf-search)
+    expect(rows[0].children[1].textContent).toBe('Encode')
+    expect(rows[1].children[1].textContent).toBe('CRF search')
+  })
+
   it('states whether a trail time is a start or a finish', async () => {
     const queued = job({
       id: 3,

@@ -21,6 +21,16 @@ export function duration(seconds: number | null | undefined): string {
   return h === 0 ? `${d} d` : `${d} d ${h} h`
 }
 
+/** A clock-string duration as the engine stores it ("02:41:41") in
+ * seconds, so the one `duration` voice covers stored clock times too;
+ * null when the string is not a clock time. */
+export function durationFromClock(raw: string | null | undefined): number | null {
+  if (!raw) return null
+  const parts = raw.split(':').map(Number)
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return null
+  return parts[0] * 3600 + parts[1] * 60 + parts[2]
+}
+
 function parseStored(iso: string): Date | null {
   const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z')
   return Number.isNaN(d.getTime()) ? null : d
@@ -161,6 +171,21 @@ export function savedPercent(value: number | null | undefined): {
   return { text: `${value.toFixed(1)}%`, grew: false }
 }
 
+/** A signed percent delta in the console's diff form (DESIGN.md's Signed
+ * Delta Rule): `−41.2% size`, `+3.8% vs encode` — the sign leads so the
+ * polarity reads without parsing, and `good` marks a favorable delta (a
+ * negative one: smaller is the point). `unit` names what changed. */
+export function signedPercent(
+  value: number | null | undefined,
+  unit: string,
+): { text: string; good: boolean } {
+  if (value == null || !Number.isFinite(value)) return { text: '—', good: false }
+  return {
+    text: `${value <= 0 ? '−' : '+'}${Math.abs(value).toFixed(1)}${unit}`,
+    good: value <= 0,
+  }
+}
+
 /** The bytes a title reclaimed for the dashboard (issue #646): the server's
  * per-title library delta plus output-directory savings. The server applies #625
  * per row (a discarded attempt reclaimed nothing) and both halves of #647 (a
@@ -211,6 +236,29 @@ const KIND_WORDS: Record<string, string> = {
  * visible rather than blank. */
 export function kindWord(kind: string): string {
   return KIND_WORDS[kind] ?? kind
+}
+
+const REASON_WORDS: Record<string, string> = {
+  'hdr not supported': 'HDR — not supported yet',
+  'too short': 'Too short to be worth it',
+  'resolution too low': 'Resolution below 1080p class',
+  'below min size': 'Below the size floor',
+  'already AV1 (the output format)': 'Already AV1 — the output format',
+  'source codec not a candidate': 'Source codec not a candidate',
+  'no size gain': 'No size gain',
+  'target unreachable': 'Quality target unreachable',
+  'saving below minimum': 'Predicted saving below the minimum',
+  // not in DESIGN.md's glossary table — plain operator wording
+  'output not smaller': 'Output not smaller',
+}
+
+/** The screen wording for an engine skip/outcome reason (DESIGN.md
+ * Glossary): the engine's strings never reach the operator. The
+ * completeness witness's reasons (watch.py's "not complete: …" /
+ * "appears incomplete: …") are already operator sentences, and an
+ * unknown reason keeps its own wording — visible, never blank. */
+export function reasonText(reason: string): string {
+  return REASON_WORDS[reason] ?? reason
 }
 
 /** How many files are waiting in the queue (issue #631): one queued job can

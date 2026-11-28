@@ -106,6 +106,33 @@ describe('JobsPage render', () => {
     expect(option.textContent).toBe('Interrupted')
   })
 
+  it('the filter options carry the glossary words, never the raw enums (issue #655)', () => {
+    // the selects render every kind/state through kindWord/stateWord: a
+    // regression to the raw enum ("crf-search" in the dropdown) must fail
+    // this pin the way the badge pins above fail a raw state
+    const { container } = render(JobsPage, {
+      history: [job()],
+      onopenMovie: () => {},
+    })
+    const optionOf = (value: string) =>
+      container.querySelector<HTMLOptionElement>(`option[value="${value}"]`)!
+    // the kind filter
+    expect(optionOf('scan').textContent).toBe('Library scan')
+    expect(optionOf('plan').textContent).toBe('Plan')
+    expect(optionOf('decision').textContent).toBe('Decision')
+    expect(optionOf('crf-search').textContent).toBe('CRF search')
+    expect(optionOf('encode').textContent).toBe('Encode')
+    expect(optionOf('legacy').textContent).toBe('Legacy')
+    // the state filter
+    expect(optionOf('running').textContent).toBe('Running')
+    expect(optionOf('queued').textContent).toBe('Queued')
+    expect(optionOf('done').textContent).toBe('Done')
+    expect(optionOf('partial').textContent).toBe('Partial')
+    expect(optionOf('failed').textContent).toBe('Failed')
+    expect(optionOf('cancelled').textContent).toBe('Cancelled')
+    expect(optionOf('interrupted').textContent).toBe('Interrupted')
+  })
+
   it('expands a row to show what the job did, not its raw payload (issue #632)', async () => {
     const movie = 'Legend (2015) - WEBDL-2160p HEVC AAC.mkv'
     const j = job({

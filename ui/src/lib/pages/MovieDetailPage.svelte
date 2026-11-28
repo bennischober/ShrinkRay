@@ -10,7 +10,7 @@
     type EncodeRecord,
     type MoviePlan,
   } from '../api'
-  import { bytes, duration, relative, vmaf } from '../format'
+  import { bitrate, bytes, duration, durationFromClock, reasonText, relative, savedPercent, signedPercent, vmaf } from '../format'
   import { kindWord, stateWord } from '../format'
   import FileName from '../components/FileName.svelte'
   import Time from '../components/Time.svelte'
@@ -120,15 +120,6 @@
   }
 
   const encode = $derived(movie.encode)
-  /** "02:41:41" → "2h 41m" — every duration carries its unit like the rest
-   * of the console; the raw HH:MM:SS string stays the fallback. */
-  function fmtDuration(raw: string | null): string | null {
-    if (!raw) return null
-    const parts = raw.split(':').map(Number)
-    if (parts.length !== 3 || parts.some(Number.isNaN)) return raw
-    const [h, m] = parts
-    return h > 0 ? `${h}h ${m}m` : `${m}m ${parts[2]}s`
-  }
   const est = $derived(
     encode?.outcome === 'discarded'
       ? // a declined swap discarded the artifact (issue #625): nothing was
@@ -136,12 +127,10 @@
         {
           text: 'Discarded',
           grew: true,
-          title: `${encode.outcome_reason ?? 'the swap was declined'} (original untouched)`,
+          title: `${reasonText(encode.outcome_reason ?? 'the swap was declined')} (original untouched)`,
         }
       : encode?.saved_percent != null
-        ? encode.saved_percent <= 0
-          ? { text: `+${Math.abs(encode.saved_percent).toFixed(1)}% larger`, grew: true }
-          : { text: `${encode.saved_percent.toFixed(1)}% saved`, grew: false }
+        ? { ...savedPercent(encode.saved_percent), title: undefined }
         : null,
   )
 
@@ -150,7 +139,7 @@
    * carries no estimate (skip verdicts without one, pre-v9 rows). */
   const planEst = $derived(
     plan?.estimated_size && movie.size && movie.size > 0
-      ? ((1 - plan.estimated_size / movie.size) * 100).toFixed(1)
+      ? (1 - plan.estimated_size / movie.size) * 100
       : null
   )
   /** The plan's verdict text for the panel head area: the skip reason in
@@ -171,23 +160,26 @@
     // thrown away (issue #625): the honest base is the bytes on disk
     const base = encode?.outcome === 'discarded' ? movie.size : encode?.output_size
     if (!base) return null
-    const diff = plan.estimated_size - base
-    const pct = (diff / base) * 100
-    return { text: `${diff <= 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% vs encode`, good: diff <= 0 }
+    return signedPercent(((plan.estimated_size - base) / base) * 100, '% vs encode')
   })
 
-  /** Source bitrate in Mbps (size per second) — the honest "how fat is
-   * this source" figure next to the encode's own bitrate. Returns a
-   * NUMBER so drift-slot math and .toFixed at the display sites see
-   * real numbers (a string here silently coerced in arithmetic but
-   * crashed on .toFixed — the drift summary was the first caller). */
-  function bitrateMbps(size: number | null | undefined, duration: string | null): number | null {
+  /** Source/output bitrate in kb/s (size per second) — the unit
+   * format.bitrate reads, so every displayed bitrate goes through the
+   * shared layer. Returns a NUMBER so the drift chart's geometry and
+   * the display sites see real numbers (a string here silently coerced
+   * in arithmetic but crashed on .toFixed — the drift summary was the
+   * first caller). */
+  function bitrateKbps(size: number | null | undefined, duration: string | null): number | null {
     if (!size || !duration) return null
-    const parts = duration.split(':').map(Number)
-    if (parts.length !== 3 || parts.some(Number.isNaN)) return null
-    const seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
-    if (seconds <= 0) return null
-    return (size * 8) / 1_000_000 / seconds
+    const seconds = durationFromClock(duration)
+    if (seconds == null || seconds <= 0) return null
+    return (size * 8) / 1000 / seconds
+  }
+  /** The drift chart's own scale unit: Mbps, geometry only — the text
+   * sites read the kb/s figure through format.bitrate. */
+  function bitrateMbps(size: number | null | undefined, duration: string | null): number | null {
+    const kbps = bitrateKbps(size, duration)
+    return kbps == null ? null : kbps / 1000
   }
 
   /** Newest first for the history table. */
@@ -301,7 +293,7 @@
     if (firstStep.br != null && lastStep?.br != null) {
       const f = firstStep.derived ? '~' : ''
       const l = lastStep.derived ? '~' : ''
-      return `bitrate ${f}${firstStep.br.toFixed(1)} → ${l}${lastStep.br.toFixed(1)} Mbps across ${driftSlots.length} encodes`
+      return `bitrate ${f}${bitrate(firstStep.br * 1000)} → ${l}${bitrate(lastStep.br * 1000)} across ${driftSlots.length} encodes`
     }
     return `${driftSlots.length} encodes, oldest → newest`
   })
@@ -319,9 +311,9 @@
     if (!previous) return []
     const parts: { text: string; good: boolean }[] = []
     if (previous.output_size && current.output_size) {
-      const diff = current.output_size - previous.output_size
-      const pct = (diff / previous.output_size) * 100
-      parts.push({ text: `${diff <= 0 ? '−' : '+'}${Math.abs(pct).toFixed(1)}% size`, good: diff <= 0 })
+      parts.push(
+        signedPercent(((current.output_size - previous.output_size) / previous.output_size) * 100, '% size'),
+      )
     }
     if (previous.vmaf != null && current.vmaf != null) {
       const d = current.vmaf - previous.vmaf
@@ -381,13 +373,13 @@
       <div class="panel-head"><span class="legend">SOURCE</span></div>
       <div class="facts">
         <div class="fact"><span class="legend">RESOLUTION</span><span class="mono">{movie.resolution?.join('×') ?? '—'}</span></div>
-        <div class="fact"><span class="legend">DURATION</span><span class="mono">{fmtDuration(movie.duration) ?? '-'}</span></div>
+        <div class="fact"><span class="legend">DURATION</span><span class="mono">{duration(durationFromClock(movie.duration))}</span></div>
         <div class="fact"><span class="legend">CODEC</span><span class="mono">{movie.codec ?? '—'}</span></div>
         <div class="fact"><span class="legend">SIZE</span><span class="mono">{bytes(movie.size)}</span></div>
-        {#if bitrateMbps(movie.size, movie.duration) != null}
+        {#if bitrateKbps(movie.size, movie.duration) != null}
           <div class="fact">
             <span class="legend">SOURCE BITRATE</span>
-            <span class="mono">{bitrateMbps(movie.size, movie.duration)?.toFixed(1)} Mbps</span>
+            <span class="mono">{bitrate(bitrateKbps(movie.size, movie.duration))}</span>
           </div>
         {/if}
         {#if fileGeneration > 1}
@@ -414,7 +406,7 @@
               <!-- the plan rejected the movie: the verdict IS the headline -->
               <div class="fact big">
                 <span class="legend">PREDICTED</span>
-                <span class="mono result warn">skip — {plan.skipped_reason}</span>
+                <span class="mono result warn">skip — {reasonText(plan.skipped_reason)}</span>
               </div>
               {#if plan.achieved_vmaf != null && plan.crf != null}
                 <div class="fact">
@@ -425,8 +417,8 @@
             {:else}
               <div class="fact big">
                 <span class="legend">PREDICTED</span>
-                <span class="mono result" class:bad={planEst != null && Number(planEst) < 0}>
-                  {planEst != null ? (Number(planEst) <= 0 ? `+${Math.abs(Number(planEst))}% larger (est.)` : `${planEst}% saved (est.)`) : '—'}
+                <span class="mono result" class:bad={planEst != null && planEst < 0}>
+                  {planEst != null ? `${savedPercent(planEst).text} (est.)` : '—'}
                 </span>
               </div>
               {#if plan.estimated_size != null && planEst != null}
@@ -476,7 +468,7 @@
             <span class="mono result" class:bad={est?.grew} title={est?.title}>{est?.text ?? '—'}</span>
           </div>
           {#if encode.outcome === 'discarded'}
-            <div class="fact"><span class="legend">SIZE</span><span class="mono" title={encode.outcome_reason ?? 'the swap was declined'}>{bytes(movie.size)} (original untouched)</span></div>
+            <div class="fact"><span class="legend">SIZE</span><span class="mono" title={reasonText(encode.outcome_reason ?? 'the swap was declined')}>{bytes(movie.size)} (original untouched)</span></div>
           {:else}
             <div class="fact"><span class="legend">SIZE</span><span class="mono">{bytes(encode.input_size)} → {bytes(encode.output_size)}</span></div>
           {/if}
@@ -502,8 +494,8 @@
           {#if encode.encode_seconds != null}
             <div class="fact"><span class="legend">ENCODE TIME</span><span class="mono">{duration(encode.encode_seconds)}</span></div>
           {/if}
-          {#if bitrateMbps(encode.output_size, movie.duration) != null}
-            <div class="fact"><span class="legend">OUTPUT BITRATE</span><span class="mono">{bitrateMbps(encode.output_size, movie.duration)?.toFixed(1)} Mbps</span></div>
+          {#if bitrateKbps(encode.output_size, movie.duration) != null}
+            <div class="fact"><span class="legend">OUTPUT BITRATE</span><span class="mono">{bitrate(bitrateKbps(encode.output_size, movie.duration))}</span></div>
           {/if}
           {#if encode.probe_count != null}
             <div class="fact">
@@ -631,12 +623,12 @@
               <span
                 class="num"
                 title={rec.input_bitrate != null ? 'measured by ffprobe (format bitrate)' : 'derived from size/duration (pre-v7 row)'}
-                aria-label={rec.input_bitrate != null ? `bitrate ${rec.input_bitrate.toFixed(1)} to ${rec.output_bitrate?.toFixed(1)} Mbps, measured by ffprobe` : 'bitrate derived from size and duration (pre-v7 row)'}
+                aria-label={rec.input_bitrate != null ? `bitrate ${bitrate(rec.input_bitrate * 1000)} to ${bitrate(rec.output_bitrate)}, measured by ffprobe` : 'bitrate derived from size and duration (pre-v7 row)'}
               >
                 {#if rec.input_bitrate != null && rec.output_bitrate != null}
-                  {rec.input_bitrate.toFixed(1)} → {rec.output_bitrate.toFixed(1)}
-                {:else if bitrateMbps(rec.input_size, fileDuration) != null && bitrateMbps(rec.output_size, fileDuration) != null}
-                  ~{bitrateMbps(rec.input_size, fileDuration)?.toFixed(1)} → ~{bitrateMbps(rec.output_size, fileDuration)?.toFixed(1)}
+                  {bitrate(rec.input_bitrate * 1000)} → {bitrate(rec.output_bitrate * 1000)}
+                {:else if bitrateKbps(rec.input_size, fileDuration) != null && bitrateKbps(rec.output_size, fileDuration) != null}
+                  ~{bitrate(bitrateKbps(rec.input_size, fileDuration))} → ~{bitrate(bitrateKbps(rec.output_size, fileDuration))}
                 {:else}
                   —
                 {/if}
@@ -646,13 +638,13 @@
                 class="num"
                 class:bad={rec.outcome === 'discarded' || (rec.saved_percent ?? 0) <= 0}
                 title={rec.outcome === 'discarded'
-                  ? `discarded — ${rec.outcome_reason ?? 'the swap was declined'} (original untouched)`
+                  ? `discarded — ${reasonText(rec.outcome_reason ?? 'the swap was declined')} (original untouched)`
                   : undefined}
               >
                 {rec.outcome === 'discarded'
                   ? 'discarded'
                   : rec.saved_percent != null
-                    ? `${rec.saved_percent.toFixed(0)}%`
+                    ? savedPercent(rec.saved_percent).text
                     : '—'}
               </span>
               <span class="num">{rec.encode_seconds != null ? duration(rec.encode_seconds) : '—'}</span>
@@ -704,7 +696,7 @@
               {#if outcome?.state === 'failed'}
                 {outcome.error ? humanizeError(null, outcome.error) : 'failed'}
               {:else if outcome?.state === 'skip'}
-                skip — {outcome.reason ?? 'no size gain'}
+                skip — {reasonText(outcome.reason ?? 'no size gain')}
               {:else if outcome?.state === 'already_encoded'}
                 already encoded
               {:else if outcome?.state === 'cancelled'}
