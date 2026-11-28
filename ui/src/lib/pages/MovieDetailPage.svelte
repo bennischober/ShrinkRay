@@ -626,7 +626,7 @@
               <span
                 class="num"
                 title={rec.input_bitrate != null ? 'measured by ffprobe (format bitrate)' : 'derived from size/duration (pre-v7 row)'}
-                aria-label={rec.input_bitrate != null ? `bitrate ${bitrate(rec.input_bitrate * 1000)} to ${bitrate(rec.output_bitrate)}, measured by ffprobe` : 'bitrate derived from size and duration (pre-v7 row)'}
+                aria-label={rec.input_bitrate != null ? `bitrate ${bitrate(rec.input_bitrate * 1000)} to ${bitrate(rec.output_bitrate * 1000)}, measured by ffprobe` : 'bitrate derived from size and duration (pre-v7 row)'}
               >
                 {#if rec.input_bitrate != null && rec.output_bitrate != null}
                   {bitrate(rec.input_bitrate * 1000)} → {bitrate(rec.output_bitrate * 1000)}
