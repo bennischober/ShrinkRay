@@ -120,18 +120,21 @@
   }
 
   const encode = $derived(movie.encode)
-  const est = $derived(
-    encode?.outcome === 'discarded'
-      ? // a declined swap discarded the artifact (issue #625): nothing was
-        // reclaimed, and the reason is what the operator needs
-        {
-          text: 'Discarded',
-          grew: true,
-          title: `${reasonText(encode.outcome_reason ?? 'the swap was declined')} (original untouched)`,
-        }
-      : encode?.saved_percent != null
-        ? { ...savedPercent(encode.saved_percent), title: undefined }
-        : null,
+  const est = $derived.by(() => {
+    if (encode?.outcome === 'discarded')
+      return {
+        text: 'Discarded',
+        grew: true,
+        title: `${reasonText(encode.outcome_reason ?? 'the swap was declined')} (original untouched)`,
+      }
+    if (encode?.saved_percent == null) return null
+    const saved = savedPercent(encode.saved_percent)
+    // the RESULT legend carries no direction word, so the positive form keeps
+    // its "saved" (round-1 review, finding 3); the column sites keep the bare
+    // form - their headers carry the word
+    return saved.grew
+      ? { ...saved, title: undefined }
+      : { text: `${saved.text} saved`, grew: false, title: undefined }
   )
 
   /** The stored plan's predicted saving vs the current source size —

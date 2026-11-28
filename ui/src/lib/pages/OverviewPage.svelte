@@ -1,6 +1,6 @@
 <script lang="ts">
   import { humanizeError, isFailedOutcome, jobPaths, type Movie, type Status, type Job, type RetainedFile } from '../api'
-  import { bytes, kindWord, percent, reclaimedBytes, relative, savedPercent, span, statusAnswer, titleBuckets, vmaf, verdictWord } from '../format'
+  import { bytes, kindWord, percent, reasonText, reclaimedBytes, relative, savedPercent, span, statusAnswer, titleBuckets, vmaf, verdictWord } from '../format'
   import PageHeader from '../components/PageHeader.svelte'
   import QueueOutlook from '../components/QueueOutlook.svelte'
   import WorkProgress from '../components/WorkProgress.svelte'
@@ -558,7 +558,7 @@
           {@const savedDelta = rec?.saved_percent != null && plannedSaved != null ? rec.saved_percent - plannedSaved : null}
           {@const verdict =
             rec == null
-              ? entry.reason ?? entry.error ?? ''
+              ? reasonText(entry.reason ?? entry.error ?? '')
               : entry.state === 'skip'
                 ? 'planned skip — encoded anyway'
                 : rec.vmaf == null
