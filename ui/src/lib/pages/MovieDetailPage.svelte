@@ -135,7 +135,7 @@
     return saved.grew
       ? { ...saved, title: undefined }
       : { text: `${saved.text} saved`, grew: false, title: undefined }
-  )
+  })
 
   /** The stored plan's predicted saving vs the current source size —
    * the same polarity form as `est` ('grew' => red). Null when the plan
