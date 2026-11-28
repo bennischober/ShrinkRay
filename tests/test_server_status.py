@@ -75,6 +75,27 @@ class TestTheStatusCarriesTheWatcherError(unittest.TestCase):
         )
 
 
+class TestTheJobRequestTargetPrecision(unittest.TestCase):
+    """Issue #596: the server's request model enforces the same one-decimal
+    rule the config loader does (the model is unwired today; the validator
+    keeps it consistent with the other entry points)."""
+
+    def test_a_finer_target_is_refused(self) -> None:
+        import pydantic
+
+        from shrinkray.server.app import JobKind, JobRequest
+
+        with self.assertRaises(pydantic.ValidationError) as ctx:
+            JobRequest(kind=JobKind.PLAN, target_vmaf=95.55)
+        self.assertIn("more than one decimal place", str(ctx.exception))
+
+    def test_a_one_decimal_target_is_accepted(self) -> None:
+        from shrinkray.server.app import JobKind, JobRequest
+
+        request = JobRequest(kind=JobKind.PLAN, target_vmaf=95.5)
+        self.assertEqual(request.target_vmaf, 95.5)
+
+
 class TestTheAppWiring(unittest.TestCase):
     """The queue/lock wiring the resident app builds (issue #649's root
     cause): the queue's connection use must hold the SAME lock the routes

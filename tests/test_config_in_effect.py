@@ -47,6 +47,30 @@ class _ConfigCase(unittest.TestCase):
         config_module.load_config(config_file=self.path)
 
 
+class TestTargetVmafPrecision(_ConfigCase):
+    """Issue #596: the target takes at most one decimal, and a finer config
+    fails the load loudly with the rule named - silent rounding would be a
+    silent fallback and would change the plan fingerprint unnoticed."""
+
+    def test_a_finer_target_fails_the_load_loudly(self) -> None:
+        with self.assertRaises(Exception) as ctx:
+            self._load('{"quality": {"target_vmaf": 95.55}}')
+        self.assertIn("more than one decimal place", str(ctx.exception))
+
+    def test_a_one_decimal_target_loads(self) -> None:
+        self._load('{"quality": {"target_vmaf": 95.5}}')
+        self.assertEqual(config_module.load_config(config_file=self.path).target_vmaf, 95.5)
+
+    def test_float_representation_never_rejects_valid_values(self) -> None:
+        for value in ("95.1", "99.9", "96", "95"):
+            reset_config()  # the loader caches: each iteration loads fresh
+            self._load(f'{{"quality": {{"target_vmaf": {value}}}}}')
+            self.assertEqual(
+                config_module.load_config(config_file=self.path).target_vmaf,
+                float(value),
+            )
+
+
 class TestTheRouteServesWhatTheLoaderApplied(_ConfigCase):
     """GET /api/config answers the loader's in-effect Conf, never its own
     parse of the file (the maintainer's decision, 2026-11-01)."""

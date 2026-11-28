@@ -168,6 +168,25 @@ class TestSetupApp(unittest.TestCase):
         run(app, steps)
         self.assertEqual(self._saved()["handbrake"]["max_threads"], 4)
 
+    def test_a_finer_target_names_the_rule_not_a_not_a_float(self) -> None:
+        """Issue #596's review: the parse-only test cannot see the editor's
+        wrapper - the rule's message must survive edited() and reach the
+        operator with the field's label, and the invalid value stays unwritten."""
+        before = self.config.read_text(encoding="utf-8")
+        app = SetupApp(self.config, None)
+
+        async def steps(pilot: Pilot[None]) -> None:
+            self._set(app, "f-quality-target_vmaf", "95.55")
+            await pilot.press("ctrl+s")
+            message = str(app.query_one("#message", Static).render())
+            self.assertIn("Required VMAF", message)
+            self.assertIn("more than one decimal place", message)
+            self.assertIn("95.55", message)
+            self.assertNotIn("is not a float", message)
+
+        run(app, steps)
+        self.assertEqual(self.config.read_text(encoding="utf-8"), before)
+
     def test_a_change_that_re_measures_the_library_says_so_first(self) -> None:
         app = SetupApp(self.config, None)
 
@@ -228,6 +247,25 @@ class TestSetupApp(unittest.TestCase):
 
         run(app, steps)
         self.assertEqual(self._saved(), {"handbrake": {"max_threads": 2}})
+
+
+class TestTargetVmafParse(unittest.TestCase):
+    """Issue #596: the terminal UI refuses a finer target with the rule
+    named, so the config never gets a value the loader would refuse."""
+
+    def test_parse_refuses_two_decimals(self) -> None:
+        from shrinkray.tui import Field, parse
+
+        field = Field("Quality", "quality.target_vmaf", "Required VMAF", "float", 96.0)
+        with self.assertRaises(ValueError) as ctx:
+            parse(field, "95.55")
+        self.assertIn("more than one decimal place", str(ctx.exception))
+
+    def test_parse_accepts_one_decimal(self) -> None:
+        from shrinkray.tui import Field, parse
+
+        field = Field("Quality", "quality.target_vmaf", "Required VMAF", "float", 96.0)
+        self.assertEqual(parse(field, "95.5"), 95.5)
 
 
 class TestJobList(unittest.TestCase):

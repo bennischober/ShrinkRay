@@ -223,6 +223,42 @@ class FileSection(BaseModel):
     output: OutputSection = Field(default_factory=OutputSection)
 
 
+class TargetVmafPrecisionError(ValueError):
+    """The requested VMAF target has more than one decimal place (issue #596).
+
+    A distinct type so the terminal UI's editor can pass the rule-naming
+    message through instead of wrapping it as a not-a-float error.
+    """
+
+
+def validate_target_vmaf(value: float) -> float:
+    """Rejects a VMAF target with more than one decimal place.
+
+    The score is measured on sampled windows and shown with two decimals;
+    its run-to-run spread is believed to be tenths. A finer target promises a
+    distinction the measurement does not have (issue #596, the maintainer's
+    decision in the #595 discussion). The check is decimal-exact on purpose:
+    `round(v, 1)` of a one-decimal float is that float, so 95.1 and 99.9 pass
+    and binary representation never rejects a valid value.
+
+    Args:
+        value (float): The requested target.
+
+    Returns:
+        float: The value, unchanged.
+
+    Raises:
+        ValueError: More than one decimal place; the message names the rule.
+    """
+    if round(value, 1) != value:
+        raise TargetVmafPrecisionError(
+            f"target_vmaf {value} has more than one decimal place: the "
+            "measurement's run-to-run spread is tenths, so the target takes "
+            "at most one decimal (e.g. 95, 96, 95.5)"
+        )
+    return value
+
+
 class QualitySection(BaseModel):
     """quality: the probe density knobs (issue #14)."""
 
@@ -231,6 +267,15 @@ class QualitySection(BaseModel):
     # the required VMAF every entry point uses unless a --target-vmaf flag
     # says otherwise (issue #252); part of the stored plan fingerprint
     target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
+
+    @field_validator("target_vmaf")
+    @classmethod
+    def _target_takes_one_decimal(cls, v: float) -> float:
+        """A finer target fails the load loudly (issue #596): silent rounding
+        would be a silent fallback and would change the plan fingerprint
+        without the operator knowing."""
+        return validate_target_vmaf(v)
+
     # the minimum predicted saving (percent of the source size) the decision
     # to encode demands (issue #316, the maintainer's 2026-10-31 decision,
     # default 15 = the calculated break-even with margin); 0 reproduces the

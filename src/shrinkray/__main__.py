@@ -26,6 +26,7 @@ from shrinkray.config import (
     DEFAULT_PROBE_ENCODER_PRESET,
     load_config,
     seed_config_from_env,
+    validate_target_vmaf,
 )
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.lock import guard_encodes
@@ -198,6 +199,23 @@ def _totals(movies_by_category: dict) -> tuple:
     return total_time, total_size
 
 
+def _target_vmaf_option(value: float | None) -> float | None:
+    """The --target-vmaf flag's callback: one decimal at most (issue #596).
+
+    The rule lives in the config's shared validator; the flag rejects at parse
+    time with exit code 2 and the message naming the rule.
+
+    Raises:
+        typer.BadParameter: More than one decimal place.
+    """
+    if value is None:
+        return value
+    try:
+        return validate_target_vmaf(value)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
+
+
 @app.command()
 def encode(
     path: str = typer.Argument(
@@ -233,6 +251,7 @@ def encode(
         "--target-vmaf",
         min=1.0,
         max=100.0,
+        callback=_target_vmaf_option,
         help="The required VMAF. Default: the quality.target_vmaf config value "
         f"({DEFAULT_TARGET_VMAF:g} unless changed).",
     ),
@@ -753,6 +772,7 @@ def plan(
         "--target-vmaf",
         min=1.0,
         max=100.0,
+        callback=_target_vmaf_option,
         help="The required VMAF. Default: the quality.target_vmaf config value "
         f"({DEFAULT_TARGET_VMAF:g} unless changed).",
     ),
