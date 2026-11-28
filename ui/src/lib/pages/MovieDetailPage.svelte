@@ -421,7 +421,14 @@
               <div class="fact big">
                 <span class="legend">PREDICTED</span>
                 <span class="mono result" class:bad={planEst != null && planEst < 0}>
-                  {planEst != null ? `${savedPercent(planEst).text} (est.)` : '—'}
+                  <!-- the PREDICTED legend carries no direction word: the
+                       positive form keeps its "saved" (round-3 review); a
+                       predicted growth reads the larger-form as-is -->
+                  {planEst != null
+                    ? planEst > 0
+                      ? `${savedPercent(planEst).text} saved (est.)`
+                      : `${savedPercent(planEst).text} (est.)`
+                    : '—'}
                 </span>
               </div>
               {#if plan.estimated_size != null && planEst != null}
