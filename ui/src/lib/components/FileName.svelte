@@ -3,7 +3,11 @@
   const name = $derived(path.split('/').pop() ?? path)
 </script>
 
-<span class="file-name" title={path} data-clamp={clamp}>{name}</span>
+<!-- The keyboard reveal (issue #655): the full path lives in title=, which
+     is mouse-only unless the host is focusable — a deliberately
+     non-interactive focusable text host, outlined by the global
+     :focus-visible rule. --><!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<span class="file-name" title={path} data-clamp={clamp} tabindex="0">{name}</span>
 
 <style>
   .file-name {

@@ -29,7 +29,7 @@ import type {
   ProgressStage,
 } from './api'
 import { storedToken } from './api'
-import { bytes, crf, duration, finishesAt, fps, measuredAtLabel, percent, vmaf } from './format'
+import { bytes, crf, duration, finishesAt, fps, measuredAtLabel, percent, reasonText, vmaf } from './format'
 
 /** The server's schema version. An event from a different version is ignored
  * (the poll stays the state channel), so an old server's flat `probe` event is
@@ -191,9 +191,11 @@ export function chosenLine(
   const chosen = view?.chosen
   if (!chosen) return ''
   if (chosen.reason) {
+    // 'no size gain' keeps its own line (the progress voice is longer than the
+    // reason table's word); every other engine reason renders through the table
     return chosen.reason === 'no size gain'
       ? 'Will not encode — no setting saves space at this quality'
-      : `Will not encode — ${chosen.reason}`
+      : `Will not encode — ${reasonText(chosen.reason)}`
   }
   let line = `Found CRF ${crf(chosen.crf)}`
   if (chosen.vmaf != null) line += ` — VMAF ${vmaf(chosen.vmaf, targetVmaf)}`
