@@ -211,6 +211,11 @@ describe('MovieDetailPage provenance badge (issue #647)', () => {
 })
 
 describe('MovieDetailPage job trail (issue #616)', () => {
+  // the second trail test's render must not see the first's (screen queries
+  // are global): the other describes carry this cleanup, this one was added
+  // with the #655 kind-word pin and needs it too
+  afterEach(() => cleanup())
+
   it('renders the trail kind as the glossary word, never the raw enum (issue #655)', async () => {
     // the kind cell is the row's second span: a regression to the raw enum
     // ("crf-search" instead of "CRF search") must fail this pin
