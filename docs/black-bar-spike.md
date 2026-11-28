@@ -120,6 +120,23 @@ unanswered, not answered** — one HDR film with no bars cannot calibrate a limi
 > bit depth (`cropdetect_limit`, `engine/crop.py`: 24 at 8-bit, 96 at 10-bit, 384
 > at 12-bit), and the 8-bit filter string is unchanged.
 
+> **The harness now measures deeper sources at their native black (issue #645).** The
+> spike harness's own `--crop-limit` carried the same absolute 8-bit constant, so a Q5
+> re-run on this corpus would have reproduced the void. Its default is now the engine's
+> rule (`cropdetect_limit` on the depth the engine's own resolver reads from the stream),
+> `--crop-limit` below 1 is ffmpeg's depth-relative fraction, and the output names the
+> limit and its source. Verified on a synthetic 10-bit letterboxed clip (testsrc2 padded
+> to 1920x1080, yuv420p10le, ffv1): the default run reports `limit 96 (the engine's rule
+> for 10-bit)` and reads the 140 px bars at 100 %; the old absolute 24 reads full frame.
+> To re-run Q5 on real 10-bit or HDR material:
+>
+> ```sh
+> uv run python tools/spike_crop_timeline.py <file> --limit 60
+> ```
+>
+> The default limit is the engine's rule; pass `--crop-limit 0.094` to compare against
+> the depth-relative fraction the correction notes.
+
 ## Q6: Dark segments
 
 This is the blind spot, and the corpus quantifies it. Media02 and Media03 keep a

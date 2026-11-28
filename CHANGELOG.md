@@ -11,6 +11,7 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 ### Fixed
 
 - **A scan no longer ffprobes a file that is not complete** ([#738](https://github.com/bennischober/ShrinkRay/issues/738), [#746](https://github.com/bennischober/ShrinkRay/pull/746)): the scan is the first probe every path runs, so a file a copy is still writing was ffprobed torn on every pass - the cost #437's witness exists to prevent, one layer earlier than the witness checks added in #586/#587. The scan now asks the witness first: an unsettled file is catalogued from the `stat()` alone - its row carries no duration, so the cache re-probes it on a later pass and the nulls can never freeze behind a mtime+size match - it stays in the scan's result so `plan` still reports the wait, and no decision path changes.
+- **The crop spike harness measures 10-bit and HDR sources at their native black level** ([#645](https://github.com/bennischober/ShrinkRay/issues/645)): the harness's `--crop-limit` carried the same absolute 8-bit constant the engine's #637 fix had replaced, so a Q5 re-run measured full frame for every 10-bit or HDR file, bars or not. Its default is now the engine's rule (`cropdetect_limit` on the depth the engine's own resolver reads from the stream), `--crop-limit` below 1 is ffmpeg's depth-relative fraction, and the output names the limit and its source; `docs/black-bar-spike.md` documents the Q5 re-run.
 
 ## [0.7.0] - 2026-11-27
 
