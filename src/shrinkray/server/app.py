@@ -27,10 +27,16 @@ from typing import TypeVar
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from shrinkray import __version__, db
-from shrinkray.config import Conf, encode_window_open, load_config, refresh_config
+from shrinkray.config import (
+    Conf,
+    encode_window_open,
+    load_config,
+    refresh_config,
+    validate_target_vmaf,
+)
 from shrinkray.engine import watch as watch_mod
 from shrinkray.engine.encoders import HDR_ESTIMATE_NOTE
 from shrinkray.engine.pause import (
@@ -412,6 +418,14 @@ class JobRequest(BaseModel):
     # only encode mode; jobs.py rejects an explicit false payload regardless
     quality: bool = True
     target_vmaf: float = Field(DEFAULT_TARGET_VMAF, ge=1.0, le=100.0)
+
+    @field_validator("target_vmaf")
+    @classmethod
+    def _target_takes_one_decimal(cls, v: float) -> float:
+        """One decimal at most (issue #596): the same rule the config's loader
+        enforces, so the server cannot accept what the config would refuse."""
+        return validate_target_vmaf(v)
+
     overwrite: bool = False
     workers: int | None = Field(None, ge=1, le=64)
     probe_encoder_preset: str | None = None

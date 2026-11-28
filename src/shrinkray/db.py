@@ -1003,7 +1003,10 @@ def get_valid_plan(
         or stat.st_size != row["input_size"]
         or row["encoder"] != encoder
         or row["encoder_preset"] != encoder_preset
-        or abs(row["target_vmaf"] - target_vmaf) > 0.01
+        # the target compares exactly (issue #596): the validator caps the
+        # target at one decimal, so a tolerance here would reuse a plan under
+        # a target that never matches the requested one
+        or row["target_vmaf"] != target_vmaf
         or row["crf_low"] != crf_range[0]
         or row["crf_high"] != crf_range[1]
         or row["sample_count"] != sample_count

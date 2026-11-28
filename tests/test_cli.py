@@ -112,6 +112,49 @@ class TestMain(unittest.TestCase):
                 self.assertIn("b1.mkv", errors[2])
 
 
+class TestTargetVmafFlag(unittest.TestCase):
+    """Issue #596: --target-vmaf takes at most one decimal, rejected at parse
+    time with the rule named."""
+
+    def test_encode_rejects_two_decimals(self) -> None:
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["encode", "/nonexistent/x.mkv", "--target-vmaf", "95.55"])
+        self.assertEqual(result.exit_code, 2, result.output)
+        # the rich box wraps the message: assert on wrap-safe fragments
+        self.assertIn("has more than one", result.output)
+        self.assertIn("decimal place", result.output)
+        self.assertIn("95.55", result.output)
+
+    def test_plan_rejects_two_decimals(self) -> None:
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["plan", "/nonexistent/x.mkv", "--target-vmaf", "95.55"])
+        self.assertEqual(result.exit_code, 2, result.output)
+        self.assertIn("has more than one", result.output)
+        self.assertIn("decimal place", result.output)
+        self.assertIn("95.55", result.output)
+
+    def test_float_representation_never_rejects_valid_values(self) -> None:
+        """95.1/99.9 parse to non-exact binaries: the validator's round-compare
+        must accept them."""
+        from typer.testing import CliRunner
+
+        from shrinkray.__main__ import app
+
+        runner = CliRunner()
+        for value in ("95.1", "99.9", "95.5", "96"):
+            result = runner.invoke(app, ["plan", "/nonexistent/x.mkv", "--target-vmaf", value])
+            self.assertNotEqual(result.exit_code, 2, result.output)
+            self.assertNotIn("more than one decimal place", result.output)
+
+
 class TestDoctorCli(unittest.TestCase):
     """The doctor command's CLI surface (service logic tested in TestDb)."""
 

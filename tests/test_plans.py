@@ -101,6 +101,10 @@ class TestPlans(unittest.TestCase):
         self._save(file_id)
         # any changed decision input invalidates
         self.assertIsNone(self._lookup(movie, encoder_preset="6"))
+        # the exact target comparison (issue #596): a 0.005 drift is a
+        # different target - the 0.01 tolerance would have reused the plan
+        # and the encode could run below the new target while reporting a pass
+        self.assertIsNone(self._lookup(movie, target_vmaf=95.005))
         self.assertIsNone(self._lookup(movie, target_vmaf=93.0))
         self.assertIsNone(self._lookup(movie, crf_range=(16, 30)))
         self.assertIsNone(self._lookup(movie, sample_count=5))

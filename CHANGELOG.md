@@ -11,6 +11,7 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 ### Changed
 
 - **The dashboard speaks one formatter voice everywhere** ([#655](https://github.com/bennischober/ShrinkRay/issues/655)): the bitrate readouts, the signed percent labels and every duration now come from the shared layer (a running row reads `1 h 5 min`, not `1h05m`), the engine's skip reasons render through the operator wording table instead of raw strings on every page that shows them, and full paths and exact timestamps are keyboard-readable (FileName and Time are focusable).
+- **The VMAF target takes at most one decimal** ([#596](https://github.com/bennischober/ShrinkRay/issues/596)): the required quality accepted any float (a config could say 95.555), but the score is measured on sampled windows and shown with two decimals and its run-to-run spread is tenths - the precision was false. Every entry point (the config, both CLI flags, the terminal UI, the server's request model) now rejects a finer value with the rule named, and a config that carries one fails the load loudly instead of being silently rounded (a silent rounding would also change the stored-plan fingerprint unnoticed); the stored-plan fingerprint compares targets exactly, so a plan stored at 96.0 no longer matches a 96.005 request. Whole steps and half steps (95, 96, 95.5) remain valid.
 
 ### Fixed
 

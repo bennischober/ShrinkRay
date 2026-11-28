@@ -33,7 +33,7 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, Static, Switch
 
-from shrinkray.config import Conf
+from shrinkray.config import Conf, TargetVmafPrecisionError, validate_target_vmaf
 from shrinkray.engine.pause import (
     operator_paused,
     pause_reason,
@@ -330,7 +330,13 @@ def parse(field: Field, text: str) -> Any:
     if field.kind == "int":
         return int(text)
     if field.kind == "float":
-        return float(text)
+        value = float(text)
+        if field.key == "quality.target_vmaf":
+            # one decimal at most (issue #596): the shared validator's message
+            # names the rule and the editor shows it, so the config never gets
+            # a value the loader would refuse
+            validate_target_vmaf(value)
+        return value
     if field.kind == "list":
         return [part.strip() for part in text.split(",") if part.strip()]
     return text
@@ -559,6 +565,10 @@ class SetupApp(App[None]):
                 text = self.query_one(f"#{field.widget_id}", Input).value
                 try:
                     value = parse(field, text)
+                except TargetVmafPrecisionError as e:
+                    # the rule's message names the fix (issue #596) - pass it
+                    # through with the field's label, not as a not-a-float wrap
+                    raise ValueError(f"{field.label}: {e}") from None
                 except ValueError:
                     raise ValueError(f"{field.label}: '{text}' is not a {field.kind}") from None
             if value != read_value(self.data, field.key, field.default):
