@@ -1,0 +1,77 @@
+name: Pin check
+
+# The container's toolchain pins a BtbN/FFmpeg-Builds ROLLING autobuild tag, and
+# upstream prunes old ones (issue #742): the v0.7.0 release failed mid-tag because
+# the pin had rotted a week earlier, unnoticed. This workflow checks the pin on a
+# schedule so the rot is caught on OURS. HandBrake's pin is a stable release tag
+# (upstream does not prune it) and is verified at build time; only the ffmpeg pin rots.
+
+on:
+  schedule:
+    # weekly, Monday 04:13 UTC: off the top-of-hour crush, before the work week
+    - cron: "13 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  ffmpeg-pin:
+    name: The pinned ffmpeg build is still upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # one source of truth: the pin is read from the Dockerfile, never restated
+      # here - a re-pin that edits only the Dockerfile is picked up
+      - name: Read the pin from the Dockerfile
+        run: |
+          version=$(grep -oP '^ARG FFMPEG_VERSION=\K.*' Dockerfile)
+          asset=$(grep -oP '^ARG FFMPEG_ASSET=\K.*' Dockerfile)
+          sha=$(grep -oP '^ARG FFMPEG_SHA256=\K.*' Dockerfile)
+          if [ -z "$version" ] || [ -z "$asset" ] || [ -z "$sha" ]; then
+            echo "::error::the Dockerfile is missing an FFMPEG_VERSION/ASSET/SHA256 ARG"
+            exit 1
+          fi
+          echo "PIN_VERSION=$version" >> "$GITHUB_ENV"
+          echo "PIN_ASSET=$asset" >> "$GITHUB_ENV"
+          echo "PIN_SHA256=$sha" >> "$GITHUB_ENV"
+
+      - name: The pinned asset URL still answers
+        run: |
+          code=$(curl -sSL -o /dev/null -w '%{http_code}' \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/${PIN_VERSION}/${PIN_ASSET}")
+          if [ "$code" != "200" ]; then
+            echo "::error::the pinned asset answered HTTP $code - the tag was likely pruned upstream (re-pin: docs/docker.md, 'A pinned, checksummed toolchain')"
+            exit 1
+          fi
+
+      - name: Our digest still matches BtbN's published checksum
+        run: |
+          url="https://github.com/BtbN/FFmpeg-Builds/releases/download/${PIN_VERSION}/checksums.sha256"
+          upstream=$(curl -fsSL "$url" | grep " ${PIN_ASSET}\$" | cut -d' ' -f1)
+          if [ -z "$upstream" ]; then
+            echo "::error::BtbN's checksums.sha256 does not list ${PIN_ASSET}"
+            exit 1
+          fi
+          if [ "$upstream" != "$PIN_SHA256" ]; then
+            echo "::error::digest drift: the Dockerfile pins ${PIN_SHA256}, upstream publishes ${upstream}"
+            exit 1
+          fi
+
+      # a red run nobody sees protects nothing: the rot lands as an issue
+      - name: Open or update the pin-rot issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          number=$(gh issue list --search "ffmpeg pin rotted in:title" --state open --json number --jq '.[0].number')
+          if [ -z "$number" ]; then
+            gh issue create \
+              --title "The container's pinned ffmpeg build rotted upstream" \
+              --body "The weekly pin check failed at $GITHUB_SHA: the pinned asset no longer answers, or its digest drifted from BtbN's published checksums.sha256. Re-pin per docs/docker.md ('A pinned, checksummed toolchain'), then cut or re-cut the release."
+          else
+            gh issue comment "$number" --body "The weekly pin check failed again at $GITHUB_SHA - still rotted, or rotted again after a re-pin."
+          fi
