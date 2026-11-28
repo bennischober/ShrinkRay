@@ -90,12 +90,16 @@ class TestMain(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            # create test files (no valid media => all error, but order is checked)
+            # create test files (no valid media => all error, but order is checked;
+            # aged, or the witness holds them back before the probe can error -
+            # issue #738's scan change)
             (root / "Cat1").mkdir()
             (root / "Cat1" / "a1.mkv").write_bytes(b"x")
             (root / "Cat1" / "a2.mkv").write_bytes(b"x")
             (root / "Cat2").mkdir()
             (root / "Cat2" / "b1.mkv").write_bytes(b"x")
+            for movie in ("Cat1/a1.mkv", "Cat1/a2.mkv", "Cat2/b1.mkv"):
+                os.utime(root / movie, (0, 0))
 
             config = config_helper.Conf()
 

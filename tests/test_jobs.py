@@ -424,6 +424,98 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(outcomes["sparse.mkv"]["state"], "skipped")
         self.assertIn("appears incomplete", outcomes["sparse.mkv"]["error"])
 
+    def test_a_directory_payloads_unsettled_file_is_never_probed(self):
+        """#738's boot-backlog shape end to end: the payload is a DIRECTORY
+        (auto_backlog enqueues the root), so resolve_movies runs the real
+        scan - and the scan itself must not ffprobe the unsettled file
+        either. The catalogue row is stat-only, the job's witness reports the
+        wait, and both probe seams (the scan's get_data and the engine's
+        plan_quality) see only the settled file."""
+        from types import SimpleNamespace as _NS
+        from unittest.mock import patch as _patch
+
+        from shrinkray.engine import search as engine_search
+
+        root = Path(self.tmp.name) / "library"
+        root.mkdir()
+        young = root / "young.mkv"
+        young.write_bytes(b"x" * 64)
+        settled = root / "settled.mkv"
+        settled.write_bytes(b"x" * 64)
+        os.utime(settled, (0, 0))
+        scan_probes: list[str] = []
+        planned: list[str] = []
+        job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.PLAN, payload={"paths": [str(root)]}))
+        fake_result = _NS(
+            input=settled,
+            output=settled,
+            success=True,
+            target_vmaf=95.0,
+            min_saving_percent=15,
+            chosen_crf=21,
+            achieved_vmaf=95.47,
+            probes=[],
+            input_size=64,
+            output_size=32,
+            saved_percent=50.0,
+            error=None,
+            skipped_reason=None,
+            encoder_preset="3",
+            probe_encoder_preset="5",
+            crop=None,
+            crf_range=engine_search.DEFAULT_CRF_RANGE,
+            sample_count=3,
+            sample_seconds=10.0,
+            crop_sample_count=10,
+            vmaf_statistic="mean",
+            vmaf_recipe="vmaf=2;fmt=yuv420p;hdr=no",
+            hdr=False,
+            encoder="svt_av1",
+            input_mtime=None,
+        )
+
+        def fake_get_data(path, config):
+            scan_probes.append(path.name)
+            return {
+                "codec": "h264",
+                "other_codecs": [],
+                "bitrate": 12345,
+                "duration": "00:00:10",
+                "duration_raw": 10.0,
+                "fps": 25,
+                "aspect_ratio": "16x9",
+                "dimensions": {"width": 1920, "height": 1080},
+                "audio_languages": "",
+                "hdr": 0,
+                "bit_depth": 8,
+            }
+
+        def fake_plan_quality(movie, **kwargs):
+            planned.append(movie.name)
+            return fake_result
+
+        with (
+            _patch("shrinkray.engine.scan.get_data", side_effect=fake_get_data),
+            _patch("shrinkray.engine.scan.has_black_bars", return_value=None),
+            _patch("shrinkray.engine.plan.plan_quality", side_effect=fake_plan_quality),
+            _patch("shrinkray.server.jobs.cap_threads", return_value=1),
+            _patch(
+                "shrinkray.engine.watch.time.time",
+                return_value=young.stat().st_mtime + 5.0,
+            ),
+        ):
+            result = jobs.execute_plan(job, self.connection, threading.Event())
+        self.assertEqual(scan_probes, ["settled.mkv"], "the scan ffprobed the unsettled file")
+        self.assertEqual(planned, ["settled.mkv"], "the engine saw an unsettled file")
+        by_movie = {entry["movie"]: entry for entry in result["plans"]}
+        self.assertEqual(by_movie["young.mkv"]["state"], "skip")
+        self.assertIn("not complete:", by_movie["young.mkv"]["reason"])
+        row = self.connection.execute(
+            "SELECT f.duration_raw FROM files f WHERE f.path = ?", (str(young),)
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertIsNone(row["duration_raw"], "the stat-only row was not kept")
+
     def test_a_plan_job_records_the_per_file_stages(self):
         """Issue #602: a file's pipeline is its own job rows - the decision
         (the gates) and the CRF search - each with its own state and outcome,
@@ -1762,7 +1854,11 @@ class TestJobs(unittest.TestCase):
         payload = {"path": str(Path(self.tmp.name) / "movies")}
         (Path(self.tmp.name) / "movies").mkdir()
         # a junk file: the scan handles it as an error, but the job succeeds
-        (Path(self.tmp.name) / "movies" / "x.mkv").write_bytes(b"junk")
+        # (aged, or the witness holds it back before the probe can error -
+        # issue #738's scan change)
+        junk = Path(self.tmp.name) / "movies" / "x.mkv"
+        junk.write_bytes(b"junk")
+        os.utime(junk, (0, 0))
         job = self.queue.enqueue(jobs.Job(kind=jobs.JobKind.SCAN, payload=payload))
         worker = jobs.JobWorker(self.connection, self.queue)
         worker._execute(job)  # direct execution => deterministic, no thread wait

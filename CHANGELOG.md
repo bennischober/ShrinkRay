@@ -8,6 +8,10 @@ All notable changes to ShrinkRay are documented here. Releases are tagged in git
 
 - **A weekly check watches the container's ffmpeg pin** ([#742](https://github.com/bennischober/ShrinkRay/issues/742), [#744](https://github.com/bennischober/ShrinkRay/pull/744)): the image's ffmpeg comes from a dated BtbN autobuild tag that upstream prunes after a few weeks, and the v0.7.0 release's container build failed on exactly that rot. A scheduled workflow now reads the pin from the Dockerfile, verifies the asset URL still answers and the pinned digest still matches BtbN's published `checksums.sha256`, and opens an issue when it rots - so a re-pin happens on our schedule, not mid-release. The re-pin procedure is documented in `docs/docker.md`.
 
+### Fixed
+
+- **A scan no longer ffprobes a file that is not complete** ([#738](https://github.com/bennischober/ShrinkRay/issues/738)): the scan is the first probe every path runs, so a file a copy is still writing was ffprobed torn on every pass - the cost #437's witness exists to prevent, one layer earlier than the witness checks added in #586/#587. The scan now asks the witness first: an unsettled file is catalogued from the `stat()` alone - its row carries no duration, so the cache re-probes it on a later pass and the nulls can never freeze behind a mtime+size match - it stays in the scan's result so `plan` still reports the wait, and no decision path changes.
+
 ## [0.7.0] - 2026-11-27
 
 ### Changed

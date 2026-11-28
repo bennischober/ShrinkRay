@@ -378,6 +378,56 @@ def process_movie(
     """
     name = get_name(filename)
     category = get_category(filename, root)
+
+    # the completeness witness (issue #738): the scan's own ffprobe must not
+    # run on a file a copy is still writing - a torn probe is exactly the cost
+    # #437's witness exists to prevent, and the scan is the FIRST probe every
+    # path runs. An unsettled file is catalogued from the stat() alone: the row
+    # carries no duration, so `is_unchanged` treats it as changed and the next
+    # pass re-probes it; the entry point's own witness (#586/#587) still reports
+    # the wait. (Function-local import: watch.py imports process_movie.)
+    from shrinkray.engine.watch import check_stability
+
+    try:
+        stability = check_stability(filename)
+    except OSError:
+        # unreadable mid-scan (vanished, permission): the probe below reports
+        # the real error, as it always has
+        stability = None
+    if stability is not None and not stability.settled:
+        # `dict`, not a tighter shape: get_data itself returns an untyped dict,
+        # and a joined union of the two branches' value types breaks every
+        # downstream access (mypy: the compression_rate division, the crop
+        # summary's bit_depth, get_other_codecs)
+        ret: dict = {
+            "codec": None,
+            # the record's fields are comma-separated STRINGS (MovieRecord:
+            # other_codecs str, audio_languages str) - the probed flow converts
+            # via get_other_codecs/get_audio_languages; the stat-only row writes
+            # the empty string
+            "other_codecs": "",
+            "bitrate": None,
+            "duration": None,
+            "duration_raw": None,
+            "fps": None,
+            "aspect_ratio": "0x0",
+            "dimensions": {"width": None, "height": None},
+            "audio_languages": "",
+            # the record mapping writes int(hdr); 0 is the column's no-value,
+            # display-only for a file no path will decide on (the witnesses
+            # hold it back), and the next pass's re-probe overwrites it
+            "hdr": 0,
+            "bit_depth": None,
+            "crop": None,
+            "name": name,
+            "category": category,
+            "size": convert_unit(os.path.getsize(filename), SIZE_UNIT.GB),
+            "compression_rate": 0.0,
+            # a torn file's hash is a torn identity: hashed on the settled pass
+            "hash": None,
+        }
+        return ret, None
+
     try:
         ret = get_data(filename, config)
     except Exception as e:

@@ -38,9 +38,11 @@ class TestCacheHitKeepsTheStoredHash(unittest.TestCase):
         self.tmp.cleanup()
 
     def _record_with_hash(self, hash_value: "str | None") -> None:
+        # the row carries probe metadata (duration), or the #738 cache rule
+        # treats it as a stat-only row and re-probes instead of hitting
         self.connection.execute(
-            "INSERT INTO files (path, mtime, size, name, category, hash, scanned_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO files (path, mtime, size, name, category, hash, duration, duration_raw, scanned_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(self.movie),
                 self.movie.stat().st_mtime,
@@ -48,6 +50,8 @@ class TestCacheHitKeepsTheStoredHash(unittest.TestCase):
                 "film",
                 "Uncategorized",
                 hash_value,
+                "00:00:10",
+                10.0,
                 "2026-01-01T00:00:00",
             ),
         )

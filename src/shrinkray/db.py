@@ -660,15 +660,25 @@ def connect(db_path: Path) -> sqlite3.Connection:
 def is_unchanged(row: sqlite3.Row, path: Path) -> bool:
     """Checks if a stored file entry is still valid (mtime and size match).
 
+    A row without probe metadata (duration_raw NULL) is never valid: the
+    stat-only row an unsettled file gets from the scan (issue #738) and a
+    probe that found no duration must both be re-probed on the next pass, or
+    their nulls would freeze behind a mtime+size match forever.
+
     Args:
         row (sqlite3.Row): The stored file row.
         path (Path): The current file on disk.
 
     Returns:
-        bool: True if the file did not change since the last scan.
+        bool: True if the file did not change since the last scan AND the row
+            carries probe metadata.
     """
     stat = path.stat()
-    return bool(row["mtime"] == stat.st_mtime and row["size"] == stat.st_size)
+    return bool(
+        row["mtime"] == stat.st_mtime
+        and row["size"] == stat.st_size
+        and row["duration_raw"] is not None
+    )
 
 
 def upsert_file(connection: sqlite3.Connection, record: MovieRecord) -> int:

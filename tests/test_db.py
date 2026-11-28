@@ -2260,11 +2260,34 @@ class TestDb(unittest.TestCase):
             row = db.get_file_by_path(self.connection, file)
             self.assertIsNotNone(row)
             self.assertEqual(row["name"], "test")
-            # unchanged => valid cache entry
-            self.assertTrue(db.is_unchanged(row, file))
+            # a metadata-less row (this record carries no duration) is never a
+            # valid cache entry (issue #738): the stat-only row an unsettled
+            # file gets and a probe that found no duration must be re-probed,
+            # or their nulls would freeze behind the mtime+size match
+            self.assertFalse(db.is_unchanged(row, file))
             # changed size => invalid
             file.write_bytes(b"more bytes than before")
             self.assertFalse(db.is_unchanged(row, file))
+
+    def test_a_fully_probed_row_is_a_valid_cache_entry(self):
+        """The #738 metadata rule must not turn every row invalid: a row WITH
+        probe metadata that matches mtime+size is still unchanged."""
+        with tempfile.TemporaryDirectory() as tmp:
+            file = Path(tmp) / "test.mkv"
+            file.write_bytes(b"x")
+            stat = file.stat()
+            record = db.MovieRecord(
+                path=file,
+                mtime=stat.st_mtime,
+                size=stat.st_size,
+                name="test",
+                category="Cat",
+                duration="00:00:10",
+                duration_raw=10.0,
+            )
+            db.upsert_file(self.connection, record)
+            row = db.get_file_by_path(self.connection, file)
+            self.assertTrue(db.is_unchanged(row, file))
 
     def test_upsert_updates_existing(self):
         record = self._record("D:/Movies/test.mkv")
